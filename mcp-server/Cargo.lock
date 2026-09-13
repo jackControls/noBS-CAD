@@ -310,6 +310,7 @@ dependencies = [
  "nbcad-solid",
  "serde",
  "serde_json",
+ "windows-sys",
  "zip",
 ]
 

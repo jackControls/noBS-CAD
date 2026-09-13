@@ -3,6 +3,11 @@
 Status: implemented for the current macOS, Windows x64 and ARM64, Ubuntu 26.04
 x64, and browser baseline.
 
+Use [Install noBS CAD](INSTALL.md) for downloads or the
+[developer guide](DEVELOPMENT.md) for SDK setup and `cargo xtask package`.
+This document explains the dependency staging and verification performed by
+that shared desktop build command.
+
 ## 1. Ownership boundary
 
 noBS CAD does not keep separate native and browser CAD models.
@@ -74,13 +79,13 @@ Do not ship a Tauri binary linked directly to `/opt/homebrew` or another SDK
 prefix. Copying dylibs without changing the executable's load commands is not
 sufficient.
 
-Use the single supported entry point:
+After SDK setup and `npm ci`, use the shared package entry point on macOS:
 
 ```sh
-npm run bundle:macos
+cargo xtask package
 ```
 
-The command:
+It selects `scripts/bundle-macos.mjs`, which:
 
 1. runs `scripts/stage-occt-macos.mjs`;
 2. discovers the recursive OCCT/TBB dylib closure with `otool -L`;
@@ -107,7 +112,7 @@ The results are:
 
 ```text
 src-tauri/target/release/bundle/macos/noBS CAD.app
-src-tauri/target/release/bundle/dmg/noBS CAD_0.1.0_aarch64.dmg
+src-tauri/target/release/bundle/dmg/noBS.CAD_0.1.0_aarch64.dmg
 ```
 
 Useful manual release audit:
@@ -169,11 +174,13 @@ DLL set from the isolated vcpkg prefix beside the executable, adds licenses,
 and creates a ZIP plus SHA-256 file:
 
 ```powershell
-$target = "x86_64-pc-windows-msvc" # Use aarch64-pc-windows-msvc for ARM64.
-$triplet = "x64-windows" # Use arm64-windows for ARM64.
-$env:OCCT_ROOT = "$PWD\vcpkg_installed\$triplet"
-npm run bundle:windows:portable -- -Target $target
+cargo xtask package
 ```
+
+This selects the running Rust toolchain's architecture and the existing
+`scripts/bundle-windows-portable.ps1` builder. Install the matching SDK first;
+the [Windows setup](WINDOWS_PACKAGING.md#local-windows-build) also documents
+explicit `--target` selection and `OCCT_ROOT` overrides.
 
 The desktop packaging GitHub Actions workflow uses one lightweight path
 classifier and then conditionally runs the affected package jobs. It builds the
@@ -192,15 +199,26 @@ in an X11 GTK child drawing surface. Native X11 and Wayland desktops through
 XWayland share the same raw-window-handle path and are both exercised by the
 packaged-application launch probe.
 
-Use the supported entry point:
+After SDK setup and `npm ci`, use the same entry point on Ubuntu:
 
 ```sh
-npm run bundle:linux
+cargo xtask package
 ```
 
 It creates and audits a `.deb`, an AppImage, their SHA-256 files, and the
 required project/OCCT license notices. See [Ubuntu 26.04 packaging](LINUX_PACKAGING.md)
 for the exact SDK, runtime requirements, and verification commands.
+
+<details>
+<summary>Underlying builders for packaging maintenance</summary>
+
+`cargo xtask package` dispatches to the existing macOS and Linux JavaScript
+builders or the Windows PowerShell builder. The `bundle:macos`, `bundle:linux`
+and `bundle:windows:portable` npm aliases still invoke those same scripts for
+CI and packaging diagnostics. They are implementation details of the shared
+entry point, not separate application build paths.
+
+</details>
 
 ## 6. Browser/WASM development
 
@@ -209,10 +227,12 @@ The browser host combines two WASM modules:
 - `nbcad_wasm`: Rust product engine and recompute planner;
 - exact `opencascade.js@2.0.0-beta.b5ff984`: B-rep kernel.
 
-Build and run:
+For browser-specific work, use the
+[browser development instructions](DEVELOPMENT.md#browser-development).
+With `wasm-pack` and the Rust WASM target installed, build and run:
 
 ```sh
-npm install
+npm ci
 npm run build:wasm
 npm run dev
 ```

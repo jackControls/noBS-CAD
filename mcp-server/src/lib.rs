@@ -31,6 +31,18 @@ pub fn script_examples() -> Value {
     nbcad_recipes::catalog(true)
 }
 
+/// No engine construction is needed to validate or hand off an installed lesson.
+pub fn recipe_id_from_uri(uri: &str) -> Result<&'static str, String> {
+    nbcad_recipes::from_open_uri(uri).map(|recipe| recipe.id)
+}
+
+/// A URL launch reuses a single unambiguous live window when possible. Ordinary
+/// launches remain independent processes, including recording/MCP windows.
+pub fn open_recipe_in_running_desktop(recipe: &str) -> Result<bool, String> {
+    nbcad_recipes::find(recipe)?;
+    desktop::open_recipe(recipe)
+}
+
 /// Inspect the same validated JSONC source accepted by `cad_interface/script`.
 pub fn inspect_script(arguments: Value) -> Result<Value, String> {
     let source = interface::script_source(&arguments)?;
@@ -491,6 +503,11 @@ impl CadServer {
                     self.execute_interface(&arguments)?
                 } else if arguments["action"] == "script" {
                     self.execute_script(&arguments)?
+                } else if arguments["action"] == "open_recipe" {
+                    // Source-editor delivery is independent of the CAD model.
+                    // The window receipt includes active_session_id, but this
+                    // action must never attach or hydrate that model snapshot.
+                    session::request_ui(&arguments, self.attached_document_id.as_deref())?
                 } else if arguments["action"] == "launch" {
                     let mut launched = desktop::launch(&arguments)?;
                     if launched["status"] == "ready" {
@@ -3735,11 +3752,11 @@ fn tool_specs() -> Vec<ToolSpec> {
         ),
         ToolSpec::control(
             "cad_interface", "Explore and drive the product interface",
-            "Catalog returns shared product groups and typed operations. Execute runs an operation by group and name with identical arguments/results headlessly or live. Recipes lists committed native examples without running them. Script runs one versioned JSONC command file selected by recipe ID, source or an absolute .nbcad.jsonc path in the current blank document; Rust sequences every operation, stops on failure, and runs final checks by default. Mode fast has no presentation delays; present requires an attached desktop. Presentation provides configure/note/pause/resume/step/stop/status/finish/dismiss/show and speed controls shared with native playback. View supports timed orientation and focus on an active sketch, body, or component. Launch connects a new desktop. Inspect returns rendered controls with fresh opaque target IDs for click/set_value/key. Window close requests guarded application exit; the reply acknowledges the request, not process termination. No selectors or executable script evaluation.",
+            "Catalog returns shared product groups and typed operations. Execute runs an operation by group and name with identical arguments/results headlessly or live. Recipes lists committed native examples without running them. Open_recipe queues a built-in recipe in the live Scripts source editor, preserving edited source with Save/Discard/Cancel; it never runs commands or replaces the model. Script runs one versioned JSONC command file selected by recipe ID, source or an absolute .nbcad.jsonc path in the current blank document; Rust sequences every operation, stops on failure, and runs final checks by default. Mode fast has no presentation delays; present requires an attached desktop. Presentation provides configure/note/pause/resume/step/stop/status/finish/dismiss/show and speed controls shared with native playback. View supports timed orientation and focus on an active sketch, body, or component. Launch connects a new desktop. Inspect returns rendered controls with fresh opaque target IDs for click/set_value/key. Window close requests guarded application exit; the reply acknowledges the request, not process termination. No selectors or executable script evaluation.",
             object_schema(json!({
                 "session_id":{"type":"string"},
-                "action":{"type":"string","enum":["catalog","recipes","execute","script","presentation","launch","view","inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
-                "recipe":{"type":"string","description":"Bundled recipe ID for action script; mutually exclusive with source and path. List IDs with action recipes."},
+                "action":{"type":"string","enum":["catalog","recipes","open_recipe","execute","script","presentation","launch","view","inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
+                "recipe":{"type":"string","description":"Bundled recipe ID for script or open_recipe; mutually exclusive with source and path. List IDs with action recipes."},
                 "group":{"type":"string"},"operation":{"type":"string"},"arguments":{"type":"object"},
                 "executable":{"type":"string"},
                 "view":{"type":"string","enum":["current","isometric","top","bottom","front","back","left","right"]},
@@ -4059,7 +4076,8 @@ fn handle_message(server: &mut CadServer, message: Value) -> Vec<Value> {
                     "serverInfo": {
                         "name": "nbcad",
                         "title": "noBS CAD",
-                        "version": env!("CARGO_PKG_VERSION")
+                        "version": nbcad_core::build_info().display_version(),
+                        "_meta": {"nbcad/build": nbcad_core::build_info()}
                     },
                     "instructions": "This is one persistent headless CAD document. Begin and finish sketches before creating solid features. Use returned stable entity/body/face/edge ids in later calls. Dynamic tool disclosure is enabled; out-of-focus tools remain callable. Engineering guidance is available through resources/list and resources/read; start at nbcad://knowledge/index.md."
                 }),
@@ -10110,6 +10128,89 @@ mod tests {
         assert!(error.contains("nothing submitted"));
         assert!(session::pending_inbox_seqs(&unique).unwrap().is_empty());
         std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn open_recipe_receipt_never_attaches_or_rehydrates_the_model() {
+        let _guard = session::ENV_LOCK.lock().unwrap();
+        let id = session::test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-open-recipe-control-{id}"));
+        let previous = std::env::var_os("NBCAD_SESSION_DIR");
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        session::write_session(
+            &id,
+            "heartbeat.json",
+            &json!({"updated_ms":session::now_ms(),"generation":9}).to_string(),
+        )
+        .unwrap();
+        session::write_session(
+            &id,
+            "model.json",
+            "This model must never be read while opening source",
+        )
+        .unwrap();
+        let target = id.clone();
+        let receiver = std::thread::spawn(move || {
+            let controls = session::session_dir().join(&target).join("controls");
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut replied = std::collections::HashSet::new();
+            while std::time::Instant::now() < deadline {
+                if let Ok(entries) = std::fs::read_dir(&controls) {
+                    for entry in entries.flatten().filter(|entry| {
+                        entry
+                            .file_name()
+                            .to_string_lossy()
+                            .ends_with(".request.json")
+                    }) {
+                        let request: Value =
+                            serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap())
+                                .unwrap();
+                        let request_id = request["id"].as_str().unwrap();
+                        if !replied.insert(request_id.to_owned()) {
+                            continue;
+                        }
+                        let response = json!({"status":"applied", "active_session_id":target,
+                            "recipe":{"status":"queued","recipe":"garden-bench"}});
+                        session::write_session(
+                            &target,
+                            &format!("controls/{request_id}.result.json"),
+                            &response.to_string(),
+                        )
+                        .unwrap();
+                        if replied.len() == 2 {
+                            return;
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            panic!("The MCP source-open calls did not reach live control");
+        });
+        for attached in [None, Some(id.clone())] {
+            let mut server = CadServer::new().unwrap();
+            let model = server.manager.export_project_model().unwrap();
+            server.attached_document_id = attached.clone();
+            server.attached_generation = Some(7);
+            server.live_snapshot_dirty = true;
+            let result = server
+                .call_tool(
+                    "cad_interface",
+                    json!({"action":"open_recipe","recipe":"garden-bench","session_id":id}),
+                )
+                .unwrap();
+            assert_eq!(result["recipe"]["status"], "queued");
+            assert_eq!(server.attached_document_id, attached);
+            assert_eq!(server.attached_generation, Some(7));
+            assert!(server.live_snapshot_dirty);
+            assert_eq!(server.manager.export_project_model().unwrap(), model);
+        }
+        receiver.join().unwrap();
+        if let Some(value) = previous {
+            std::env::set_var("NBCAD_SESSION_DIR", value);
+        } else {
+            std::env::remove_var("NBCAD_SESSION_DIR");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -17,6 +17,7 @@ RUN apt-get update \
         cmake \
         curl \
         dbus-x11 \
+        desktop-file-utils \
         file \
         libayatana-appindicator3-dev \
         libfuse2t64 \
@@ -41,6 +42,7 @@ RUN apt-get update \
         weston \
         wget \
         xauth \
+        xdg-utils \
         xvfb \
     && if apt-cache show xwayland >/dev/null 2>&1; then \
          apt-get install --yes --no-install-recommends xwayland; \

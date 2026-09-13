@@ -97,7 +97,7 @@ One spine tool: `cad_help` with `action: search | get | topics`
 
 ## Ranking fields
 
-Boost: `title` > `keywords` / `topics` > `description` > `body`.  
+Boost: `title` > `keywords` / `topics` > `description` > `body`.
 Optional: boost `related_recipes` when caller passes active recipe context.
 
 ## Implementation plan

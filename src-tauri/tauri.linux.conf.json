@@ -17,7 +17,9 @@
         "bundleMediaFramework": false
       },
       "deb": {
+        "desktopTemplate": "linux-desktop.hbs",
         "depends": [
+          "desktop-file-utils",
           "libayatana-appindicator3-1",
           "libgtk-3-0t64",
           "libocct-data-exchange-7.9",
@@ -25,7 +27,8 @@
           "libudev1",
           "libvulkan1",
           "libwebkit2gtk-4.1-0",
-          "xwayland"
+          "xwayland",
+          "xdg-utils"
         ]
       }
     }

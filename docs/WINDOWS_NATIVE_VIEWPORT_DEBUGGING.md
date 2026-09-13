@@ -42,6 +42,10 @@ Primary code owners:
 
 ## Reliable local launch
 
+For a distributable application, use `cargo xtask package` after the
+[Windows SDK setup](WINDOWS_PACKAGING.md#local-windows-build). The command below
+is a development launch for debugging native startup with a live frontend.
+
 PowerShell may block `npm.ps1`. Use `npm.cmd` explicitly.
 
 The development checkout used the release-style local vcpkg prefix below. If

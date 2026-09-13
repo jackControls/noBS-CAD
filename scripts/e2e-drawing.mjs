@@ -45,6 +45,23 @@ async function clickRibbonMenuItem(panelName, groupId, itemId) {
   await menu.locator(`[data-ribbon-menu-id="${itemId}"]`).click();
 }
 
+async function assertDrawingSheetFits() {
+  await page.waitForFunction(() => {
+    const pane = document.querySelector('[data-drawing-zoom]');
+    const sheet = document.querySelector('[data-testid="drawing-sheet"]');
+    if (!pane || !sheet) return false;
+    const bounds = pane.getBoundingClientRect(), paper = sheet.getBoundingClientRect();
+    const style = getComputedStyle(pane);
+    return paper.width > 0 && paper.height > 0
+      && paper.left >= bounds.left + pane.clientLeft + parseFloat(style.paddingLeft) - 1
+      && paper.top >= bounds.top + pane.clientTop + parseFloat(style.paddingTop) - 1
+      && paper.right <= bounds.left + pane.clientLeft + pane.clientWidth - parseFloat(style.paddingRight) + 1
+      && paper.bottom <= bounds.top + pane.clientTop + pane.clientHeight - parseFloat(style.paddingBottom) + 1
+      && pane.scrollWidth <= pane.clientWidth + 1 && pane.scrollHeight <= pane.clientHeight + 1;
+  });
+  assert.equal(await page.getByRole('button', {name: 'Fit sheet', exact: true}).getAttribute('aria-pressed'), 'true');
+}
+
 async function dragDrawingAnnotation(testId, annotationId, fields, delta) {
   const before = await page.evaluate(({ annotationId, fields }) => {
     const annotation = window.__appStore.getState().drawingDocument.sheets
@@ -330,6 +347,8 @@ try {
   await page.setViewportSize({ width: 1600, height: 1000 });
 
   const drawingScroll = page.locator('[data-drawing-zoom]');
+  await assertDrawingSheetFits();
+  const initialDrawingZoom = Number(await drawingScroll.getAttribute('data-drawing-zoom'));
   await drawingScroll.hover();
   await drawingScroll.dispatchEvent('wheel', {
     deltaY: -3,
@@ -337,7 +356,7 @@ try {
     clientX: 800,
     clientY: 500,
   });
-  await page.waitForFunction(() => Number(document.querySelector('[data-drawing-zoom]')?.getAttribute('data-drawing-zoom')) > 1);
+  await page.waitForFunction((initial) => Number(document.querySelector('[data-drawing-zoom]')?.getAttribute('data-drawing-zoom')) > initial, initialDrawingZoom);
   const wheelZoom = Number(await drawingScroll.getAttribute('data-drawing-zoom'));
   await drawingScroll.dispatchEvent('wheel', {
     deltaY: -20,
@@ -354,30 +373,28 @@ try {
     Number(await drawingScroll.getAttribute('data-drawing-zoom')) > wheelZoom,
     'trackpad-style pinch and physical wheel input both zoom the drawing sheet',
   );
-  const testedZoom = Number(await drawingScroll.getAttribute('data-drawing-zoom'));
-  await drawingScroll.dispatchEvent('wheel', {
-    deltaY: Math.log(testedZoom) / 0.007,
-    deltaMode: 0,
-    ctrlKey: true,
-    clientX: 800,
-    clientY: 500,
-  });
-  await page.waitForFunction(
-    () => Math.abs(Number(document.querySelector('[data-drawing-zoom]')?.getAttribute('data-drawing-zoom')) - 1) < 0.01,
-  );
+  await page.getByRole('button', {name: 'Fit sheet', exact: true}).click();
+  await assertDrawingSheetFits();
+  assert.ok(Math.abs(Number(await drawingScroll.getAttribute('data-drawing-zoom')) - initialDrawingZoom) < 0.01,
+    'Fit sheet restores the pane-dependent starting view');
 
   // Pixel-mode two-finger scrolling pans the paper without changing zoom.
   // A physical middle-button drag follows the same grab-the-sheet contract.
   await page.waitForTimeout(400);
   await drawingScroll.dispatchEvent('wheel', {
-    deltaY: -60,
+    deltaY: -180,
     deltaMode: 0,
     ctrlKey: true,
     clientX: 800,
     clientY: 500,
   });
+  await page.waitForFunction((initial) => Number(document.querySelector('[data-drawing-zoom]')?.getAttribute('data-drawing-zoom')) > initial, initialDrawingZoom);
   const navigationZoom = Number(await drawingScroll.getAttribute('data-drawing-zoom'));
-  assert.ok(navigationZoom > 1.2, 'navigation fixture has enough overflow to pan');
+  assert.ok(navigationZoom > initialDrawingZoom, 'navigation fixture enlarges the fitted sheet');
+  await page.waitForFunction(() => {
+    const pane = document.querySelector('[data-drawing-zoom]');
+    return pane.scrollWidth - pane.clientWidth > 200 && pane.scrollHeight - pane.clientHeight > 250;
+  });
   await drawingScroll.evaluate((element) => {
     element.scrollLeft = 80;
     element.scrollTop = 80;
@@ -453,20 +470,8 @@ try {
     'middle-button drag pans the drawing sheet',
   );
 
-  await drawingScroll.dispatchEvent('wheel', {
-    deltaY: Math.log(navigationZoom) / 0.007,
-    deltaMode: 0,
-    ctrlKey: true,
-    clientX: 800,
-    clientY: 500,
-  });
-  await page.waitForFunction(
-    () => Math.abs(Number(document.querySelector('[data-drawing-zoom]')?.getAttribute('data-drawing-zoom')) - 1) < 0.01,
-  );
-  await drawingScroll.evaluate((element) => {
-    element.scrollLeft = 0;
-    element.scrollTop = 0;
-  });
+  await page.getByRole('button', {name: 'Fit sheet', exact: true}).click();
+  await assertDrawingSheetFits();
 
   const solidHistoryBeforeAutoLayout = await page.evaluate(() => ({
     featureIds: window.__appStore.getState().document.features.map((feature) => feature.id),

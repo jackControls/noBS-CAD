@@ -4,6 +4,7 @@ import { getSessionCamera, subscribeSessionCamera } from './components/viewport/
 import { inspectUi, operateUi, visible, type UiAction } from './uiControl';
 import { presentOperation, presentation, setPlaybackPace, waitForPlayback, type PresentationRequest } from './operationPlayback';
 import { operateUiFile, type UiFileRequest } from './uiFiles';
+import { queueRecipeOpen } from './scripts/recipeLinks';
 import {drivePointer, type UiGesture} from './uiPointer';
 import {pendingEngineOperations} from './engine/activity';
 import { applicationExitBarrier } from './files/applicationExit';
@@ -17,7 +18,7 @@ interface ViewRequest extends CameraViewRequest { id: string; session_id: string
   document_id?: string;
   engine_revision?: number;
   ui?: Omit<UiAction, 'action'> & Omit<UiFileRequest, 'command'> & Omit<PresentationRequest, 'mode' | 'command'> & {
-    action: UiAction['action'] | 'window' | 'file' | 'viewport' | 'presentation'; command?: string;
+    action: UiAction['action'] | 'window' | 'file' | 'viewport' | 'presentation' | 'open_recipe'; command?: string; recipe?: string;
     pace_ms?: number; mode?: string; canvas?: 'viewport' | 'drawing'; gesture?: UiGesture;
     point?: [number, number]; to?: [number, number]; world?: [number, number, number]; shift?: boolean;
   }
@@ -52,7 +53,16 @@ export async function applyLiveUiControl(publishChangedState: () => Promise<void
       if (request.ui) {
         if (request.expires_ms < Date.now()) throw new Error('UI request expired');
         if (request.ui.pace_ms !== undefined) setPlaybackPace(request.ui.pace_ms);
-        if (request.ui.action === 'presentation') {
+        if (request.ui.action === 'open_recipe') {
+          response.recipe = await queueRecipeOpen(request.ui.recipe ?? '');
+          try { response.window = await invoke('mcp_window_control', { mode: 'foreground' }); }
+          catch (error) { response.focus_error = String(error); }
+          // Receipt means queued, including while playback or a save prompt is
+          // active. Never hold the transport open awaiting the user's choice.
+          response.status = 'applied';
+          await invoke('mcp_session_bridge_control', { response });
+          return;
+        } else if (request.ui.action === 'presentation') {
           response.presentation = presentation.control(request.ui as PresentationRequest);
         } else if (request.ui.action === 'window') {
           response.window = await invoke('mcp_window_control', { mode: request.ui.mode ?? 'inspect' });

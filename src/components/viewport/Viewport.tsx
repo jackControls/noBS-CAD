@@ -2,6 +2,7 @@ import { drivePointer } from '../../uiPointer';
 import { registerSessionCamera, unregisterSessionCamera, notifySessionCameraChanged } from './cameraApi';
 import { presentation } from '../../operationPlayback';
 import { listenForModelKeys } from '../../modelKeyboard';
+import { consumeOpenedProjectFraming, subscribeOpenedProjectFraming } from '../../files/openProjectFraming';
 /**
  * Native Bevy viewport interaction layer with noBS CAD navigation and the
  * sketch environment.
@@ -12455,6 +12456,9 @@ export function Viewport() {
     let lastDatumHidden = store.getState().hidden;
     let lastDatumDocument = store.getState().document;
     rebuildDatumPlanes();
+    const frameOpenedProject = () => {
+      if (consumeOpenedProjectFraming(store.getState())) api.home(0);
+    };
     let lastPalette = {
       points: store.getState().palette.points,
       dimensions: store.getState().palette.dimensions,
@@ -12725,6 +12729,9 @@ export function Viewport() {
         };
         surface.domElement.style.cursor = cursors[s.navTool] ?? '';
       }
+      // All loaded geometry, assembly poses and sketch transitions above must
+      // settle before an Open-only camera request can measure their bounds.
+      frameOpenedProject();
     });
 
     // --- Resize handling ---
@@ -12861,6 +12868,10 @@ export function Viewport() {
     };
     wakeControllerFrame();
 
+    // Open may have arrived while Drawings had the viewport unmounted. Fit the
+    // matching model before publishing the camera or drawing its first frame.
+    const unsubscribeOpenedFraming = subscribeOpenedProjectFraming(frameOpenedProject);
+    frameOpenedProject();
     // Publish only after the mounted viewport has built its scene and handlers.
     registerSessionCamera(api);
     return () => {
@@ -12869,6 +12880,7 @@ export function Viewport() {
       cancelAnimationFrame(raf);
       resizeObserver.disconnect();
       unsub();
+      unsubscribeOpenedFraming();
       surface.domElement.removeEventListener('pointerdown', onNavPointerDown);
       surface.domElement.removeEventListener('pointermove', onPointerMove);
       surface.domElement.removeEventListener('pointerleave', onPointerLeave);

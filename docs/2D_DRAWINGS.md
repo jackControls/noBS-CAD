@@ -1,11 +1,38 @@
 # 2D technical drawings
 
-The drawing workspace turns the current parametric model into persistent,
-printable vector sheets. It follows the same production boundary used by the
-rest of noBS CAD: Rust owns document meaning, OCCT owns exact geometry, React
-owns document UI, and Bevy remains the native interactive 3D viewport.
+The Drawing workspace creates editable sheets from your parts and assemblies.
+Views, dimensions and annotations are saved with the model in its `.nbcad` file.
+
+Finish any active sketch, switch to **Drawing**, create a sheet, and place a base
+view. Add projected views and dimensions, then save the project. The
+[vise](d-screw-vise.md) and [turbine](vertical-axis-turbine.md) include complete
+example drawing packages to inspect in CAD.
+
+During the turbine's live presentation, the assembly sheet has been observed
+showing view crosshairs without projected linework. The same run's native SVG
+and DXF exports contain the placed geometry. This live rendering gap remains
+unresolved; successful export checks alone do not validate what the sheet shows.
+See the [drawing workstream](https://github.com/jackControls/noBS-CAD/issues/93).
+
+## Export and print
+
+- **Interactive Drawing workspace:** export sheet DXF or use the platform's
+  print/PDF path. A separate 1:1 profile export supplies model-space geometry.
+- **Native MCP/recipe export:** `drawing_export` returns SVG or DXF containing
+  linear, radial and angular dimensions, notes, title information and BOM.
+  Other annotation kinds and dual-unit presentation currently reject export;
+  interactive export supports a wider set of annotations.
+- **Editable source:** save `.nbcad` to retain views, associations and annotations.
+  STEP/STL/3MF geometry exports do not replace that drawing document.
+
+See the [native export contract](native-drawing-export.md) for supported commands
+and reference validation. DWG output and direct headless PDF export are not
+implemented. Review sheet scale, dimensions and manufacturing notes before use.
 
 ## Ownership boundary
+
+Rust owns drawing meaning, OCCT owns exact projected geometry, React owns the
+sheet interface, and Bevy owns the native 3D viewport.
 
 | Layer | Responsibility |
 | --- | --- |
@@ -65,7 +92,10 @@ projected views. From there the user may:
   modeless cursor-following placement previews.
 - Drawing-specific undo/redo. A compound command such as Auto Layout or a
   completed drag is one history operation rather than several internal edits.
-- Cursor-anchored pinch/wheel zoom from 25% through 500%. Unmodified macOS
+- Sheets initially fit the available drawing pane. **Fit sheet** restores that
+  view and follows window resizing; manual zoom or pan keeps your chosen view.
+  The same labelled control is available through MCP inspection and activation.
+- Cursor-anchored pinch/wheel zoom from 1% through 500%. Unmodified macOS
   two-finger movement pans in both axes; middle-button drag pans with a mouse
   on macOS and Windows.
 

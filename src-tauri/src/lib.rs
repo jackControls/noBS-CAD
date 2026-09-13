@@ -9,6 +9,7 @@
 
 mod native_menu;
 pub mod native_viewport;
+mod recipe_links;
 mod scripts;
 mod session_bridge;
 mod six_dof_mouse;
@@ -33,6 +34,11 @@ use tauri::{Emitter, Manager};
 #[tauri::command]
 fn ping() -> String {
     "pong".to_string()
+}
+
+#[tauri::command]
+fn native_build_info() -> nbcad_core::BuildInfo {
+    nbcad_core::build_info()
 }
 
 #[derive(Serialize)]
@@ -927,9 +933,11 @@ fn write_binary_file_atomic(path: String, bytes: Vec<u8>) -> Result<(), String> 
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_deep_link::init())
         .manage(AppState::new())
         .manage(NativeQuitState::default())
         .manage(scripts::NativeScriptState::default())
+        .manage(recipe_links::RecipeLinkState::default())
         .manage(native_menu::NativeEditMenuState::default())
         .manage(native_menu::NativeFileMenuState::default())
         .manage(session_bridge::SessionBridgeState::default())
@@ -947,6 +955,7 @@ pub fn run() {
         .on_menu_event(native_menu::handle_event);
     builder
         .setup(|app| {
+            recipe_links::install(app.handle());
             session_bridge::start_mcp_wake_loop(app.handle().clone());
             let viewport = NativeViewport::install(app).map_err(std::io::Error::other)?;
             let (
@@ -989,6 +998,9 @@ pub fn run() {
             scripts::native_script_preview_close,
             scripts::native_script_preview_release,
             scripts::native_script_examples,
+            native_build_info,
+            recipe_links::native_recipe_open_pending,
+            recipe_links::native_recipe_open_ack,
             get_document,
             native_viewport_set_layout,
             native_viewport_set_suspended,

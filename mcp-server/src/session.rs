@@ -184,11 +184,22 @@ pub fn request_ui(arguments: &Value, attached: Option<&str>) -> Result<Value, St
             | "file"
             | "viewport"
             | "presentation"
+            | "open_recipe"
     ) {
         return Err("unknown UI action".into());
     }
     if action == "presentation" {
         validate_presentation(arguments)?;
+    }
+    if action == "open_recipe" {
+        nbcad_recipes::find(
+            arguments["recipe"]
+                .as_str()
+                .ok_or("open_recipe requires a built-in recipe ID")?,
+        )?;
+        if arguments.get("source").is_some() || arguments.get("path").is_some() {
+            return Err("open_recipe accepts a built-in recipe ID only".into());
+        }
     }
     if matches!(
         action,
@@ -1990,6 +2001,16 @@ mod tests {
 
     #[test]
     fn ui_requests_reject_invalid_actions_targets_and_pacing_before_io() {
+        for arguments in [
+            json!({"action":"open_recipe"}),
+            json!({"action":"open_recipe","recipe":"unknown"}),
+            json!({"action":"open_recipe","recipe":"garden-bench","source":"{}"}),
+            json!({"action":"open_recipe","recipe":"garden-bench","path":"example.jsonc"}),
+        ] {
+            assert!(!request_ui(&arguments, None)
+                .unwrap_err()
+                .contains("session_id"));
+        }
         for action in ["click", "double_click", "context_menu", "set_value", "key"] {
             assert!(request_ui(&json!({"action":action}), None)
                 .unwrap_err()
@@ -2009,6 +2030,68 @@ mod tests {
                 .unwrap_err()
                 .contains("pace_ms"));
         }
+    }
+
+    #[test]
+    fn recipe_link_handoff_uses_live_control_without_reading_or_writing_model() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let id = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-recipe-link-{id}"));
+        let previous = std::env::var_os("NBCAD_SESSION_DIR");
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        write_process_lease(
+            &dir,
+            "recipe-test",
+            now_ms(),
+            json!([{
+                "window_id":"main", "active_document_id":"retained-document", "active_session_id":id
+            }]),
+        );
+        write_session(&id, "heartbeat.json", &json!({
+            "updated_ms":now_ms(), "generation":1, "process_instance_id":"recipe-test",
+            "window_id":"main", "document_id":"retained-document", "project_session_id":"retained-document"
+        }).to_string()).unwrap();
+        // Deliberately unreadable as a model: opening source must not hydrate it.
+        let model = "user's unsaved model stays byte-for-byte unchanged";
+        write_session(&id, "model.json", model).unwrap();
+        let controls = dir.join(&id).join("controls");
+        let receiver = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while std::time::Instant::now() < deadline {
+                if let Ok(entries) = fs::read_dir(&controls) {
+                    for entry in entries.flatten().filter(|entry| {
+                        entry
+                            .file_name()
+                            .to_string_lossy()
+                            .ends_with(".request.json")
+                    }) {
+                        let request: Value =
+                            serde_json::from_str(&fs::read_to_string(entry.path()).unwrap())
+                                .unwrap();
+                        assert_eq!(request["ui"]["action"], "open_recipe");
+                        assert_eq!(request["ui"]["recipe"], "garden-bench");
+                        let result = controls
+                            .join(format!("{}.result.json", request["id"].as_str().unwrap()));
+                        let temporary = result.with_extension("tmp");
+                        fs::write(&temporary, r#"{"status":"applied","recipe":{"status":"queued","recipe":"garden-bench"}}"#).unwrap();
+                        fs::rename(temporary, result).unwrap();
+                        return;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            panic!("No recipe request reached the existing control channel");
+        });
+        assert!(crate::open_recipe_in_running_desktop("garden-bench").unwrap());
+        receiver.join().unwrap();
+        assert_eq!(read_session_file(&id, "model.json").unwrap(), model);
+        assert!(!dir.join(&id).join("inbox").exists());
+        if let Some(value) = previous {
+            std::env::set_var("NBCAD_SESSION_DIR", value);
+        } else {
+            std::env::remove_var("NBCAD_SESSION_DIR");
+        }
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

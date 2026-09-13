@@ -64,7 +64,7 @@ export async function checkScriptDocumentOwnership() {
     replace('Original');
     useAppStore.setState({engineKind: 'tauri', activeProjectTabId: 'existing',
       projectTabs: [{id: 'existing', name: 'Original', fileName: null, dirty: false, workspaceTab: 'solid'}]});
-    useScriptWorkspace.setState({source, info, loading: false, running: false, completed: false});
+    useScriptWorkspace.setState({source, sourceBaseline: source, info, loading: false, running: false, completed: false});
     const inspecting = runLoadedScript();
     replace('Opened during inspection');
     pendingInspect.resolve(info); pendingInspect = null;

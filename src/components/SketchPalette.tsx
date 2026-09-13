@@ -21,27 +21,36 @@ const SUPPORTED_OPTIONS = new Set<PaletteOptionKey>([
   'constraints',
 ]);
 
+function PaletteToggle({ label, checked, disabled = false, onChange }: {
+  label: string; checked: boolean; disabled?: boolean; onChange: () => void;
+}) {
+  return (
+    <li>
+      <label className={cx(
+        'flex h-6 items-center justify-between px-3 text-xs',
+        disabled ? 'cursor-not-allowed text-mute opacity-45' : 'cursor-pointer text-ink hover:bg-header',
+      )}>
+        <span>{label}</span>
+        <span className="relative flex h-3.5 w-3.5 items-center justify-center">
+          <input type="checkbox" checked={checked} disabled={disabled} onChange={onChange}
+            className={cx(
+              'absolute inset-0 m-0 h-full w-full cursor-inherit appearance-none rounded-[2px] border focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent',
+              checked ? 'border-accent bg-accent' : 'border-mute/60 bg-transparent',
+            )} />
+          {checked && <Check aria-hidden="true" className="pointer-events-none relative text-white" size={10} strokeWidth={3} />}
+        </span>
+      </label>
+    </li>
+  );
+}
+
 /** ISO 129 dimension style row (document-level setting, D4.5). */
 function IsoStyleRow() {
   const { t } = useTranslation();
   const iso = useAppStore((s) => s.activeSketch?.dimension_style === 'iso');
   return (
-    <li
-      className="flex h-6 cursor-pointer items-center justify-between px-3 text-xs text-ink hover:bg-header"
-      onClick={() => void setDimensionStyle(iso ? 'aligned' : 'iso')}
-    >
-      <span>{t('palette.isoDimensions')}</span>
-      <span
-        role="checkbox"
-        aria-checked={iso}
-        className={cx(
-          'flex h-3.5 w-3.5 items-center justify-center rounded-[2px] border',
-          iso ? 'border-accent bg-accent text-white' : 'border-mute/60 bg-transparent',
-        )}
-      >
-        {iso && <Check size={10} strokeWidth={3} />}
-      </span>
-    </li>
+    <PaletteToggle label={t('palette.isoDimensions')} checked={iso}
+      onChange={() => void setDimensionStyle(iso ? 'aligned' : 'iso')} />
   );
 }
 
@@ -103,32 +112,8 @@ export function SketchPalette() {
                 const checked = palette[key];
                 const supported = SUPPORTED_OPTIONS.has(key);
                 return (
-                  <li
-                    key={key}
-                    aria-disabled={!supported}
-                    className={cx(
-                      'flex h-6 items-center justify-between px-3 text-xs',
-                      supported
-                        ? 'cursor-pointer text-ink hover:bg-header'
-                        : 'cursor-not-allowed text-mute opacity-45',
-                    )}
-                    onClick={supported ? () => onOptionClick(key) : undefined}
-                  >
-                    <span>{t(`palette.${key}`)}</span>
-                    <span
-                      role="checkbox"
-                      aria-checked={supported && checked}
-                      aria-disabled={!supported}
-                      className={cx(
-                        'flex h-3.5 w-3.5 items-center justify-center rounded-[2px] border',
-                        supported && checked
-                          ? 'border-accent bg-accent text-white'
-                          : 'border-mute/60 bg-transparent',
-                      )}
-                    >
-                      {supported && checked && <Check size={10} strokeWidth={3} />}
-                    </span>
-                  </li>
+                  <PaletteToggle key={key} label={t(`palette.${key}`)} checked={supported && checked}
+                    disabled={!supported} onChange={() => onOptionClick(key)} />
                 );
               })}
               {/* ISO 129 dimension style toggle (document setting, D4.5). */}

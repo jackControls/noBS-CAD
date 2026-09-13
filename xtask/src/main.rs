@@ -6,6 +6,8 @@
 //! ```
 
 mod install_mcp;
+mod package;
+mod package_mcp;
 mod playback_test;
 mod replay;
 mod test_mcp;
@@ -32,8 +34,10 @@ fn run() -> Result<()> {
     };
 
     match command.as_str() {
+        "package" => package::run(args),
         "run-script" => replay::run(args),
         "cad-call" => replay::call(args),
+        "verify-package-mcp" => package_mcp::run(args),
         "test-mcp" => test_mcp::run(args),
         "install-mcp" => {
             let options = install_mcp::Options::parse(args)?;
@@ -56,14 +60,26 @@ fn print_usage() {
 noBS CAD xtask
 
 Usage:
+  cargo xtask package
   cargo run -p xtask -- install-mcp --dry-run
   cargo run -p xtask -- install-mcp --clients LIST [--no-build] [--binary PATH]
 
 Commands:
+  package       Build the host desktop package using the existing platform bundler.
+                Use --help for prerequisites and optional Windows target selection.
   run-script    Run a .nbcad.jsonc file or --recipe ID using the Rust MCP client. Use --server PATH,
+                plus --server-arg --mcp for packaged CAD. Repeat --server-arg for literal arguments.
+                --init-timeout-seconds N bounds startup only (default: 30); modeling waits remain unbounded.
                 --session UUID --new --present to replay in an existing window.
                 --repeat 2 verifies independent headless runs are deterministic.
+                Use run-script --help for all options.
   cad-call      Send one MCP command from Rust (--tool NAME --args JSON).
+                Accepts the same server arguments and initialization timeout; use cad-call --help.
+  verify-package-mcp
+                Verify a packaged executable over stdio without launching a GUI:
+                --server PATH --server-arg --mcp [--out REPORT.json]
+                Repeat --server-arg for additional executable arguments.
+                --timeout-seconds N bounds each request (default: 120).
   test-mcp      Run contracts (default), live, controls, playback, scripts-workspace, exit, bench, garden-bench, or drawing. Additional
                 arguments pass directly to the selected MCP test/demo driver.
                 Example: cargo xtask test-mcp live --server PATH --desktop PATH

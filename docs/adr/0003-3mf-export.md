@@ -1,49 +1,68 @@
 # ADR 0003 — 3MF (and STL) print export
 
-- Status: Proposed
-- Date: 2026-07-27
+- Status: Implemented for native export with per-body appearance
+- Original proposal: 2026-07-27
+- Status reviewed: 2026-09-12
 - Tracking: [#13](https://github.com/jackControls/noBS-CAD/issues/13)
 - Related: [product directions](../goals.md), MCP print focus in ADR 0006,
   tutor quests [#16](https://github.com/jackControls/noBS-CAD/issues/16)
 
-## Context
+## Original context (July 2026)
 
-Interchange today is STEP (AP242 export in the UI). Makers need slicer-friendly
-mesh packages. **3MF** is the preferred modern print format; STL remains ubiquitous.
+At the time of this proposal, interchange centered on STEP (AP242 export in the
+UI). Makers also needed slicer-friendly mesh packages. **3MF** was selected as
+the preferred print format, with STL as a compatibility fallback.
 
 Additive manufacturing is a **main project goal**. A print package that drops
 appearance data is incomplete for multi-material and painted/assigned-color
 workflows.
 
-**Today:** no 3MF writer on `main`; no MCP export tools for 3MF/STEP;
-`AppearanceDialog` is theme-only (not part materials). MCP has
-`cad_project_model` / `cad_load_project_model` only for model IO.
+The original assessment recorded no 3MF writer or MCP manufacturing export tools,
+and theme-only appearance settings. That describes the starting point, not the
+current implementation.
 
-## Decision (proposed)
+## Decision and current implementation
 
-1. Add Rust export: OCCT tessellation → **3MF** primary, **STL** fallback.
-2. Expose in UI (File export) and MCP (`solid_export_3mf`, `solid_export_stl`).
-3. **Core requirement (not optional):** 3MF export must carry **materials and
-   colors** when the model has them (body/face appearance, named materials).
-   Round-trip enough metadata that a common slicer or 3MF viewer shows the
-   intended colors/materials.
-4. Preserve units and other useful metadata in 3MF when practical.
-5. Keep STEP as CAD interchange; 3MF/STL are manufacturing outputs, not editable history.
-6. STL remains a fallback; STL will not preserve rich materials/colors — document that.
-7. v1 appearance model may be **per-body color + named material**; document the limit.
+1. Native OCCT tessellation feeds one Rust writer in `nbcad-export`: **3MF**
+   for print packages and binary **STL** for geometry-only interchange.
+2. Both the desktop File menu and MCP (`solid_export_3mf`, `solid_export_stl`)
+   use this export implementation. Native mesh export is not implemented by the
+   browser development kernel.
+3. **Materials and colors are part of 3MF export.** Saved per-body appearances
+   include named material and filament/catalog metadata. When appearance is
+   included, 3MF writes base materials and display colors. Per-face painting is
+   outside this initial appearance model.
+4. Packages use millimetres. Optional Bambu Studio, OrcaSlicer, PrusaSlicer and
+   Cura metadata targets provide compatible filament/color hints; these are not
+   complete pre-sliced projects or guarantees for every slicer version.
+5. Assembly scope exports visible solved occurrences with their placement and
+   repetition; definition scope exports retained bodies in part coordinates.
+6. Keep **STEP** for exact CAD interchange. **3MF/STL** contain manufacturing
+   meshes; **`.nbcad`** retains the editable sketches, features and assembly.
+7. **STL** does not preserve materials or colors. Material assignments and export
+   success do not establish physical print fit or strength.
 
 ## Consequences
 
-- Document model must grow appearance/material DTOs (not theme UI).
-- 3MF writer must support the materials/colors part of the targeted 3MF spec.
-- Golden fixtures: unit cube **with color/material** → 3MF; plain cube → STL.
-- MCP print focus (#10) should surface these tools when focus = `print`.
+- Body appearances are persisted project data, separate from application theme.
+  The shared catalog and its frontend mirror must stay aligned; see
+  [the materials model](../manufacturing/materials.md).
+- The Rust writer validates mesh integrity before producing a 3MF package.
+  Geometry repair or print qualification is not silently inferred from export.
+- The desktop and MCP share export behavior and product grouping. Tool disclosure
+  is discovery guidance, not an alternate export implementation.
 
-## Acceptance sketch
+## Validation status
 
-- [ ] Cube with assigned color/material → 3MF shows appearance in a common viewer/slicer
-- [ ] Multi-body or multi-face color case documented (even if v1 is per-body only)
-- [ ] STL path for same geometry; docs state color/material limits
-- [ ] Units preserved in 3MF metadata where the format allows
-- [ ] MCP tools present; golden fixture in CI/MCP
-- [ ] README / goals / export docs list materials and colors as core for 3MF
+The original acceptance called for colored cube and multi-body examples, STL
+fallback, preserved units, MCP coverage, documentation, and inspection in a real
+slicer. Current repository tests cover 3MF millimetre units, base materials,
+slicer metadata, mesh integrity and STL output. Native recipe tests exercise
+STEP/STL/3MF handoff; committed
+[smoke fixtures](../../crates/export/fixtures/smoke) support slicer inspection.
+
+This implementation status does not mark every slicer acceptance check complete.
+Use the [manufacturing validation guide](../manufacturing/VALIDATION.md) for
+target-specific inspection, and retain the source/build, slicer version and print
+profile with each result. The [flagship examples](../flagship-examples.md) track
+their own digital and physical qualification separately.

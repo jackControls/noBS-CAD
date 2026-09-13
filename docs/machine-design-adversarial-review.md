@@ -1,7 +1,7 @@
 # Adversarial findings — docs/machine-design-help (self-audit draft)
 
-Branch tip at start of review: `1e28368`  
-Scope: help corpus + distill/link policy + Tantivy/search plan  
+Branch tip at start of review: `1e28368`
+Scope: help corpus + distill/link policy + Tantivy/search plan
 Status: self-audit complete; external adversarial executors + Perf Hawk pending merge
 
 ## Blockers
@@ -10,8 +10,8 @@ Status: self-audit complete; external adversarial executors + Perf Hawk pending 
 Concept frontmatter uses `sources: nist-gdt-1, nist-gdt-2, nwtc-guns-dfm, …` but `SOURCES.md` has **no id column** and no matching keys. Agents/CI cannot verify attribution. **Fix:** add stable `id` column to SOURCES; validate frontmatter `sources` ⊆ known ids in `check-knowledge` or a new check.
 
 ### B2. SOURCES contradicts distill-vs-link on ShareAlike
-`SOURCES.md` lists Baughman, Mechanics Map, Wikipedia under **Distill with SA**.  
-`docs/machine-design-distill-vs-link.md` parks them as **link-only** until SA policy.  
+`SOURCES.md` lists Baughman, Mechanics Map, Wikipedia under **Distill with SA**.
+`docs/machine-design-distill-vs-link.md` parks them as **link-only** until SA policy.
 **Fix:** one policy wins — prefer link-only for SA until Jack/Jeff decide; change SOURCES use column.
 
 ## High

@@ -1,7 +1,7 @@
 import { translate } from '../i18n';
 
 export type UnsavedDecision = 'save' | 'discard' | 'cancel';
-export type UnsavedPromptKind = 'close' | 'quit' | 'replace';
+export type UnsavedPromptKind = 'close' | 'quit' | 'replace' | 'replace-script';
 
 interface PendingUnsavedPrompt {
   kind: UnsavedPromptKind;
@@ -40,6 +40,7 @@ export function resolveUnsavedPrompt(decision: UnsavedDecision): void {
 }
 
 export function unsavedPromptMessage(kind: UnsavedPromptKind): string {
+  if (kind === 'replace-script') return 'Save your script edits before opening another recipe? Your CAD design stays open.';
   if (kind === 'quit') return translate('file.quitSaveConfirm');
   if (kind === 'replace') return translate('file.replaceSaveConfirm');
   return translate('file.closeSaveConfirm');

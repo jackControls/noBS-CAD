@@ -1,38 +1,13 @@
 # Maintenance — MCP & disclosure
 
-## Prerequisites (Windows)
+## Setup and tests
 
-```powershell
-# After vcpkg install (see docs/WINDOWS_PACKAGING.md):
-$env:OCCT_ROOT = "$PWD\vcpkg_installed\x64-windows"
-$env:Path = "$PWD\vcpkg_installed\x64-windows\bin;$env:Path"
-```
+Use [DEVELOPMENT.md](../DEVELOPMENT.md) for native SDK/runtime setup and the
+sequential MCP test command. Manual end-user client configuration belongs in
+[INSTALL.md](../INSTALL.md#connect-an-mcp-agent); the
+[standalone development installer](INSTALL_MCP.md) documents source-built servers.
 
-Point MCP clients at the release binary after build:
-
-```text
-.../mcp-server/target/release/nbcad-mcp
-```
-
-Example Cursor / VS Code config:
-
-```json
-{
-  "mcpServers": {
-    "nbcad": {
-      "command": "/absolute/path/to/noBS-CAD/mcp-server/target/release/nbcad-mcp"
-    }
-  }
-}
-```
-
-## Tests
-
-```powershell
-cargo test --manifest-path mcp-server/Cargo.toml
-```
-
-CI: `.github/workflows/mcp-server.yml` (Windows + vcpkg OCCT).
+CI: `.github/workflows/mcp-server.yml` (Windows and Ubuntu with native OCCT).
 Pinned vcpkg checkout must use `fetch-depth: 0` (versioned port trees fail on shallow clones).
 
 ## Adding an MCP tool

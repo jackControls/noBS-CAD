@@ -3,6 +3,8 @@
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::f64::consts::PI;
+#[path = "turbine/demo.rs"]
+mod turbine_demo;
 #[path = "turbine/design.rs"]
 mod turbine_design;
 #[path = "turbine/drawings.rs"]
@@ -64,6 +66,10 @@ struct Author {
     hardware: Vec<Value>,
     clamps: Vec<Clamp>,
     joint_names: Vec<String>,
+    sketch_visibility: Option<String>,
+    last_build_scene: Option<Value>,
+    present_construction: bool,
+    profile_view: &'static str,
 }
 #[derive(Clone)]
 struct Clamp {
@@ -86,6 +92,10 @@ impl Author {
             hardware: vec![],
             clamps: vec![],
             joint_names: vec![],
+            sketch_visibility: None,
+            last_build_scene: None,
+            present_construction: false,
+            profile_view: "current",
         }
     }
     fn call(&mut self, id: &str, _group: &str, op: &str, args: Value) {
@@ -128,6 +138,42 @@ impl Author {
         format!("{base}_{}", self.serial)
     }
     fn begin(&mut self, name: &str, plane: &str, z: f64) {
+        assert!(
+            self.sketch_visibility.is_none(),
+            "Previous sketch visibility was not restored"
+        );
+        // Presentation IDs must not consume the geometry-name sequence: doing
+        // so would rename later editable sketches and change saved references.
+        let visibility = format!("{name}_before_sketch_visibility");
+        self.call(
+            &visibility,
+            "document/appearance",
+            "project_visibility",
+            json!({}),
+        );
+        // Extrusions create every body here; reuse the prior response's IDs.
+        let scene = self
+            .last_build_scene
+            .clone()
+            .unwrap_or_else(|| json!({"bodies":[]}));
+        let isolate = format!("{name}_clear_sketch_view");
+        self.call(
+            &isolate,
+            "document/appearance",
+            "project_set_visibility",
+            json!({
+                "hidden_body_ids":select(scene,"/bodies",json!({}),"all","/id"),
+                "hidden_sketch_names":at(&visibility,"/hidden_sketch_names"),
+                "hidden_datum_plane_ids":at(&visibility,"/hidden_datum_plane_ids")
+            }),
+        );
+        self.sketch_visibility = Some(visibility);
+        self.profile_view = match plane {
+            "xy" => "top",
+            "xz" => "front",
+            "yz" => "right",
+            _ => panic!("Unknown sketch plane {plane}"),
+        };
         let datum = self.uid("datum");
         self.call(&datum,"construct/planes","construction_plane_offset",json!({"name":format!("{name} / datum"),"reference":{"type":"origin_plane","plane":plane},"distance":z}));
         let id = self.uid("begin");
@@ -219,15 +265,29 @@ impl Author {
         operation: &str,
         target: Option<&str>,
     ) -> String {
-        if operation == "new_body" {
-            self.steps.push(
-                json!({"view":"current","fit":true,"target":"active_sketch","duration_ms":300}),
-            );
-        }
+        let view = if self.present_construction {
+            self.profile_view
+        } else {
+            "current"
+        };
+        self.steps
+            .push(json!({"view":view,"fit":true,"target":"active_sketch","duration_ms":300}));
         let finish = self.uid("finish");
         self.call(&finish, "sketch/draw", "sketch_finish", json!({}));
         let id = self.uid("extrude");
         self.call(&id,"solid/build","solid_extrude",json!({"sketch_name":name,"profile_indices":[0],"operation":operation,"extent":{"type":"distance","distance":height},"taper_angle_deg":0,"flip":false,"target_body_ids":target.map(|n|vec![body_ref(n)]).unwrap_or_default()}));
+        self.last_build_scene = Some(at(&id, "/scene"));
+        let saved_visibility = self
+            .sketch_visibility
+            .take()
+            .expect("Sketch visibility snapshot");
+        let restore = format!("{name}_restore_model_view");
+        self.call(
+            &restore,
+            "document/appearance",
+            "project_set_visibility",
+            r(&saved_visibility),
+        );
         let visibility = self.uid("completed_feature_references");
         self.call(
             &visibility,
@@ -235,6 +295,12 @@ impl Author {
             "construction_set_visibility",
             json!({"visible":false}),
         );
+        if self.present_construction {
+            let body = target
+                .map(body_ref)
+                .unwrap_or_else(|| select(r(&id), "/scene/bodies", json!({}), "last", "/id"));
+            turbine_demo::construction(self, name, body);
+        }
         id
     }
     fn cylinder(
@@ -454,7 +520,18 @@ impl Author {
         self.call(&format!("{name}_placement"),"assembly/joints","assembly_set_occurrence_pose",json!({"occurrence_id":occ_ref(name),"local_pose":{"translation":pose,"rotation":[0,0,0,1]}}));
         self.poses.insert(name.into(), (pose, [0., 0., 0., 1.]));
         self.occurrences.insert(name.into(), occ_ref(name));
-        self.steps.push(json!({"view":"isometric","fit":true,"component_id":at(&format!("{name}_component"),"/id"),"duration_ms":450}));
+        if self.present_construction && printable {
+            turbine_demo::show_body(
+                self,
+                &format!("completed_{name}"),
+                body_ref(name),
+                &format!(
+                    "{title}. Inspect the completed editable part before continuing the assembly."
+                ),
+            );
+        } else {
+            self.steps.push(json!({"view":"isometric","fit":true,"component_id":at(&format!("{name}_component"),"/id"),"duration_ms":450}));
+        }
         self.parts.push(json!({"id":name,"name":title,"body_id":body_ref(name),"component_id":at(&format!("{name}_component"),"/id"),"occurrence_id":occ_ref(name),"printable":printable,"material":if printable{"PETG"}else{"purchased — drawing/specimen confirmation required"},"print_pose":{"translation":[0,0,0],"rotation":[0,0,0,1]}}));
     }
     fn repeat(&mut self, name: &str, source: &str, pose: [f64; 3]) {
@@ -583,7 +660,8 @@ impl Author {
 
 fn main() {
     let mut a = Author::new();
-    a.note("The experiment","Build a two-stage vertical-axis Savonius turbine. PETG baseline; 180 mm bucket diameter and 200 mm combined bucket height. Generator and hardware are native representative parts pending specimen fit and physical testing.");
+    a.present_construction = true;
+    a.note("The experiment","Two 198 mm rotor discs, 200 mm combined bucket height, an 8 x 300 mm shaft and a 4:1 generator drive. The printed design and representative hardware still need physical fit and output testing.");
     a.note("Repeated rotor stage","Concentric driving diameters define a bottom disc, shaft hub and two semicircular bucket walls. The clamp hub ends at 18 mm so only the 8 mm shaft divides the overlap above it. One stage definition appears twice, staggered by 90 degrees. Print each stage upright and the final cap separately.");
     let stage_plate = a.cylinder("stage", [0., 0.], 198., 0., 3., "new_body", None);
     a.bind(
@@ -697,6 +775,13 @@ fn main() {
         turbine_hardware::rz(10.),
     );
     a.hardware_definitions();
+    // Hardware ends with a small set-screw close-up. Establish the complete
+    // assembly framing before the longer grounding, joint and installation phase.
+    a.steps.push(json!({"id":"assembly_overview_fit",
+        "view":"isometric","fit":true,"duration_ms":650}));
+    a.steps.push(json!({"id":"assembly_introduction","chapter":"Assemble the supported drive",
+        "note":"Ground the base, constrain the bearing-supported rotor and generator, then install the screws and captive nuts. The two shaft joints are linked by the 72:18 gear relation.",
+        "duration_ms":6000}));
     a.call("joint_geometry", "solid/check", "solid_scene", json!({}));
     a.call(
         "ground_base",
@@ -791,6 +876,7 @@ fn main() {
     a.call("gear_coupling","assembly/joints","assembly_create_gear_relation",json!({"name":"Printed 72:18 spur pair","joint_a":at("rotor_rotation","/id"),"joint_b":at("generator_rotation","/id"),"teeth_a":72,"teeth_b":18,"reverse":true,"phase_deg":10}));
     a.install_clamps();
     a.install_remaining_hardware();
+    turbine_demo::run(&mut a);
     let print_plates = a.print_plates();
     a.note("Read the manufacturing intent","Each native part carries its own editable drawing with actual projected edges, diameter and height dimensions. Fits are provisional. Ages 8–12 with adult guidance; age 5 requires closer hands-on adult guidance. Anchor the base before any fan or wind test. Keep fingers away from the rotor and use only supervised low-energy airflow.");
     for (name,height,diameters,note) in [
@@ -806,7 +892,28 @@ fn main() {
         ("rotor_gear",12.,vec![8.3,24.],"PRINT 1 / teeth down. Module1 /72 teeth /20 degree pressure angle /3 mm face /0.10 mm thinning. Captive M3 nut. Narrow shim bears only on the upper inner ring. Native geometry and coupons do not qualify strength or wear."),
         ("pinion",6.,vec![2.2,12.],"PRINT 1 / teeth down. Module1 /18 teeth /20 degree pressure angle /3 mm face. Preload captive M2 nut before meshing; nominal 2 mm motor shaft. Check measured shaft engagement, clamp slip and backlash before applying electrical load."),
         ("shaft",D.shaft_length,vec![8.],"PURCHASE / straight 8 x300 mm shaft, uncut. Deburr without shortening the bearing seats. Purchased 8 x16 x8 collars use M4x4 set screws. Verify shaft and bearing fits and inspect the exposed top before use."),
-    ] { a.part_drawing(name,height,&diameters,note); }
+    ] {
+        if name == "shaft" {
+            a.steps.push(json!({
+                "id":"shaft_drawing_introduction","chapter":"Specify the purchased shaft",
+                "note":"The straight 8 x 300 mm shaft is purchased stock. This sheet records its diameter, length and collar requirements; check bearing fits against the delivered parts.",
+                "duration_ms":6000
+            }));
+        }
+        a.part_drawing(name,height,&diameters,note);
+        if name == "pinion" {
+            a.steps.push(json!({
+                "chapter":"Read the generator pinion",
+                "note":"Two projected views locate the 2.2 mm shaft bore and 12 mm hub. Read the tooth dimensions and captive M2 nut notes; the printed fit still needs measurement.",
+                "duration_ms":4500
+            }));
+        }
+    }
+    a.steps.push(json!({
+        "id":"assembly_drawing_introduction","chapter":"Read the assembly and parts list",
+        "note":"The assembly views locate the rotor and generator. The following bill of materials lists printed parts and purchased hardware, with procurement and fit notes.",
+        "duration_ms":6000
+    }));
     a.assembly_drawing();
     a.steps
         .push(json!({"view":"isometric","fit":true,"duration_ms":600}));

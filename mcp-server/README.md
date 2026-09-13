@@ -1,8 +1,14 @@
 # noBS CAD MCP server
 
-`nbcad-mcp` is a native **stdio** JSON-RPC MCP server (protocol `2025-06-18`).
-It covers most sketch and solid-modeling tools with **soft focus-scoped
-disclosure** (`tools.listChanged: true`). Out-of-focus tools stay callable.
+The MCP server drives native sketches, solid features, assemblies and drawings
+through the same grouped product operations used by the application. It runs
+locally over **stdio** JSON-RPC (protocol `2025-06-18`).
+
+**No source build needed for a release install:** the desktop application starts
+this same server when launched with `--mcp`, without opening a window. See
+[packaged MCP setup](../docs/INSTALL.md#connect-an-mcp-agent) for Windows, macOS
+and Ubuntu commands. The standalone binary and developer setup below remain
+available for source builds.
 
 > Notes: [docs/mcp-harness.md](../docs/mcp-harness.md).
 > Further architecture options (multi-document broker, …):
@@ -23,40 +29,38 @@ Markdown knowledge bundle; `resources/read` returns a listed URI such as
 for design and workholding guidance. The corpus is compiled into the server,
 available offline, and read-only; rebuild after updating `knowledge/`.
 
-## Build and verify
+## Setup and first use
 
-```sh
-cargo build --release --manifest-path mcp-server/Cargo.toml
-cargo test --manifest-path mcp-server/Cargo.toml
-```
+Follow [Install → Connect an MCP agent](../docs/INSTALL.md#connect-an-mcp-agent)
+for packaged executable paths, exact Cursor/VS Code configuration files and a
+first-part prompt. The installed application uses `--mcp`; a separately built
+`nbcad-mcp` executable starts directly as a server.
 
-Windows:
+Developers should use the single [build and test guide](../docs/DEVELOPMENT.md)
+for OCCT runtime setup, sequential native tests and
+[replay CLI examples](../docs/DEVELOPMENT.md#replay-a-recipe).
+The [source installer](../docs/agentic/INSTALL_MCP.md) can configure a standalone
+development server in supported clients.
 
-```powershell
-$env:OCCT_ROOT = "$PWD\vcpkg_installed\x64-windows"
-cargo test --manifest-path mcp-server/Cargo.toml
-```
+Logs go to **stderr**; stdout carries JSON-RPC. Tool discovery uses soft focus
+groups (`tools.listChanged: true`); undisclosed tools remain callable. Use
+`full_static` or `cad_list_all_tools` when a client cannot refresh dynamic tool
+lists. `cad_interface` also supports desktop launch and guarded live-window
+control; the [harness guide](../docs/mcp-harness.md) explains ownership.
 
-Logs on **stderr**; stdout is JSON-RPC.
+## Drawing and material boundaries
 
-Prefer `dynamic` disclosure for main agents; `full_static` or
-`cad_list_all_tools` for subagents.
+Native MCP drawing export supports SVG/DXF with linear, radial and angular
+dimensions, notes, title information and BOM. Other annotation kinds and
+dual-unit presentation are rejected by this exporter. The interactive drawing
+workspace has wider annotation/export coverage and the print/PDF path. See
+[drawing delivery](../docs/2D_DRAWINGS.md#export-and-print) and the
+[native export contract](../docs/native-drawing-export.md).
 
-Manual Cursor / VS Code config (build the release binary first):
-
-```json
-{
-  "mcpServers": {
-    "nbcad": {
-      "command": "/absolute/path/to/noBS-CAD/mcp-server/target/release/nbcad-mcp"
-    }
-  }
-}
-```
-
-Repository client setup uses `cargo xtask install-mcp`. `cad_interface` also
-supports application launch and guarded live-window control; see the harness
-notes for document ownership and version compatibility.
+3MF carries millimetres, per-body material names/colors and compatible slicer
+metadata hints. Select and review actual filament and process settings in the
+slicer. A material assignment does not establish strength, printability or a
+qualified printer profile; see [export guidance](../knowledge/concepts/export-print.md).
 
 ## Modeling flow
 

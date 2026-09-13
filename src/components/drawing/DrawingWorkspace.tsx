@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useContext,
   useRef,
   useState,
@@ -9,7 +10,7 @@ import {
   type ReactNode,
   type WheelEvent as ReactWheelEvent,
 } from 'react';
-import { Eye, EyeOff, Minus, Plus, Printer, Trash2, X } from 'lucide-react';
+import { Eye, EyeOff, Maximize, Minus, Plus, Printer, Trash2, X } from 'lucide-react';
 import { getEngine } from '../../engine';
 import type {
   DrawingAnnotationDto,
@@ -122,6 +123,7 @@ import {
   type DrawingChamferCandidate,
 } from '../../drawing/chamfer';
 import { exportManufacturingProfileDxf, printActiveDrawing } from '../../drawing/export';
+import {drawingTitleBlock} from '../../drawing/titleBlock';
 import { drawingProjectionRequestForView, drawingSourceAnchorPoint, drawingSectionSourceExtent } from '../../drawing/projection';
 import {captureDrawingProjectionScope, isDrawingProjectionScopeCurrent, observeDrawingProjection} from '../../drawing/projectionPresentation';
 import {presentation} from '../../operationPlayback';
@@ -132,7 +134,6 @@ import {
   drawingFormatsForStandard,
   drawingFormatShortLabel,
   drawingSheetSize,
-  drawingToleranceNoteText,
   drawingViewPaperBounds,
   drawingViewTransform,
 } from '../../drawing/sheet';
@@ -196,7 +197,7 @@ function useDrawingStyle(): DrawingSheetStyleDto {
 }
 
 const drawingScales = [10, 5, 2, 1, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01] as const;
-const MIN_DRAWING_ZOOM = 0.25;
+const MIN_DRAWING_ZOOM = 0.01;
 const MAX_DRAWING_ZOOM = 5;
 const MACOS_DRAWING_INPUT = typeof navigator !== 'undefined'
   && /Macintosh|Mac OS X/.test(navigator.userAgent);
@@ -223,6 +224,7 @@ type SheetPanDrag = {
 
 export function DrawingWorkspace() {
   const drawing = useAppStore((state) => state.drawingDocument);
+  const projectTabId = useAppStore((state) => state.activeProjectTabId);
   const scene = useAppStore((state) => state.solidScene);
   const selectedViewId = useAppStore((state) => state.selectedDrawingViewId);
   const selectedAnnotationId = useAppStore((state) => state.selectedDrawingAnnotationId);
@@ -236,7 +238,10 @@ export function DrawingWorkspace() {
   const setDrawingTool = useAppStore((state) => state.setDrawingTool);
   const setPendingViewKind = useAppStore((state) => state.setDrawingPendingViewKind);
   const sheet = drawing.sheets.find((candidate) => candidate.id === drawing.active_sheet_id) ?? null;
+  const [width, height] = sheet ? drawingSheetSize(sheet.format, sheet.orientation) : [0, 0];
   const [zoom, setZoom] = useState(1);
+  const [sheetFitted, setSheetFitted] = useState(true);
+  const sheetFittedRef = useRef(true);
   const [anchorDraft, setAnchorDraft] = useState<AnchorDraft>(null);
   const [circleDraft, setCircleDraft] = useState<CircleDraft>(null);
   const [centerlineEdgeDraft, setCenterlineEdgeDraft] = useState<CenterlineEdgeDraft>(null);
@@ -262,7 +267,56 @@ export function DrawingWorkspace() {
     selectAnnotation(null);
   };
 
+  const leaveSheetFit = () => {
+    sheetFittedRef.current = false;
+    setSheetFitted(false);
+  };
+
+  const fitSheet = useCallback(() => {
+    const scroll = drawingScrollRef.current;
+    if (!scroll || width <= 0 || height <= 0) return;
+    const padding = getComputedStyle(scroll);
+    const bounds = scroll.getBoundingClientRect();
+    // The fitted page needs no scrollbars. Using the currently zoomed pane's
+    // client size includes its old scrollbar deduction and causes a second
+    // visible fit when the scrollbar disappears on the next layout frame.
+    const availableWidth = bounds.width - parseFloat(padding.borderLeftWidth) - parseFloat(padding.borderRightWidth)
+      - parseFloat(padding.paddingLeft) - parseFloat(padding.paddingRight);
+    const availableHeight = bounds.height - parseFloat(padding.borderTopWidth) - parseFloat(padding.borderBottomWidth)
+      - parseFloat(padding.paddingTop) - parseFloat(padding.paddingBottom);
+    if (availableWidth <= 0 || availableHeight <= 0) return;
+    // Measure the paper pane itself: its siblings already reserve the ribbon,
+    // inspector and playback controls. Sheet dimensions use three pixels/mm
+    // at 100%; zoom changes only the view, never the drawing's paper scale.
+    const nextZoom = Math.min(MAX_DRAWING_ZOOM, availableWidth / (width * 3), availableHeight / (height * 3));
+    sheetFittedRef.current = true;
+    setSheetFitted(true);
+    zoomRef.current = nextZoom;
+    setZoom(nextZoom);
+    if (zoomFrameRef.current !== 0) cancelAnimationFrame(zoomFrameRef.current);
+    scroll.scrollLeft = 0;
+    scroll.scrollTop = 0;
+    zoomFrameRef.current = requestAnimationFrame(() => {
+      zoomFrameRef.current = 0;
+      scroll.scrollLeft = 0;
+      scroll.scrollTop = 0;
+    });
+  }, [width, height]);
+
+  useLayoutEffect(() => {
+    const scroll = drawingScrollRef.current;
+    if (!scroll || !sheet || sheetSetupOpen) return;
+    fitSheet();
+    const resize = new ResizeObserver(() => {
+      if (sheetFittedRef.current) fitSheet();
+    });
+    resize.observe(scroll);
+    return () => resize.disconnect();
+  }, [projectTabId, sheet?.id, sheetSetupOpen, fitSheet]);
+
   const zoomAtPoint = useCallback((requestedZoom: number, clientPoint?: [number, number]) => {
+    sheetFittedRef.current = false;
+    setSheetFitted(false);
     const nextZoom = Math.max(MIN_DRAWING_ZOOM, Math.min(MAX_DRAWING_ZOOM, requestedZoom));
     const scroll = drawingScrollRef.current;
     const svg = drawingSheetRef.current;
@@ -366,6 +420,7 @@ export function DrawingWorkspace() {
         ? event.deltaMode === WheelEvent.DOM_DELTA_PIXEL
         : classifyDrawingWheel(event) === 'pan');
     if (shouldPan) {
+      leaveSheetFit();
       event.currentTarget.scrollLeft += deltaX;
       event.currentTarget.scrollTop += deltaY;
       return;
@@ -380,6 +435,7 @@ export function DrawingWorkspace() {
 
   const startSheetPan = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button === 1) {
+      leaveSheetFit();
       event.preventDefault();
       event.stopPropagation();
       sheetPanDragRef.current = {
@@ -495,7 +551,6 @@ export function DrawingWorkspace() {
     {profileExportOpen && <ManufacturingProfileExportDialog onClose={() => setProfileExportOpen(false)} />}
   </>;
 
-  const [width, height] = drawingSheetSize(sheet.format, sheet.orientation);
   const placementActive = drawingTool === 'place_view' && pendingViewKind !== null;
   const placementRoot = placementActive
     ? drawingViewPlacementRoot(sheet, selectedViewId)
@@ -1001,8 +1056,8 @@ export function DrawingWorkspace() {
     <div className="flex h-full min-h-0 bg-viewport" data-testid="drawing-workspace">
       <section className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-9 shrink-0 items-center justify-between border-b border-edge bg-header px-3">
-          <div className="flex min-w-0 items-center gap-2 text-[11px] text-mute">
-            <span className="font-semibold text-ink">{sheet.name}</span>
+          <div className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap text-[11px] text-mute">
+            <span className="truncate font-semibold text-ink" title={sheet.name}>{sheet.name}</span>
             <span>·</span>
             <span>{drawingFormatShortLabel(sheet.format)} {sheet.orientation}</span>
             <span>·</span>
@@ -1026,11 +1081,12 @@ export function DrawingWorkspace() {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1" data-interface-group="drawing/sheet">
+            <button className="drawing-mini-button" type="button" onClick={fitSheet} title="Fit sheet" aria-pressed={sheetFitted}><Maximize size={14} /></button>
             <button className="drawing-mini-button" type="button" onClick={() => zoomAtPoint(zoomRef.current - 0.1)} title="Zoom out"><Minus size={14} /></button>
             <span className="w-12 text-center font-mono text-[10px] text-mute">{Math.round(zoom * 100)}%</span>
             <button className="drawing-mini-button" type="button" onClick={() => zoomAtPoint(zoomRef.current + 0.1)} title="Zoom in"><Plus size={14} /></button>
-            <button className="drawing-mini-button ml-2" type="button" onClick={printActiveDrawing} title="Print / Save as PDF"><Printer size={14} /></button>
+            <button className="drawing-mini-button ml-2" type="button" data-interface-group="drawing/output" onClick={printActiveDrawing} title="Print / Save as PDF"><Printer size={14} /></button>
           </div>
         </div>
         <div
@@ -3909,29 +3965,22 @@ function SheetFrame({ sheet, width, height }: { sheet: DrawingSheetDto; width: n
   const style = useDrawingStyle();
   const visibleLine = useDrawingLine('visible');
   const tableLine = useDrawingLine('dimension');
-  const blockWidth = Math.min(180, width - 10);
-  const blockHeight = 44;
-  const x = width - blockWidth - 5;
-  const y = height - blockHeight - 5;
-  const tolerance = drawingToleranceNoteText(sheet.tolerance_note);
+  const layout = drawingTitleBlock(sheet, width, height);
   return <>
     <g fill="none" stroke="#4a5058" className="pointer-events-none">
       <rect x="5" y="5" width={width - 10} height={height - 10} {...visibleLine} />
-      <rect x={x} y={y} width={blockWidth} height={blockHeight} {...tableLine} />
-      <path d={`M${x} ${y + 15}H${x + blockWidth} M${x} ${y + 23}H${x + blockWidth} M${x} ${y + 31}H${x + blockWidth} M${x} ${y + 38}H${x + blockWidth} M${x + blockWidth * 0.62} ${y}V${y + 23} M${x + blockWidth * 0.78} ${y + 23}V${y + blockHeight} M${x + blockWidth * 0.9} ${y + 31}V${y + blockHeight}`} {...tableLine} />
+      <rect x={layout.x} y={layout.y} width={layout.width} height={layout.height} {...tableLine} />
+      <path d={layout.segments.map(([a, b]) => `M${a[0]} ${a[1]}L${b[0]} ${b[1]}`).join(' ')} {...tableLine} />
       <g fill="#30343a" stroke="none" fontFamily={style.font_family}>
-        <text x={x + 3} y={y + 6.2} fontSize={style.text_height_mm + 0.8} fontWeight="650">{sheet.title_block.title || sheet.name}</text>
-        <text x={x + 3} y={y + 12.2} fontSize={style.small_text_height_mm}>DRAWING: {sheet.title_block.drawing_number || '—'}</text>
-        <text x={x + blockWidth * 0.64} y={y + 6.2} fontSize={style.small_text_height_mm}>SHEET: {sheet.name}</text>
-        <text x={x + blockWidth * 0.64} y={y + 12.2} fontSize={style.small_text_height_mm}>{drawingFormatShortLabel(sheet.format)} · {sheet.projection_method === 'first_angle' ? '1ST ANGLE' : '3RD ANGLE'}</text>
-        <text x={x + 3} y={y + 20.4} fontSize={style.small_text_height_mm}>{tolerance || 'TOLERANCES: AS SPECIFIED'}</text>
-        <text x={x + 3} y={y + 28.2} fontSize={style.small_text_height_mm}>COMPANY: {sheet.title_block.company || '—'}</text>
-        <text x={x + blockWidth * 0.8} y={y + 28.2} fontSize={style.small_text_height_mm}>REV {sheet.title_block.revision || '—'}</text>
-        <text x={x + 3} y={y + 35.6} fontSize={style.small_text_height_mm}>MATERIAL: {sheet.title_block.material || '—'}</text>
-        <text x={x + blockWidth * 0.8} y={y + 35.6} fontSize={style.small_text_height_mm}>FINISH: {sheet.title_block.finish || '—'}</text>
-        <text x={x + 3} y={y + 42.2} fontSize={style.small_text_height_mm}>DRAWN: {sheet.title_block.author || '—'}</text>
-        <text x={x + blockWidth * 0.4} y={y + 42.2} fontSize={style.small_text_height_mm}>CHECKED: {sheet.title_block.checked_by || '—'}</text>
-        <text x={x + blockWidth * 0.79} y={y + 42.2} fontSize={style.small_text_height_mm}>APPROVED: {sheet.title_block.approved_by || '—'}</text>
+        {layout.cells.map(cell => <g key={cell.id} data-title-block-cell={cell.id}
+          data-cell-bounds={[cell.x, cell.y, cell.width, cell.height].join(',')}
+          data-overflow={cell.overflow || undefined} className="pointer-events-auto">
+          <title>{cell.overflow ? `${cell.label} is too long. Shorten this field or move detailed instructions into drawing notes.\n` : ''}{cell.text}</title>
+          {cell.lines.map((line, index) => <text key={index} x={line.x} y={line.y}
+            style={{fontSize: cell.fontSize}} fontWeight={cell.id === 'title' ? 650 : undefined}
+            fill={cell.overflow ? '#b54432' : undefined}
+            textLength={line.width || undefined} lengthAdjust="spacingAndGlyphs">{line.text}</text>)}
+        </g>)}
       </g>
     </g>
     {sheet.revision_table_position && <RevisionTableGraphic sheet={sheet} position={sheet.revision_table_position} sheetWidth={width} sheetHeight={height} />}

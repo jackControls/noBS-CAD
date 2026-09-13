@@ -27,7 +27,7 @@ export function mountScriptSurfaces(disabled = true) {
     calls.push(command);
     if (command === 'native_script_examples') return catalog;
     if (command === 'native_script_preview') throw new Error('Preview geometry intentionally unavailable in interaction fixture');
-    if (command === 'native_script_inspect') return info;
+    if (command === 'native_script_inspect') return {...info};
     if (command === 'engine_project_session_create') {
       documentId = args.sessionId as string; model = {...model, name: 'Untitled'};
       return ok({document: model, scene: {bodies: [], errors: []}});
@@ -48,7 +48,7 @@ export function mountScriptSurfaces(disabled = true) {
   useAppStore.getState().loadProjectState({document: model, scene: {bodies: [], errors: []}}, [], [], 'retained.nbcad');
   useAppStore.setState({engineKind: 'tauri', activeProjectTabId: documentId,
     projectTabs: [{id: documentId, name: model.name, fileName: 'retained.nbcad', dirty: false, workspaceTab: 'solid'}]});
-  useScriptWorkspace.setState({source, info, loading: false, running: false, open: false, selectedExample: null});
+  useScriptWorkspace.setState({source, sourceBaseline: source, info, loading: false, running: false, open: false, selectedExample: null});
   let escapedToCad = 0;
   // Use the same routing boundary as the real viewport's capture listener.
   listenForModelKeys(event => {

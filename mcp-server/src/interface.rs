@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use std::sync::OnceLock;
 
-const MAX_SCRIPT_BYTES: usize = 16 * 1024 * 1024;
+use nbcad_script::MAX_SCRIPT_BYTES;
 
 /// Load an authored text script, never executable code or a model snapshot.
 pub fn script_source(arguments: &Value) -> Result<String, String> {

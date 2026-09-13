@@ -6,8 +6,9 @@ whose screw could not be assembled as prescribed and whose moving jaw could hit
 mounting hardware. Earlier replay records do not qualify the replacement.
 
 The source is [d-screw-vise.nbcad.jsonc](../examples/scripts/d-screw-vise.nbcad.jsonc).
-Choose it in **Scripts → Run in new design**, or run
-`cargo xtask run-script --server PATH_TO_NBCAD_MCP --recipe d-screw-vise`.
+Choose it in **Scripts → Run in new design**. For headless replay and comparison,
+use the [developer replay guide](DEVELOPMENT.md#replay-a-recipe) with recipe ID
+`d-screw-vise`.
 The Rust [author](../crates/recipes/examples/author_vise.rs) emits readable JSONC;
 all geometry is constructed by the native MCP interpreter. Sketches, dimensions,
 datums, features, parts, joints and drawing sheets remain editable.
@@ -15,7 +16,7 @@ datums, features, parts, joints and drawing sheets remain editable.
 This is a development candidate validated by native geometry, assembly, edit,
 independent replay and export tests, plus a rebuilt-desktop Open and exact model
 comparison. **300 N is a design load case, not a tested capacity.** Physical fit,
-load, fatigue and creep qualification remain open; the presentation PR stays draft.
+load, fatigue and creep qualification remain open.
 
 ## Mechanical design
 

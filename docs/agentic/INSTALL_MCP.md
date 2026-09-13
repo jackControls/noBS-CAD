@@ -1,201 +1,102 @@
-# Install noBS CAD MCP into agent clients
+# Configure a standalone development MCP server
 
-**Audience:** humans setting up local automation, and coding agents that need a
-repeatable, safe install path.
+For a downloaded application, follow [Install → Connect an MCP agent](../INSTALL.md#connect-an-mcp-agent).
+That setup uses the installed CAD executable with `--mcp` and needs no source build.
 
-This installer **upserts** (inserts or updates) the local `nbcad-mcp` stdio
-server into each chosen client’s **user** config. Other MCP servers are left
-alone.
+This page describes `cargo xtask install-mcp`, the developer utility for a
+separate `nbcad-mcp` binary. It updates selected clients' user configurations,
+copies the server to a stable user directory and preserves unrelated entries.
+It does not launch CAD or create a live session.
 
-It does **not** launch the CAD UI, start a desktop session, or write session
-state. Config wiring only.
+## Prepare and install
 
----
+Use the [developer guide](../DEVELOPMENT.md#standalone-mcp-server) to build the
+standalone server and configure its native OCCT runtime. Pair it with a desktop
+from the same source revision when using live control. This installer launches
+its selected binary with no arguments; do not pass a packaged CAD executable
+to `--binary`.
 
-## Quick start
+From the repository root:
 
-Discover which clients are present (zero build / copy / write):
-
-```powershell
-cargo run -p xtask -- install-mcp --dry-run
+```sh
+cargo xtask install-mcp --dry-run
+cargo xtask install-mcp --clients cursor,vscode
 ```
 
-Install into an explicit client list (required for any real write):
+The dry run discovers client configuration directories and prints the intended
+changes without building, copying or writing. A real install requires an
+explicit `--clients` list. Supported names are `cursor`, `vscode`, `claude` and
+`opencode`; an absent client is skipped with a log message.
 
-```powershell
-cargo run -p xtask -- install-mcp --clients cursor,vscode
+To select an already-built standalone server explicitly:
+
+```sh
+cargo xtask install-mcp --clients cursor --no-build --binary /absolute/path/to/nbcad-mcp
 ```
 
-Skip the release build when a binary already exists:
+Use `nbcad-mcp.exe` on Windows. The server entry is named **nobs-cad**.
+Reload the client's MCP servers after installation.
 
-```powershell
-cargo run -p xtask -- install-mcp --clients cursor --no-build
-```
+## Configuration destinations
 
-Then **restart** the client (or reload MCP) so it picks up the new server.
+The utility detects the existing user configuration, rather than writing a
+committed workspace file:
 
-Server key written into configs: **`nobs-cad`**.
+- **Cursor:** `~/.cursor/mcp.json`, with `mcpServers.nobs-cad`.
+- **VS Code:** the detected Code or Code Insiders user `mcp.json`, with
+  `servers.nobs-cad` and `"type": "stdio"`. Default-profile locations are
+  `%APPDATA%/Code/User/mcp.json` on Windows,
+  `~/Library/Application Support/Code/User/mcp.json` on macOS and
+  `~/.config/Code/User/mcp.json` on Linux.
+- **Claude Code / Claude Desktop:** detected `~/.claude.json` and/or
+  `claude_desktop_config.json`, with `mcpServers.nobs-cad`.
+- **OpenCode v2:** detected `opencode.json` under its configuration directory,
+  with `mcp.servers.nobs-cad`.
 
----
+On Windows, `~` means `%USERPROFILE%`. The
+[application setup guide](../INSTALL.md#connect-an-mcp-agent) owns the copyable
+manual Cursor and VS Code configurations. Keep those formats separate.
 
-## Safety rules (Jack §4)
+## Binary and runtime resolution
 
-| Rule | Behavior |
-|------|----------|
-| `--dry-run` | **Zero** `cargo build`, binary copy, config write, or backup |
-| `--clients` | **Required** for install writes; omit only with `--dry-run` to discover |
-| Duplicate clients | Repeated names are collapsed before any config is touched |
-| Backups | Existing configs copied once to `*.bak.<pid>` before replace |
-| Atomic write | Temp file inherits the existing portable permissions, then renames into place |
-| Supported clients | `cursor`, `vscode`, `claude`, `opencode` only |
-| Rejected | `grok` / `xai` (no official contract yet) |
+The installer resolves a standalone binary in this order:
 
-Without `--clients` on a real install:
+1. An explicit `--binary PATH`.
+2. `mcp-server/target/release/nbcad-mcp(.exe)`.
+3. `mcp-server/target/debug/nbcad-mcp(.exe)`.
+4. A release build, only if no binary exists and neither `--dry-run` nor
+   `--no-build` prohibits it.
 
-```text
-error: --clients is required for install writes (use --dry-run to discover …)
-```
+Build the intended source revision before installing; an existing executable
+can be reused without rebuilding. On write, the binary is copied to
+`%LOCALAPPDATA%/nbcad/mcp/nbcad-mcp.exe` on Windows, or
+`$XDG_DATA_HOME/nbcad/mcp/nbcad-mcp` (default
+`~/.local/share/nbcad/mcp/nbcad-mcp`) on Unix.
 
----
+The generated entry includes the discovered `NBCAD_REPO_ROOT`, `OCCT_ROOT` and
+OCCT `bin` addition to `PATH`. The SDK runtime remains necessary for this
+standalone development installation. Packaged CAD's `--mcp` mode bundles its
+runtime separately.
 
-## What “detect” means
+## Existing configurations
 
-For each requested client family the installer looks for a known **user config
-file** or **config directory**. If nothing is present, that family is
-**skipped** with a clear log line.
+The installer changes only the selected `nobs-cad` entry. It backs up an existing
+file to `*.bak.<pid>`, writes through a temporary file and preserves portable
+permissions. Repeated client names are processed once.
 
-| Client | Detection markers (typical) | File upserted |
-|--------|-----------------------------|---------------|
-| **Cursor** | `~/.cursor/` or `~/.cursor/mcp.json` | `~/.cursor/mcp.json` |
-| **VS Code** | `%APPDATA%/Code/` (and Insiders) or macOS/Linux Code dirs | `…/User/mcp.json` |
-| **Claude** | `~/.claude.json` or `~/.claude/`; also Claude Desktop app folder | Claude Code user file and/or `claude_desktop_config.json` |
-| **OpenCode** | `~/.config/opencode/` (or `XDG_CONFIG_HOME` / `%APPDATA%/opencode`) | `opencode.json` |
+Empty files and plain JSON are accepted. JSONC comments are rejected so a
+pretty-print rewrite cannot silently discard them. If a client uses commented
+configuration, follow the manual setup guide and add the entry yourself.
 
-Windows home is `%USERPROFILE%`. macOS/Linux home is `$HOME`.
+## Verify and maintain
 
----
+Confirm **nobs-cad** appears in the client's server list and call
+`cad_get_focus` or `cad_list_focus_areas`. Then use the
+[first-part prompt](../INSTALL.md#choose-the-executable-and-try-it).
+For dynamic tool discovery and live document selection, read the
+[MCP interface](../../mcp-server/README.md) and [ownership guide](../mcp-harness.md).
 
-## What “upsert” means
-
-1. Read the existing config if present (or start from an empty template).
-   Empty files and strict JSON are accepted. Commented JSONC is refused so
-   comments are never destroyed by a pretty-print rewrite.
-2. Set / replace only the **`nobs-cad`** entry.
-3. Preserve every other server and unrelated settings.
-4. Backup (if the file existed) then write pretty JSON atomically.
-
-Shapes used:
-
-- Cursor / Claude: top-level `mcpServers.nobs-cad`
-- VS Code: top-level `servers.nobs-cad` with `"type": "stdio"`
-- OpenCode v2: `mcp.servers.nobs-cad`; servers connect automatically, so no
-  legacy `enabled` field is written
-
----
-
-## What gets configured
-
-| Field | Value |
-|-------|--------|
-| Command | Resolved `nbcad-mcp` path (see binary resolution below) |
-| Args | `[]` |
-| Env | `NBCAD_REPO_ROOT`, `OCCT_ROOT` when found; `PATH` with OCCT `bin` for DLLs |
-
-### Binary resolution
-
-1. `--binary PATH` if provided (copied to the user install dir on write)
-2. Else `mcp-server/target/release/nbcad-mcp(.exe)` if present
-3. Else `mcp-server/target/debug/nbcad-mcp(.exe)` if present
-4. Else, **only when not `--dry-run` and not `--no-build`**:
-
-```text
-cargo build --release --manifest-path mcp-server/Cargo.toml
-```
-
-On **write** installs the chosen binary is copied to a stable user path so client
-configs do not point at `target/` (wiped by `cargo clean`):
-
-- Windows: `%LOCALAPPDATA%\nbcad\mcp\nbcad-mcp.exe`
-- Unix: `$XDG_DATA_HOME/nbcad/mcp/nbcad-mcp` or `~/.local/share/nbcad/mcp/nbcad-mcp`
-
-Dry-run never builds or copies; it prints the planned user path when the binary
-is missing.
-
-Point at a custom binary:
-
-```powershell
-cargo run -p xtask -- install-mcp --clients cursor --binary path\to\nbcad-mcp.exe
-```
-
----
-
-## Prerequisites
-
-1. Rust toolchain (`cargo` on `PATH`).
-2. For a real install that needs a build: OCCT available — see
-   [MAINTENANCE.md](MAINTENANCE.md) and [WINDOWS_PACKAGING.md](../WINDOWS_PACKAGING.md).
-3. At least one requested client already present (config dir or file).
-4. Client config must be **plain JSON** (no `//` / `/* */` JSONC). The upsert
-   pretty-prints and would drop comments — installs refuse JSONC rather than
-   silently destroy them.
-
-Local MCP behavior (disclosure, tools): [../mcp-harness.md](../mcp-harness.md).
-
----
-
-## After install — smoke check
-
-1. Restart Cursor / VS Code / Claude / OpenCode (as applicable).
-2. Confirm server **`nobs-cad`** appears in that client’s MCP list.
-3. Call a cheap tool, e.g. `cad_get_focus` or `cad_list_focus_areas`.
-4. Prefer **dynamic** disclosure for the main agent; use `cad_list_all_tools` or
-   `full_static` only when needed ([STEERABLE_MCP.md](STEERABLE_MCP.md)).
-
----
-
-## Safety notes
-
-- Writes only to **user** configs (not committed project MCP files).
-- Atomic update: existing file copied to `*.bak.<pid>`, then temp+rename.
-- Existing portable config permissions, including Unix mode bits, are preserved
-  across replacement.
-- Duplicate names in `--clients` are processed once, preserving the first order.
-- Does not delete other servers.
-- Does not enable cloud transport; `nbcad-mcp` stays **local stdio**.
-- Does **not** launch UI or touch session control channels.
-- Prefer `--dry-run` first to see paths before writing.
-- Refuses JSONC-with-comments rather than rewriting them away.
-
----
-
-## For agents maintaining this feature
-
-| Path | Role |
-|------|------|
-| `xtask/src/install_mcp.rs` | Detection + upsert + atomic write |
-| `xtask/src/main.rs` | CLI entry |
-| This doc | Human + agent operating guide |
-
-When adding a new client:
-
-1. Add a `ClientKind` + discovery paths.
-2. Reuse an existing upsert format or add a small format-specific writer.
-3. Extend unit tests in `install_mcp.rs`.
-4. Update the detection table in this file and [INDEX.md](INDEX.md).
-
-Run tests:
-
-```powershell
-cargo test -p xtask
-```
-
----
-
-## Related docs
-
-| Doc | Why |
-|-----|-----|
-| [STEERABLE_MCP.md](STEERABLE_MCP.md) | Soft disclosure invariants |
-| [MAINTENANCE.md](MAINTENANCE.md) | OCCT / `cargo test` for mcp-server |
-| [../mcp-harness.md](../mcp-harness.md) | As-built MCP surface |
-| [../../mcp-server/README.md](../../mcp-server/README.md) | Build the server itself |
+Implementation lives in `xtask/src/install_mcp.rs`; `xtask/src/main.rs` routes
+the command. New client support should include detection, the correct
+configuration writer and focused tests. Run `cargo test -p xtask` for this
+installer. Native CAD build and test commands remain in [DEVELOPMENT.md](../DEVELOPMENT.md).

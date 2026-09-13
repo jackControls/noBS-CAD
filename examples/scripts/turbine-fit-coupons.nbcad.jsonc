@@ -304,6 +304,42 @@
     },
     {
       "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "shaft_coupon_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "bodies": []
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "shaft_coupon_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "shaft_coupon_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "shaft_coupon_clear_sketch_view"
+    },
+    {
+      "call": {
         "arguments": {
           "distance": 0.0,
           "name": "shaft_coupon / datum",
@@ -466,6 +502,16 @@
     {
       "call": {
         "arguments": {
+          "$ref": "shaft_coupon_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "shaft_coupon_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
@@ -486,6 +532,43 @@
           }
         }
       }
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "shaft_coupon_hub_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_10",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "shaft_coupon_hub_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "shaft_coupon_hub_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "shaft_coupon_hub_clear_sketch_view"
     },
     {
       "call": {
@@ -614,6 +697,12 @@
       "id": "exact_coordinates_19"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -650,12 +739,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "shaft_coupon_hub_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "shaft_coupon_hub_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_22"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "shaft_coupon_fit_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_21",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "shaft_coupon_fit_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "shaft_coupon_fit_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "shaft_coupon_fit_clear_sketch_view"
     },
     {
       "call": {
@@ -784,6 +920,12 @@
       "id": "exact_coordinates_30"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -820,12 +962,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "shaft_coupon_fit_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "shaft_coupon_fit_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_33"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "shaft_coupon_split_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_32",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "shaft_coupon_split_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "shaft_coupon_split_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "shaft_coupon_split_clear_sketch_view"
     },
     {
       "call": {
@@ -1085,6 +1274,12 @@
       "id": "close_profile_45"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -1121,12 +1316,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "shaft_coupon_split_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "shaft_coupon_split_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_48"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "shaft_coupon_clamp_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_47",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "shaft_coupon_clamp_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "shaft_coupon_clamp_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "shaft_coupon_clamp_clear_sketch_view"
     },
     {
       "call": {
@@ -1255,6 +1497,12 @@
       "id": "exact_coordinates_56"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -1291,12 +1539,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "shaft_coupon_clamp_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "shaft_coupon_clamp_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_59"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "clamp_head_seat_60_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_58",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "clamp_head_seat_60_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "clamp_head_seat_60_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_head_seat_60_clear_sketch_view"
     },
     {
       "call": {
@@ -1425,6 +1720,12 @@
       "id": "exact_coordinates_68"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -1461,12 +1762,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "clamp_head_seat_60_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_head_seat_60_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_71"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "clamp_hex_capture_72_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_70",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "clamp_hex_capture_72_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "clamp_hex_capture_72_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_hex_capture_72_clear_sketch_view"
     },
     {
       "call": {
@@ -1822,6 +2170,12 @@
       "id": "close_profile_88"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -1854,6 +2208,16 @@
         "operation": "solid_extrude"
       },
       "id": "extrude_90"
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "clamp_hex_capture_72_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_hex_capture_72_restore_model_view"
     },
     {
       "call": {
@@ -1971,6 +2335,43 @@
       "chapter": "Bearing insertion and clamping",
       "duration_ms": 3000,
       "note": "The lower 608 seat opens at the bed side. Remove first-layer flare before measurement. Insert the bearing from below, then tighten the transverse M3 clamp lightly and check that the bearing still rotates freely."
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "bearing_coupon_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_90",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "bearing_coupon_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "bearing_coupon_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "bearing_coupon_clear_sketch_view"
     },
     {
       "call": {
@@ -2136,6 +2537,16 @@
     {
       "call": {
         "arguments": {
+          "$ref": "bearing_coupon_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "bearing_coupon_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
@@ -2156,6 +2567,43 @@
           }
         }
       }
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "bearing_coupon_column_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_102",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "bearing_coupon_column_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "bearing_coupon_column_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "bearing_coupon_column_clear_sketch_view"
     },
     {
       "call": {
@@ -2284,6 +2732,12 @@
       "id": "exact_coordinates_111"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -2320,12 +2774,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "bearing_coupon_column_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "bearing_coupon_column_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_114"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "bearing_coupon_relief_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_113",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "bearing_coupon_relief_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "bearing_coupon_relief_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "bearing_coupon_relief_clear_sketch_view"
     },
     {
       "call": {
@@ -2454,6 +2955,12 @@
       "id": "exact_coordinates_122"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -2490,12 +2997,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "bearing_coupon_relief_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "bearing_coupon_relief_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_125"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "bearing_coupon_fit_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_124",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "bearing_coupon_fit_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "bearing_coupon_fit_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "bearing_coupon_fit_clear_sketch_view"
     },
     {
       "call": {
@@ -2624,6 +3178,12 @@
       "id": "exact_coordinates_133"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -2660,12 +3220,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "bearing_coupon_fit_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "bearing_coupon_fit_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_136"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "bearing_coupon_split_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_135",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "bearing_coupon_split_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "bearing_coupon_split_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "bearing_coupon_split_clear_sketch_view"
     },
     {
       "call": {
@@ -2925,6 +3532,12 @@
       "id": "close_profile_148"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -2961,12 +3574,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "bearing_coupon_split_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "bearing_coupon_split_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_151"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "bearing_coupon_clamp_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_150",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "bearing_coupon_clamp_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "bearing_coupon_clamp_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "bearing_coupon_clamp_clear_sketch_view"
     },
     {
       "call": {
@@ -3095,6 +3755,12 @@
       "id": "exact_coordinates_159"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -3131,12 +3797,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "bearing_coupon_clamp_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "bearing_coupon_clamp_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_162"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "clamp_head_seat_163_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_161",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "clamp_head_seat_163_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "clamp_head_seat_163_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_head_seat_163_clear_sketch_view"
     },
     {
       "call": {
@@ -3265,6 +3978,12 @@
       "id": "exact_coordinates_171"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -3301,12 +4020,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "clamp_head_seat_163_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_head_seat_163_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_174"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "clamp_hex_capture_175_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_173",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "clamp_hex_capture_175_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "clamp_hex_capture_175_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_hex_capture_175_clear_sketch_view"
     },
     {
       "call": {
@@ -3662,6 +4428,12 @@
       "id": "close_profile_191"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -3694,6 +4466,16 @@
         "operation": "solid_extrude"
       },
       "id": "extrude_193"
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "clamp_hex_capture_175_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_hex_capture_175_restore_model_view"
     },
     {
       "call": {
@@ -3811,6 +4593,43 @@
       "chapter": "Measure the generator specimen",
       "duration_ms": 3000,
       "note": "The case and projecting shaft need separate checks. The complete small cradle reuses the exact turbine construction, including its 32.6 mm cavity, supported M3 clamp ears, hex nut captures and independent wire channel. Nominal case 32 mm and shaft 2 mm must be checked against the delivered motor."
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "motor_mount_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_193",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "motor_mount_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "motor_mount_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_mount_clear_sketch_view"
     },
     {
       "call": {
@@ -3976,6 +4795,16 @@
     {
       "call": {
         "arguments": {
+          "$ref": "motor_mount_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_mount_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
@@ -3996,6 +4825,43 @@
           }
         }
       }
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "motor_mount_cavity_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_205",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "motor_mount_cavity_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "motor_mount_cavity_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_mount_cavity_clear_sketch_view"
     },
     {
       "call": {
@@ -4124,6 +4990,12 @@
       "id": "exact_coordinates_214"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -4160,12 +5032,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "motor_mount_cavity_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_mount_cavity_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_217"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "motor_clamp_split_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_216",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "motor_clamp_split_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "motor_clamp_split_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_clamp_split_clear_sketch_view"
     },
     {
       "call": {
@@ -4425,6 +5344,12 @@
       "id": "close_profile_229"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -4461,12 +5386,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "motor_clamp_split_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_clamp_split_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_232"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "motor_clamp_left_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_231",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "motor_clamp_left_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "motor_clamp_left_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_clamp_left_clear_sketch_view"
     },
     {
       "call": {
@@ -4726,6 +5698,12 @@
       "id": "close_profile_244"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -4762,12 +5740,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "motor_clamp_left_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_clamp_left_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_247"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "motor_clamp_right_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_246",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "motor_clamp_right_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "motor_clamp_right_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_clamp_right_clear_sketch_view"
     },
     {
       "call": {
@@ -5027,6 +6052,12 @@
       "id": "close_profile_259"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -5063,12 +6094,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "motor_clamp_right_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_clamp_right_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_262"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "motor_adjustment_backtab_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_261",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "motor_adjustment_backtab_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "motor_adjustment_backtab_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_adjustment_backtab_clear_sketch_view"
     },
     {
       "call": {
@@ -5328,6 +6406,12 @@
       "id": "close_profile_274"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -5364,12 +6448,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "motor_adjustment_backtab_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_adjustment_backtab_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_277"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "motor_rear_terminal_opening_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_276",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "motor_rear_terminal_opening_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "motor_rear_terminal_opening_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_rear_terminal_opening_clear_sketch_view"
     },
     {
       "call": {
@@ -5498,6 +6629,12 @@
       "id": "exact_coordinates_285"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -5534,12 +6671,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "motor_rear_terminal_opening_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_rear_terminal_opening_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_288"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "motor_independent_wire_channel_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_287",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "motor_independent_wire_channel_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "motor_independent_wire_channel_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_independent_wire_channel_clear_sketch_view"
     },
     {
       "call": {
@@ -5799,6 +6983,12 @@
       "id": "close_profile_300"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -5835,12 +7025,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "motor_independent_wire_channel_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_independent_wire_channel_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_303"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "motor_cradle_clamp_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_302",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "motor_cradle_clamp_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "motor_cradle_clamp_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_cradle_clamp_clear_sketch_view"
     },
     {
       "call": {
@@ -5969,6 +7206,12 @@
       "id": "exact_coordinates_311"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -6005,12 +7248,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "motor_cradle_clamp_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "motor_cradle_clamp_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_314"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "clamp_head_seat_315_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_313",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "clamp_head_seat_315_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "clamp_head_seat_315_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_head_seat_315_clear_sketch_view"
     },
     {
       "call": {
@@ -6139,6 +7429,12 @@
       "id": "exact_coordinates_323"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -6175,12 +7471,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "clamp_head_seat_315_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_head_seat_315_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_326"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "clamp_hex_capture_327_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_325",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "clamp_hex_capture_327_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "clamp_hex_capture_327_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_hex_capture_327_clear_sketch_view"
     },
     {
       "call": {
@@ -6536,6 +7879,12 @@
       "id": "close_profile_343"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -6572,12 +7921,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "clamp_hex_capture_327_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_hex_capture_327_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_346"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "cradle_adjuster_bore_347_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_345",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "cradle_adjuster_bore_347_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "cradle_adjuster_bore_347_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "cradle_adjuster_bore_347_clear_sketch_view"
     },
     {
       "call": {
@@ -6706,6 +8102,12 @@
       "id": "exact_coordinates_355"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -6742,12 +8144,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "cradle_adjuster_bore_347_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "cradle_adjuster_bore_347_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_358"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "cradle_adjuster_hex_359_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_357",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "cradle_adjuster_hex_359_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "cradle_adjuster_hex_359_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "cradle_adjuster_hex_359_clear_sketch_view"
     },
     {
       "call": {
@@ -7103,6 +8552,12 @@
       "id": "close_profile_375"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -7139,12 +8594,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "cradle_adjuster_hex_359_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "cradle_adjuster_hex_359_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_378"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "cradle_adjuster_bore_379_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_377",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "cradle_adjuster_bore_379_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "cradle_adjuster_bore_379_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "cradle_adjuster_bore_379_clear_sketch_view"
     },
     {
       "call": {
@@ -7273,6 +8775,12 @@
       "id": "exact_coordinates_387"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -7309,12 +8817,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "cradle_adjuster_bore_379_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "cradle_adjuster_bore_379_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_390"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "cradle_adjuster_hex_391_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_389",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "cradle_adjuster_hex_391_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "cradle_adjuster_hex_391_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "cradle_adjuster_hex_391_clear_sketch_view"
     },
     {
       "call": {
@@ -7670,6 +9225,12 @@
       "id": "close_profile_407"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -7702,6 +9263,16 @@
         "operation": "solid_extrude"
       },
       "id": "extrude_409"
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "cradle_adjuster_hex_391_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "cradle_adjuster_hex_391_restore_model_view"
     },
     {
       "call": {
@@ -7885,6 +9456,43 @@
     },
     {
       "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "pinion_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_409",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "pinion_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "pinion_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "pinion_clear_sketch_view"
+    },
+    {
+      "call": {
         "arguments": {
           "distance": 0.0,
           "name": "pinion / datum",
@@ -8047,6 +9655,16 @@
     {
       "call": {
         "arguments": {
+          "$ref": "pinion_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "pinion_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
@@ -8067,6 +9685,43 @@
           }
         }
       }
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "pinion_tooth_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_422",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "pinion_tooth_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "pinion_tooth_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "pinion_tooth_clear_sketch_view"
     },
     {
       "call": {
@@ -9131,6 +10786,16 @@
     {
       "call": {
         "arguments": {
+          "$ref": "pinion_tooth_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "pinion_tooth_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
@@ -9226,6 +10891,43 @@
         "operation": "solid_combine"
       },
       "id": "pinion_fuse"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "pinion_hub_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_469",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "pinion_hub_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "pinion_hub_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "pinion_hub_clear_sketch_view"
     },
     {
       "call": {
@@ -9354,6 +11056,12 @@
       "id": "exact_coordinates_478"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -9390,12 +11098,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "pinion_hub_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "pinion_hub_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_481"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "pinion_bore_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_480",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "pinion_bore_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "pinion_bore_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "pinion_bore_clear_sketch_view"
     },
     {
       "call": {
@@ -9524,6 +11279,12 @@
       "id": "exact_coordinates_489"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -9560,12 +11321,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "pinion_bore_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "pinion_bore_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_492"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "pinion_clamp_split_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_491",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "pinion_clamp_split_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "pinion_clamp_split_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "pinion_clamp_split_clear_sketch_view"
     },
     {
       "call": {
@@ -9825,6 +11633,12 @@
       "id": "close_profile_504"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -9861,12 +11675,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "pinion_clamp_split_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "pinion_clamp_split_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_507"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "pinion_clamp_bolt_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_506",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "pinion_clamp_bolt_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "pinion_clamp_bolt_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "pinion_clamp_bolt_clear_sketch_view"
     },
     {
       "call": {
@@ -9995,6 +11856,12 @@
       "id": "exact_coordinates_515"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -10031,12 +11898,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "pinion_clamp_bolt_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "pinion_clamp_bolt_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_518"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "clamp_head_seat_519_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_517",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "clamp_head_seat_519_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "clamp_head_seat_519_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_head_seat_519_clear_sketch_view"
     },
     {
       "call": {
@@ -10165,6 +12079,12 @@
       "id": "exact_coordinates_527"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -10201,12 +12121,59 @@
     {
       "call": {
         "arguments": {
+          "$ref": "clamp_head_seat_519_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_head_seat_519_restore_model_view"
+    },
+    {
+      "call": {
+        "arguments": {
           "visible": false
         },
         "group": "solid/reference",
         "operation": "construction_set_visibility"
       },
       "id": "completed_feature_references_530"
+    },
+    {
+      "call": {
+        "arguments": {},
+        "group": "document/appearance",
+        "operation": "project_visibility"
+      },
+      "id": "clamp_hex_capture_531_before_sketch_visibility"
+    },
+    {
+      "call": {
+        "arguments": {
+          "hidden_body_ids": {
+            "$select": {
+              "from": {
+                "$ref": "extrude_529",
+                "pointer": "/scene"
+              },
+              "path": "/bodies",
+              "pointer": "/id",
+              "take": "all",
+              "where": {}
+            }
+          },
+          "hidden_datum_plane_ids": {
+            "$ref": "clamp_hex_capture_531_before_sketch_visibility",
+            "pointer": "/hidden_datum_plane_ids"
+          },
+          "hidden_sketch_names": {
+            "$ref": "clamp_hex_capture_531_before_sketch_visibility",
+            "pointer": "/hidden_sketch_names"
+          }
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_hex_capture_531_clear_sketch_view"
     },
     {
       "call": {
@@ -10562,6 +12529,12 @@
       "id": "close_profile_547"
     },
     {
+      "duration_ms": 300,
+      "fit": true,
+      "target": "active_sketch",
+      "view": "current"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "sketch/draw",
@@ -10594,6 +12567,16 @@
         "operation": "solid_extrude"
       },
       "id": "extrude_549"
+    },
+    {
+      "call": {
+        "arguments": {
+          "$ref": "clamp_hex_capture_531_before_sketch_visibility"
+        },
+        "group": "document/appearance",
+        "operation": "project_set_visibility"
+      },
+      "id": "clamp_hex_capture_531_restore_model_view"
     },
     {
       "call": {

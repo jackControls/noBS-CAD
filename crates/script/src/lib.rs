@@ -8,6 +8,9 @@ use std::{
 };
 mod manufacturing;
 
+/// Shared limit for files, source text, the desktop picker and MCP.
+pub const MAX_SCRIPT_BYTES: usize = 16 * 1024 * 1024;
+
 #[derive(Debug)]
 pub struct Script {
     document: Value,
@@ -30,6 +33,9 @@ impl Default for RunOptions {
 
 impl Script {
     pub fn parse(source: &str) -> Result<Self, String> {
+        if source.len() > MAX_SCRIPT_BYTES {
+            return Err("Script exceeds 16 MiB".into());
+        }
         let document: Value = serde_json::from_str(&strip_jsonc(source)?)
             .map_err(|e| format!("Invalid script JSONC: {e}"))?;
         if document["version"] != 1 {
@@ -196,9 +202,10 @@ impl Script {
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|step| {
+            .enumerate()
+            .filter_map(|(index, step)| {
                 let text = step.get("note")?;
-                let mut note = json!({"text": text});
+                let mut note = json!({"text": text, "step_index": index + 1});
                 if let Some(chapter) = step.get("chapter") {
                     note["chapter"] = chapter.clone();
                 }
@@ -210,6 +217,7 @@ impl Script {
             "step_count": self.document["steps"].as_array().map_or(0, Vec::len),
             "check_count": self.document["checks"].as_array().map_or(0, Vec::len),
             "chapters": chapters,
+            "max_source_bytes": MAX_SCRIPT_BYTES,
             "operations": operations,
         })
     }
@@ -798,6 +806,23 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_limit_and_chapter_positions_are_shared_by_all_hosts() {
+        let source = r#"{"version":1,"name":"Chapters","steps":[{"let":{"size":12}},{"chapter":"Edit","note":"Change the dimension"}]}"#;
+        let padded = format!("{}{}", " ".repeat(2 * 1024 * 1024 + 1), source);
+        let metadata = Script::parse(&padded).unwrap().metadata();
+        assert_eq!(metadata["chapters"][0]["step_index"], 2);
+        assert_eq!(metadata["max_source_bytes"], MAX_SCRIPT_BYTES);
+        let boundary = format!("{}{}", source, " ".repeat(MAX_SCRIPT_BYTES - source.len()));
+        assert!(Script::parse(&boundary).is_ok());
+        assert!(Script::parse(&format!("{boundary} "))
+            .unwrap_err()
+            .contains("16 MiB"));
+        assert!(Script::parse(&" ".repeat(MAX_SCRIPT_BYTES + 1))
+            .unwrap_err()
+            .contains("16 MiB"));
+    }
+
     #[test]
     fn host_progress_counts_completed_steps_without_extra_calls_or_early_success() {
         let script = Script::parse(r#"{"version":1,"name":"Progress","steps":[

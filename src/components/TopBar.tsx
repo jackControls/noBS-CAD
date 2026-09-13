@@ -49,6 +49,11 @@ import { openScriptFile, showScripts, useScriptWorkspace } from '../scripts/work
 const FILE_MENU_VIEWPORT_MARGIN = 6;
 const FILE_MENU_FALLBACK_WIDTH = 256;
 
+function fileShortcut(key: string, shift = false): string {
+  const mac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+  return mac ? `${shift ? '⇧' : ''}⌘${key}` : `Ctrl+${shift ? 'Shift+' : ''}${key}`;
+}
+
 interface FileMenuPosition {
   left: number;
   top: number;
@@ -245,7 +250,7 @@ export function ProjectMenuControls() {
               <FileMenuItem
                 icon={<FolderOpen size={14} />}
                 label={t('file.open')}
-                shortcut="⌘O"
+                shortcut={fileShortcut('O')}
                 onClick={() => run(openProject)}
               />
               <FileMenuItem
@@ -256,14 +261,14 @@ export function ProjectMenuControls() {
               <FileMenuItem
                 icon={<Save size={14} />}
                 label={t('file.save')}
-                shortcut="⌘S"
+                shortcut={fileShortcut('S')}
                 disabled={document === null}
                 onClick={() => run(() => saveProject(false))}
               />
               <FileMenuItem
                 icon={<FileDown size={14} />}
                 label={t('file.saveAs')}
-                shortcut="⇧⌘S"
+                shortcut={fileShortcut('S', true)}
                 disabled={document === null}
                 onClick={() => run(() => saveProject(true))}
               />
