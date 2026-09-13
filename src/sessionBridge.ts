@@ -99,6 +99,8 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let inboxTimer: ReturnType<typeof setInterval> | null = null;
 let inboxApplying = false;
 let started = false;
+let publishedTransitionRevision: number | null = null;
+let transitionPublicationOwed = false;
 
 interface InboxApplyResult {
   applied: boolean;
@@ -144,10 +146,12 @@ export async function publishCurrentSession(transition?: ProjectTransitionReleas
   const state = useAppStore.getState();
   if (state.engineKind !== 'tauri') return null;
   const documentRevision = presentation.documentVersion();
+  const transitionRevision = projectTransitions.capture();
   const focus = focusFromUi(state.mode, state.activeTool, activeSolidDialog(state));
   let snapshot: ReturnType<typeof projectTransitions.beginSnapshot> | undefined;
   try {
     snapshot = projectTransitions.beginSnapshot(transition);
+    transitionPublicationOwed = false;
     const assertCurrent = () => {
       snapshot!.assertCurrent();
       if (documentRevision !== presentation.documentVersion()) throw new Error('The document changed during publication');
@@ -197,9 +201,15 @@ export async function publishCurrentSession(transition?: ProjectTransitionReleas
       };
       inboxOwner = {...owner, documentRevision};
       bindDrawingProjectionOwner(owner.sessionId, owner.documentId, reservation.engine_revision);
+      publishedTransitionRevision = projectTransitions.capture();
       return owner;
     }
   } catch (error) {
+    // A debounce can run while an unchanged inbox poll owns the document.
+    // Retry when that owner settles, even though its revision will not advance.
+    // Ordinary IPC/export failures do not create a background retry loop.
+    try { projectTransitions.assertSettled(transitionRevision); }
+    catch { transitionPublicationOwed = true; }
     console.debug('[sessionBridge] publish failed', error);
   } finally {
     snapshot?.release();
@@ -240,6 +250,7 @@ export async function applyInboxNow(): Promise<void> {
   const releaseExit = applicationExitBarrier.hold();
   let changed = true; // An uncertain native failure must invalidate captures.
   let published = false;
+  let snapshotPublished = false;
   let replacingDocument = false;
   try {
     await releaseTransition.waitForSnapshots();
@@ -297,7 +308,10 @@ export async function applyInboxNow(): Promise<void> {
         result.project_replaced ? undefined : result.script_progress);
       // Sequential scripts need this result before their next operation.
       // Publishing now removes the old 300 ms debounce from every command.
-      if (ownsDocument() && published && !await publishCurrentSession(releaseTransition) && ownsDocument()) scheduleSessionBridgePublish();
+      if (ownsDocument() && published) {
+        snapshotPublished = await publishCurrentSession(releaseTransition) !== null;
+        if (!snapshotPublished && ownsDocument()) scheduleSessionBridgePublish();
+      }
     }
   } catch (error) {
     console.debug('[sessionBridge] inbox apply failed', error);
@@ -308,7 +322,14 @@ export async function applyInboxNow(): Promise<void> {
   } finally {
     // The replacement has its own transition/publication. A late result from
     // its predecessor must neither invalidate nor bless the current model.
-    releaseTransition(ownsDocument() && changed, published);
+    const changedOwnedDocument = ownsDocument() && changed;
+    // This exact transition already exported its hydrated result. Its release
+    // advances the revision synchronously below, with no intervening await;
+    // do not schedule another export for that exact owned release.
+    if (changedOwnedDocument && published && snapshotPublished) {
+      publishedTransitionRevision = projectTransitions.capture() + 1;
+    }
+    releaseTransition(changedOwnedDocument, published);
     inboxApplying = false;
     releaseExit();
   }
@@ -336,6 +357,21 @@ export function scheduleSessionBridgePublish(): void {
 export function startSessionBridge(): void {
   if (started) return;
   started = true;
+  let observedTransitionRevision = projectTransitions.capture();
+  projectTransitions.subscribe(() => {
+    const revision = projectTransitions.capture();
+    if (revision !== observedTransitionRevision) {
+      observedTransitionRevision = revision;
+      transitionPublicationOwed = publishedTransitionRevision !== revision;
+    }
+    // Store hydration can precede a slow native session bind. A debounce that
+    // ran before/during that bind cannot publish its final document identity.
+    // Failed hydration stays unpublished. An unchanged poll retries only a
+    // publication that yielded to it; ordinary empty polling never exports.
+    // Preserve an existing deadline: the 250 ms inbox poll must not keep
+    // restarting the 300 ms publication debounce.
+    if (transitionPublicationOwed && !publishTimer && projectTransitions.isSettled()) scheduleSessionBridgePublish();
+  });
   useAppStore.subscribe((state, prev) => {
     if (
       state.document !== prev.document ||

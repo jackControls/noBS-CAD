@@ -8,7 +8,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     fs,
     io::{Cursor, Read},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -158,13 +158,21 @@ fn package_command(
                 "webview-{}",
                 NEXT_PROFILE.fetch_add(1, Ordering::Relaxed)
             ));
+            fs::create_dir(&profile).context("Create isolated desktop browser profile")?;
             #[cfg(windows)]
             command.env("WEBVIEW2_USER_DATA_FOLDER", &profile);
             #[cfg(target_os = "linux")]
-            command
-                .env("XDG_DATA_HOME", profile.join("data"))
-                .env("XDG_CACHE_HOME", profile.join("cache"))
-                .env("XDG_CONFIG_HOME", profile.join("config"));
+            for (name, directory) in [
+                ("XDG_DATA_HOME", "data"),
+                ("XDG_CACHE_HOME", "cache"),
+                ("XDG_CONFIG_HOME", "config"),
+            ] {
+                let path = profile.join(directory);
+                // xdg-mime writes mimeapps.list directly into XDG_CONFIG_HOME;
+                // unlike WebKit, it does not create this parent directory.
+                fs::create_dir(&path).context("Create isolated desktop XDG directory")?;
+                command.env(name, path);
+            }
         }
     }
     // Headless startup must not depend on a graphical login. Desktop checks
@@ -425,6 +433,67 @@ fn desktop_not_ready(reply: &Value) -> bool {
         .is_some_and(|error| error["code"] == "desktop_not_ready")
 }
 
+/// Keep startup failures useful on CI without copying a browser profile or an
+/// entire CAD model. Read only this fixture's private publication directory.
+fn startup_diagnostics(sessions: &SessionDirectory, pid: u32) -> Value {
+    const MAX_ENTRIES: usize = 8;
+    fn read_json(path: &Path) -> Value {
+        const MAX_BYTES: u64 = 16 * 1024;
+        let result = (|| -> Result<Value> {
+            let mut bytes = Vec::new();
+            fs::File::open(path)?
+                .take(MAX_BYTES + 1)
+                .read_to_end(&mut bytes)?;
+            ensure!(
+                bytes.len() as u64 <= MAX_BYTES,
+                "Publication exceeds diagnostic byte limit"
+            );
+            Ok(serde_json::from_slice(&bytes)?)
+        })();
+        result.unwrap_or_else(|error| json!({"read_error":format!("{error:#}")}))
+    }
+    let registry_path = sessions.0.join("_ui/processes");
+    let registry = fs::read_dir(&registry_path).map(|entries| {
+        entries
+            .take(MAX_ENTRIES)
+            .map(|entry| match entry {
+                Ok(entry) if entry.file_type().is_ok_and(|kind| kind.is_file()) => json!({
+                    "file":entry.file_name().to_string_lossy(),
+                    "publication":read_json(&entry.path()),
+                }),
+                Ok(entry) => json!({"file":entry.file_name().to_string_lossy(),"skipped":true}),
+                Err(error) => json!({"read_error":error.to_string()}),
+            })
+            .collect::<Vec<_>>()
+    });
+    let registry = match registry {
+        Ok(entries) => json!({"entries":entries,"entry_limit":MAX_ENTRIES}),
+        Err(error) => json!({"read_error":error.to_string()}),
+    };
+    let documents: Vec<_> = fs::read_dir(&sessions.0)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name != "_ui"
+                && !name.starts_with("webview-")
+                && entry.file_type().is_ok_and(|kind| kind.is_dir())
+        })
+        .take(MAX_ENTRIES)
+        .map(|entry| {
+            json!({
+                "session":entry.file_name().to_string_lossy(),
+                "model_present":entry.path().join("model.json").is_file(),
+                "heartbeat":read_json(&entry.path().join("heartbeat.json")),
+            })
+        })
+        .collect();
+    json!({"owned_pid":pid,"private_session_root":sessions.0,"registry":registry,
+        "documents":documents,"entry_limit":MAX_ENTRIES})
+}
+
 /// The process lease can appear before its matching heartbeat/model identity
 /// finishes publishing. Retry that specific startup state, never modeling errors.
 fn initial_project_model(client: &mut Client, timeout: Duration) -> Result<Value> {
@@ -474,10 +543,12 @@ fn wait_for_owned_window(
                 return Ok(window);
             }
         }
-        ensure!(
-            Instant::now() < deadline,
-            "Desktop did not publish an owned document before deadline"
-        );
+        if Instant::now() >= deadline {
+            bail!(
+                "Desktop did not publish an owned document before deadline; startup evidence: {}",
+                startup_diagnostics(sessions, pid)
+            );
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
 }
@@ -924,6 +995,48 @@ mod tests {
         fs::remove_dir(sessions.0.join("_ui")).unwrap();
     }
 
+    #[test]
+    fn startup_evidence_distinguishes_missing_registry_foreign_pid_and_unpublished_model() {
+        let sessions = SessionDirectory::create().unwrap();
+        assert!(startup_diagnostics(&sessions, 12)["registry"]["read_error"].is_string());
+        let registry = sessions.0.join("_ui/processes");
+        fs::create_dir_all(&registry).unwrap();
+        let lease = registry.join("foreign.json");
+        fs::write(&lease, json!({"pid":11,"windows":[]}).to_string()).unwrap();
+        let document = sessions.0.join("own-session");
+        fs::create_dir(&document).unwrap();
+        fs::write(
+            document.join("heartbeat.json"),
+            json!({"session_id":"own-session"}).to_string(),
+        )
+        .unwrap();
+        let evidence = startup_diagnostics(&sessions, 12);
+        assert_eq!(evidence["owned_pid"], 12);
+        assert_eq!(evidence["registry"]["entries"][0]["publication"]["pid"], 11);
+        assert_eq!(evidence["documents"][0]["model_present"], false);
+        assert_eq!(
+            evidence["documents"][0]["heartbeat"]["session_id"],
+            "own-session"
+        );
+        fs::write(document.join("model.json"), "private model contents").unwrap();
+        fs::write(&lease, vec![b'x'; 16 * 1024 + 1]).unwrap();
+        let evidence = startup_diagnostics(&sessions, 12);
+        assert_eq!(evidence["documents"][0]["model_present"], true);
+        assert!(
+            evidence["registry"]["entries"][0]["publication"]["read_error"]
+                .as_str()
+                .unwrap()
+                .contains("byte limit")
+        );
+        assert!(!evidence.to_string().contains("private model contents"));
+        fs::remove_file(document.join("model.json")).unwrap();
+        fs::remove_file(document.join("heartbeat.json")).unwrap();
+        fs::remove_dir(document).unwrap();
+        fs::remove_file(lease).unwrap();
+        fs::remove_dir(registry).unwrap();
+        fs::remove_dir(sessions.0.join("_ui")).unwrap();
+    }
+
     #[cfg(any(windows, target_os = "linux"))]
     #[test]
     fn desktop_cases_use_distinct_private_browser_profiles() {
@@ -936,6 +1049,27 @@ mod tests {
         let sessions = SessionDirectory::create().unwrap();
         let first = package_command(&options, &sessions, true).unwrap();
         let second = package_command(&options, &sessions, true).unwrap();
+        for command in [&first, &second] {
+            for (key, path) in command
+                .get_envs()
+                .filter_map(|(key, value)| value.map(|value| (key, value)))
+            {
+                if matches!(
+                    key.to_str(),
+                    Some(
+                        "WEBVIEW2_USER_DATA_FOLDER"
+                            | "XDG_DATA_HOME"
+                            | "XDG_CACHE_HOME"
+                            | "XDG_CONFIG_HOME"
+                    )
+                ) {
+                    assert!(
+                        Path::new(path).is_dir(),
+                        "The browser and xdg-mime need {key:?} to exist before launch"
+                    );
+                }
+            }
+        }
         #[cfg(windows)]
         let key = "WEBVIEW2_USER_DATA_FOLDER";
         #[cfg(target_os = "linux")]

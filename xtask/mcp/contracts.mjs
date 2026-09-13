@@ -387,6 +387,20 @@ try {
  });
  console.log('PASS production history editor callbacks: '+JSON.stringify(historyEditors));
  await historyPage.close();
+ for(const phase of ['before-bind','during-bind']) {
+  const startupPage=await browser.newPage();
+  try {
+   await startupPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+   const startup=await startupPage.evaluate(async phase=>{
+    const {checkStartupPublication}=await import('/src/scripts/startupPublication.browser.test.ts');
+    let timer;
+    try { return await Promise.race([checkStartupPublication(phase),new Promise((_,reject)=>{
+     timer=setTimeout(()=>reject(new Error('Startup publication contract timed out')),15000);
+    })]); } finally { clearTimeout(timer); }
+   },phase);
+   console.log('PASS production startup publication: '+JSON.stringify(startup));
+  } finally { await startupPage.close(); }
+ }
  const ownershipPage=await browser.newPage();
  await ownershipPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const ownership=await ownershipPage.evaluate(async()=>{
