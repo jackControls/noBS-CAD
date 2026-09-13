@@ -11,6 +11,7 @@ use nbcad_sketch::{host, SketchManager};
 use nbcad_solid::{CommitKernelRequest, RecomputePlanDto, StepExportRequest};
 use serde_json::{json, Map, Value};
 
+mod cam_tools;
 mod desktop;
 mod disclosure;
 mod drawing_tools;
@@ -1432,6 +1433,8 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "demo_export_pip_3mf"
             | "material_catalog"
             | "body_appearances"
+            | "cam_get_document"
+            | "cam_toolpath_statuses"
     )
 }
 
@@ -3903,6 +3906,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ),
     ];
     tools.extend(drawing_tools::specs());
+    tools.extend(cam_tools::specs());
     for tool in &mut tools {
         let (pack, spine) = tags_for_tool(tool.name);
         tool.pack = pack;
@@ -3914,7 +3918,11 @@ fn tool_specs() -> Vec<ToolSpec> {
 fn records_in_script(name: &str) -> bool {
     if matches!(
         name,
-        "drawing_document" | "drawing_projection" | "drawing_export"
+        "drawing_document"
+            | "drawing_projection"
+            | "drawing_export"
+            | "cam_get_document"
+            | "cam_toolpath_statuses"
     ) {
         return false;
     }
@@ -4384,7 +4392,7 @@ mod tests {
         let model = server.call_tool("cad_project_model", json!({})).unwrap();
         {
             let mut legacy: Value = serde_json::from_str(model.as_str().unwrap()).unwrap();
-            assert_eq!(legacy["schema_version"], 6);
+            assert_eq!(legacy["schema_version"], 7);
             fn remove_guards(value: &mut Value) {
                 match value {
                     Value::Object(object) => {
@@ -4413,7 +4421,7 @@ mod tests {
                     .unwrap();
                 let resaved = migrated.call_tool("cad_project_model", json!({})).unwrap();
                 let resaved: Value = serde_json::from_str(resaved.as_str().unwrap()).unwrap();
-                assert_eq!(resaved["schema_version"], 6);
+                assert_eq!(resaved["schema_version"], 7);
                 assert_eq!(
                     serde_json::from_value::<nbcad_sketch::DrawingDocumentDto>(
                         resaved["drawings"].clone()
@@ -10212,6 +10220,51 @@ mod tests {
             std::env::remove_var("NBCAD_SESSION_DIR");
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cam_tools_share_the_product_catalog_and_persist_in_the_project() {
+        let expected = [
+            ("cam_get_document", "cam/setup"),
+            ("cam_set_document", "cam/setup"),
+            ("cam_toolpath_statuses", "cam/toolpaths"),
+            ("cam_regenerate_operation", "cam/toolpaths"),
+            ("cam_regenerate_setup", "cam/toolpaths"),
+            ("cam_plan_setup", "cam/toolpaths"),
+            ("cam_simulate_setup", "cam-simulate/simulation"),
+            ("cam_simulate_gcode", "cam-simulate/simulation"),
+            ("cam_post_events", "cam-output/advanced"),
+            ("cam_post_setup", "cam-output/output"),
+        ];
+        let tools = tool_specs();
+        for (name, group) in expected {
+            assert_eq!(tools.iter().filter(|tool| tool.name == name).count(), 1);
+            assert_eq!(interface::group_for(name), Some(group));
+        }
+        assert!(is_read_safe_while_attached("cam_get_document"));
+        assert!(is_read_safe_while_attached("cam_toolpath_statuses"));
+        assert!(!records_in_script("cam_get_document"));
+        assert!(!records_in_script("cam_toolpath_statuses"));
+        let mut server = CadServer::new().unwrap();
+        let mut cam = server.call_tool("cam_get_document", json!({})).unwrap();
+        cam["units"] = json!("inches");
+        server
+            .call_tool(
+                "cad_interface",
+                json!({
+                    "action":"execute", "group":"cam/setup", "operation":"cam_set_document",
+                    "arguments":cam
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            server.call_tool("cam_get_document", json!({})).unwrap()["units"],
+            "inches"
+        );
+        let model = server.call_tool("cad_project_model", json!({})).unwrap();
+        let model: Value = serde_json::from_str(model.as_str().unwrap()).unwrap();
+        assert_eq!(model["cam"]["units"], "inches");
+        assert_eq!(model["schema_version"], 7);
     }
 
     #[test]

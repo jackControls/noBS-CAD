@@ -18,6 +18,20 @@ calls follow the active document without a separate attach step.
 An outdated desktop is rejected before submission. No uncertain mutation is
 automatically retried.
 
+CAM operations use the same Program, Simulate and Output groups as the ribbon.
+`cam_set_document` replaces the entire result of `cam_get_document`; preserve
+unedited post settings, generation stamps and associative height/linking intent.
+Load warnings are accepted but recomputed by the engine. `cam_simulate_setup`
+accepts modeled `stock_mesh`, finished-model `target`, an inclusive
+`through_operation_id`, and optional step/time prefixes (zero means uncut stock).
+`cam_simulate_gcode` accepts NC text and the same stock/target inputs with a
+step prefix. `cam_post_events` returns neutral post events through
+`cam-output/advanced`, retaining the normal freshness and verification checks.
+Read-result `_disclosure` metadata is accepted on document round trips but is
+not persisted. Partial-time playback frames omit comparison verdicts; request
+the complete scope for verification.
+Neither simulation nor post export constitutes whole-machine safety certification.
+
 `action: launch` starts an explicitly
 supplied desktop executable (or
 `NBCAD_DESKTOP_BIN`). It reports `ready` only after the new process publishes a

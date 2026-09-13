@@ -148,7 +148,11 @@ fn identity(root: &Path, override_revision: Option<&str>) -> Result<Identity, St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    // Clock readings can repeat between parallel tests on the same process.
+    static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
     struct Fixture(PathBuf);
     impl Fixture {
@@ -158,8 +162,9 @@ mod tests {
                 .unwrap()
                 .as_nanos();
             let root = env::temp_dir().join(format!(
-                "nbcad build identity {} {nonce}",
-                std::process::id()
+                "nbcad build identity {} {nonce} {}",
+                std::process::id(),
+                NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir(&root).unwrap();
             assert!(git(&root, &["init", "--initial-branch=main"]).is_some());

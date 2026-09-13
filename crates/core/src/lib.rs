@@ -10,6 +10,7 @@ mod browser;
 mod build_info;
 mod document;
 mod dto;
+pub mod edge_chain;
 mod feature;
 mod ids;
 mod plane;

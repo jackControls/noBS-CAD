@@ -16,7 +16,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import {currentHistoryProjectKey,dropApplicationHistory,recordDrawingHistory} from './engine/applicationHistory';
 import { listen } from '@tauri-apps/api/event';
-import { getEngine } from './engine';
+import { getEngine, isTauriRuntime } from './engine';
 import { applyLiveUiControl } from './liveUiBridge';
 import { SerialPlayback, presentOperation, presentation, wakePlayback, type ScriptProgress } from './operationPlayback';
 import { getSessionCamera } from './components/viewport/cameraApi';
@@ -334,7 +334,7 @@ export function scheduleSessionBridgePublish(): void {
 }
 
 export function startSessionBridge(): void {
-  if (started) return;
+  if (started || !isTauriRuntime()) return;
   started = true;
   useAppStore.subscribe((state, prev) => {
     if (
@@ -344,6 +344,7 @@ export function startSessionBridge(): void {
       state.mode !== prev.mode ||
       state.activeTool !== prev.activeTool ||
       state.projectVisibility !== prev.projectVisibility ||
+      state.camDocument !== prev.camDocument ||
       activeSolidDialog(state) !== activeSolidDialog(prev)
     ) {
       // Native engine commands bump engine_revision under the publisher lock

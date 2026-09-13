@@ -5,32 +5,151 @@
  * project tab. In sketch mode a green FINISH SKETCH button docks on the
  * right.
  *
- * Dropdown menus are PORTALED to document.body: the panels row uses
- * `overflow-x-auto` for narrow windows, and CSS computes overflow-y to
- * auto in that case — an in-tree dropdown would be clipped to the 92 px
- * ribbon box (in the DOM but invisible). Fixed-position portal menus
- * escape the clip; `data-ribbon-menu` marks them so the outside-pointer
- * closer doesn't treat menu clicks as outside clicks.
+ * The ribbon measures its usable command area and progressively condenses
+ * secondary commands into their panel menus before horizontal scrolling is
+ * allowed. This keeps every workflow group, including Select, in view at
+ * normal desktop widths while restoring direct commands as space returns.
+ *
+ * Dropdown menus are PORTALED to document.body so they escape the 92 px
+ * ribbon clip; `data-ribbon-menu` marks them so the outside-pointer closer
+ * doesn't treat menu clicks as outside clicks.
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Box, Check, ChevronDown, FileText } from 'lucide-react';
+import { Check, ChevronDown, FileText, MoreHorizontal } from 'lucide-react';
 import { useTranslation } from '../i18n';
 import { cx } from '../lib/cx';
-import { ribbonTabById, type RibbonAction, type RibbonButton, type RibbonPanel } from '../ribbon/config';
+import {
+  ribbonTabById,
+  CAM_SIMULATE_TAB,
+  CAM_OUTPUT_TAB,
+  type MenuEntry,
+  type RibbonAction,
+  type RibbonButton,
+  type RibbonPanel,
+  type RibbonTab,
+} from '../ribbon/config';
 import { dispatchRibbonAction } from '../ribbon/dispatch';
 import { constructionReferencesVisible, useAppStore } from '../store/appStore';
 import { CONSTRAINT_ICON_IDS, ToolIcon } from './icons';
 import { RibbonMenu } from './RibbonMenu';
 import { FeatureScriptPreview } from './FeatureScriptPreview';
+import { useCamActivity, type CamRibbonSection } from '../cam/simulationUi';
+
+const CAM_SECTIONS: readonly CamRibbonSection[] = ['program', 'simulate', 'output'];
+
+function ribbonButtonKey(panel: RibbonPanel, button: RibbonButton): string {
+  return `${panel.id}:${button.id}`;
+}
+
+/**
+ * Preserve the first button in every panel as its primary command. The
+ * remaining buttons are ordered by their position within a panel, so a
+ * compact ribbon sheds the last/least-primary command from each group before
+ * it ever removes a group's primary action.
+ */
+function collapsibleButtonKeys(panels: RibbonPanel[]): string[] {
+  return panels
+    .flatMap((panel, panelIndex) => panel.buttons.map((button, buttonIndex) => ({
+      key: ribbonButtonKey(panel, button),
+      panelIndex,
+      buttonIndex,
+    })))
+    .filter(({ buttonIndex }) => buttonIndex > 0)
+    .sort((a, b) => a.buttonIndex - b.buttonIndex || a.panelIndex - b.panelIndex)
+    .map(({ key }) => key);
+}
+
+function useResponsiveRibbonLayout(
+  tab: RibbonTab,
+  commandStripRef: { current: HTMLDivElement | null },
+) {
+  const allButtonKeys = useMemo(
+    () => tab.panels.flatMap((panel) => panel.buttons.map((button) => ribbonButtonKey(panel, button))),
+    [tab],
+  );
+  const candidates = useMemo(() => collapsibleButtonKeys(tab.panels), [tab]);
+  const [visibleCandidateCount, setVisibleCandidateCount] = useState(candidates.length);
+  const [measuredWidth, setMeasuredWidth] = useState(0);
+  const [settled, setSettled] = useState(false);
+  const priorWidthRef = useRef<number | null>(null);
+
+  // A workspace switch starts from its complete command set. The layout pass
+  // immediately removes only the commands that do not fit in its own usable
+  // width (which already excludes the workspace switcher and Finish Sketch).
+  useLayoutEffect(() => {
+    priorWidthRef.current = null;
+    setVisibleCandidateCount(candidates.length);
+    setSettled(false);
+  }, [tab.id, candidates.length]);
+
+  useLayoutEffect(() => {
+    const strip = commandStripRef.current;
+    if (!strip) return;
+
+    const noteWidth = (width: number) => {
+      const priorWidth = priorWidthRef.current;
+      if (priorWidth !== null && Math.abs(width - priorWidth) < 0.5) return;
+      priorWidthRef.current = width;
+      // Start a fresh fitting pass on every real width change. Restoring the
+      // complete set first is deliberate: it lets a newly larger window bring
+      // back every command it can accommodate, while the layout effect below
+      // trims only what still overflows.
+      setVisibleCandidateCount(candidates.length);
+      setMeasuredWidth(width);
+      setSettled(false);
+    };
+
+    noteWidth(strip.clientWidth);
+    const observer = new ResizeObserver((entries) => {
+      noteWidth(entries[0]?.contentRect.width ?? strip.clientWidth);
+    });
+    observer.observe(strip);
+    const onWindowResize = () => noteWidth(strip.clientWidth);
+    window.addEventListener('resize', onWindowResize);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', onWindowResize);
+    };
+  }, [commandStripRef, tab.id]);
+
+  useLayoutEffect(() => {
+    const strip = commandStripRef.current;
+    if (!strip) return;
+
+    const overflowing = strip.scrollWidth > strip.clientWidth + 1;
+    if (overflowing && visibleCandidateCount > 0) {
+      setSettled(false);
+      setVisibleCandidateCount((count) => Math.max(0, count - 1));
+      return;
+    }
+
+    setSettled(true);
+  }, [candidates.length, commandStripRef, measuredWidth, tab.id, visibleCandidateCount]);
+
+  const visibleButtonKeys = useMemo(() => {
+    const hidden = new Set(candidates.slice(visibleCandidateCount));
+    return new Set(allButtonKeys.filter((key) => !hidden.has(key)));
+  }, [allButtonKeys, candidates, visibleCandidateCount]);
+
+  return {
+    visibleButtonKeys,
+    atMinimum: visibleCandidateCount === 0,
+    measuredWidth,
+    settled,
+  };
+}
 
 export function Ribbon() {
   const { t } = useTranslation();
   const mode = useAppStore((s) => s.mode);
   const activeTab = useAppStore((s) => s.activeTab);
+  const activeProjectTabId = useAppStore((s) => s.activeProjectTabId);
+  const camSection = useCamActivity((s) => s.ribbonSection);
   const documentOpen = useAppStore((s) => s.document !== null);
   const [openPanel, setOpenPanel] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const commandStripRef = useRef<HTMLDivElement>(null);
 
   // Close open dropdowns on outside pointer down (menu portals are exempt
   // via data-ribbon-menu).
@@ -53,38 +172,103 @@ export function Ribbon() {
     };
   }, [openPanel]);
 
-  const tab = ribbonTabById(activeTab);
+  const camActive = activeTab === 'cam';
+  const tab = camActive && camSection === 'simulate' ? CAM_SIMULATE_TAB
+    : camActive && camSection === 'output' ? CAM_OUTPUT_TAB
+      : ribbonTabById(activeTab);
+  // Task tabs never call setActiveTab: that would unmount the shared CAM
+  // viewport and discard the prepared playback/stock caches.
+  useEffect(() => {
+    useCamActivity.setState({ ribbonSection: 'program' });
+  }, [activeProjectTabId]);
+  useEffect(() => {
+    if (!camActive) useCamActivity.setState({ ribbonSection: 'program' });
+    setOpenPanel(null);
+  }, [camActive, camSection]);
+  const responsiveLayout = useResponsiveRibbonLayout(tab, commandStripRef);
   const dispatch = (action?: RibbonAction, payload?: string) => dispatchRibbonAction(action, payload);
 
   return (
     <div
       ref={rootRef}
-      className="relative flex h-[92px] w-full min-w-0 shrink-0 flex-col overflow-hidden"
+      data-testid="ribbon"
+      className={cx('relative flex w-full min-w-0 shrink-0 flex-col overflow-hidden', camActive ? 'h-[120px]' : 'h-[92px]')}
     >
+      {camActive && (
+        <div role="tablist" aria-label={t('ribbon.cam.taskTabs')}
+          className="flex h-7 shrink-0 items-stretch gap-1 border-b border-edge bg-header pl-[116px] max-[1400px]:pl-16">
+          {CAM_SECTIONS.map((section) => (
+            <button key={section} type="button" role="tab" id={`cam-task-${section}`}
+              aria-selected={camSection === section} aria-controls="cam-task-panel"
+              tabIndex={camSection === section ? 0 : -1}
+              onClick={() => { setOpenPanel(null); useCamActivity.setState({ ribbonSection: section }); }}
+              onKeyDown={(event) => {
+                const index = CAM_SECTIONS.indexOf(section);
+                const next = event.key === 'ArrowRight' ? CAM_SECTIONS[(index + 1) % CAM_SECTIONS.length]
+                  : event.key === 'ArrowLeft' ? CAM_SECTIONS[(index + CAM_SECTIONS.length - 1) % CAM_SECTIONS.length]
+                    : event.key === 'Home' ? CAM_SECTIONS[0] : event.key === 'End' ? CAM_SECTIONS[2] : null;
+                if (!next) return;
+                event.preventDefault();
+                setOpenPanel(null);
+                useCamActivity.setState({ ribbonSection: next });
+                window.document.getElementById(`cam-task-${next}`)?.focus();
+              }}
+              className={cx('min-w-20 border-b-2 px-4 text-[11px] transition-colors motion-reduce:transition-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-3px] focus-visible:outline-accent',
+                camSection === section ? 'border-accent font-semibold text-ink' : 'border-transparent text-mute hover:bg-edge/50 hover:text-ink')}>
+              {t(`ribbon.cam.${section}Tab`)}
+            </button>
+          ))}
+        </div>
+      )}
       <div
         data-testid="ribbon-tools"
         className="flex h-[92px] min-w-0 shrink-0 items-stretch border-b border-edge bg-header"
       >
         <WorkspaceSwitcher onOpen={() => setOpenPanel(null)} />
         <div
+          ref={commandStripRef}
+          id={camActive ? 'cam-task-panel' : undefined}
+          role={camActive ? 'tabpanel' : undefined}
+          aria-labelledby={camActive ? `cam-task-${camSection}` : undefined}
           data-testid="ribbon-command-scroll"
-          className="flex min-w-0 flex-1 items-stretch overflow-x-auto overscroll-x-contain"
+          data-ribbon-layout-ready={responsiveLayout.settled ? 'true' : 'false'}
+          data-ribbon-layout-width={Math.round(responsiveLayout.measuredWidth)}
+          className={cx(
+            'flex min-w-0 flex-1 items-stretch',
+            responsiveLayout.atMinimum ? 'overflow-x-auto overscroll-x-contain' : 'overflow-hidden',
+          )}
         >
-          {tab.panels.map((panel) => (
-            <Panel
-              key={panel.id}
-              panel={panel}
-              menuOpen={openPanel === panel.id}
-              documentOpen={documentOpen}
-              onToggleMenu={() => setOpenPanel(openPanel === panel.id ? null : panel.id)}
-              onCloseMenu={() => setOpenPanel(null)}
-              onAction={dispatch}
-            />
-          ))}
+          {tab.panels.map((panel) => {
+            const visibleButtons = panel.buttons.filter((button) =>
+              responsiveLayout.visibleButtonKeys.has(ribbonButtonKey(panel, button)),
+            );
+            const hiddenButtons = panel.buttons.filter((button) =>
+              !responsiveLayout.visibleButtonKeys.has(ribbonButtonKey(panel, button)),
+            );
+            return (
+              <Panel
+                key={panel.id}
+                panel={panel}
+                visibleButtons={visibleButtons}
+                hiddenButtons={hiddenButtons}
+                menuOpen={openPanel === panel.id}
+                documentOpen={documentOpen}
+                onToggleMenu={() => setOpenPanel(openPanel === panel.id ? null : panel.id)}
+                onCloseMenu={() => setOpenPanel(null)}
+                onAction={dispatch}
+              />
+            );
+          })}
+          {/* Reserve the controls' width before their portal is mounted, so
+              the first responsive-layout pass also accounts for playback. */}
+          {camActive && camSection === 'simulate' && <div id="cam-simulation-toolbar" className="flex min-w-[572px] flex-1 items-stretch" />}
         </div>
 
         {mode === 'sketch' && (
-          <div className="flex shrink-0 items-center border-l border-edge px-3 max-[1400px]:px-2">
+          <div
+            data-testid="finish-sketch-container"
+            className="flex shrink-0 items-center px-3 max-[1400px]:px-2"
+          >
             <button
               type="button"
               onClick={() => dispatchRibbonAction('exitSketch')}
@@ -135,6 +319,7 @@ function WorkspaceSwitcher({ onOpen }: { onOpen: () => void }) {
 
   const sketching = mode === 'sketch';
   const drawingActive = activeTab === 'drawing';
+  const camActive = activeTab === 'cam';
   const choose = (action: RibbonAction) => {
     setOpen(false);
     dispatchRibbonAction(action);
@@ -143,9 +328,9 @@ function WorkspaceSwitcher({ onOpen }: { onOpen: () => void }) {
   return (
     <div
       ref={anchorRef}
-      className="flex h-full w-[108px] shrink-0 flex-col border-r border-edge bg-header pr-1.5 max-[1400px]:w-14 max-[1400px]:pr-0"
+      className="flex h-full w-[108px] shrink-0 flex-col border-r border-edge bg-header px-1.5 max-[1400px]:w-14 max-[1400px]:px-0"
     >
-      <div className="flex h-[62px] w-full items-start pl-1.5 pt-1.5 max-[1400px]:pl-0.5">
+      <div className="flex h-[62px] w-full items-start pt-1.5 max-[1400px]:px-0.5">
         <button
           type="button"
           data-testid="workspace-switcher"
@@ -174,18 +359,27 @@ function WorkspaceSwitcher({ onOpen }: { onOpen: () => void }) {
           className="flex h-[52px] w-full min-w-0 flex-col items-center justify-center gap-0.5 rounded px-2 text-mute hover:bg-edge hover:text-ink disabled:cursor-default disabled:opacity-50 max-[1400px]:px-1"
         >
           <span className="flex h-6 items-center justify-center text-ink">
-            {drawingActive ? <FileText size={20} /> : <Box size={20} />}
+            {drawingActive ? <FileText size={20} /> : <ToolIcon id={camActive ? 'camManufacture' : 'camModel'} size={20} />}
           </span>
-          <span className="flex items-center gap-0.5 whitespace-nowrap text-[9px] leading-tight">
-            <span className="max-[1400px]:hidden">
-              {drawingActive ? t('ribbon.tabs.drawingWorkspace') : t('ribbon.tabs.solidModeling')}
+          <span
+            data-testid="workspace-mode-label"
+            className="flex flex-col items-center gap-0.5 text-[9px] leading-none"
+          >
+            <span className="flex items-center gap-0.5 whitespace-nowrap">
+              <span className="max-[1400px]:hidden">
+                {drawingActive
+                  ? t('ribbon.tabs.drawingWorkspace')
+                  : camActive
+                    ? t('ribbon.tabs.camWorkspace')
+                    : t('ribbon.tabs.solidModeling')}
+              </span>
+              <ChevronDown size={8} />
             </span>
             {sketching && (
               <span className="rounded bg-accent/15 px-1 text-[8px] font-medium text-accent max-[1400px]:hidden">
                 {t('ribbon.tabs.sketch')}
               </span>
             )}
-            <ChevronDown size={8} />
           </span>
         </button>
       </div>
@@ -202,9 +396,9 @@ function WorkspaceSwitcher({ onOpen }: { onOpen: () => void }) {
           style={{ left: menuPos.left, top: menuPos.top }}
         >
           <WorkspaceMenuItem
-            icon={<Box size={14} />}
+            icon={<ToolIcon id="camModel" size={15} />}
             label={t('ribbon.tabs.solidModeling')}
-            checked={!drawingActive}
+            checked={!drawingActive && !camActive}
             onClick={() => choose('modelWorkspace')}
           />
           <WorkspaceMenuItem
@@ -214,6 +408,14 @@ function WorkspaceSwitcher({ onOpen }: { onOpen: () => void }) {
             disabled={sketching}
             title={sketching ? 'Finish the active sketch before opening Drawings' : undefined}
             onClick={() => choose('drawingWorkspace')}
+          />
+          <WorkspaceMenuItem
+            icon={<ToolIcon id="camManufacture" size={15} />}
+            label={t('ribbon.tabs.camWorkspace')}
+            checked={camActive}
+            disabled={sketching}
+            title={sketching ? 'Finish the active sketch before opening CAM' : undefined}
+            onClick={() => choose('camWorkspace')}
           />
         </div>,
         window.document.body,
@@ -256,6 +458,8 @@ function WorkspaceMenuItem({
 
 function Panel({
   panel,
+  visibleButtons,
+  hiddenButtons,
   menuOpen,
   documentOpen,
   onToggleMenu,
@@ -263,6 +467,8 @@ function Panel({
   onAction,
 }: {
   panel: RibbonPanel;
+  visibleButtons: RibbonButton[];
+  hiddenButtons: RibbonButton[];
   menuOpen: boolean;
   documentOpen: boolean;
   onToggleMenu: () => void;
@@ -274,6 +480,19 @@ function Panel({
   const workspace = useAppStore((state) => state.mode === 'sketch' ? 'sketch' : state.activeTab);
   const group = `${workspace}/${panel.id}`;
   const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
+  const menuEntries: MenuEntry[] | undefined = panel.menu ?? (
+    hiddenButtons.length > 0
+      ? hiddenButtons.map((button) => ({
+        type: 'item' as const,
+        id: `ribbon-overflow-${button.id}`,
+        labelKey: button.labelKey,
+        icon: button.icon,
+        enabled: button.enabled ?? false,
+        action: button.action,
+        payload: button.payload,
+      }))
+      : undefined
+  );
 
   const toggle = () => {
     if (!documentOpen) return;
@@ -291,13 +510,18 @@ function Panel({
     <div
       ref={panelRef}
       data-interface-group={group}
-      className="relative flex shrink-0 flex-col border-r border-edge px-1.5 max-[1400px]:px-0.5"
+      data-ribbon-panel={panel.id}
+      className="relative flex shrink-0 flex-col border-r border-edge px-1"
     >
-      <div className={cx(
-        'flex h-[62px] items-start gap-0.5 pt-1.5',
-        panel.id === 'dimensions' && 'justify-center',
-      )}>
-        {panel.buttons.map((button) => (
+      <div className="flex h-[62px] items-start justify-center gap-0.5 pt-1.5">
+        {panel.buttons.length === 0 && panel.menu && (
+          <button type="button" aria-haspopup="menu" aria-expanded={menuOpen} disabled={!documentOpen}
+            onClick={toggle} className="flex h-[52px] w-16 flex-col items-center justify-center gap-1 rounded text-mute hover:bg-edge hover:text-ink disabled:opacity-40">
+            <MoreHorizontal size={22} />
+            <span className="flex items-center gap-1 text-[9px]">{t(panel.labelKey)}<ChevronDown size={10} /></span>
+          </button>
+        )}
+        {visibleButtons.map((button) => (
           <Button
             key={button.id}
             button={button}
@@ -315,29 +539,29 @@ function Panel({
           />
         ))}
       </div>
-      <button
+      {panel.buttons.length > 0 && <button
         type="button"
-        disabled={!panel.menu || !documentOpen}
-        onClick={panel.menu ? toggle : undefined}
+        disabled={!menuEntries || !documentOpen}
+        onClick={menuEntries ? toggle : undefined}
         className={cx(
-          'flex h-5 items-center justify-center gap-0.5 text-[10px] tracking-wider',
-          panel.menu && documentOpen
+          'flex h-5 w-full items-center justify-center gap-0.5 text-[10px] tracking-wider',
+          menuEntries && documentOpen
             ? 'text-mute hover:text-ink'
             : 'cursor-default text-mute/40',
           menuOpen && 'text-ink',
         )}
       >
         {t(panel.labelKey)}
-        {panel.menu && <ChevronDown size={10} />}
-      </button>
+        {menuEntries && <ChevronDown size={10} />}
+      </button>}
 
       {menuOpen &&
-        panel.menu &&
+        menuEntries &&
         menuPos &&
         createPortal(
           <div data-ribbon-menu className="fixed z-50" style={{ left: menuPos.left, top: menuPos.top }}>
             <RibbonMenu
-              entries={panel.menu}
+              entries={menuEntries}
               onClose={onCloseMenu}
               submenuSide={menuPos.left + 256 + 240 > window.innerWidth - 8 ? 'left' : 'right'}
             />
@@ -394,21 +618,13 @@ function Button({
         && s.drawingPendingViewKind === button.payload
       ),
   );
-  const widthClass =
-    button.action?.startsWith('drawing')
-      ? 'w-12'
-      : button.id === 'patternRectangular'
-        ? 'w-14 max-[1400px]:w-12'
-      : button.id === 'sectionAnalysis'
-        ? 'w-11 max-[1400px]:w-10'
-      : button.id === 'perpendicular'
-      ? 'w-14 max-[1400px]:w-10'
-      : button.id === 'sketchDimension'
-          || button.id === 'drawingDimension'
-          || button.id === 'horizontalVertical'
-        ? 'w-12 max-[1400px]:w-10'
-        : 'w-11 max-[1400px]:w-9';
-
+  // Keep the standard command-cell width consistent. These two constraint
+  // names need one modestly wider cell so their complete localized labels can
+  // remain legible without introducing an ellipsis or a third line.
+  const widthClass = button.id === 'horizontalVertical' || button.id === 'perpendicular'
+    ? 'w-14'
+    : 'w-12';
+  const label = t(button.labelKey);
   const control = (
     <button
       type="button"
@@ -437,9 +653,16 @@ function Button({
       </span>
       <span
         data-ribbon-button-label
-        className="flex h-5 w-full items-center justify-center whitespace-normal break-words text-center text-[9px] leading-[9px] text-mute [overflow-wrap:anywhere]"
+        className="grid h-6 w-full place-items-center text-center text-[8px] leading-[8px] text-mute"
       >
-        {t(button.labelKey)}
+        <span className="max-w-full whitespace-normal">
+          {label.split('/').map((part, index) => (
+            <Fragment key={`${button.id}-${index}`}>
+              {index > 0 && <><span>/</span><wbr /></>}
+              {part}
+            </Fragment>
+          ))}
+        </span>
       </span>
     </button>
   );

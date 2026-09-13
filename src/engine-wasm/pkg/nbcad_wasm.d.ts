@@ -113,6 +113,19 @@ export class WasmEngine {
      * `payload`: serialized `BreakRequest`.
      */
     break_curve(payload: string): string;
+    cam_analyze_nbpost(payload: string): string;
+    cam_chamfer_geometry(payload: string): string;
+    cam_cutter_mesh(payload: string): string;
+    cam_document(): string;
+    cam_plan(payload: string): string;
+    cam_post(payload: string): string;
+    cam_post_events(payload: string): string;
+    cam_regenerate_operation(payload: string): string;
+    cam_regenerate_setup(payload: string): string;
+    cam_set_document(payload: string): string;
+    cam_simulate(payload: string): string;
+    cam_simulate_gcode(payload: string): string;
+    cam_toolpath_statuses(): string;
     chamfer_definitions(): string;
     /**
      * `payload`: serialized `ChamferRequest`.
@@ -181,6 +194,7 @@ export class WasmEngine {
      * Finished-sketch snapshots (M1d): muted 3D rendering + re-edit list.
      */
     finished_sketches(): string;
+    geometry_edge_chain(payload: string): string;
     hole_definitions(): string;
     loft_definitions(): string;
     /**
@@ -358,6 +372,19 @@ export interface InitOutput {
     readonly wasmengine_body_appearances: (a: number) => [number, number];
     readonly wasmengine_body_feature_definitions: (a: number) => [number, number];
     readonly wasmengine_break_curve: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_cam_analyze_nbpost: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_cam_chamfer_geometry: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_cam_cutter_mesh: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_cam_document: (a: number) => [number, number];
+    readonly wasmengine_cam_plan: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_cam_post: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_cam_post_events: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_cam_regenerate_operation: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_cam_regenerate_setup: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_cam_set_document: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_cam_simulate: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_cam_simulate_gcode: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_cam_toolpath_statuses: (a: number) => [number, number];
     readonly wasmengine_chamfer_definitions: (a: number) => [number, number];
     readonly wasmengine_chamfer_lines: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_circular_pattern: (a: number, b: number, c: number) => [number, number];
@@ -384,6 +411,7 @@ export interface InitOutput {
     readonly wasmengine_fillet_lines: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_fillet_preview: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_finished_sketches: (a: number) => [number, number];
+    readonly wasmengine_geometry_edge_chain: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_hole_definitions: (a: number) => [number, number];
     readonly wasmengine_loft_definitions: (a: number) => [number, number];
     readonly wasmengine_mirror_entities: (a: number, b: number, c: number) => [number, number];

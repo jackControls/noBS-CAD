@@ -3937,6 +3937,7 @@ dependencies = [
  "glib",
  "gtk",
  "hidapi",
+ "nbcad-cam",
  "nbcad-core",
  "nbcad-export",
  "nbcad-mcp",
@@ -3957,6 +3958,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-deep-link",
  "tauri-plugin-dialog",
+ "tokio",
  "uuid",
  "webkit2gtk",
  "webview2-com",
@@ -3972,6 +3974,15 @@ dependencies = [
  "nbcad-core",
  "nbcad-solid",
  "serde",
+]
+
+[[package]]
+name = "nbcad-cam"
+version = "0.1.0"
+dependencies = [
+ "nbcad-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4053,6 +4064,7 @@ name = "nbcad-sketch"
 version = "0.1.0"
 dependencies = [
  "nbcad-assembly",
+ "nbcad-cam",
  "nbcad-core",
  "nbcad-solid",
  "serde",

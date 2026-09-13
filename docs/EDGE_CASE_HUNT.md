@@ -65,7 +65,7 @@ A good report takes five minutes and saves us an hour:
   survives even if the `.nbcad` format changes in pre-alpha.
 - **OS + build info** — e.g. *Windows 11, main @ 5071ec2*.
 
-Use the [bug template](../../.github/ISSUE_TEMPLATE/bug_report.yml) (open an
+Use the [bug template](../.github/ISSUE_TEMPLATE/bug_report.yml) (open an
 issue and pick *Bug report*), or comment on the
 [Edge-case hunt issue](https://github.com/jackControls/noBS-CAD/issues/45) if
 you are not sure it is a bug. Either way, try to say whether it feels like an

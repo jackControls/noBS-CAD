@@ -1498,6 +1498,18 @@ pub struct KernelFaceDto {
     /// triangles.
     #[serde(default)]
     pub cylinder: Option<CylindricalSurfaceDto>,
+    /// Actual B-rep boundary membership (all wires), not triangle adjacency.
+    #[serde(default)]
+    pub edge_keys: Vec<String>,
+    #[serde(default)]
+    pub cone: Option<ConicalSurfaceDto>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ConicalSurfaceDto {
+    pub axis: Point3Dto,
+    /// Angle between the cone generator and its axis, radians.
+    pub semi_angle: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -1581,6 +1593,10 @@ pub struct FaceDto {
     pub signature: Option<PlanarFaceSignatureDto>,
     #[serde(default)]
     pub cylinder: Option<CylindricalSurfaceDto>,
+    #[serde(default)]
+    pub edge_keys: Vec<String>,
+    #[serde(default)]
+    pub cone: Option<ConicalSurfaceDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

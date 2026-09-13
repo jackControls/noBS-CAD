@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 
+use nbcad_cam::CamDocumentDto;
 use nbcad_core::{
     BodyAppearance, DimensionStyle, DocumentSettings, FeatureId, FeatureKind, FeatureTree,
     PlaneBasis, PlaneRef,
@@ -26,10 +27,13 @@ pub const LEGACY_PROJECT_FORMAT: &str = "tfcad-project";
 // dimensions; schema 4 introduced gear coupling; schema 5 protects placed
 // drawing references from readers that would silently treat them as definitions.
 // Schema 6 protects structural drawing guards from readers that would drop them.
-pub const PROJECT_SCHEMA_VERSION: u32 = 6;
+// Schema 7 protects CAM intent, including every chamfer chain, from readers
+// that would silently discard machining data. Earlier CAM preview projects
+// used schema 4; their additive CAM fields remain readable here as well.
+pub const PROJECT_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ProjectModelV6 {
+pub(crate) struct ProjectModelV7 {
     pub format: String,
     pub schema_version: u32,
     pub document: ProjectDocumentV2,
@@ -68,6 +72,10 @@ pub(crate) struct ProjectModelV6 {
     /// Browser eye-toggle choices. Additive so older projects remain valid.
     #[serde(default)]
     pub visibility: ProjectVisibilityDto,
+    /// Subtractive-manufacturing intent. Toolpaths and posted NC are derived
+    /// from this model and are deliberately not persisted.
+    #[serde(default)]
+    pub cam: CamDocumentDto,
     pub counters: ProjectCountersV2,
     pub preferences: ProjectPreferencesV2,
 }
@@ -115,7 +123,7 @@ pub(crate) struct ProjectPreferencesV2 {
     pub grid_snap: bool,
 }
 
-pub(crate) fn decode_project(json: &str) -> Result<ProjectModelV6, String> {
+pub(crate) fn decode_project(json: &str) -> Result<ProjectModelV7, String> {
     let mut header: serde_json::Value = serde_json::from_str(json)
         .map_err(|error| format!("model.json is not valid JSON: {error}"))?;
     let format = header
@@ -138,7 +146,7 @@ pub(crate) fn decode_project(json: &str) -> Result<ProjectModelV6, String> {
             migrate_v2_to_v3(&mut header);
         }
         2 => migrate_v2_to_v3(&mut header),
-        3 | 4 | 5 => {}
+        3 | 4 | 5 | 6 => {}
         version if version == u64::from(PROJECT_SCHEMA_VERSION) => {}
         _ => {
             return Err(format!(
@@ -153,8 +161,12 @@ pub(crate) fn decode_project(json: &str) -> Result<ProjectModelV6, String> {
     // association. Users must explicitly reassociate unverified references.
     // Raising the version prevents old readers from saving away model intent.
     header["schema_version"] = serde_json::Value::from(PROJECT_SCHEMA_VERSION);
-    let model: ProjectModelV6 = serde_json::from_value(header)
+    let mut model: ProjectModelV7 = serde_json::from_value(header)
         .map_err(|error| format!("invalid project model: {error}"))?;
+    // A project file must always open: CAM content migrates what it can and
+    // parks what it cannot as disabled operations with load warnings,
+    // instead of rejecting the whole file.
+    model.cam.soften_for_load();
     validate_project(&model)?;
     Ok(model)
 }
@@ -202,7 +214,7 @@ fn migrate_v2_to_v3(model: &mut serde_json::Value) {
     model["schema_version"] = serde_json::Value::from(3);
 }
 
-pub(crate) fn validate_project(model: &ProjectModelV6) -> Result<(), String> {
+pub(crate) fn validate_project(model: &ProjectModelV7) -> Result<(), String> {
     if model.format != PROJECT_FORMAT || model.schema_version != PROJECT_SCHEMA_VERSION {
         return Err("project header does not match the supported schema".to_string());
     }
@@ -214,6 +226,9 @@ pub(crate) fn validate_project(model: &ProjectModelV6) -> Result<(), String> {
     }
     model.drawings.validate()?;
     model.assembly.validate()?;
+    // CAM content never blocks the open: decode_project already ran
+    // soften_for_load, which migrates what's migratable and parks the rest
+    // as disabled operations with load warnings.
 
     let mut feature_ids = HashSet::new();
     for feature in &model.document.history.features {
@@ -565,7 +580,7 @@ pub(crate) fn validate_project(model: &ProjectModelV6) -> Result<(), String> {
 }
 
 fn validate_feature_entry(
-    model: &ProjectModelV6,
+    model: &ProjectModelV7,
     feature_id: FeatureId,
     name: &str,
     kind: FeatureKind,

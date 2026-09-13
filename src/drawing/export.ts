@@ -47,7 +47,7 @@ import { drawingLineStyle, type DrawingLineRole } from './styles';
 import {assertTitleBlockFits, drawingTitleBlock} from './titleBlock';
 
 const DXF_TYPE: SaveType = {
-  description: 'AutoCAD Drawing Interchange',
+  description: 'Drawing Exchange Format',
   extension: '.dxf',
   mime: 'application/dxf',
 };
