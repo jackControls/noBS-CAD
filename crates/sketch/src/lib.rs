@@ -14,13 +14,13 @@
 //!
 //! This crate never touches OCCT — the sketch solver is pure Rust.
 
+mod cam_chamfer;
 mod constraint;
 mod drawing;
 pub mod drawing_commands;
 pub mod drawing_topology;
-mod edge_selection;
-mod cam_chamfer;
 mod dto;
+mod edge_selection;
 mod entity;
 mod expr;
 mod geometry;
@@ -35,6 +35,7 @@ mod solver;
 
 pub mod host;
 
+pub use cam_chamfer::{CamChamferGeometry, CamChamferGeometryRequest};
 pub use constraint::{Constraint, ConstraintId, ConstraintKind};
 pub use drawing::{
     DrawingAnnotationDto, DrawingBreakAxis, DrawingCircularRefDto, DrawingDimensionPresentationDto,
@@ -64,6 +65,7 @@ pub use dto::{
     SlotRequest, SnapTarget, SplineRequest, ToggleFixBatchRequest, ToolResult, TrackingAxis,
     TrackingGuideDto, TrimPreviewDto, TrimRequest, UndoResult,
 };
+pub use edge_selection::{ChainMode, ChainSource, EdgeChainRequest};
 pub use entity::{Entity, EntityId};
 pub use expr::{
     eval_expression, parse as parse_expression, referenced_idents, Ast, ExprError,
@@ -71,8 +73,6 @@ pub use expr::{
 };
 pub use geometry::Vec2;
 pub use manager::SketchManager;
-pub use edge_selection::{EdgeChainRequest, ChainMode, ChainSource};
-pub use cam_chamfer::{CamChamferGeometryRequest, CamChamferGeometry};
 pub use nbcad_assembly::{
     approximate_pair_result, broad_phase_interference_pairs, contact_violation_score,
     ApplyJointMotionsRequestDto, AssemblyDiagnosticDto, AssemblyDiagnosticKindDto,

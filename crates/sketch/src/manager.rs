@@ -1406,16 +1406,31 @@ impl SketchManager {
         Ok(self.drawings.clone())
     }
 
-    pub fn geometry_edge_chain(&self, request: crate::EdgeChainRequest) -> Result<nbcad_core::edge_chain::Chain, SessionError> {
-        let sketches = if request.source == crate::ChainSource::Sketch { self.finished_sketches() } else { Vec::new() };
+    pub fn geometry_edge_chain(
+        &self,
+        request: crate::EdgeChainRequest,
+    ) -> Result<nbcad_core::edge_chain::Chain, SessionError> {
+        let sketches = if request.source == crate::ChainSource::Sketch {
+            self.finished_sketches()
+        } else {
+            Vec::new()
+        };
         crate::edge_selection::resolve(self.solids.scene(), &sketches, &request)
             .map_err(SessionError::Solid)
     }
 
-    pub fn cam_chamfer_geometry(&self, request: crate::CamChamferGeometryRequest) -> Result<crate::CamChamferGeometry, SessionError> {
-        let setup=self.cam.setups.iter().find(|s|s.id==request.setup_id)
-            .ok_or_else(||SessionError::Solid("The CAM setup no longer exists.".into()))?;
-        crate::cam_chamfer::resolve(self.solids.scene(),setup,&request.chain_ref).map_err(SessionError::Solid)
+    pub fn cam_chamfer_geometry(
+        &self,
+        request: crate::CamChamferGeometryRequest,
+    ) -> Result<crate::CamChamferGeometry, SessionError> {
+        let setup = self
+            .cam
+            .setups
+            .iter()
+            .find(|s| s.id == request.setup_id)
+            .ok_or_else(|| SessionError::Solid("The CAM setup no longer exists.".into()))?;
+        crate::cam_chamfer::resolve(self.solids.scene(), setup, &request.chain_ref)
+            .map_err(SessionError::Solid)
     }
 
     pub fn cam_document(&self) -> CamDocumentDto {
@@ -1455,9 +1470,11 @@ impl SketchManager {
                 continue; // A broken old setup must not block its repair.
             };
             for operation in setup.operations.iter().filter(|o| o.enabled()) {
-                let Some(saved) = self.cam.toolpath_generations.iter().find(|s| {
-                    s.operation_id == operation.id() && s.order_dependencies.is_none()
-                }) else {
+                let Some(saved) =
+                    self.cam.toolpath_generations.iter().find(|s| {
+                        s.operation_id == operation.id() && s.order_dependencies.is_none()
+                    })
+                else {
                     continue;
                 };
                 let Some(incoming) = next.toolpath_generations.iter_mut().find(|s| *s == saved)
@@ -1816,9 +1833,14 @@ impl SketchManager {
                         "Operation geometry or cutting/linking settings changed."
                     }.to_string());
                 }
-                if let (Some(saved), Some(current)) = (&saved.order_dependencies, &current.order_dependencies) {
+                if let (Some(saved), Some(current)) =
+                    (&saved.order_dependencies, &current.order_dependencies)
+                {
                     if saved.rules_revision != current.rules_revision {
-                        reasons.push("The CAM order-dependency rules changed; regenerate this path.".to_string());
+                        reasons.push(
+                            "The CAM order-dependency rules changed; regenerate this path."
+                                .to_string(),
+                        );
                     }
                     if saved.stock_height_fingerprint != current.stock_height_fingerprint {
                         reasons.push("Earlier facing operations used to establish incoming stock height moved, changed, or were suppressed.".to_string());
@@ -1862,8 +1884,11 @@ impl SketchManager {
         if stale.is_empty() {
             return Ok(None);
         }
-        let invalid = stale.iter().filter(|status| status.state == CamToolpathStateDto::Invalid)
-            .flat_map(|status| status.reasons.iter().cloned()).collect::<Vec<_>>();
+        let invalid = stale
+            .iter()
+            .filter(|status| status.state == CamToolpathStateDto::Invalid)
+            .flat_map(|status| status.reasons.iter().cloned())
+            .collect::<Vec<_>>();
         if !invalid.is_empty() {
             return Ok(Some(format!("SAFETY: Invalid toolpath configuration: {}. Correct the assigned tool or operation, then regenerate before posting NC.", invalid.join("; "))));
         }
@@ -2054,8 +2079,15 @@ impl SketchManager {
                 }
             };
             let top = match operation {
-                CamOperationDto::Chamfer2d { modeled_chamfer:Some(_), .. } => operation.chamfer_chains().iter().map(|c| c.top_z).fold(f64::NEG_INFINITY, f64::max),
-                _=>resolve(&expressions.top, bottom, None, None, None)?,
+                CamOperationDto::Chamfer2d {
+                    modeled_chamfer: Some(_),
+                    ..
+                } => operation
+                    .chamfer_chains()
+                    .iter()
+                    .map(|c| c.top_z)
+                    .fold(f64::NEG_INFINITY, f64::max),
+                _ => resolve(&expressions.top, bottom, None, None, None)?,
             };
             let feed = resolve(&expressions.feed, bottom, Some(top), None, None)?;
             let retract = resolve(&expressions.retract, bottom, Some(top), Some(feed), None)?;
@@ -2178,8 +2210,7 @@ impl SketchManager {
                     outline,
                     chain_ref: Some(reference),
                     ..
-                }
-                => {
+                } => {
                     let (resolved, closed) = resolve_cam_chain(
                         reference.source,
                         &reference.keys,
@@ -2205,16 +2236,37 @@ impl SketchManager {
                     let name = operation.name().to_owned();
                     let mut chains = operation.chamfer_chains();
                     for (i, chain) in chains.iter_mut().enumerate() {
-                        let Some(reference) = &chain.chain_ref else { continue; };
-                        let failure = |e| SessionError::Solid(format!("Cannot regenerate chamfer '{name}', chain {}: {e}", i + 1));
+                        let Some(reference) = &chain.chain_ref else {
+                            continue;
+                        };
+                        let failure = |e| {
+                            SessionError::Solid(format!(
+                                "Cannot regenerate chamfer '{name}', chain {}: {e}",
+                                i + 1
+                            ))
+                        };
                         if let Some(modeled) = &chain.modeled_chamfer {
-                            let resolved = crate::cam_chamfer::resolve(scene, &setup_snapshot, reference).map_err(failure)?;
-                            chain.path = resolved.path; chain.closed = resolved.closed; chain.top_z = resolved.top_z;
-                            chain.chamfer_width = resolved.width + modeled.additional_width; chain.wall_side = resolved.wall_side;
+                            let resolved =
+                                crate::cam_chamfer::resolve(scene, &setup_snapshot, reference)
+                                    .map_err(failure)?;
+                            chain.path = resolved.path;
+                            chain.closed = resolved.closed;
+                            chain.top_z = resolved.top_z;
+                            chain.chamfer_width = resolved.width + modeled.additional_width;
+                            chain.wall_side = resolved.wall_side;
                         } else {
-                            let resolved = resolve_cam_chain(reference.source, &reference.keys, reference.reversed,
-                                &setup_snapshot, scene, &sketches, true).map_err(failure)?;
-                            chain.path = resolved.0; chain.closed = resolved.1;
+                            let resolved = resolve_cam_chain(
+                                reference.source,
+                                &reference.keys,
+                                reference.reversed,
+                                &setup_snapshot,
+                                scene,
+                                &sketches,
+                                true,
+                            )
+                            .map_err(failure)?;
+                            chain.path = resolved.0;
+                            chain.closed = resolved.1;
                         }
                     }
                     operation.set_chamfer_chains(chains);
@@ -2386,7 +2438,11 @@ impl SketchManager {
         Ok(program)
     }
 
-    pub fn cam_plan_through(&self, setup_id: u64, operation_id: u64) -> Result<CamProgramDto, SessionError> {
+    pub fn cam_plan_through(
+        &self,
+        setup_id: u64,
+        operation_id: u64,
+    ) -> Result<CamProgramDto, SessionError> {
         let mut program = nbcad_cam::plan_setup_through(&self.cam, setup_id, operation_id)
             .map_err(|error| SessionError::Solid(error.to_string()))?;
         if let Some(warning) = self.cam_toolpath_safety_warning(setup_id)? {
@@ -4898,7 +4954,6 @@ fn max_feature_number(document: &Document, prefix: &str) -> u32 {
         .unwrap_or(0)
 }
 
-
 fn cam_model_point_to_setup(point: [f64; 3], setup: &CamSetupDto) -> nbcad_cam::Point3Dto {
     let delta = [
         point[0] - setup.wcs.origin.x,
@@ -4923,7 +4978,6 @@ fn cam_direction_to_setup(direction: [f64; 3], setup: &CamSetupDto) -> [f64; 3] 
     ]
 }
 
-
 fn resolve_cam_chain(
     source: CamChainSource,
     keys: &[String],
@@ -4933,27 +4987,41 @@ fn resolve_cam_chain(
     sketches: &[SketchDto],
     planar: bool,
 ) -> Result<(Vec<nbcad_cam::Point2Dto>, bool), String> {
-    let chain = crate::edge_selection::resolve(scene, sketches, &crate::EdgeChainRequest {
-        source: match source {
-            CamChainSource::Model => crate::ChainSource::Model,
-            CamChainSource::Sketch => crate::ChainSource::Sketch,
+    let chain = crate::edge_selection::resolve(
+        scene,
+        sketches,
+        &crate::EdgeChainRequest {
+            source: match source {
+                CamChainSource::Model => crate::ChainSource::Model,
+                CamChainSource::Sketch => crate::ChainSource::Sketch,
+            },
+            body_ids: setup.body_ids.clone(),
+            normal: Some(setup.wcs.z_axis),
+            keys: keys.to_vec(),
+            mode: crate::ChainMode::Manual,
+            reversed,
         },
-        body_ids: setup.body_ids.clone(),
-        normal: Some(setup.wcs.z_axis),
-        keys: keys.to_vec(),
-        mode: crate::ChainMode::Manual,
-        reversed,
-    })?;
+    )?;
     if planar {
         let z = cam_model_point_to_setup(chain.points[0], setup).z;
-        if chain.points.iter().any(|p| (cam_model_point_to_setup(*p, setup).z - z).abs() > nbcad_core::edge_chain::JOIN_TOLERANCE) {
+        if chain.points.iter().any(|p| {
+            (cam_model_point_to_setup(*p, setup).z - z).abs()
+                > nbcad_core::edge_chain::JOIN_TOLERANCE
+        }) {
             return Err("The selected 2D boundary must lie in one setup-Z plane.".into());
         }
     }
-    Ok((chain.points.into_iter().map(|p| {
-        let p = cam_model_point_to_setup(p, setup);
-        nbcad_cam::Point2Dto::new(p.x, p.y)
-    }).collect(), chain.closed))
+    Ok((
+        chain
+            .points
+            .into_iter()
+            .map(|p| {
+                let p = cam_model_point_to_setup(p, setup);
+                nbcad_cam::Point2Dto::new(p.x, p.y)
+            })
+            .collect(),
+        chain.closed,
+    ))
 }
 
 fn resolve_cam_hole(
@@ -5057,10 +5125,21 @@ fn cam_selection_reference_z(
     sketches: &[SketchDto],
     label: &str,
 ) -> Result<f64, SessionError> {
-    if matches!(operation, CamOperationDto::Chamfer2d { additional_chains, .. } if !additional_chains.is_empty()) {
-        return operation.chamfer_chains().into_iter().map(|chain| {
-            cam_selection_reference_z(&operation.with_chamfer_chain(chain), setup, scene, sketches, label)
-        }).try_fold(f64::NEG_INFINITY, |highest, z| z.map(|z| highest.max(z)));
+    if matches!(operation, CamOperationDto::Chamfer2d { additional_chains, .. } if !additional_chains.is_empty())
+    {
+        return operation
+            .chamfer_chains()
+            .into_iter()
+            .map(|chain| {
+                cam_selection_reference_z(
+                    &operation.with_chamfer_chain(chain),
+                    setup,
+                    scene,
+                    sketches,
+                    label,
+                )
+            })
+            .try_fold(f64::NEG_INFINITY, |highest, z| z.map(|z| highest.max(z)));
     }
     let reference = match operation {
         CamOperationDto::Contour2d { chain_ref, .. }
@@ -5074,14 +5153,29 @@ fn cam_selection_reference_z(
         ))
     })?;
     if reference.source == CamChainSource::Model {
-        let chain = crate::edge_selection::resolve(scene, sketches, &crate::EdgeChainRequest {
-            source: crate::ChainSource::Model, body_ids: setup.body_ids.clone(),
-            normal: Some(setup.wcs.z_axis), keys: reference.keys.clone(),
-            mode: crate::ChainMode::Manual, reversed: false,
-        }).map_err(|e| SessionError::Solid(format!("Cannot regenerate operation '{label}': {e}")))?;
-        let levels: Vec<_> = chain.points.iter().map(|p| cam_model_point_to_setup(*p, setup).z).collect();
+        let chain = crate::edge_selection::resolve(
+            scene,
+            sketches,
+            &crate::EdgeChainRequest {
+                source: crate::ChainSource::Model,
+                body_ids: setup.body_ids.clone(),
+                normal: Some(setup.wcs.z_axis),
+                keys: reference.keys.clone(),
+                mode: crate::ChainMode::Manual,
+                reversed: false,
+            },
+        )
+        .map_err(|e| SessionError::Solid(format!("Cannot regenerate operation '{label}': {e}")))?;
+        let levels: Vec<_> = chain
+            .points
+            .iter()
+            .map(|p| cam_model_point_to_setup(*p, setup).z)
+            .collect();
         let z = levels[0];
-        if levels.iter().any(|v| (v - z).abs() > nbcad_core::edge_chain::JOIN_TOLERANCE) {
+        if levels
+            .iter()
+            .any(|v| (v - z).abs() > nbcad_core::edge_chain::JOIN_TOLERANCE)
+        {
             return Err(SessionError::Solid(format!("Cannot regenerate operation '{label}': Selection height requires a chain in one setup-Z plane.")));
         }
         return Ok(z);
@@ -5207,9 +5301,13 @@ fn cam_apply_resolved_heights(
         } => {
             // Modeled chains retain their individually measured top levels.
             // Sharp chains use the operation's common explicit top plane.
-            if modeled_chamfer.is_none() { *top_z = top; }
+            if modeled_chamfer.is_none() {
+                *top_z = top;
+            }
             for chain in additional_chains {
-                if chain.modeled_chamfer.is_none() { chain.top_z = top; }
+                if chain.modeled_chamfer.is_none() {
+                    chain.top_z = top;
+                }
             }
             *feed_height_z = feed;
             *retract_z = retract;
@@ -6803,7 +6901,9 @@ mod project_tests {
                 },
                 stock_model_box: None,
                 body_ids: vec![],
-                machine: Some(nbcad_cam::CamMachineAssignmentDto::three_axis(CamPostConfigDto::default())),
+                machine: Some(nbcad_cam::CamMachineAssignmentDto::three_axis(
+                    CamPostConfigDto::default(),
+                )),
                 legacy_clearance_z: None,
                 legacy_retract_z: None,
                 operations: vec![CamOperationDto::Face {
@@ -6877,19 +6977,28 @@ mod project_tests {
                 "path":[{"x":20.0,"y":0.0},{"x":30.0,"y":0.0},{"x":30.0,"y":10.0}],
                 "closed":true,"top_z":-1.0,"chamfer_width":0.5,"wall_side":"outside"
             }]
-        })).unwrap();
+        }))
+        .unwrap();
         manager.set_cam_document(cam.clone()).unwrap();
-        manager.drawing_command(serde_json::from_value(serde_json::json!({
-            "type":"create_sheet", "arguments":{
-                "name":"Manufacturing", "format":"a4", "orientation":"landscape"
-            }
-        })).unwrap()).unwrap();
+        manager
+            .drawing_command(
+                serde_json::from_value(serde_json::json!({
+                    "type":"create_sheet", "arguments":{
+                        "name":"Manufacturing", "format":"a4", "orientation":"landscape"
+                    }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
         let mut drawings = manager.drawing_document();
-        drawings.sheets[0].views.push(serde_json::from_value(serde_json::json!({
-            "id":1,"name":"Placed assembly", "kind":"top", "scope":"assembly",
-            "occurrence_ids":[], "direction":[0.0,0.0,1.0],"up":[0.0,1.0,0.0],
-            "position":[80.0,60.0],"scale":1.0
-        })).unwrap());
+        drawings.sheets[0].views.push(
+            serde_json::from_value(serde_json::json!({
+                "id":1,"name":"Placed assembly", "kind":"top", "scope":"assembly",
+                "occurrence_ids":[], "direction":[0.0,0.0,1.0],"up":[0.0,1.0,0.0],
+                "position":[80.0,60.0],"scale":1.0
+            }))
+            .unwrap(),
+        );
         drawings.next_view_id = 2;
         manager.set_drawing_document(drawings.clone()).unwrap();
         let mut model: serde_json::Value =
@@ -6901,13 +7010,28 @@ mod project_tests {
             model["schema_version"] = version.into();
             let mut loaded = SketchManager::new();
             let plan = loaded.prepare_load_project(model.to_string()).unwrap();
-            loaded.commit_solid(CommitKernelRequest {
-                transaction_id: plan.transaction_id,
-                scene: KernelSceneDto::default(),
-            }).unwrap();
-            assert_eq!(loaded.cam_document(), cam, "CAM migration from schema {version}");
-            assert_eq!(loaded.drawing_document(), drawings, "Drawing migration from schema {version}");
-            assert_eq!(loaded.cam_document().setups[0].operations[0].chamfer_chains().len(), 2);
+            loaded
+                .commit_solid(CommitKernelRequest {
+                    transaction_id: plan.transaction_id,
+                    scene: KernelSceneDto::default(),
+                })
+                .unwrap();
+            assert_eq!(
+                loaded.cam_document(),
+                cam,
+                "CAM migration from schema {version}"
+            );
+            assert_eq!(
+                loaded.drawing_document(),
+                drawings,
+                "Drawing migration from schema {version}"
+            );
+            assert_eq!(
+                loaded.cam_document().setups[0].operations[0]
+                    .chamfer_chains()
+                    .len(),
+                2
+            );
             let saved: serde_json::Value =
                 serde_json::from_str(&loaded.export_project_model().unwrap()).unwrap();
             assert_eq!(saved["schema_version"], PROJECT_SCHEMA_VERSION);
@@ -7052,25 +7176,62 @@ mod project_tests {
         let mut generic = before.clone();
         generic.setups[0].machine = None;
         manager.set_cam_document(generic).unwrap();
-        assert_eq!(manager.cam_toolpath_statuses().unwrap()[0].state, CamToolpathStateDto::Current);
+        assert_eq!(
+            manager.cam_toolpath_statuses().unwrap()[0].state,
+            CamToolpathStateDto::Current
+        );
         assert_eq!(manager.cam_plan(3).unwrap(), program);
-        assert!(manager.cam_post(CamPostRequestDto { setup_id: 3, post: None, program_name: None }).unwrap_err().to_string().contains("select a machine/controller"));
+        assert!(manager
+            .cam_post(CamPostRequestDto {
+                setup_id: 3,
+                post: None,
+                program_name: None
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("select a machine/controller"));
         let mut bound = manager.cam_document();
-        bound.setups[0].machine = Some(nbcad_cam::CamMachineAssignmentDto::three_axis(CamPostConfigDto {
-            dialect: nbcad_cam::PostDialect::Siemens828d,
-            siemens_828d: Some(nbcad_cam::Siemens828dPostConfigDto::default()),
-            ..Default::default()
-        }));
+        bound.setups[0].machine = Some(nbcad_cam::CamMachineAssignmentDto::three_axis(
+            CamPostConfigDto {
+                dialect: nbcad_cam::PostDialect::Siemens828d,
+                siemens_828d: Some(nbcad_cam::Siemens828dPostConfigDto::default()),
+                ..Default::default()
+            },
+        ));
         let tool_id = bound.tools[0].id;
-        bound.setups[0].machine.as_mut().unwrap().tool_calls = vec![nbcad_cam::CamMachineToolBindingDto {
-            tool_id, call: nbcad_cam::CamMachineToolCallDto::Name { name: "HostTest_EM6".into() },
-        }];
+        bound.setups[0].machine.as_mut().unwrap().tool_calls =
+            vec![nbcad_cam::CamMachineToolBindingDto {
+                tool_id,
+                call: nbcad_cam::CamMachineToolCallDto::Name {
+                    name: "HostTest_EM6".into(),
+                },
+            }];
         manager.set_cam_document(bound).unwrap();
-        assert_eq!(manager.cam_toolpath_statuses().unwrap()[0].state, CamToolpathStateDto::Current);
-        assert_eq!(manager.cam_document().toolpath_generations, before.toolpath_generations);
-        let output = manager.cam_post(CamPostRequestDto { setup_id: 3, post: None, program_name: None }).unwrap();
+        assert_eq!(
+            manager.cam_toolpath_statuses().unwrap()[0].state,
+            CamToolpathStateDto::Current
+        );
+        assert_eq!(
+            manager.cam_document().toolpath_generations,
+            before.toolpath_generations
+        );
+        let output = manager
+            .cam_post(CamPostRequestDto {
+                setup_id: 3,
+                post: None,
+                program_name: None,
+            })
+            .unwrap();
         assert_eq!(output.dialect, nbcad_cam::PostDialect::Siemens828d);
-        assert!(manager.cam_post(CamPostRequestDto { setup_id: 3, post: Some(CamPostConfigDto::default()), program_name: None }).unwrap_err().to_string().contains("does not match"));
+        assert!(manager
+            .cam_post(CamPostRequestDto {
+                setup_id: 3,
+                post: Some(CamPostConfigDto::default()),
+                program_name: None
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("does not match"));
     }
 
     #[test]

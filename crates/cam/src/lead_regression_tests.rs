@@ -1,12 +1,10 @@
 //! Synthetic adverse inputs for lead geometry and stock-clearance regression tests.
-use crate::*;
 use crate::post::post_setup_unchecked as post_setup;
+use crate::*;
 
 fn fixture(name: &str) -> CamDocumentDto {
-    let data: serde_json::Value = serde_json::from_str(include_str!(
-        "../fixtures/lead-clearance.json"
-    ))
-    .unwrap();
+    let data: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/lead-clearance.json")).unwrap();
     serde_json::from_value(
         data["cases"]
             .as_array()

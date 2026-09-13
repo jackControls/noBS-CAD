@@ -439,12 +439,19 @@ mod tests {
                 floor.clip_contact(c, 4., &mut intervals);
                 let upper = super::super::angle_with_guard(&intervals);
                 let n = 2048;
-                let count = (0..n).filter(|&i| (0..=32).any(|j| {
-                    let delta = 2. * j as f64 / 32.;
-                    let angle = 2. * PI * (i as f64 + 0.5) / n as f64;
-                    let p = Point2Dto::new(c.x + (4. + delta) * angle.cos(), c.y + (4. + delta) * angle.sin());
-                    floor.distance(p) <= floor.offset - delta
-                })).count();
+                let count = (0..n)
+                    .filter(|&i| {
+                        (0..=32).any(|j| {
+                            let delta = 2. * j as f64 / 32.;
+                            let angle = 2. * PI * (i as f64 + 0.5) / n as f64;
+                            let p = Point2Dto::new(
+                                c.x + (4. + delta) * angle.cos(),
+                                c.y + (4. + delta) * angle.sin(),
+                            );
+                            floor.distance(p) <= floor.offset - delta
+                        })
+                    })
+                    .count();
                 assert!(upper + 0.005 >= count as f64 * 2. * PI / n as f64);
             }
         }

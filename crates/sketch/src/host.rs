@@ -78,7 +78,10 @@ fn require_project_snapshot(
 #[serde(untagged)]
 enum CamPlanPayload {
     Setup(u64),
-    Through { setup_id: u64, through_operation_id: u64 },
+    Through {
+        setup_id: u64,
+        through_operation_id: u64,
+    },
 }
 
 /// Dispatch one engine call. Unknown methods and malformed payloads yield
@@ -290,8 +293,12 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         "assembly_set_grounded_body" => {
             with_payload(payload, |body_id| manager.set_grounded_body(body_id))
         }
-        "geometry_edge_chain" => with_payload(payload, |request| manager.geometry_edge_chain(request)),
-        "cam_chamfer_geometry" => with_payload(payload, |request| manager.cam_chamfer_geometry(request)),
+        "geometry_edge_chain" => {
+            with_payload(payload, |request| manager.geometry_edge_chain(request))
+        }
+        "cam_chamfer_geometry" => {
+            with_payload(payload, |request| manager.cam_chamfer_geometry(request))
+        }
         "cam_document" => ok_json(manager.cam_document()),
         "cam_cutter_mesh" => with_payload(payload, |geometry: nbcad_cam::CamCutterGeometryDto| {
             nbcad_cam::cutter_mesh(geometry).map_err(crate::SessionError::Solid)
@@ -306,8 +313,10 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         }),
         "cam_plan" => with_payload(payload, |request: CamPlanPayload| match request {
             CamPlanPayload::Setup(setup_id) => manager.cam_plan(setup_id),
-            CamPlanPayload::Through { setup_id, through_operation_id } =>
-                manager.cam_plan_through(setup_id, through_operation_id),
+            CamPlanPayload::Through {
+                setup_id,
+                through_operation_id,
+            } => manager.cam_plan_through(setup_id, through_operation_id),
         }),
         "cam_post" => with_payload(payload, |request| manager.cam_post(request)),
         "cam_analyze_nbpost" => {

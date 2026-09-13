@@ -204,26 +204,48 @@ pub fn plan_setup_through(
     let setup = document
         .setup(setup_id)
         .ok_or_else(|| CamPlanError(format!("CAM setup {setup_id} does not exist")))?;
-    let through = setup.operations.iter()
+    let through = setup
+        .operations
+        .iter()
         .position(|operation| operation.id() == through_operation_id)
-        .ok_or_else(|| CamPlanError(format!(
-            "CAM operation {through_operation_id} does not exist in setup '{}'", setup.name
-        )))? + 1;
+        .ok_or_else(|| {
+            CamPlanError(format!(
+                "CAM operation {through_operation_id} does not exist in setup '{}'",
+                setup.name
+            ))
+        })?
+        + 1;
     let mut scoped = document.clone();
-    scoped.setups.iter_mut().find(|setup| setup.id == setup_id)
-        .expect("validated setup").operations.truncate(through);
-    let kept = scoped.setups.iter().flat_map(|setup| setup.operations.iter().map(CamOperationDto::id))
+    scoped
+        .setups
+        .iter_mut()
+        .find(|setup| setup.id == setup_id)
+        .expect("validated setup")
+        .operations
+        .truncate(through);
+    let kept = scoped
+        .setups
+        .iter()
+        .flat_map(|setup| setup.operations.iter().map(CamOperationDto::id))
         .collect::<std::collections::HashSet<_>>();
-    scoped.height_expressions.retain(|item| kept.contains(&item.operation_id));
-    scoped.linking.retain(|item| kept.contains(&item.operation_id));
+    scoped
+        .height_expressions
+        .retain(|item| kept.contains(&item.operation_id));
+    scoped
+        .linking
+        .retain(|item| kept.contains(&item.operation_id));
     let setup = scoped.setup(setup_id).expect("validated setup");
     if !setup.operations.iter().any(CamOperationDto::enabled) {
         scoped.validate().map_err(CamPlanError)?;
         crate::machine::ensure_setup_machines_supported(&scoped, setup_id)?;
         return Ok(CamProgramDto {
-            setup_id, name: setup.name.clone(), commands: Vec::new(),
-            stats: Default::default(), per_operation: Vec::new(),
-            work_offsets: setup.work_offsets(), warnings: Vec::new(),
+            setup_id,
+            name: setup.name.clone(),
+            commands: Vec::new(),
+            stats: Default::default(),
+            per_operation: Vec::new(),
+            work_offsets: setup.work_offsets(),
+            warnings: Vec::new(),
         });
     }
     plan_setup(&scoped, setup_id)
@@ -366,7 +388,10 @@ fn plan_setup_uncached(
             builder.link_obstacles = None;
             // The planner and freshness gate share the same context contract.
             // New prior-stock consumers must extend dependencies.rs as well.
-            let dependencies = crate::dependencies::planning_dependency_policy(operation, builder.linking.as_ref());
+            let dependencies = crate::dependencies::planning_dependency_policy(
+                operation,
+                builder.linking.as_ref(),
+            );
             builder.predrilled = if dependencies.predrilled_entry {
                 linking_planner::predrilled_holes(document, setup, operation.id())
             } else {
@@ -731,16 +756,23 @@ fn facing_clears_stock_floor(
     cut_min_x: f64,
     cut_max_x: f64,
 ) -> bool {
-    let Some(flat_radius) = crate::CutterProfile::new(tool.into()).ok()
-        .and_then(|profile| profile.radius_at_height(0.0)) else { return false; };
-    let (Some(first), Some(last)) = (rows.first(), rows.last()) else { return false; };
+    let Some(flat_radius) = crate::CutterProfile::new(tool.into())
+        .ok()
+        .and_then(|profile| profile.radius_at_height(0.0))
+    else {
+        return false;
+    };
+    let (Some(first), Some(last)) = (rows.first(), rows.last()) else {
+        return false;
+    };
     flat_radius > EPSILON
         && cut_min_x <= stock.min.x + EPSILON
         && cut_max_x >= stock.max.x - EPSILON
         && first - flat_radius <= stock.min.y + EPSILON
         && last + flat_radius >= stock.max.y - EPSILON
-        && rows.windows(2).all(|pair| pair[1] >= pair[0]
-            && pair[1] - pair[0] <= 2.0 * flat_radius + EPSILON)
+        && rows
+            .windows(2)
+            .all(|pair| pair[1] >= pair[0] && pair[1] - pair[0] <= 2.0 * flat_radius + EPSILON)
 }
 
 fn plan_face(
@@ -842,8 +874,13 @@ fn plan_face(
         }
         builder.retract_to_clearance();
     }
-    if facing_clears_stock_floor(tool, &setup.stock, &rows,
-        left_cut_x.max(left_clear_x), right_cut_x.min(right_clear_x)) {
+    if facing_clears_stock_floor(
+        tool,
+        &setup.stock,
+        &rows,
+        left_cut_x.max(left_clear_x),
+        right_cut_x.min(right_clear_x),
+    ) {
         builder.incoming_top = builder.incoming_top.min(*target_z);
     }
     Ok(())
@@ -1993,7 +2030,8 @@ fn plan_chamfer(
     operation: &CamOperationDto,
     tool: &CamToolDto,
 ) -> Result<(), CamPlanError> {
-    if matches!(operation, CamOperationDto::Chamfer2d { additional_chains, .. } if !additional_chains.is_empty()) {
+    if matches!(operation, CamOperationDto::Chamfer2d { additional_chains, .. } if !additional_chains.is_empty())
+    {
         for (i, chain) in operation.chamfer_chains().into_iter().enumerate() {
             // Each boundary finishes with a clearance retract. No line is
             // ever invented between disconnected profiles at cutting depth.
@@ -2018,18 +2056,31 @@ fn plan_chamfer(
     else {
         unreachable!();
     };
-    let source = if *closed { without_duplicate_closure(path) } else { path.clone() };
+    let source = if *closed {
+        without_duplicate_closure(path)
+    } else {
+        path.clone()
+    };
     let material_inside = matches!(wall_side, ContourCompensation::Inside);
     // Modeled paths reference the upper rim. A corner-clipped lower wire
     // must not be widened into an unintended cut through a corner transition.
-    let profile_offset = tip_offset + modeled_chamfer.as_ref().map_or(0., |m| chamfer_width - m.additional_width);
+    let profile_offset = tip_offset
+        + modeled_chamfer
+            .as_ref()
+            .map_or(0., |m| chamfer_width - m.additional_width);
     let mut tool_left = matches!(wall_side, ContourCompensation::Right);
     let mut center_path = if *closed {
         offset_polygon(&source, profile_offset, !material_inside)?
     } else {
         offset_polyline_open(&source, profile_offset, tool_left)?
     };
-    if !chamfer_profile_is_clear(&center_path, &source, *closed, material_inside, profile_offset) {
+    if !chamfer_profile_is_clear(
+        &center_path,
+        &source,
+        *closed,
+        material_inside,
+        profile_offset,
+    ) {
         return Err(CamPlanError(format!(
             "chamfer operation '{name}' produces a folded or wall-crossing offset; reduce the tip offset or split the selection into clearer chains"
         )));
@@ -2052,10 +2103,20 @@ fn plan_chamfer(
         tool_left = !tool_left;
     }
     let depth = top_z - (chamfer_width + tip_offset);
-    let bend_left = if *closed { (signed_area(&center_path) > 0.0) != material_inside } else { tool_left };
+    let bend_left = if *closed {
+        (signed_area(&center_path) > 0.0) != material_inside
+    } else {
+        tool_left
+    };
     if builder.linking.is_some() {
         return linking_planner::plan_chamfer(
-            builder, operation, tool, &center_path, &source, profile_offset, bend_left,
+            builder,
+            operation,
+            tool,
+            &center_path,
+            &source,
+            profile_offset,
+            bend_left,
         );
     }
     // The lead is generated in the free side of the wall and joins the
@@ -2072,17 +2133,27 @@ fn plan_chamfer(
     let mut fitted = None;
     for scale in [1., 0.75, 0.5, 0.25, 0.125, 0.0625] {
         let radius = lead_radius * scale;
-        let leads = contour_leads(&center_path, ContourLeadOptions {
-            closed: *closed, inside_closed: false,
-            lead_in: radius, lead_out: radius, arc_radius: Some(radius),
-            bend_left, control_compensation: None,
-        })?;
+        let leads = contour_leads(
+            &center_path,
+            ContourLeadOptions {
+                closed: *closed,
+                inside_closed: false,
+                lead_in: radius,
+                lead_out: radius,
+                arc_radius: Some(radius),
+                bend_left,
+                control_compensation: None,
+            },
+        )?;
         let clear = if *closed {
             chamfer_leads_clear_profile(&leads, &source, material_inside, profile_offset)
         } else {
             open_leads_clear_profile(&leads, &center_path, &source, profile_offset, None)?
         };
-        if clear { fitted = Some((leads, radius)); break; }
+        if clear {
+            fitted = Some((leads, radius));
+            break;
+        }
     }
     let (leads, fitted_radius) = fitted.ok_or_else(|| CamPlanError(format!(
         "chamfer operation '{name}' cannot fit a clearance-checked tangent entry/exit at the tested sizes; reduce tip offset, use a smaller tool, or select a clearer edge"
@@ -2124,23 +2195,32 @@ fn plan_chamfer(
 /// Certify complete center segments, not only offset vertices. A narrow
 /// concavity can fold a miter back across the selected wall between vertices.
 fn chamfer_profile_is_clear(
-    path: &[Point2Dto], boundary: &[Point2Dto], closed: bool,
-    material_inside: bool, minimum_offset: f64,
+    path: &[Point2Dto],
+    boundary: &[Point2Dto],
+    closed: bool,
+    material_inside: bool,
+    minimum_offset: f64,
 ) -> bool {
     let simple = |points: &[Point2Dto]| {
         let count = points.len() - usize::from(!closed);
-        (0..count).all(|i| (i + 1..count).all(|j| {
-            let next_i = (i + 1) % points.len();
-            let next_j = (j + 1) % points.len();
-            next_i == j || next_j == i
-                || !segments_intersect(points[i], points[next_i], points[j], points[next_j])
-        }))
+        (0..count).all(|i| {
+            (i + 1..count).all(|j| {
+                let next_i = (i + 1) % points.len();
+                let next_j = (j + 1) % points.len();
+                next_i == j
+                    || next_j == i
+                    || !segments_intersect(points[i], points[next_i], points[j], points[next_j])
+            })
+        })
     };
-    if !simple(path) || !simple(boundary) { return false; }
+    if !simple(path) || !simple(boundary) {
+        return false;
+    }
     let count = path.len() - usize::from(!closed);
     let boundary_count = boundary.len() - usize::from(!closed);
     (0..count).all(|i| {
-        let from = path[i]; let to = path[(i + 1) % path.len()];
+        let from = path[i];
+        let to = path[(i + 1) % path.len()];
         (!closed || point_in_polygon(from, boundary) != material_inside)
             && (0..boundary_count).all(|j| {
                 segment_segment_distance(from, to, boundary[j], boundary[(j + 1) % boundary.len()])
@@ -4738,30 +4818,66 @@ mod tests {
             "chain_ref":{"source":"model","keys":["edge:1:upper"]},
             "top_z":0.,"chamfer_width":1.,"tip_offset":0.5,"wall_side":"inside","direction":"climb",
             "clearance_z":10.,"retract_z":3.,"feed_height_z":1.,"cutting":cutting()
-        })).unwrap();
-        let mut sharp=modeled.clone();
-        if let CamOperationDto::Chamfer2d {path,modeled_chamfer,chain_ref,..}=&mut sharp {
-            *path=offset_polygon(path,1.,false).unwrap(); *modeled_chamfer=None; *chain_ref=None;
+        }))
+        .unwrap();
+        let mut sharp = modeled.clone();
+        if let CamOperationDto::Chamfer2d {
+            path,
+            modeled_chamfer,
+            chain_ref,
+            ..
+        } = &mut sharp
+        {
+            *path = offset_polygon(path, 1., false).unwrap();
+            *modeled_chamfer = None;
+            *chain_ref = None;
         }
-        let plan=|op|plan_setup(&document(vec![op],vec![tool(3,CamToolKind::ChamferMill,6.)]),1).unwrap();
-        assert_eq!(plan(modeled.clone()).commands,plan(sharp).commands);
-        let mut extra=modeled;
-        if let CamOperationDto::Chamfer2d {chamfer_width,modeled_chamfer,..}=&mut extra {
-            *chamfer_width=1.2;modeled_chamfer.as_mut().unwrap().additional_width=0.2;
+        let plan = |op| {
+            plan_setup(
+                &document(vec![op], vec![tool(3, CamToolKind::ChamferMill, 6.)]),
+                1,
+            )
+            .unwrap()
+        };
+        assert_eq!(plan(modeled.clone()).commands, plan(sharp).commands);
+        let mut extra = modeled;
+        if let CamOperationDto::Chamfer2d {
+            chamfer_width,
+            modeled_chamfer,
+            ..
+        } = &mut extra
+        {
+            *chamfer_width = 1.2;
+            modeled_chamfer.as_mut().unwrap().additional_width = 0.2;
         }
-        let program=plan(extra);
-        let profile=program.commands.iter().filter_map(|c|match c {
-            CamCommandDto::Linear{to,..} if (to.z+1.7).abs()<1e-8 && ((to.x-8.5).abs()<1e-8 || (to.x-31.5).abs()<1e-8) =>Some(*to),_=>None
-        }).collect::<Vec<_>>();
-        assert!(profile.len()>=4,"additional width lowers the tool, not its upper-rim XY offset");
+        let program = plan(extra);
+        let profile = program
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                CamCommandDto::Linear { to, .. }
+                    if (to.z + 1.7).abs() < 1e-8
+                        && ((to.x - 8.5).abs() < 1e-8 || (to.x - 31.5).abs() < 1e-8) =>
+                {
+                    Some(*to)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            profile.len() >= 4,
+            "additional width lowers the tool, not its upper-rim XY offset"
+        );
     }
 
     #[test]
     fn modeled_hole_rim_accepts_six_mm_chamfer_tool_and_one_mm_tip_offset() {
-        let path: Vec<_> = (0..96).map(|i| {
-            let angle = i as f64 * std::f64::consts::TAU / 96.;
-            Point2Dto::new(20. + 3.25 * angle.cos(), 15. + 3.25 * angle.sin())
-        }).collect();
+        let path: Vec<_> = (0..96)
+            .map(|i| {
+                let angle = i as f64 * std::f64::consts::TAU / 96.;
+                Point2Dto::new(20. + 3.25 * angle.cos(), 15. + 3.25 * angle.sin())
+            })
+            .collect();
         let operation: CamOperationDto = serde_json::from_value(serde_json::json!({
             "kind":"chamfer2d","id":1,"name":"Hole rim","enabled":true,"tool_id":3,
             "path":path,"closed":true,"modeled_chamfer":{"additional_width":0.},
@@ -4770,30 +4886,70 @@ mod tests {
             "clearance_z":10.,"retract_z":3.,"feed_height_z":1.,"cutting":cutting()
         })).unwrap();
         let mut center_path = offset_polygon(&path, 1.5, true).unwrap();
-        if signed_area(&center_path) < 0. { center_path.reverse(); }
+        if signed_area(&center_path) < 0. {
+            center_path.reverse();
+        }
         center_path = split_closed_path_on_longest_edge(&center_path).unwrap();
-        let old_leads = contour_leads(&center_path, ContourLeadOptions {
-            closed: true, inside_closed: false, lead_in: 1.5, lead_out: 1.5,
-            arc_radius: Some(1.5), bend_left: true, control_compensation: None,
-        }).unwrap();
-        assert!(!chamfer_leads_clear_profile(&old_leads, &path, false, 1.5), "reproduce the old fixed-size lead failure");
-        let program = plan_setup(&document(vec![operation], vec![tool(3, CamToolKind::ChamferMill, 6.)]), 1).unwrap();
-        assert!(program.warnings.iter().any(|w| w.contains("1.500 to 1.125")));
+        let old_leads = contour_leads(
+            &center_path,
+            ContourLeadOptions {
+                closed: true,
+                inside_closed: false,
+                lead_in: 1.5,
+                lead_out: 1.5,
+                arc_radius: Some(1.5),
+                bend_left: true,
+                control_compensation: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            !chamfer_leads_clear_profile(&old_leads, &path, false, 1.5),
+            "reproduce the old fixed-size lead failure"
+        );
+        let program = plan_setup(
+            &document(vec![operation], vec![tool(3, CamToolKind::ChamferMill, 6.)]),
+            1,
+        )
+        .unwrap();
+        assert!(program
+            .warnings
+            .iter()
+            .any(|w| w.contains("1.500 to 1.125")));
         let mut position = None;
         for command in &program.commands {
             if let Some(to) = command.endpoint() {
                 if to.z < 0. {
-                    assert!((to.z + 1.5).abs() < 1e-9, "do not change chamfer depth to make a lead fit");
+                    assert!(
+                        (to.z + 1.5).abs() < 1e-9,
+                        "do not change chamfer depth to make a lead fit"
+                    );
                     if let Some(from) = position {
                         match command {
-                            CamCommandDto::Circular { center, clockwise, .. } => {
-                                let arc = LeadArc { center: Point2Dto::new(center.x, center.y), clockwise: *clockwise,
-                                    arc_end: Point2Dto::new(to.x, to.y) };
-                                assert!((0..path.len()).all(|i| arc_segment_distance(from, &arc, path[i], path[(i+1)%path.len()]) >= 1.5 - 1e-6));
+                            CamCommandDto::Circular {
+                                center, clockwise, ..
+                            } => {
+                                let arc = LeadArc {
+                                    center: Point2Dto::new(center.x, center.y),
+                                    clockwise: *clockwise,
+                                    arc_end: Point2Dto::new(to.x, to.y),
+                                };
+                                assert!((0..path.len()).all(|i| arc_segment_distance(
+                                    from,
+                                    &arc,
+                                    path[i],
+                                    path[(i + 1) % path.len()]
+                                ) >= 1.5 - 1e-6));
                             }
-                            CamCommandDto::Linear { .. } => assert!((0..path.len()).all(|i|
-                                segment_segment_distance(from, Point2Dto::new(to.x,to.y), path[i], path[(i+1)%path.len()]) >= 1.5 - 1e-6)),
-                            _ => {},
+                            CamCommandDto::Linear { .. } => {
+                                assert!((0..path.len()).all(|i| segment_segment_distance(
+                                    from,
+                                    Point2Dto::new(to.x, to.y),
+                                    path[i],
+                                    path[(i + 1) % path.len()]
+                                ) >= 1.5 - 1e-6))
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -4804,10 +4960,12 @@ mod tests {
 
     #[test]
     fn multiple_chamfer_chains_keep_distinct_depths_and_retract_between_them() {
-        let make_chain = |x: f64, z: f64, width: f64| serde_json::json!({
-            "path":(0..64).map(|i| { let a=i as f64*std::f64::consts::TAU/64.; Point2Dto::new(x+3.25*a.cos(),15.+3.25*a.sin()) }).collect::<Vec<_>>(),
-            "closed":true,"top_z":z,"chamfer_width":width,"wall_side":"outside"
-        });
+        let make_chain = |x: f64, z: f64, width: f64| {
+            serde_json::json!({
+                "path":(0..64).map(|i| { let a=i as f64*std::f64::consts::TAU/64.; Point2Dto::new(x+3.25*a.cos(),15.+3.25*a.sin()) }).collect::<Vec<_>>(),
+                "closed":true,"top_z":z,"chamfer_width":width,"wall_side":"outside"
+            })
+        };
         let mut value = make_chain(10., 0., 0.5);
         for (key, val) in serde_json::json!({
             "kind":"chamfer2d","id":1,"name":"Two rims","enabled":true,"tool_id":3,
@@ -4815,55 +4973,99 @@ mod tests {
             "additional_chains":[make_chain(30., -2., 0.25)]
         }).as_object().unwrap() { value[key] = val.clone(); }
         let operation: CamOperationDto = serde_json::from_value(value).unwrap();
-        let doc = document(vec![operation.clone()], vec![tool(3, CamToolKind::ChamferMill, 6.)]);
+        let doc = document(
+            vec![operation.clone()],
+            vec![tool(3, CamToolKind::ChamferMill, 6.)],
+        );
         let program = plan_setup(&doc, 1).unwrap();
         assert_eq!(program.stats.operation_count, 1);
-        assert_eq!(program.commands.iter().filter(|c|matches!(c,CamCommandDto::Circular{..})).count(),4);
+        assert_eq!(
+            program
+                .commands
+                .iter()
+                .filter(|c| matches!(c, CamCommandDto::Circular { .. }))
+                .count(),
+            4
+        );
         let mut previous: Option<Point3Dto> = None;
-        let mut saw_left = false; let mut saw_right = false; let mut crossed_at_clearance = false;
+        let mut saw_left = false;
+        let mut saw_right = false;
+        let mut crossed_at_clearance = false;
         for c in &program.commands {
             if let Some(to) = c.endpoint() {
                 if let Some(from) = previous {
-                    if (to.x-from.x).abs() > 10. {
-                        assert_eq!(from.z, 10.); assert_eq!(to.z, 10.);
+                    if (to.x - from.x).abs() > 10. {
+                        assert_eq!(from.z, 10.);
+                        assert_eq!(to.z, 10.);
                         crossed_at_clearance = true;
                     }
                 }
                 if to.z < 0. {
-                    if to.x < 20. { saw_left = true; assert_eq!(to.z,-1.5); }
-                    else { saw_right = true; assert_eq!(to.z,-3.25); }
+                    if to.x < 20. {
+                        saw_left = true;
+                        assert_eq!(to.z, -1.5);
+                    } else {
+                        saw_right = true;
+                        assert_eq!(to.z, -3.25);
+                    }
                 }
                 previous = Some(to);
             }
         }
         assert!(saw_left && saw_right && crossed_at_clearance);
-        assert_eq!(serde_json::from_str::<CamOperationDto>(&serde_json::to_string(&operation).unwrap()).unwrap(),operation);
+        assert_eq!(
+            serde_json::from_str::<CamOperationDto>(&serde_json::to_string(&operation).unwrap())
+                .unwrap(),
+            operation
+        );
         let mut invalid = doc.clone();
-        if let CamOperationDto::Chamfer2d {additional_chains,..}=&mut invalid.setups[0].operations[0] {
+        if let CamOperationDto::Chamfer2d {
+            additional_chains, ..
+        } = &mut invalid.setups[0].operations[0]
+        {
             additional_chains[0].chamfer_width = 3.;
         }
-        let error = plan_setup(&invalid,1).unwrap_err().0;
-        assert!(error.contains("Chain 2") && error.contains("exceeds the tool radius"),"{error}");
+        let error = plan_setup(&invalid, 1).unwrap_err().0;
+        assert!(
+            error.contains("Chain 2") && error.contains("exceeds the tool radius"),
+            "{error}"
+        );
         let mut high = doc;
-        if let CamOperationDto::Chamfer2d {additional_chains,..}=&mut high.setups[0].operations[0] {
+        if let CamOperationDto::Chamfer2d {
+            additional_chains, ..
+        } = &mut high.setups[0].operations[0]
+        {
             additional_chains[0].top_z = 2.;
         }
-        assert!(plan_setup(&high,1).unwrap_err().0.contains("feed height"));
+        assert!(plan_setup(&high, 1).unwrap_err().0.contains("feed height"));
     }
 
     #[test]
     fn chamfer_clearance_rejects_crossing_segments_and_folded_offsets() {
-        let p=Point2Dto::new;
+        let p = Point2Dto::new;
         // A U-shaped cavity: all four path vertices are in free space, but
         // its top segment crosses the protected central peninsula.
-        let boundary=vec![p(0.,0.),p(10.,0.),p(10.,10.),p(7.,10.),p(7.,3.),p(3.,3.),p(3.,10.),p(0.,10.)];
-        let path=vec![p(1.,1.),p(9.,1.),p(9.,9.),p(1.,9.)];
-        assert!(path.iter().all(|p|point_in_polygon(*p,&boundary)));
-        assert!(!chamfer_profile_is_clear(&path,&boundary,true,false,0.5));
-        let folded=vec![p(1.,1.),p(9.,9.),p(1.,9.),p(9.,1.)];
-        assert!(!chamfer_profile_is_clear(&folded,&boundary,false,false,0.5));
-        let square=vec![p(0.,0.),p(10.,0.),p(10.,10.),p(0.,10.)];
-        assert!(chamfer_profile_is_clear(&path,&square,true,false,0.5));
+        let boundary = vec![
+            p(0., 0.),
+            p(10., 0.),
+            p(10., 10.),
+            p(7., 10.),
+            p(7., 3.),
+            p(3., 3.),
+            p(3., 10.),
+            p(0., 10.),
+        ];
+        let path = vec![p(1., 1.), p(9., 1.), p(9., 9.), p(1., 9.)];
+        assert!(path.iter().all(|p| point_in_polygon(*p, &boundary)));
+        assert!(!chamfer_profile_is_clear(
+            &path, &boundary, true, false, 0.5
+        ));
+        let folded = vec![p(1., 1.), p(9., 9.), p(1., 9.), p(9., 1.)];
+        assert!(!chamfer_profile_is_clear(
+            &folded, &boundary, false, false, 0.5
+        ));
+        let square = vec![p(0., 0.), p(10., 0.), p(10., 10.), p(0., 10.)];
+        assert!(chamfer_profile_is_clear(&path, &square, true, false, 0.5));
     }
 
     #[test]
@@ -4876,15 +5078,35 @@ mod tests {
                     "top_z":0.,"chamfer_width":0.2,"tip_offset":0.5,"wall_side":wall,"direction":direction,
                     "clearance_z":10.,"retract_z":3.,"feed_height_z":1.,"cutting":cutting()
                 })).unwrap();
-                let program=plan_setup(&document(vec![operation],vec![tool(3,CamToolKind::ChamferMill,6.)]),1).unwrap();
-                let y=if wall=="left" {9.5}else{10.5};
-                let forward=(wall=="right")== (direction=="climb");
-                let last=if forward {30.}else{10.};
-                let profile_ends=program.commands.iter().filter_map(|c|match c {
-                    CamCommandDto::Linear{to,..} if (to.z+0.7).abs()<1e-8 && (to.y-y).abs()<1e-8 => Some(to.x), _=>None
-                }).collect::<Vec<_>>();
-                assert_eq!(profile_ends,vec![last],"{wall} {direction}");
-                assert_eq!(program.commands.iter().filter(|c|matches!(c,CamCommandDto::Circular{..})).count(),2);
+                let program = plan_setup(
+                    &document(vec![operation], vec![tool(3, CamToolKind::ChamferMill, 6.)]),
+                    1,
+                )
+                .unwrap();
+                let y = if wall == "left" { 9.5 } else { 10.5 };
+                let forward = (wall == "right") == (direction == "climb");
+                let last = if forward { 30. } else { 10. };
+                let profile_ends = program
+                    .commands
+                    .iter()
+                    .filter_map(|c| match c {
+                        CamCommandDto::Linear { to, .. }
+                            if (to.z + 0.7).abs() < 1e-8 && (to.y - y).abs() < 1e-8 =>
+                        {
+                            Some(to.x)
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(profile_ends, vec![last], "{wall} {direction}");
+                assert_eq!(
+                    program
+                        .commands
+                        .iter()
+                        .filter(|c| matches!(c, CamCommandDto::Circular { .. }))
+                        .count(),
+                    2
+                );
             }
         }
     }

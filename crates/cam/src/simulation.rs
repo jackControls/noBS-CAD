@@ -897,7 +897,8 @@ fn resolve_stage_cache(
     let index = cache.iter().position(|entry| entry.key == key)?;
     let entry = cache.remove(index).expect("cache index came from position");
     if crate::machine::motion_document(&entry.document) != crate::machine::motion_document(document)
-        || !entry.compatible(setup, spec, request) {
+        || !entry.compatible(setup, spec, request)
+    {
         return None;
     }
     cache.push_back(Arc::clone(&entry));
@@ -1131,25 +1132,43 @@ fn run_program(
                 let mut moves = Vec::with_capacity(compensated_moves.len());
                 for (_, buffered, _) in compensated_moves {
                     let (to, motion) = match buffered {
-                        CompMove::Line(to) => (*to, crate::compensation::ProfileMove::Line(
-                            crate::model::Point2Dto::new(to.x, to.y))),
-                        CompMove::Arc { center, clockwise, to } => (*to, crate::compensation::ProfileMove::Arc {
-                            center: *center, clockwise: *clockwise, to: crate::model::Point2Dto::new(to.x,to.y),
-                        }),
+                        CompMove::Line(to) => (
+                            *to,
+                            crate::compensation::ProfileMove::Line(crate::model::Point2Dto::new(
+                                to.x, to.y,
+                            )),
+                        ),
+                        CompMove::Arc {
+                            center,
+                            clockwise,
+                            to,
+                        } => (
+                            *to,
+                            crate::compensation::ProfileMove::Arc {
+                                center: *center,
+                                clockwise: *clockwise,
+                                to: crate::model::Point2Dto::new(to.x, to.y),
+                            },
+                        ),
                     };
-                    if (to.z-depth).abs() > 1e-6 {
+                    if (to.z - depth).abs() > 1e-6 {
                         return Err(CamPlanError("simulation: cutter compensation only applies to constant-depth profiling moves".into()));
                     }
                     moves.push(motion);
                 }
                 let (offset, source_moves) = crate::compensation::intersection_path(
-                    crate::model::Point2Dto::new(entry_target.x,entry_target.y),
-                    &moves, tool.diameter*0.5, left,
+                    crate::model::Point2Dto::new(entry_target.x, entry_target.y),
+                    &moves,
+                    tool.diameter * 0.5,
+                    left,
                 )?;
-                let seg_meta: Vec<_> = source_moves.into_iter().map(|i| {
-                    let (index, _, feed) = compensated_moves[i];
-                    (index, feed)
-                }).collect();
+                let seg_meta: Vec<_> = source_moves
+                    .into_iter()
+                    .map(|i| {
+                        let (index, _, feed) = compensated_moves[i];
+                        (index, feed)
+                    })
+                    .collect();
                 let compensated_start = Point3Dto::new(offset[0].x, offset[0].y, depth);
                 note_approximation(tool, &mut outcome.approximated_drill);
                 if outcome.step_budget_reached(collect, completed_steps) {
@@ -2620,7 +2639,9 @@ impl VoxelStock {
             }
             // One analytic radius per Z slice, not trig/sqrt per occupied voxel.
             let local_z = self.center(0, 0, z).z - tip.z;
-            let Some(local_radius) = profile.radius_at_height(local_z) else { continue; };
+            let Some(local_radius) = profile.radius_at_height(local_z) else {
+                continue;
+            };
             let local_radius_sq = local_radius * local_radius + EPSILON;
             for y in ranges[1].0..ranges[1].1 {
                 for x in ranges[0].0..ranges[0].1 {
@@ -3244,8 +3265,10 @@ fn dimensions_for_extent(extent: [f64; 3], edge: f64) -> [usize; 3] {
 
 #[cfg(test)]
 fn cutter_contains(tool: &CamToolDto, tip: Point3Dto, point: Point3Dto) -> bool {
-    crate::CutterProfile::new(tool.into()).unwrap()
-        .contains((point.x - tip.x).powi(2) + (point.y - tip.y).powi(2), point.z - tip.z)
+    crate::CutterProfile::new(tool.into()).unwrap().contains(
+        (point.x - tip.x).powi(2) + (point.y - tip.y).powi(2),
+        point.z - tip.z,
+    )
 }
 
 #[derive(Clone, PartialEq)]
@@ -3655,21 +3678,42 @@ mod tests {
     #[test]
     fn material_removal_respects_face_mill_radii_and_end_mill_chamfers() {
         let mut tool = document().tools.remove(0);
-        tool.diameter = 6.; tool.flute_length = 8.; tool.overall_length = 30.;
-        let envelope = StockBoxDto { min: Point3Dto::new(-4.,-4.,-4.), max: Point3Dto::new(4.,4.,0.) };
+        tool.diameter = 6.;
+        tool.flute_length = 8.;
+        tool.overall_length = 30.;
+        let envelope = StockBoxDto {
+            min: Point3Dto::new(-4., -4., -4.),
+            max: Point3Dto::new(4., 4., 0.),
+        };
         let spec = GridSpec::for_stock(&envelope, Some(0.125), HARD_MAX_VOXELS).unwrap();
         let remove = |tool: &CamToolDto| {
             let mut stock = VoxelStock::filled(&spec, |_| true);
-            stock.sweep_tool(tool, Point3Dto::new(0.,0.,-3.), Point3Dto::new(0.,0.,-3.), ToolSweepOptions {
-                mode: SweepMode::RemoveMaterial, total_samples: &mut 0, verification: None, cancellation: None,
-            }).unwrap().removed
+            stock
+                .sweep_tool(
+                    tool,
+                    Point3Dto::new(0., 0., -3.),
+                    Point3Dto::new(0., 0., -3.),
+                    ToolSweepOptions {
+                        mode: SweepMode::RemoveMaterial,
+                        total_samples: &mut 0,
+                        verification: None,
+                        cancellation: None,
+                    },
+                )
+                .unwrap()
+                .removed
         };
         tool.kind = CamToolKind::FlatEndMill;
         let flat = remove(&tool);
-        tool.kind = CamToolKind::FaceMill; tool.corner_radius = Some(1.);
+        tool.kind = CamToolKind::FaceMill;
+        tool.corner_radius = Some(1.);
         let rounded = remove(&tool);
-        tool.kind = CamToolKind::FlatEndMill; tool.corner_radius = None;
-        tool.corner_chamfer = Some(crate::CamCornerChamferDto { width: 1., angle_degrees: 45. });
+        tool.kind = CamToolKind::FlatEndMill;
+        tool.corner_radius = None;
+        tool.corner_chamfer = Some(crate::CamCornerChamferDto {
+            width: 1.,
+            angle_degrees: 45.,
+        });
         let chamfered = remove(&tool);
         assert!(flat > rounded && rounded > chamfered && chamfered > 0);
     }

@@ -155,13 +155,41 @@ impl CamMachineAssignmentDto {
                 CamControllerLanguage::FanucStyle,
                 "Generic FANUC-style",
             ),
-            PostDialect::Haas => (CamControllerFamily::Haas, CamControllerLanguage::FanucStyle, "Haas NGC"),
-            PostDialect::Mitsubishi => (CamControllerFamily::Mitsubishi, CamControllerLanguage::FanucStyle, "Mitsubishi M80/M800"),
-            PostDialect::Mazak => (CamControllerFamily::Mazak, CamControllerLanguage::FanucStyle, "Mazak EIA milling"),
-            PostDialect::Syntec => (CamControllerFamily::Syntec, CamControllerLanguage::FanucStyle, "Syntec milling"),
-            PostDialect::Okuma => (CamControllerFamily::Okuma, CamControllerLanguage::OkumaOsp, "Okuma OSP milling"),
-            PostDialect::Heidenhain => (CamControllerFamily::Heidenhain, CamControllerLanguage::HeidenhainConversational, "Heidenhain TNC"),
-            PostDialect::HermleHeidenhain => (CamControllerFamily::Heidenhain, CamControllerLanguage::HeidenhainConversational, "Hermle / Heidenhain TNC — fixed axis"),
+            PostDialect::Haas => (
+                CamControllerFamily::Haas,
+                CamControllerLanguage::FanucStyle,
+                "Haas NGC",
+            ),
+            PostDialect::Mitsubishi => (
+                CamControllerFamily::Mitsubishi,
+                CamControllerLanguage::FanucStyle,
+                "Mitsubishi M80/M800",
+            ),
+            PostDialect::Mazak => (
+                CamControllerFamily::Mazak,
+                CamControllerLanguage::FanucStyle,
+                "Mazak EIA milling",
+            ),
+            PostDialect::Syntec => (
+                CamControllerFamily::Syntec,
+                CamControllerLanguage::FanucStyle,
+                "Syntec milling",
+            ),
+            PostDialect::Okuma => (
+                CamControllerFamily::Okuma,
+                CamControllerLanguage::OkumaOsp,
+                "Okuma OSP milling",
+            ),
+            PostDialect::Heidenhain => (
+                CamControllerFamily::Heidenhain,
+                CamControllerLanguage::HeidenhainConversational,
+                "Heidenhain TNC",
+            ),
+            PostDialect::HermleHeidenhain => (
+                CamControllerFamily::Heidenhain,
+                CamControllerLanguage::HeidenhainConversational,
+                "Hermle / Heidenhain TNC — fixed axis",
+            ),
             PostDialect::LinuxCnc => (
                 CamControllerFamily::LinuxCnc,
                 CamControllerLanguage::LinuxCnc,
@@ -176,7 +204,15 @@ impl CamMachineAssignmentDto {
         Self {
             tool_calls: Vec::new(),
             profile: CamMachineProfileDto {
-                schema_version: if post.siemens_828d.as_ref().is_some_and(|s| s.spindle_stop_subprogram.is_some()) { 2 } else { 1 },
+                schema_version: if post
+                    .siemens_828d
+                    .as_ref()
+                    .is_some_and(|s| s.spindle_stop_subprogram.is_some())
+                {
+                    2
+                } else {
+                    1
+                },
                 id: "three-axis-starter".into(),
                 revision: 1,
                 name: format!("{model} / 3-axis"),
@@ -230,13 +266,18 @@ impl CamMachineAssignmentDto {
         if !matches!(p.schema_version, 1 | 2) || p.revision == 0 {
             return Err("Unsupported machine profile version or zero revision".into());
         }
-        if p.post.siemens_828d.as_ref().is_some_and(|s| s.spindle_stop_subprogram.is_some()) {
+        if p.post
+            .siemens_828d
+            .as_ref()
+            .is_some_and(|s| s.spindle_stop_subprogram.is_some())
+        {
             if p.schema_version < 2 {
                 return Err("Private spindle-stop behavior requires machine profile version 2; older readers must not silently discard it.".into());
             }
             if p.post.dialect != PostDialect::Siemens828d
                 || p.controller.family != CamControllerFamily::Siemens
-                || p.controller.language != CamControllerLanguage::SiemensNative {
+                || p.controller.language != CamControllerLanguage::SiemensNative
+            {
                 return Err("A native spindle-stop subprogram is supported only on a Siemens-native machine profile.".into());
             }
         }
@@ -421,11 +462,14 @@ impl CamMachineAssignmentDto {
             return Err("Post dialect does not match the setup's machine/controller. Change the setup machine explicitly; existing operations will be kept.".into());
         }
         if post.tool_call_mode == crate::CamToolCallMode::Name && !expected.supports_named_tools() {
-            return Err("This post requires numeric tool calls from the project tool library.".into());
+            return Err(
+                "This post requires numeric tool calls from the project tool library.".into(),
+            );
         }
         if post.siemens_828d != self.profile.post.siemens_828d
             || post.tool_call_mode != self.profile.post.tool_call_mode
-            || post.machine_retract_z != self.profile.post.machine_retract_z {
+            || post.machine_retract_z != self.profile.post.machine_retract_z
+        {
             return Err("Machine-specific post settings differ from the setup snapshot. Review and save the machine settings before posting.".into());
         }
         if expected.requires_machine_retract() && post.machine_retract_z.is_none() {
@@ -563,7 +607,18 @@ pub(crate) fn check_compensation_contract(
                     / 2.0;
                 let (minimum, strict) = match (dialect, engage) {
                     (PostDialect::LinuxCnc, false) => (2.0 * radius, true),
-                    (PostDialect::LinuxCnc | PostDialect::Fanuc | PostDialect::Haas | PostDialect::Mitsubishi | PostDialect::Mazak | PostDialect::Syntec | PostDialect::Okuma | PostDialect::Heidenhain | PostDialect::HermleHeidenhain, _) => (radius, false),
+                    (
+                        PostDialect::LinuxCnc
+                        | PostDialect::Fanuc
+                        | PostDialect::Haas
+                        | PostDialect::Mitsubishi
+                        | PostDialect::Mazak
+                        | PostDialect::Syntec
+                        | PostDialect::Okuma
+                        | PostDialect::Heidenhain
+                        | PostDialect::HermleHeidenhain,
+                        _,
+                    ) => (radius, false),
                     _ => (0.0, true),
                 };
                 if !matches!(command, CamCommandDto::Linear { .. })

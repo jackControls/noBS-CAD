@@ -6,16 +6,22 @@
 //! constrain NC output; controller words remain in posts, not geometry code.
 //! Rotary and multi-channel resources can be stored but are not executable yet.
 
-mod gcode;
 mod cutter;
-pub use cutter::{cutter_mesh, CamCornerChamferDto, CamCutterGeometryDto, CamCutterMeshDto, CamCutterMeshPartDto, CutterProfile};
+mod gcode;
+pub use cutter::{
+    cutter_mesh, CamCornerChamferDto, CamCutterGeometryDto, CamCutterMeshDto, CamCutterMeshPartDto,
+    CutterProfile,
+};
 mod dependencies;
-pub use dependencies::{cam_operation_dependencies, CamOperationDependency, CamOperationDependencyKind, CAM_ORDER_DEPENDENCY_RULES_REVISION};
-mod model;
+pub use dependencies::{
+    cam_operation_dependencies, CamOperationDependency, CamOperationDependencyKind,
+    CAM_ORDER_DEPENDENCY_RULES_REVISION,
+};
 mod machine;
+mod model;
 pub use machine::*;
-mod tool_calls;
 mod compensation;
+mod tool_calls;
 pub use tool_calls::{CamMachineToolBindingDto, CamMachineToolCallDto};
 mod linking;
 pub use linking::*;
@@ -33,11 +39,12 @@ mod lead_regression_tests;
 
 pub use gcode::{simulate_gcode, CamGcodeDialectDto, CamGcodeSimulationRequestDto};
 pub use model::{
-    BoxAnchor, CamAdaptiveGeometryDto, CamAdaptiveParametersDto, CamChainRefDto, CamChainSource, CamChamferChainDto,
-    CamDocumentDto, CamHeightExpressionDto, CamHeightReferenceDto, CamHoleDto, CamLoadWarningDto, CamModeledChamferDto,
-    CamOperationDto, CamOperationHeightExpressionsDto, CamPostConfigDto, CamResolvedStockDto,
-    CamSetupDto, CamToolCallMode, CamStockFace, CamStockOffsetsDto, CamStockPlacementDto, CamStockShape,
-    CamStockSpecDto, CamToolDto, CamToolKind, CamToolpathGenerationDto, CamToolpathOrderDependenciesDto, CamToolpathStateDto,
+    BoxAnchor, CamAdaptiveGeometryDto, CamAdaptiveParametersDto, CamChainRefDto, CamChainSource,
+    CamChamferChainDto, CamDocumentDto, CamHeightExpressionDto, CamHeightReferenceDto, CamHoleDto,
+    CamLoadWarningDto, CamModeledChamferDto, CamOperationDto, CamOperationHeightExpressionsDto,
+    CamPostConfigDto, CamResolvedStockDto, CamSetupDto, CamStockFace, CamStockOffsetsDto,
+    CamStockPlacementDto, CamStockShape, CamStockSpecDto, CamToolCallMode, CamToolDto, CamToolKind,
+    CamToolpathGenerationDto, CamToolpathOrderDependenciesDto, CamToolpathStateDto,
     CamToolpathStatusDto, CamUnits, CompensationMode, ContourCompensation, CoolantMode,
     CuttingParametersDto, DrillCycle, FaceDirection, MillingDirection, Point2Dto, Point3Dto,
     PostDialect, Rect2Dto, Siemens828dAtcStyle, Siemens828dPostConfigDto,
@@ -49,8 +56,8 @@ pub use nbpost::{
     NbPostSourceKind,
 };
 pub use planner::{
-    plan_setup, plan_setup_through, CamArcPlane, CamCommandDto, CamPlanError, CamProgramDto, CamProgramStatsDto,
-    MotionKind,
+    plan_setup, plan_setup_through, CamArcPlane, CamCommandDto, CamPlanError, CamProgramDto,
+    CamProgramStatsDto, MotionKind,
 };
 pub use post::{post_setup, CamPostRequestDto, CamPostResultDto};
 pub use post_events::{post_event_stream, PostEventDto, PostEventStreamDto};

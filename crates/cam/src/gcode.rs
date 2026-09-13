@@ -163,7 +163,9 @@ fn parse_gcode(
         )));
     }
     let identified = generated_post_dialect(&request.source)?;
-    if request.dialect != CamGcodeDialectDto::Auto && identified.is_some_and(|d| d != request.dialect) {
+    if request.dialect != CamGcodeDialectDto::Auto
+        && identified.is_some_and(|d| d != request.dialect)
+    {
         return Err(CamPlanError("The chosen NC dialect conflicts with this program's post header. Use Auto or the matching dialect; dwell units must not be reinterpreted.".into()));
     }
     let dialect = resolve_dialect(request);
@@ -237,7 +239,9 @@ fn resolve_dialect(request: &CamGcodeSimulationRequestDto) -> CamGcodeDialectDto
     if request.dialect != CamGcodeDialectDto::Auto {
         return request.dialect;
     }
-    if let Ok(Some(dialect)) = generated_post_dialect(&request.source) { return dialect; }
+    if let Ok(Some(dialect)) = generated_post_dialect(&request.source) {
+        return dialect;
+    }
     let upper = request.source.to_ascii_uppercase();
     let siemens_name = request
         .file_name
@@ -275,8 +279,13 @@ fn generated_post_dialect(source: &str) -> Result<Option<CamGcodeDialectDto>, Ca
             _ => None,
         };
         if let Some(dialect) = found {
-            if identified.replace(dialect).is_some_and(|previous| previous != dialect) {
-                return Err(CamPlanError("NC source contains conflicting post format headers".into()));
+            if identified
+                .replace(dialect)
+                .is_some_and(|previous| previous != dialect)
+            {
+                return Err(CamPlanError(
+                    "NC source contains conflicting post format headers".into(),
+                ));
             }
         }
     }
@@ -533,11 +542,17 @@ impl Interpreter<'_> {
                     let value = number()?;
                     feed_word = Some(value);
                 }
-                "P" => { p_dwell_word = Some(number()?); p_has_decimal = word.value.contains('.'); }
+                "P" => {
+                    p_dwell_word = Some(number()?);
+                    p_has_decimal = word.value.contains('.');
+                }
                 "S" => spindle_word = Some(number()?),
                 "T" => {
                     if tool_word.replace((&word.value, word.quoted)).is_some() {
-                        return Err(line_error(source_line, "Multiple T calls in one block are ambiguous"));
+                        return Err(line_error(
+                            source_line,
+                            "Multiple T calls in one block are ambiguous",
+                        ));
                     }
                 }
                 "D" | "H" => {
@@ -591,14 +606,26 @@ impl Interpreter<'_> {
         }
 
         // Even an excluded SUPA/G53 block must not hide a controller call.
-        if unknown.iter().any(|name| name.contains('_')
-            || words.iter().any(|w| &w.address == name && name.len() > 1 && w.value.is_empty())) {
+        if unknown.iter().any(|name| {
+            name.contains('_')
+                || words
+                    .iter()
+                    .any(|w| &w.address == name && name.len() > 1 && w.value.is_empty())
+        }) {
             let list = unknown.join(", ");
             return Err(line_error(source_line, format!("Controller subprogram/statement {list} cannot be executed by NC simulation. Its motion and side effects are unknown; use controller-side verification. CAM simulation covers neutral tool motion only.")));
         }
 
-        if g_codes.iter().filter(|code| matches!(code, 20 | 21 | 70 | 71 | 700 | 710)).count() > 1 {
-            return Err(line_error(source_line, "Multiple dimensional modes in one block are ambiguous"));
+        if g_codes
+            .iter()
+            .filter(|code| matches!(code, 20 | 21 | 70 | 71 | 700 | 710))
+            .count()
+            > 1
+        {
+            return Err(line_error(
+                source_line,
+                "Multiple dimensional modes in one block are ambiguous",
+            ));
         }
         for code in g_codes {
             match code {
@@ -787,11 +814,16 @@ impl Interpreter<'_> {
         // a real cancellation even when this block's machine motion itself
         // is excluded from the workpiece simulation.
         if let Some(change) = comp_change {
-            if change.is_some() && self.dialect == CamGcodeDialectDto::Siemens828d
-                && !self.siemens_intersection_corners {
+            if change.is_some()
+                && self.dialect == CamGcodeDialectDto::Siemens828d
+                && !self.siemens_intersection_corners
+            {
                 return Err(line_error(source_line, "Siemens G41/G42 needs an explicit G451 corner policy; the control's prior modal corner state is unknown."));
             }
-            if change.is_some() && self.dialect == CamGcodeDialectDto::Siemens828d && !self.siemens_normal_approach {
+            if change.is_some()
+                && self.dialect == CamGcodeDialectDto::Siemens828d
+                && !self.siemens_normal_approach
+            {
                 return Err(line_error(source_line, "Siemens G41/G42 needs explicit NORM approach/retraction; prior modal approach state is unknown."));
             }
             if change != self.cutter_compensation {
@@ -864,8 +896,13 @@ impl Interpreter<'_> {
                     })? / 1_000.0
                 }
                 CamGcodeDialectDto::Haas => {
-                    let p = p_dwell_word.ok_or_else(|| line_error(source_line, "Haas G4 dwell requires P"))?;
-                    if p_has_decimal { p } else { p / 1_000.0 }
+                    let p = p_dwell_word
+                        .ok_or_else(|| line_error(source_line, "Haas G4 dwell requires P"))?;
+                    if p_has_decimal {
+                        p
+                    } else {
+                        p / 1_000.0
+                    }
                 }
                 CamGcodeDialectDto::Auto | CamGcodeDialectDto::Iso => p_dwell_word
                     .ok_or_else(|| line_error(source_line, "ISO G4 dwell requires P seconds"))?,
@@ -1113,15 +1150,26 @@ impl Interpreter<'_> {
     }
 }
 
-fn resolve_tool(document: &CamDocumentDto, setup: &CamSetupDto, dialect: CamGcodeDialectDto, raw: &str, quoted: bool) -> Result<u64, String> {
+fn resolve_tool(
+    document: &CamDocumentDto,
+    setup: &CamSetupDto,
+    dialect: CamGcodeDialectDto,
+    raw: &str,
+    quoted: bool,
+) -> Result<u64, String> {
     if raw.is_empty() {
         return Err("T tool call is empty".to_string());
     }
     let call = if quoted {
-        crate::CamMachineToolCallDto::Name { name: raw.to_owned() }
+        crate::CamMachineToolCallDto::Name {
+            name: raw.to_owned(),
+        }
     } else {
-        crate::CamMachineToolCallDto::Number { number: raw.parse::<u32>()
-            .map_err(|_| "Unquoted T calls must be positive integer tool numbers".to_string())? }
+        crate::CamMachineToolCallDto::Number {
+            number: raw.parse::<u32>().map_err(|_| {
+                "Unquoted T calls must be positive integer tool numbers".to_string()
+            })?,
+        }
     };
     if dialect == CamGcodeDialectDto::Siemens828d {
         return crate::tool_calls::resolve_siemens_tool(document, setup, &call);
@@ -1130,8 +1178,12 @@ fn resolve_tool(document: &CamDocumentDto, setup: &CamSetupDto, dialect: CamGcod
         crate::CamMachineToolCallDto::Name { name } => &tool.name == name,
         crate::CamMachineToolCallDto::Number { number } => tool.number == Some(*number),
     });
-    let matched = matches.next().ok_or_else(|| format!("T call '{raw}' has no exact matching project-library tool"))?;
-    if matches.next().is_some() { return Err(format!("T call '{raw}' matches more than one project tool")); }
+    let matched = matches
+        .next()
+        .ok_or_else(|| format!("T call '{raw}' has no exact matching project-library tool"))?;
+    if matches.next().is_some() {
+        return Err(format!("T call '{raw}' matches more than one project tool"));
+    }
     Ok(matched.id)
 }
 
@@ -1420,7 +1472,11 @@ fn lex_words(line: &str) -> Result<Vec<Word>, String> {
             }
             chars[start..index].iter().collect::<String>()
         };
-        words.push(Word { address, value, quoted });
+        words.push(Word {
+            address,
+            value,
+            quoted,
+        });
     }
     Ok(words)
 }
@@ -1506,10 +1562,14 @@ mod tests {
             next_operation_id: 1,
             next_tool_id: 2,
         };
-        document.setups[0].machine = Some(crate::CamMachineAssignmentDto::three_axis(CamPostConfigDto::default()));
-        document.setups[0].machine.as_mut().unwrap().tool_calls = vec![crate::CamMachineToolBindingDto {
-            tool_id: 1, call: crate::CamMachineToolCallDto::Number { number: 3 },
-        }];
+        document.setups[0].machine = Some(crate::CamMachineAssignmentDto::three_axis(
+            CamPostConfigDto::default(),
+        ));
+        document.setups[0].machine.as_mut().unwrap().tool_calls =
+            vec![crate::CamMachineToolBindingDto {
+                tool_id: 1,
+                call: crate::CamMachineToolCallDto::Number { number: 3 },
+            }];
         document
     }
 
@@ -1533,25 +1593,50 @@ mod tests {
         let mut input = request("G700 G90 G94\nT3 M6\nG0 X0 Y0 Z1\nG1 X1 F60\nG710\nG1 X50.8\nG1 X76.2 F1524\nG70\nG1 X4\nG71\nG1 X127\nG4 F0.5\nM30");
         input.file_name = None; // G700 alone must identify the native dialect.
         let parsed = parse_gcode(&doc, &doc.setups[0], &input).unwrap();
-        let feeds: Vec<_> = parsed.program.commands.iter().filter_map(|command| {
-            if let CamCommandDto::Linear { to, feed } = command { Some((to.x, *feed)) } else { None }
-        }).collect();
+        let feeds: Vec<_> = parsed
+            .program
+            .commands
+            .iter()
+            .filter_map(|command| {
+                if let CamCommandDto::Linear { to, feed } = command {
+                    Some((to.x, *feed))
+                } else {
+                    None
+                }
+            })
+            .collect();
         assert_eq!(feeds.len(), 5);
         for (i, (x, feed)) in feeds.iter().enumerate() {
             assert!((x - (i + 1) as f64 * 25.4).abs() < 1e-8);
             assert!((feed - 1524.0).abs() < 1e-8);
         }
-        assert!(parsed.program.commands.iter().any(|c| matches!(c, CamCommandDto::Dwell { seconds } if *seconds == 0.5)));
+        assert!(parsed
+            .program
+            .commands
+            .iter()
+            .any(|c| matches!(c, CamCommandDto::Dwell { seconds } if *seconds == 0.5)));
     }
 
     #[test]
     fn opaque_subprogram_calls_never_become_ignored_non_motion_words() {
         let doc = document();
-        for call in ["SHOP_STOP", "N100 SHOP_STOP", "N100 SHOP_STOP2", "G0 SUPA Z0 SHOP_STOP", "G53 G0 Z0 SHOP_STOP", "CALL SHOP_STOP"] {
+        for call in [
+            "SHOP_STOP",
+            "N100 SHOP_STOP",
+            "N100 SHOP_STOP2",
+            "G0 SUPA Z0 SHOP_STOP",
+            "G53 G0 Z0 SHOP_STOP",
+            "CALL SHOP_STOP",
+        ] {
             let source = format!("G710 G90\nT3 M6\nG0 X0 Y0 Z5\n{call}\nM5\nM30");
-            let error = parse_gcode(&doc, &doc.setups[0], &request(&source)).err().unwrap();
-            assert!(error.0.contains("cannot be executed by NC simulation")
-                || error.0.contains("requires controller execution"), "{error}");
+            let error = parse_gcode(&doc, &doc.setups[0], &request(&source))
+                .err()
+                .unwrap();
+            assert!(
+                error.0.contains("cannot be executed by NC simulation")
+                    || error.0.contains("requires controller execution"),
+                "{error}"
+            );
         }
         let comments_only = "G710 G90\nT3 M6\nG0 X0 Y0 Z5\n; SHOP_STOP\nMSG(\"SHOP_STOP is only text here\")\nG0 Z6\nM5\nM30";
         parse_gcode(&doc, &doc.setups[0], &request(comments_only)).unwrap();
@@ -1562,35 +1647,76 @@ mod tests {
         let doc = document();
         for mode in ["G70", "G71"] {
             let source = format!("G710 G90\nT3 M6\nG0 X0 Y0 Z5\n{mode}\nG1 X1 F60");
-            let error = parse_gcode(&doc, &doc.setups[0], &request(&source)).err().unwrap();
+            let error = parse_gcode(&doc, &doc.setups[0], &request(&source))
+                .err()
+                .unwrap();
             assert!(error.0.contains("machine's basic units"), "{error}");
             let corrected = source.replace("G1 X1 F60", "G700 G1 X1 F60");
             assert!(parse_gcode(&doc, &doc.setups[0], &request(&corrected)).is_ok());
         }
-        let error = parse_gcode(&doc, &doc.setups[0], &request("G700 G710")).err().unwrap();
+        let error = parse_gcode(&doc, &doc.setups[0], &request("G700 G710"))
+            .err()
+            .unwrap();
         assert!(error.0.contains("Multiple dimensional modes"));
     }
 
     #[test]
     fn a_work_offset_change_reestablishes_xyz_without_a_cross_fixture_sweep() {
         let doc = document();
-        let source = "G710 G90\nT3 M6\nG0 X-6 Y0 Z2\nG1 Z-1 F300\nG55\nG0 X6 Y0\nG0 Z2\nG1 Z-1 F300";
+        let source =
+            "G710 G90\nT3 M6\nG0 X-6 Y0 Z2\nG1 Z-1 F300\nG55\nG0 X6 Y0\nG0 Z2\nG1 Z-1 F300";
         let parsed = parse_gcode(&doc, &doc.setups[0], &request(source)).unwrap();
-        let resets: Vec<_> = parsed.program.commands.iter().filter_map(|command| {
-            if let CamCommandDto::SetPosition { to } = command { Some(*to) } else { None }
-        }).collect();
-        assert_eq!(resets, vec![Point3Dto::new(-6.0, 0.0, 2.0), Point3Dto::new(6.0, 0.0, 2.0)]);
-        assert!(!parsed.program.commands.iter().any(|c| matches!(c, CamCommandDto::Rapid { .. })));
+        let resets: Vec<_> = parsed
+            .program
+            .commands
+            .iter()
+            .filter_map(|command| {
+                if let CamCommandDto::SetPosition { to } = command {
+                    Some(*to)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            resets,
+            vec![
+                Point3Dto::new(-6.0, 0.0, 2.0),
+                Point3Dto::new(6.0, 0.0, 2.0)
+            ]
+        );
+        assert!(!parsed
+            .program
+            .commands
+            .iter()
+            .any(|c| matches!(c, CamCommandDto::Rapid { .. })));
     }
 
     #[test]
     fn native_fifth_and_sixth_fixture_aliases_map_to_the_same_logical_offsets() {
         let doc = document();
-        let parsed = parse_gcode(&doc, &doc.setups[0], &request("G710\nT3 M6\nG505\nG0 X0 Y0 Z2\nG1 X1 F300\nG506\nG0 X0 Y0 Z2")).unwrap();
-        let offsets: Vec<_> = parsed.program.commands.iter().filter_map(|c| {
-            if let CamCommandDto::WorkOffset { offset } = c { Some(*offset) } else { None }
-        }).collect();
-        assert_eq!(offsets, vec![WorkOffset::G54, WorkOffset::G58, WorkOffset::G59]);
+        let parsed = parse_gcode(
+            &doc,
+            &doc.setups[0],
+            &request("G710\nT3 M6\nG505\nG0 X0 Y0 Z2\nG1 X1 F300\nG506\nG0 X0 Y0 Z2"),
+        )
+        .unwrap();
+        let offsets: Vec<_> = parsed
+            .program
+            .commands
+            .iter()
+            .filter_map(|c| {
+                if let CamCommandDto::WorkOffset { offset } = c {
+                    Some(*offset)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            offsets,
+            vec![WorkOffset::G54, WorkOffset::G58, WorkOffset::G59]
+        );
         let mut iso = request("G505");
         iso.dialect = CamGcodeDialectDto::Iso;
         assert!(parse_gcode(&doc, &doc.setups[0], &iso).is_err());
@@ -1598,37 +1724,100 @@ mod tests {
 
     #[test]
     fn quoted_numeric_names_stay_distinct_from_numeric_selection_and_case_is_exact() {
-        let mut doc=document();
-        let mut second=doc.tools[0].clone();second.id=2;second.number=Some(4);second.name="3".into();
-        doc.tools.push(second);doc.next_tool_id=3;
-        doc.setups[0].machine.as_mut().unwrap().tool_calls=vec![
-            crate::CamMachineToolBindingDto{tool_id:1,call:crate::CamMachineToolCallDto::Number{number:3}},
-            crate::CamMachineToolBindingDto{tool_id:2,call:crate::CamMachineToolCallDto::Name{name:"3".into()}},
+        let mut doc = document();
+        let mut second = doc.tools[0].clone();
+        second.id = 2;
+        second.number = Some(4);
+        second.name = "3".into();
+        doc.tools.push(second);
+        doc.next_tool_id = 3;
+        doc.setups[0].machine.as_mut().unwrap().tool_calls = vec![
+            crate::CamMachineToolBindingDto {
+                tool_id: 1,
+                call: crate::CamMachineToolCallDto::Number { number: 3 },
+            },
+            crate::CamMachineToolBindingDto {
+                tool_id: 2,
+                call: crate::CamMachineToolCallDto::Name { name: "3".into() },
+            },
         ];
-        for (raw,id) in [("T3",1),("T=\"3\"",2)] {
-            let parsed=parse_gcode(&doc,&doc.setups[0],&request(&format!("G710 G90\n{raw} M6\nG0 X0 Y0 Z5\nG1 X2 F300"))).unwrap();
-            assert!(parsed.program.commands.iter().any(|c|matches!(c,CamCommandDto::ToolChange{tool_id,..} if *tool_id==id)));
+        for (raw, id) in [("T3", 1), ("T=\"3\"", 2)] {
+            let parsed = parse_gcode(
+                &doc,
+                &doc.setups[0],
+                &request(&format!("G710 G90\n{raw} M6\nG0 X0 Y0 Z5\nG1 X2 F300")),
+            )
+            .unwrap();
+            assert!(parsed
+                .program
+                .commands
+                .iter()
+                .any(|c| matches!(c,CamCommandDto::ToolChange{tool_id,..} if *tool_id==id)));
         }
-        crate::post::tests::bind_test_names(&mut doc,&[(1,"Drill_A"),(2,"DRILL_A")]);
-        assert_eq!(resolve_tool(&doc,&doc.setups[0],CamGcodeDialectDto::Siemens828d,"Drill_A",true).unwrap(),1);
-        assert_eq!(resolve_tool(&doc,&doc.setups[0],CamGcodeDialectDto::Siemens828d,"DRILL_A",true).unwrap(),2);
-        assert!(resolve_tool(&doc,&doc.setups[0],CamGcodeDialectDto::Siemens828d,"drill_a",true).is_err());
-        assert!(resolve_tool(&doc,&doc.setups[0],CamGcodeDialectDto::Siemens828d,"Drill A",true).is_err());
+        crate::post::tests::bind_test_names(&mut doc, &[(1, "Drill_A"), (2, "DRILL_A")]);
+        assert_eq!(
+            resolve_tool(
+                &doc,
+                &doc.setups[0],
+                CamGcodeDialectDto::Siemens828d,
+                "Drill_A",
+                true
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            resolve_tool(
+                &doc,
+                &doc.setups[0],
+                CamGcodeDialectDto::Siemens828d,
+                "DRILL_A",
+                true
+            )
+            .unwrap(),
+            2
+        );
+        assert!(resolve_tool(
+            &doc,
+            &doc.setups[0],
+            CamGcodeDialectDto::Siemens828d,
+            "drill_a",
+            true
+        )
+        .is_err());
+        assert!(resolve_tool(
+            &doc,
+            &doc.setups[0],
+            CamGcodeDialectDto::Siemens828d,
+            "Drill A",
+            true
+        )
+        .is_err());
     }
 
     #[test]
     fn siemens_compensation_pins_corner_and_approach_modes_and_rejects_unsupported_changes() {
-        let doc=document();
-        let source=|words:&str|format!("G17 G710 G90\nT3 M6\nG0 X0 Y0 Z0\nG1 {words} X5 Y0 F300\nG1 X10\nG1 G40 Y-5");
-        for (words,reason) in [("G41 NORM","G451"),("G41 G451","NORM"),("G41 NORM G450","G450"),("G41 NORM G451 G450","corner")] {
-            let error=parse_gcode(&doc,&doc.setups[0],&request(&source(words))).err().unwrap().to_string();
-            assert!(error.contains(reason),"{error}");
+        let doc = document();
+        let source = |words: &str| {
+            format!("G17 G710 G90\nT3 M6\nG0 X0 Y0 Z0\nG1 {words} X5 Y0 F300\nG1 X10\nG1 G40 Y-5")
+        };
+        for (words, reason) in [
+            ("G41 NORM", "G451"),
+            ("G41 G451", "NORM"),
+            ("G41 NORM G450", "G450"),
+            ("G41 NORM G451 G450", "corner"),
+        ] {
+            let error = parse_gcode(&doc, &doc.setups[0], &request(&source(words)))
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(error.contains(reason), "{error}");
         }
-        assert!(parse_gcode(&doc,&doc.setups[0],&request(&source("G41 NORM G451"))).is_ok());
-        let modal=format!("NORM G451\n{}",source("G41"));
-        assert!(parse_gcode(&doc,&doc.setups[0],&request(&modal)).is_ok());
-        let unsupported=modal.replace("G1 X10","G1 G450 X10");
-        assert!(parse_gcode(&doc,&doc.setups[0],&request(&unsupported)).is_err());
+        assert!(parse_gcode(&doc, &doc.setups[0], &request(&source("G41 NORM G451"))).is_ok());
+        let modal = format!("NORM G451\n{}", source("G41"));
+        assert!(parse_gcode(&doc, &doc.setups[0], &request(&modal)).is_ok());
+        let unsupported = modal.replace("G1 X10", "G1 G450 X10");
+        assert!(parse_gcode(&doc, &doc.setups[0], &request(&unsupported)).is_err());
     }
 
     #[test]
@@ -1653,7 +1842,7 @@ mod tests {
     #[test]
     fn radius_arcs_and_siemens_implicit_vertical_planes_share_the_timeline() {
         let mut document = document();
-        crate::post::tests::bind_test_names(&mut document, &[(1,"6_MM_FLAT")]);
+        crate::post::tests::bind_test_names(&mut document, &[(1, "6_MM_FLAT")]);
         let result = simulate_gcode(
             &document,
             &request(
@@ -1705,8 +1894,9 @@ mod tests {
     #[test]
     fn g40_safety_headers_and_repeated_modal_words_are_idempotent() {
         let prefix = "G21 G90 G94 G40\nT3 M6\nG40\nG0 X1 Y0 Z2\nG1 Z-2 F300\n";
-        let ordinary =
-            format!("{prefix}G41 NORM G451 X1 Y4 F600\nG1 X5 Y4\nG0 G40 Z5\nG0 X-9 Y8\nG1 Z-2 F300\nM30");
+        let ordinary = format!(
+            "{prefix}G41 NORM G451 X1 Y4 F600\nG1 X5 Y4\nG0 G40 Z5\nG0 X-9 Y8\nG1 Z-2 F300\nM30"
+        );
         let repeated = format!(
             "{prefix}G41 NORM G451 X1 Y4 F600\nG1 G41 X5 Y4\nG0 G40 Z5\nG40\nG0 X-9 Y8\nG1 Z-2 F300\nM30"
         );

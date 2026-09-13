@@ -7,11 +7,11 @@ use crate::model::{
 };
 use crate::planner::{plan_setup, CamCommandDto, CamPlanError, CamProgramDto};
 
-#[path = "brand_posts.rs"]
-mod brand_posts;
 #[cfg(test)]
 #[path = "brand_post_tests.rs"]
 mod brand_post_tests;
+#[path = "brand_posts.rs"]
+mod brand_posts;
 
 /// Converts canonical millimetre motion into the document's output units and
 /// formats controller words. Seconds and RPM pass through unchanged.
@@ -73,10 +73,22 @@ impl PostUnits {
 
 /// The compensation gate must see the same quantized coordinates that the
 /// controller receives, especially with inch output and short linear leads.
-pub(crate) fn output_point_mm(point: Point3Dto, units: CamUnits, dialect: PostDialect, contains_arcs: bool) -> Point3Dto {
-    let formatter = PostUnits { units, contains_arcs };
+pub(crate) fn output_point_mm(
+    point: Point3Dto,
+    units: CamUnits,
+    dialect: PostDialect,
+    contains_arcs: bool,
+) -> Point3Dto {
+    let formatter = PostUnits {
+        units,
+        contains_arcs,
+    };
     let round = |value| {
-        let word = if dialect == PostDialect::Siemens828d { formatter.siemens_len(value) } else { formatter.len(value) };
+        let word = if dialect == PostDialect::Siemens828d {
+            formatter.siemens_len(value)
+        } else {
+            formatter.len(value)
+        };
         units.to_mm(word.parse::<f64>().unwrap_or(f64::NAN))
     };
     Point3Dto::new(round(point.x), round(point.y), round(point.z))
@@ -107,7 +119,8 @@ pub fn post_setup(
     document: &CamDocumentDto,
     request: &CamPostRequestDto,
 ) -> Result<CamPostResultDto, CamPlanError> {
-    let post = crate::machine::machine_post_config(document, request.setup_id, request.post.as_ref())?;
+    let post =
+        crate::machine::machine_post_config(document, request.setup_id, request.post.as_ref())?;
     let mut resolved = request.clone();
     resolved.post = Some(post);
     let mut result = post_setup_unchecked(document, &resolved)?;
@@ -115,7 +128,13 @@ pub fn post_setup(
     if result.dialect == PostDialect::Siemens828d {
         crate::compensation::validate_posted_intersections(document, &result.program)?;
     }
-    let machine = &document.setup(request.setup_id).unwrap().machine.as_ref().unwrap().profile;
+    let machine = &document
+        .setup(request.setup_id)
+        .unwrap()
+        .machine
+        .as_ref()
+        .unwrap()
+        .profile;
     result.warnings.insert(0, format!(
         "Target: {} (profile {} revision {}). Controller/post checks do not certify this machine. CAM/NC simulation checks tools, stock and model only; travel, fixtures, holders, PLC and channel synchronization are not verified.",
         machine.name, machine.id, machine.revision,
@@ -158,19 +177,28 @@ pub(crate) fn post_setup_unchecked(
         .filter(|name| !name.is_empty())
         .unwrap_or(&program.name);
     let tool_calls = if dialect == PostDialect::Siemens828d {
-        crate::tool_calls::siemens_program_tool_calls(document, document.setup(request.setup_id).unwrap(), &program, post.tool_call_mode)?
-    } else { BTreeMap::new() };
+        crate::tool_calls::siemens_program_tool_calls(
+            document,
+            document.setup(request.setup_id).unwrap(),
+            &program,
+            post.tool_call_mode,
+        )?
+    } else {
+        BTreeMap::new()
+    };
     let nc = if dialect.requires_machine_retract() {
         brand_posts::render(document, &program, &post, name, units)?
-    } else { render_program(
-        &program,
-        dialect,
-        name,
-        post.sequence_numbers,
-        post.siemens_828d.as_ref(),
-        &tool_calls,
-        units,
-    )? };
+    } else {
+        render_program(
+            &program,
+            dialect,
+            name,
+            post.sequence_numbers,
+            post.siemens_828d.as_ref(),
+            &tool_calls,
+            units,
+        )?
+    };
     let mut warnings = program.warnings.clone();
     if document.units == CamUnits::Inches {
         warnings.push(
@@ -224,7 +252,10 @@ pub(crate) fn post_setup_unchecked(
     if dialect.requires_machine_retract() {
         warnings.push("Approaches use XY while retracted, then Z with tool-length compensation. Work-offset changes retract first. Confirm the machine-coordinate retract and M6/TOOL CALL behavior. Drilling cycles are expanded into explicit motion. Optional tool-change stops and preloading are off.".into());
     }
-    if matches!(dialect, PostDialect::Heidenhain | PostDialect::HermleHeidenhain) {
+    if matches!(
+        dialect,
+        PostDialect::Heidenhain | PostDialect::HermleHeidenhain
+    ) {
         warnings.push("Setup offsets 1–6 select preset-table rows 1–6 using cycle 247. Helices are chorded to a 0.002 mm tolerance. The NC simulator does not yet interpret conversational programs; CAM stock evidence is not NC replay.".into());
     }
     if dialect == PostDialect::Okuma {
@@ -293,10 +324,19 @@ fn render_program(
                     .to_string(),
             )
         })?;
-        return render_siemens828d_program(program, program_name, sequence_numbers, profile, tool_calls, units);
+        return render_siemens828d_program(
+            program,
+            program_name,
+            sequence_numbers,
+            profile,
+            tool_calls,
+            units,
+        );
     }
     if !matches!(dialect, PostDialect::Grbl | PostDialect::LinuxCnc) {
-        return Err(CamPlanError("This controller requires its dedicated brand renderer".into()));
+        return Err(CamPlanError(
+            "This controller requires its dedicated brand renderer".into(),
+        ));
     }
     let mut writer = NcWriter::new(sequence_numbers, 10);
     let mut position: Option<Point3Dto> = None;
@@ -511,9 +551,7 @@ fn render_siemens828d_program(
                 }
             }
             CamCommandDto::ToolChange {
-                tool_id,
-                tool_name,
-                ..
+                tool_id, tool_name, ..
             } => {
                 if tool_change_count > 0
                     && write_siemens_tool_change_positioning(&mut writer, profile, units)?
@@ -527,9 +565,11 @@ fn render_siemens828d_program(
                 if tool_change_count > 0 && profile.optional_stop_on_tool_change {
                     writer.block("M1");
                 }
-                let tool_call = tool_calls.get(tool_id).ok_or_else(|| CamPlanError(
-                    format!("No confirmed controller tool call for '{tool_name}'"),
-                ))?;
+                let tool_call = tool_calls.get(tool_id).ok_or_else(|| {
+                    CamPlanError(format!(
+                        "No confirmed controller tool call for '{tool_name}'"
+                    ))
+                })?;
                 writer.raw(&format!(
                     "; {} {}",
                     tool_call,
@@ -539,7 +579,9 @@ fn render_siemens828d_program(
                 writer.block("M6");
                 writer.block(&format!("D{}", profile.tool_length_offset));
                 if profile.preload_next_tool {
-                    if let Some(next_call) = siemens_next_preload_call(program, index, tool_call, tool_calls) {
+                    if let Some(next_call) =
+                        siemens_next_preload_call(program, index, tool_call, tool_calls)
+                    {
                         writer.block(&next_call);
                     }
                 }
@@ -640,7 +682,11 @@ fn render_siemens828d_program(
             CamCommandDto::CutterCompensationOn { left } => {
                 // NORM is approach/retract; G451 independently selects
                 // intersection corners. Pin both on every activation.
-                comp_words = Some(if *left { "G41 NORM G451" } else { "G42 NORM G451" });
+                comp_words = Some(if *left {
+                    "G41 NORM G451"
+                } else {
+                    "G42 NORM G451"
+                });
             }
             CamCommandDto::CutterCompensationOff => {
                 comp_words = Some("G40");
@@ -681,8 +727,14 @@ fn write_siemens_initial_position(
     units: PostUnits,
 ) {
     let motion = if feed.is_some() { "G1" } else { "G0" };
-    let f = feed.map(|value| format!(" F{}", units.feed(value))).unwrap_or_default();
-    writer.block(&format!("{motion} X{} Y{}{f}", units.siemens_len(to.x), units.siemens_len(to.y)));
+    let f = feed
+        .map(|value| format!(" F{}", units.feed(value)))
+        .unwrap_or_default();
+    writer.block(&format!(
+        "{motion} X{} Y{}{f}",
+        units.siemens_len(to.x),
+        units.siemens_len(to.y)
+    ));
     writer.block(&format!("{motion} Z{}{f}", units.siemens_len(to.z)));
 }
 
@@ -731,10 +783,7 @@ fn siemens_next_preload_call(
 ) -> Option<String> {
     let find_call = |commands: &[CamCommandDto]| {
         commands.iter().find_map(|command| match command {
-            CamCommandDto::ToolChange {
-                tool_id,
-                ..
-            } => tool_calls.get(tool_id).cloned(),
+            CamCommandDto::ToolChange { tool_id, .. } => tool_calls.get(tool_id).cloned(),
             _ => None,
         })
     };
@@ -968,10 +1017,18 @@ pub(crate) mod tests {
 
     /// Give fixtures exact library names; no separate mapping is required.
     pub(crate) fn bind_test_names(doc: &mut CamDocumentDto, names: &[(u64, &str)]) {
-        let machine = doc.setups[0].machine.get_or_insert_with(|| crate::CamMachineAssignmentDto::three_axis(doc.post_defaults.clone()));
-        machine.tool_calls = names.iter().map(|(tool_id,name)| crate::CamMachineToolBindingDto {
-            tool_id: *tool_id, call: crate::CamMachineToolCallDto::Name { name: (*name).into() },
-        }).collect();
+        let machine = doc.setups[0].machine.get_or_insert_with(|| {
+            crate::CamMachineAssignmentDto::three_axis(doc.post_defaults.clone())
+        });
+        machine.tool_calls = names
+            .iter()
+            .map(|(tool_id, name)| crate::CamMachineToolBindingDto {
+                tool_id: *tool_id,
+                call: crate::CamMachineToolCallDto::Name {
+                    name: (*name).into(),
+                },
+            })
+            .collect();
         for (id, name) in names {
             if let Some(tool) = doc.tools.iter_mut().find(|t| t.id == *id) {
                 tool.name = (*name).into();
@@ -1030,7 +1087,7 @@ pub(crate) mod tests {
         });
         source.next_tool_id = 3;
         source.next_operation_id = 3;
-        bind_test_names(&mut source, &[(1,"6_MM_FLAT"),(2,"5_MM_DRILL")]);
+        bind_test_names(&mut source, &[(1, "6_MM_FLAT"), (2, "5_MM_DRILL")]);
         source
     }
 
@@ -1081,7 +1138,9 @@ pub(crate) mod tests {
             },
         }];
         source.next_tool_id = 8;
-        if dialect == PostDialect::Siemens828d { bind_test_names(&mut source, &[(7,"ThreadMill48")]); }
+        if dialect == PostDialect::Siemens828d {
+            bind_test_names(&mut source, &[(7, "ThreadMill48")]);
+        }
         source.next_operation_id = 4;
         source
     }
@@ -1285,7 +1344,10 @@ pub(crate) mod tests {
         assert!(posted.nc.contains("S10000 M3"));
         assert!(posted.nc.contains("M8"));
         assert!(posted.nc.ends_with("M30\n"));
-        assert!(posted.nc.lines().any(|line| line.ends_with(" M5") || line == "M5"));
+        assert!(posted
+            .nc
+            .lines()
+            .any(|line| line.ends_with(" M5") || line == "M5"));
         assert_eq!(posted.extension, "mpf");
     }
 
@@ -1312,7 +1374,12 @@ pub(crate) mod tests {
     #[test]
     fn siemens_later_tool_change_uses_standard_shutdown_and_native_dwell() {
         let mut source = two_tool_siemens_document();
-        source.post_defaults.siemens_828d.as_mut().unwrap().optional_stop_on_tool_change = true;
+        source
+            .post_defaults
+            .siemens_828d
+            .as_mut()
+            .unwrap()
+            .optional_stop_on_tool_change = true;
 
         let posted = post_setup(
             &source,
@@ -1343,41 +1410,110 @@ pub(crate) mod tests {
                 let mut source = two_tool_siemens_document();
                 source.units = units;
                 let mut same_tool = source.setups[0].operations[0].clone();
-                if let CamOperationDto::Face { id, name, cutting, .. } = &mut same_tool {
-                    *id = 90; *name = "Same tool, changed speed".into(); cutting.spindle_rpm = 9_000;
+                if let CamOperationDto::Face {
+                    id, name, cutting, ..
+                } = &mut same_tool
+                {
+                    *id = 90;
+                    *name = "Same tool, changed speed".into();
+                    cutting.spindle_rpm = 9_000;
                 }
                 source.setups[0].operations.insert(1, same_tool);
                 source.next_operation_id = 91;
                 source.post_defaults.sequence_numbers = numbered;
-                source.post_defaults.siemens_828d.as_mut().unwrap().spindle_stop_subprogram = Some("SHOP_STOP".into());
-                source.setups[0].machine = Some(crate::CamMachineAssignmentDto::three_axis(source.post_defaults.clone()));
-                let request = CamPostRequestDto { setup_id: 1, post: None, program_name: None };
+                source
+                    .post_defaults
+                    .siemens_828d
+                    .as_mut()
+                    .unwrap()
+                    .spindle_stop_subprogram = Some("SHOP_STOP".into());
+                source.setups[0].machine = Some(crate::CamMachineAssignmentDto::three_axis(
+                    source.post_defaults.clone(),
+                ));
+                let request = CamPostRequestDto {
+                    setup_id: 1,
+                    post: None,
+                    program_name: None,
+                };
                 let result = super::post_setup(&source, &request).unwrap();
-                let blocks: Vec<_> = result.nc.lines().map(|l| {
-                    if l.starts_with('N') { l.split_once(' ').map_or(l, |(_, block)| block) } else { l }
-                }).collect();
-                let stops: Vec<_> = blocks.iter().enumerate().filter(|(_, b)| **b == "M5").map(|(i, _)| i).collect();
+                let blocks: Vec<_> = result
+                    .nc
+                    .lines()
+                    .map(|l| {
+                        if l.starts_with('N') {
+                            l.split_once(' ').map_or(l, |(_, block)| block)
+                        } else {
+                            l
+                        }
+                    })
+                    .collect();
+                let stops: Vec<_> = blocks
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, b)| **b == "M5")
+                    .map(|(i, _)| i)
+                    .collect();
                 assert_eq!(stops.len(), 2, "same-tool RPM changes must not add stops");
-                assert_eq!(blocks.iter().filter(|b| **b == "SHOP_STOP").count(), stops.len());
-                for i in &stops { assert_eq!(blocks[i - 1], "SHOP_STOP"); }
+                assert_eq!(
+                    blocks.iter().filter(|b| **b == "SHOP_STOP").count(),
+                    stops.len()
+                );
+                for i in &stops {
+                    assert_eq!(blocks[i - 1], "SHOP_STOP");
+                }
                 assert!(blocks.iter().position(|b| *b == "M6").unwrap() < stops[0]);
                 assert!(blocks.contains(&"S9000 M3"));
                 assert_eq!(*blocks.last().unwrap(), "M30");
-                assert!(result.warnings.iter().any(|w| w.contains("SHOP_STOP") && w.contains("NC replay is unavailable")));
-                let mut roundtrip: CamDocumentDto = serde_json::from_str(&serde_json::to_string(&source).unwrap()).unwrap();
+                assert!(result
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("SHOP_STOP") && w.contains("NC replay is unavailable")));
+                let mut roundtrip: CamDocumentDto =
+                    serde_json::from_str(&serde_json::to_string(&source).unwrap()).unwrap();
                 roundtrip.soften_for_load();
-                assert_eq!(super::post_setup(&roundtrip, &request).unwrap().nc, result.nc);
+                assert_eq!(
+                    super::post_setup(&roundtrip, &request).unwrap().nc,
+                    result.nc
+                );
                 // Emulate an older reader discarding the unknown setting:
                 // schema 2 remains and prevents its version-1 machine gate.
-                assert_eq!(roundtrip.setups[0].machine.as_ref().unwrap().profile.schema_version, 2);
+                assert_eq!(
+                    roundtrip.setups[0]
+                        .machine
+                        .as_ref()
+                        .unwrap()
+                        .profile
+                        .schema_version,
+                    2
+                );
                 let m = source.setups[0].machine.as_mut().unwrap();
-                m.profile.post.siemens_828d.as_mut().unwrap().spindle_stop_subprogram = None;
+                m.profile
+                    .post
+                    .siemens_828d
+                    .as_mut()
+                    .unwrap()
+                    .spindle_stop_subprogram = None;
                 let standard = super::post_setup(&source, &request).unwrap();
                 assert!(!standard.nc.contains("SHOP_STOP"));
-                let standard_blocks: Vec<_> = standard.nc.lines().map(|l| {
-                    if l.starts_with('N') { l.split_once(' ').map_or(l, |(_, block)| block) } else { l }
-                }).collect();
-                assert_eq!(standard_blocks, blocks.into_iter().filter(|b| *b != "SHOP_STOP").collect::<Vec<_>>(), "Only the stop calls change executable blocks");
+                let standard_blocks: Vec<_> = standard
+                    .nc
+                    .lines()
+                    .map(|l| {
+                        if l.starts_with('N') {
+                            l.split_once(' ').map_or(l, |(_, block)| block)
+                        } else {
+                            l
+                        }
+                    })
+                    .collect();
+                assert_eq!(
+                    standard_blocks,
+                    blocks
+                        .into_iter()
+                        .filter(|b| *b != "SHOP_STOP")
+                        .collect::<Vec<_>>(),
+                    "Only the stop calls change executable blocks"
+                );
             }
         }
     }
@@ -1385,12 +1521,34 @@ pub(crate) mod tests {
     #[test]
     fn private_spindle_stop_rejects_code_injection_and_old_reader_versions() {
         let mut source = document(PostDialect::Siemens828d);
-        for invalid in ["", "M5", "RET", "CALL", "SHOP_STOP\nM30", "SHOP_STOP(1)", "../SHOP_STOP", "SHOP_STOP;M5", "0_SHOP", "Å_STOP", "ABCDEFGHIJKLMNOPQRSTUVWXYZ_STOP_1"] {
-            source.post_defaults.siemens_828d.as_mut().unwrap().spindle_stop_subprogram = Some(invalid.into());
+        for invalid in [
+            "",
+            "M5",
+            "RET",
+            "CALL",
+            "SHOP_STOP\nM30",
+            "SHOP_STOP(1)",
+            "../SHOP_STOP",
+            "SHOP_STOP;M5",
+            "0_SHOP",
+            "Å_STOP",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ_STOP_1",
+        ] {
+            source
+                .post_defaults
+                .siemens_828d
+                .as_mut()
+                .unwrap()
+                .spindle_stop_subprogram = Some(invalid.into());
             let machine = crate::CamMachineAssignmentDto::three_axis(source.post_defaults.clone());
             assert!(machine.validate().is_err(), "{invalid:?}");
         }
-        source.post_defaults.siemens_828d.as_mut().unwrap().spindle_stop_subprogram = Some("SHOP_STOP".into());
+        source
+            .post_defaults
+            .siemens_828d
+            .as_mut()
+            .unwrap()
+            .spindle_stop_subprogram = Some("SHOP_STOP".into());
         let mut machine = crate::CamMachineAssignmentDto::three_axis(source.post_defaults.clone());
         assert!(machine.validate().is_ok());
         machine.profile.schema_version = 1;
@@ -1404,32 +1562,62 @@ pub(crate) mod tests {
     #[ignore = "operator-supplied private profile; set NBCAD_PRIVATE_POST_PATH"]
     fn inspect_private_profile_and_emit_sample_without_private_repo_data() {
         let file = std::env::var("NBCAD_PRIVATE_POST_PATH").expect("private profile path");
-        let raw: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
         assert_eq!(raw["format"], "nbpost");
         assert_eq!(raw["schema_version"], 2);
-        let machine: crate::CamMachineAssignmentDto = serde_json::from_value(raw["machine"].clone()).unwrap();
+        let machine: crate::CamMachineAssignmentDto =
+            serde_json::from_value(raw["machine"].clone()).unwrap();
         machine.ensure_post_matches(&machine.profile.post).unwrap();
         let mut source = two_tool_siemens_document();
         // This fixture's numeric library identity is the source of T calls.
-        for (i, tool) in source.tools.iter_mut().enumerate() { tool.number = Some(i as u32 + 1); }
+        for (i, tool) in source.tools.iter_mut().enumerate() {
+            tool.number = Some(i as u32 + 1);
+        }
         source.setups[0].machine = Some(machine);
-        let result = super::post_setup(&source, &CamPostRequestDto { setup_id: 1, post: None, program_name: Some("PRIVATE_POST_TEST".into()) }).unwrap();
+        let result = super::post_setup(
+            &source,
+            &CamPostRequestDto {
+                setup_id: 1,
+                post: None,
+                program_name: Some("PRIVATE_POST_TEST".into()),
+            },
+        )
+        .unwrap();
         println!("{}", result.nc);
-        for warning in result.warnings { println!("CHECK: {warning}"); }
+        for warning in result.warnings {
+            println!("CHECK: {warning}");
+        }
     }
 
     #[test]
     fn native_production_post_positions_xy_before_z_after_every_m6() {
         let source = two_tool_siemens_document();
-        let posted = super::post_setup(&source, &CamPostRequestDto {
-            setup_id: 1, post: None, program_name: None,
-        }).unwrap();
+        let posted = super::post_setup(
+            &source,
+            &CamPostRequestDto {
+                setup_id: 1,
+                post: None,
+                program_name: None,
+            },
+        )
+        .unwrap();
         let mut changes = 0;
         for section in posted.nc.split("\nM6\n").skip(1) {
-            let moves: Vec<_> = section.lines().filter(|line| line.starts_with("G0 ")).take(2).collect();
+            let moves: Vec<_> = section
+                .lines()
+                .filter(|line| line.starts_with("G0 "))
+                .take(2)
+                .collect();
             assert_eq!(moves.len(), 2);
-            assert!(moves[0].starts_with("G0 X") && !moves[0].contains('Z'), "{moves:?}");
-            assert!(moves[1].starts_with("G0 Z") && !moves[1].contains('X'), "{moves:?}");
+            assert!(
+                moves[0].starts_with("G0 X") && !moves[0].contains('Z'),
+                "{moves:?}"
+            );
+            assert!(
+                moves[1].starts_with("G0 Z") && !moves[1].contains('X'),
+                "{moves:?}"
+            );
             changes += 1;
         }
         assert_eq!(changes, 2);
@@ -1439,14 +1627,27 @@ pub(crate) mod tests {
     fn native_production_post_retracts_before_a_same_tool_fixture_change() {
         let mut source = document(PostDialect::Siemens828d);
         source.setups[0].work_offset_count = 2;
-        let posted = super::post_setup(&source, &CamPostRequestDto {
-            setup_id: 1, post: None, program_name: None,
-        }).unwrap();
+        let posted = super::post_setup(
+            &source,
+            &CamPostRequestDto {
+                setup_id: 1,
+                post: None,
+                program_name: None,
+            },
+        )
+        .unwrap();
         assert_eq!(posted.nc.matches("\nM6\n").count(), 1);
         let next = posted.nc.find("\nG55\n").unwrap();
         assert!(posted.nc[..next].ends_with("G0 SUPA Z0 D0\nD1"));
-        let moves: Vec<_> = posted.nc[next..].lines().filter(|line| line.starts_with("G0 ")).take(2).collect();
-        assert!(moves[0].starts_with("G0 X") && !moves[0].contains('Z'), "{moves:?}");
+        let moves: Vec<_> = posted.nc[next..]
+            .lines()
+            .filter(|line| line.starts_with("G0 "))
+            .take(2)
+            .collect();
+        assert!(
+            moves[0].starts_with("G0 X") && !moves[0].contains('Z'),
+            "{moves:?}"
+        );
         assert!(moves[1].starts_with("G0 Z"), "{moves:?}");
     }
 
@@ -1459,12 +1660,28 @@ pub(crate) mod tests {
             high_feed: 1200.0,
             ..Default::default()
         });
-        let posted = super::post_setup(&source, &CamPostRequestDto {
-            setup_id: 1, post: None, program_name: None,
-        }).unwrap();
-        let moves: Vec<_> = posted.nc.split("\nM6\n").nth(1).unwrap().lines()
-            .filter(|line| line.starts_with("G0 ") || line.starts_with("G1 ")).take(2).collect();
-        assert!(moves[0].starts_with("G1 X") && !moves[0].contains('Z'), "{moves:?}");
+        let posted = super::post_setup(
+            &source,
+            &CamPostRequestDto {
+                setup_id: 1,
+                post: None,
+                program_name: None,
+            },
+        )
+        .unwrap();
+        let moves: Vec<_> = posted
+            .nc
+            .split("\nM6\n")
+            .nth(1)
+            .unwrap()
+            .lines()
+            .filter(|line| line.starts_with("G0 ") || line.starts_with("G1 "))
+            .take(2)
+            .collect();
+        assert!(
+            moves[0].starts_with("G1 X") && !moves[0].contains('Z'),
+            "{moves:?}"
+        );
         assert!(moves[1].starts_with("G1 Z"), "{moves:?}");
         assert!(moves.iter().all(|line| line.ends_with("F1200")));
     }
@@ -1541,7 +1758,12 @@ pub(crate) mod tests {
         let mut source = document(PostDialect::Siemens828d);
         source.tools[0].name = "!!!".into();
         source.tools[0].number = Some(27);
-        source.setups[0].machine.as_mut().unwrap().tool_calls.clear();
+        source.setups[0]
+            .machine
+            .as_mut()
+            .unwrap()
+            .tool_calls
+            .clear();
         let posted = post_setup(
             &source,
             &CamPostRequestDto {
@@ -1687,20 +1909,31 @@ pub(crate) mod tests {
         assert_eq!(profile.station_x, None);
         assert_eq!(profile.station_y, None);
         assert!(!profile.preload_next_tool);
-        assert!(profile.optional_stop_on_tool_change, "an explicit saved opt-in is retained");
+        assert!(
+            profile.optional_stop_on_tool_change,
+            "an explicit saved opt-in is retained"
+        );
     }
 
     #[test]
     fn optional_tool_stops_default_off_in_new_and_unspecified_profiles() {
-        let profile: Siemens828dPostConfigDto = serde_json::from_str(
-            r#"{"supa_retract_z":0.0}"#,
-        ).unwrap();
+        let profile: Siemens828dPostConfigDto =
+            serde_json::from_str(r#"{"supa_retract_z":0.0}"#).unwrap();
         assert!(!profile.optional_stop_on_tool_change);
         assert!(!Siemens828dPostConfigDto::default().optional_stop_on_tool_change);
-        let posted = post_setup(&two_tool_siemens_document(), &CamPostRequestDto {
-            setup_id: 1, post: None, program_name: None,
-        }).unwrap();
-        assert!(!posted.nc.lines().any(|line| line.split_whitespace().any(|word| word == "M1")));
+        let posted = post_setup(
+            &two_tool_siemens_document(),
+            &CamPostRequestDto {
+                setup_id: 1,
+                post: None,
+                program_name: None,
+            },
+        )
+        .unwrap();
+        assert!(!posted
+            .nc
+            .lines()
+            .any(|line| line.split_whitespace().any(|word| word == "M1")));
     }
 
     #[test]

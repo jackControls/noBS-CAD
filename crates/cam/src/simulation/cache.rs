@@ -40,7 +40,8 @@ pub(super) fn key(
     }
     // Exact identity, not only a hash: tool, stock, WCS, rest-source and CAD
     // changes cannot alias an old result. Metadata keys are also byte-bounded.
-    serde_json::to_vec(&(crate::machine::motion_document(document), normalized)).map_err(|error| CamPlanError(error.to_string()))
+    serde_json::to_vec(&(crate::machine::motion_document(document), normalized))
+        .map_err(|error| CamPlanError(error.to_string()))
 }
 
 pub(super) fn get(key: &[u8]) -> Option<CamSimulationResultDto> {

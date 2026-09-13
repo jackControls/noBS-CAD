@@ -386,11 +386,16 @@ impl Cleared {
 
     fn contact_arc(&self, c: Point2Dto, r: f64, other: Point2Dto) -> Option<(f64, f64)> {
         let low = disk_contact_arc(c, r - self.corner_loss, other, self.radius)?;
-        if self.corner_loss == 0.0 { return Some(low); }
+        if self.corner_loss == 0.0 {
+            return Some(low);
+        }
         let high = disk_contact_arc(c, r, other, self.radius + self.corner_loss)?;
         // |v + s*u|² - (q+s)² is affine in section radius s. A ray
         // cleared at both endpoints is cleared at EVERY intermediate s.
-        Some((if low.1 >= PI - EPS { high.0 } else { low.0 }, low.1.min(high.1)))
+        Some((
+            if low.1 >= PI - EPS { high.0 } else { low.0 },
+            low.1.min(high.1),
+        ))
     }
 }
 
@@ -477,8 +482,12 @@ fn analytic_engagement(
         CamResolvedStockDto::Cylinder { center, radius } => {
             // The widest annular/cylinder intersection is at an endpoint
             // or s=sqrt(distance²-stock_radius²), not necessarily at R.
-            let critical = (dist(c, center).powi(2) - radius * radius).max(0.0).sqrt().clamp(floor_r, r);
-            let contact = [floor_r, r, critical].into_iter()
+            let critical = (dist(c, center).powi(2) - radius * radius)
+                .max(0.0)
+                .sqrt()
+                .clamp(floor_r, r);
+            let contact = [floor_r, r, critical]
+                .into_iter()
                 .filter_map(|section| disk_contact_arc(c, section, center, radius))
                 .max_by(|a, b| a.1.total_cmp(&b.1));
             if let Some((a, b)) = contact {
@@ -546,9 +555,7 @@ fn analytic_engagement(
         if let Some(ids) = cleared.buckets.get(&(x, y)) {
             for &id in ids.iter().rev() {
                 work.spend(1, 2)?;
-                if let Some((angle, half)) =
-                    cleared.contact_arc(c, r, cleared.centers[id])
-                {
+                if let Some((angle, half)) = cleared.contact_arc(c, r, cleared.centers[id]) {
                     subtract_arc(&mut ranges, angle, half);
                     if angle_with_guard(&ranges) <= limit {
                         return Ok(angle_with_guard(&ranges));
@@ -570,7 +577,9 @@ fn disk_already_clear(setup: &CamSetupDto, cleared: &Cleared, c: Point2Dto, r: f
     // Do not dilate a union containing original air: air does not expand
     // with cutter section radius. The one-certificate proof above is enough
     // for the common exterior case and remains bounded for corner tools.
-    if cleared.corner_loss > 0.0 { return false; }
+    if cleared.corner_loss > 0.0 {
+        return false;
+    }
     let mut nodes = 0usize;
     fn visit(
         setup: &CamSetupDto,
@@ -673,7 +682,9 @@ fn engagement(
     ring: &[Point2Dto],
     work: &mut Work,
 ) -> Result<f64, CamPlanError> {
-    if cleared.corner_loss > 0.0 || !matches!(setup.resolved_stock, CamResolvedStockDto::ModelBody { .. }) {
+    if cleared.corner_loss > 0.0
+        || !matches!(setup.resolved_stock, CamResolvedStockDto::ModelBody { .. })
+    {
         return analytic_engagement(setup, cleared, center, r, limit, work);
     }
     work.spend(ring.len(), 2)?;
@@ -982,8 +993,10 @@ pub(super) fn plan(
     }
     let geometry = geometry.as_ref().filter(|g| !g.targets.is_empty()).ok_or_else(||CamPlanError("High Speed Roughing requires current target geometry; regenerate the operation to capture its setup bodies.".into()))?;
     let r = tool.diameter * 0.5;
-    let floor_r = crate::CutterProfile::new(tool.into()).map_err(CamPlanError)?
-        .radius_at_height(0.0).expect("validated cutter floor");
+    let floor_r = crate::CutterProfile::new(tool.into())
+        .map_err(CamPlanError)?
+        .radius_at_height(0.0)
+        .expect("validated cutter floor");
     let corner_loss = r - floor_r;
     let q = builder
         .linking
@@ -1012,7 +1025,8 @@ pub(super) fn plan(
     // A flat-wall stepover formula would over-engage this curved frontier.
     let beta = (phi - angular_guard) * 0.5;
     let floor_sweep = floor_r + q;
-    let d = (floor_sweep * floor_sweep - floor_r * floor_r * beta.sin().powi(2)).sqrt() - floor_r * beta.cos();
+    let d = (floor_sweep * floor_sweep - floor_r * floor_r * beta.sin().powi(2)).sqrt()
+        - floor_r * beta.cos();
     let pitch = (0.9 * (d - q)).max(1.0e-6);
     let mut work = Work::default();
     let mut envelope = Envelope::new(
@@ -2195,12 +2209,12 @@ mod tests {
     }
 
     fn assert_adaptive_nc_roundtrip(mut doc: CamDocumentDto) {
-        crate::post::tests::bind_test_names(&mut doc, &[(1,"AdaptiveTool")]);
+        crate::post::tests::bind_test_names(&mut doc, &[(1, "AdaptiveTool")]);
         doc.tools[0].number = Some(1);
         use crate::{
-            post::post_setup_unchecked as post_setup, simulate_gcode, simulate_setup, CamGcodeDialectDto,
-            CamGcodeSimulationRequestDto, CamPostRequestDto, CamSimulationRequestDto,
-            CamSimulationStepKind, CamSimulationTargetDto,
+            post::post_setup_unchecked as post_setup, simulate_gcode, simulate_setup,
+            CamGcodeDialectDto, CamGcodeSimulationRequestDto, CamPostRequestDto,
+            CamSimulationRequestDto, CamSimulationStepKind, CamSimulationTargetDto,
         };
         let CamOperationDto::Adaptive3d {
             geometry: Some(geometry),

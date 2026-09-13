@@ -4031,8 +4031,11 @@ fn tool_specs() -> Vec<ToolSpec> {
 fn records_in_script(name: &str) -> bool {
     if matches!(
         name,
-        "drawing_document" | "drawing_projection" | "drawing_export"
-            | "cam_get_document" | "cam_toolpath_statuses"
+        "drawing_document"
+            | "drawing_projection"
+            | "drawing_export"
+            | "cam_get_document"
+            | "cam_toolpath_statuses"
     ) {
         return false;
     }
@@ -10356,11 +10359,19 @@ mod tests {
         let mut server = CadServer::new().unwrap();
         let mut cam = server.call_tool("cam_get_document", json!({})).unwrap();
         cam["units"] = json!("inches");
-        server.call_tool("cad_interface", json!({
-            "action":"execute", "group":"cam/setup", "operation":"cam_set_document",
-            "arguments":cam
-        })).unwrap();
-        assert_eq!(server.call_tool("cam_get_document", json!({})).unwrap()["units"], "inches");
+        server
+            .call_tool(
+                "cad_interface",
+                json!({
+                    "action":"execute", "group":"cam/setup", "operation":"cam_set_document",
+                    "arguments":cam
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            server.call_tool("cam_get_document", json!({})).unwrap()["units"],
+            "inches"
+        );
         let model = server.call_tool("cad_project_model", json!({})).unwrap();
         let model: Value = serde_json::from_str(model.as_str().unwrap()).unwrap();
         assert_eq!(model["cam"]["units"], "inches");

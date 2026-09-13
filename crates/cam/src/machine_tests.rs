@@ -6,7 +6,9 @@ fn fixture(dialect: PostDialect) -> CamDocumentDto {
     doc.setups[0].machine = Some(CamMachineAssignmentDto::three_axis(
         doc.post_defaults.clone(),
     ));
-    if dialect == PostDialect::Siemens828d { crate::post::tests::bind_test_names(&mut doc, &[(1,"6_MM_FLAT")]); }
+    if dialect == PostDialect::Siemens828d {
+        crate::post::tests::bind_test_names(&mut doc, &[(1, "6_MM_FLAT")]);
+    }
     doc
 }
 
@@ -111,7 +113,10 @@ fn controller_brands_and_iso_modes_are_not_post_aliases() {
         controller.language = language;
         assert!(plan_setup(&doc, 1).is_ok()); // Keep reusable programming intent.
         let error = post_setup(&doc, &request(None)).unwrap_err().to_string();
-        assert!(error.contains("No supported built-in post") || error.contains("does not match"), "{error}");
+        assert!(
+            error.contains("No supported built-in post") || error.contains("does not match"),
+            "{error}"
+        );
     }
 }
 
@@ -309,7 +314,7 @@ fn production_post_gate_applies_compensation_contract_to_generated_blocks() {
     doc.setups[0].machine = Some(CamMachineAssignmentDto::three_axis(
         doc.post_defaults.clone(),
     ));
-    crate::post::tests::bind_test_names(&mut doc, &[(1,"6_MM_FLAT")]);
+    crate::post::tests::bind_test_names(&mut doc, &[(1, "6_MM_FLAT")]);
     for op in &mut doc.setups[0].operations {
         if let crate::CamOperationDto::Contour2d {
             lead_in, lead_out, ..

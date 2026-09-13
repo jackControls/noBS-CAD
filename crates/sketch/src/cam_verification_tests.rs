@@ -2,10 +2,8 @@ use super::*;
 use nbcad_cam::{CamToolKind, Point2Dto, PostDialect};
 
 fn thread_job(with_bore: bool, drill_bottom: f64) -> CamDocumentDto {
-    let data: serde_json::Value = serde_json::from_str(include_str!(
-        "../../cam/fixtures/lead-clearance.json"
-    ))
-    .unwrap();
+    let data: serde_json::Value =
+        serde_json::from_str(include_str!("../../cam/fixtures/lead-clearance.json")).unwrap();
     let mut doc: CamDocumentDto = serde_json::from_value(
         data["cases"]
             .as_array()
@@ -47,7 +45,9 @@ fn thread_job(with_bore: bool, drill_bottom: f64) -> CamDocumentDto {
     doc.next_operation_id = 3;
     doc.next_tool_id = 3;
     doc.post_defaults.dialect = PostDialect::LinuxCnc;
-    doc.setups[0].machine = Some(nbcad_cam::CamMachineAssignmentDto::three_axis(doc.post_defaults.clone()));
+    doc.setups[0].machine = Some(nbcad_cam::CamMachineAssignmentDto::three_axis(
+        doc.post_defaults.clone(),
+    ));
     doc
 }
 
@@ -111,8 +111,19 @@ fn moving_bore_after_thread_keeps_motion_current_but_blocks_unverified_nc_entry(
     let mut reordered = manager.cam_document();
     reordered.setups[0].operations.swap(0, 1);
     manager.set_cam_document(reordered).unwrap();
-    assert!(manager.cam_toolpath_statuses().unwrap().iter().all(|s| s.state == CamToolpathStateDto::Current));
-    let error = manager.cam_post(CamPostRequestDto { setup_id: 1, post: None, program_name: None }).unwrap_err().to_string();
+    assert!(manager
+        .cam_toolpath_statuses()
+        .unwrap()
+        .iter()
+        .all(|s| s.state == CamToolpathStateDto::Current));
+    let error = manager
+        .cam_post(CamPostRequestDto {
+            setup_id: 1,
+            post: None,
+            program_name: None,
+        })
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("thread-tool entry"), "{error}");
 }
 

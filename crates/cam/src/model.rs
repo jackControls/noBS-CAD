@@ -290,11 +290,24 @@ pub enum PostDialect {
 
 impl PostDialect {
     pub fn requires_machine_retract(self) -> bool {
-        matches!(self, Self::Fanuc | Self::Haas | Self::Mitsubishi | Self::Mazak | Self::Syntec | Self::Okuma | Self::Heidenhain | Self::HermleHeidenhain)
+        matches!(
+            self,
+            Self::Fanuc
+                | Self::Haas
+                | Self::Mitsubishi
+                | Self::Mazak
+                | Self::Syntec
+                | Self::Okuma
+                | Self::Heidenhain
+                | Self::HermleHeidenhain
+        )
     }
 
     pub fn supports_named_tools(self) -> bool {
-        matches!(self, Self::Siemens828d | Self::Heidenhain | Self::HermleHeidenhain)
+        matches!(
+            self,
+            Self::Siemens828d | Self::Heidenhain | Self::HermleHeidenhain
+        )
     }
 
     pub fn extension(self) -> &'static str {
@@ -1284,14 +1297,27 @@ pub enum CamOperationDto {
 impl CamOperationDto {
     pub fn chamfer_chains(&self) -> Vec<CamChamferChainDto> {
         match self {
-            Self::Chamfer2d { path, closed, chain_ref, modeled_chamfer, top_z,
-                chamfer_width, wall_side, additional_chains, .. } => {
-                std::iter::once(CamChamferChainDto {
-                    path: path.clone(), closed: *closed, chain_ref: chain_ref.clone(),
-                    modeled_chamfer: modeled_chamfer.clone(), top_z: *top_z,
-                    chamfer_width: *chamfer_width, wall_side: *wall_side,
-                }).chain(additional_chains.iter().cloned()).collect()
-            }
+            Self::Chamfer2d {
+                path,
+                closed,
+                chain_ref,
+                modeled_chamfer,
+                top_z,
+                chamfer_width,
+                wall_side,
+                additional_chains,
+                ..
+            } => std::iter::once(CamChamferChainDto {
+                path: path.clone(),
+                closed: *closed,
+                chain_ref: chain_ref.clone(),
+                modeled_chamfer: modeled_chamfer.clone(),
+                top_z: *top_z,
+                chamfer_width: *chamfer_width,
+                wall_side: *wall_side,
+            })
+            .chain(additional_chains.iter().cloned())
+            .collect(),
             _ => Vec::new(),
         }
     }
@@ -1299,18 +1325,41 @@ impl CamOperationDto {
     /// Materialize only one boundary with the operation's common settings.
     /// Used for per-chain validation/planning without manufacturing extra ops.
     pub fn with_chamfer_chain(&self, chain: CamChamferChainDto) -> Self {
-        let Self::Chamfer2d { id, name, enabled, tool_id, tip_offset, direction,
-            clearance_z, retract_z, feed_height_z, cutting, .. } = self else {
+        let Self::Chamfer2d {
+            id,
+            name,
+            enabled,
+            tool_id,
+            tip_offset,
+            direction,
+            clearance_z,
+            retract_z,
+            feed_height_z,
+            cutting,
+            ..
+        } = self
+        else {
             panic!("chamfer chain requires a chamfer operation");
         };
         Self::Chamfer2d {
-            id: *id, name: name.clone(), enabled: *enabled, tool_id: *tool_id,
-            path: chain.path, closed: chain.closed, chain_ref: chain.chain_ref,
-            modeled_chamfer: chain.modeled_chamfer, top_z: chain.top_z,
-            chamfer_width: chain.chamfer_width, wall_side: chain.wall_side,
-            additional_chains: Vec::new(), tip_offset: *tip_offset, direction: *direction,
-            clearance_z: *clearance_z, retract_z: *retract_z,
-            feed_height_z: *feed_height_z, cutting: cutting.clone(),
+            id: *id,
+            name: name.clone(),
+            enabled: *enabled,
+            tool_id: *tool_id,
+            path: chain.path,
+            closed: chain.closed,
+            chain_ref: chain.chain_ref,
+            modeled_chamfer: chain.modeled_chamfer,
+            top_z: chain.top_z,
+            chamfer_width: chain.chamfer_width,
+            wall_side: chain.wall_side,
+            additional_chains: Vec::new(),
+            tip_offset: *tip_offset,
+            direction: *direction,
+            clearance_z: *clearance_z,
+            retract_z: *retract_z,
+            feed_height_z: *feed_height_z,
+            cutting: cutting.clone(),
         }
     }
 
@@ -1318,7 +1367,10 @@ impl CamOperationDto {
         let mut chains = chains.into_iter();
         let first = chains.next().expect("chamfer requires at least one chain");
         *self = self.with_chamfer_chain(first);
-        if let Self::Chamfer2d { additional_chains, .. } = self {
+        if let Self::Chamfer2d {
+            additional_chains, ..
+        } = self
+        {
             *additional_chains = chains.collect();
         }
     }
@@ -1492,14 +1544,36 @@ impl CamOperationDto {
     // Editing may preserve an operation whose assigned tool no longer fits.
     // Numeric/geometry/identity validation stays strict; execution does not
     // use this mode and never silently suppresses an incompatible operation.
-    fn validate_with_tool_checks(&self, setup: &CamSetupDto, tools: &[CamToolDto], check_tool: bool) -> Result<(), String> {
+    fn validate_with_tool_checks(
+        &self,
+        setup: &CamSetupDto,
+        tools: &[CamToolDto],
+        check_tool: bool,
+    ) -> Result<(), String> {
         let label = self.name().trim();
-        if let Self::Chamfer2d { path, chain_ref, additional_chains, .. } = self {
-            if additional_chains.len() >= 64 || path.len() + additional_chains.iter().map(|c| c.path.len()).sum::<usize>() > MAX_PATH_POINTS {
+        if let Self::Chamfer2d {
+            path,
+            chain_ref,
+            additional_chains,
+            ..
+        } = self
+        {
+            if additional_chains.len() >= 64
+                || path.len()
+                    + additional_chains
+                        .iter()
+                        .map(|c| c.path.len())
+                        .sum::<usize>()
+                    > MAX_PATH_POINTS
+            {
                 return Err(format!("chamfer operation '{label}' exceeds 64 chains or {MAX_PATH_POINTS} total path points"));
             }
             let mut keys = std::collections::HashSet::new();
-            for reference in chain_ref.iter().chain(additional_chains.iter().filter_map(|c| c.chain_ref.as_ref())) {
+            for reference in chain_ref.iter().chain(
+                additional_chains
+                    .iter()
+                    .filter_map(|c| c.chain_ref.as_ref()),
+            ) {
                 for key in &reference.keys {
                     if !keys.insert(key) {
                         return Err(format!("chamfer operation '{label}' selects the same edge more than once; remove the overlapping chain"));
@@ -1508,7 +1582,8 @@ impl CamOperationDto {
             }
             if !additional_chains.is_empty() {
                 for (i, chain) in self.chamfer_chains().into_iter().enumerate() {
-                    self.with_chamfer_chain(chain).validate_with_tool_checks(setup, tools, check_tool)
+                    self.with_chamfer_chain(chain)
+                        .validate_with_tool_checks(setup, tools, check_tool)
                         .map_err(|error| format!("Chain {}: {error}", i + 1))?;
                 }
                 return Ok(());
@@ -1583,10 +1658,19 @@ impl CamOperationDto {
                 parameters,
                 ..
             } => {
-                if check_tool && (!matches!(tool.kind, CamToolKind::FlatEndMill | CamToolKind::BullNoseEndMill) || !tool.center_cutting) {
+                if check_tool
+                    && (!matches!(
+                        tool.kind,
+                        CamToolKind::FlatEndMill | CamToolKind::BullNoseEndMill
+                    ) || !tool.center_cutting)
+                {
                     return Err(format!("high-speed roughing operation '{label}' requires a center-cutting flat or bull-nose end mill; radiused and chamfered end-mill corners are supported, drills and chamfer mills are not"));
                 }
-                if check_tool && tool.corner_radius.is_some_and(|corner| corner >= tool.diameter * 0.5 - EPSILON) {
+                if check_tool
+                    && tool
+                        .corner_radius
+                        .is_some_and(|corner| corner >= tool.diameter * 0.5 - EPSILON)
+                {
                     return Err(format!("high-speed roughing operation '{label}' needs a nonzero flat land; a full ball nose does not provide the required floor-clearance proof"));
                 }
                 // Top is an editable depth-range reference, including an
@@ -1660,10 +1744,14 @@ impl CamOperationDto {
                 // edge: flat and bull-nose end mills and face mills only —
                 // ball noses leave scallops, chamfer mills cut on an angled
                 // edge, thread mills cannot side-mill at all.
-                if check_tool && !matches!(
-                    tool.kind,
-                    CamToolKind::FlatEndMill | CamToolKind::BullNoseEndMill | CamToolKind::FaceMill
-                ) {
+                if check_tool
+                    && !matches!(
+                        tool.kind,
+                        CamToolKind::FlatEndMill
+                            | CamToolKind::BullNoseEndMill
+                            | CamToolKind::FaceMill
+                    )
+                {
                     return Err(format!(
                         "face operation '{label}' needs a flat, bull-nose, or face mill"
                     ));
@@ -1679,7 +1767,10 @@ impl CamOperationDto {
                     ));
                 }
                 validate_depth_range(label, *top_z, *target_z, *step_down, within_z)?;
-                if !step_over.is_finite() || *step_over <= 0.0 || (check_tool && *step_over > tool.diameter) {
+                if !step_over.is_finite()
+                    || *step_over <= 0.0
+                    || (check_tool && *step_over > tool.diameter)
+                {
                     return Err(format!(
                         "face operation '{label}' stepover must be positive and no larger than the tool diameter"
                     ));
@@ -1710,7 +1801,15 @@ impl CamOperationDto {
                 // lengths carry no tool-diameter floor in either mode.
                 ..
             } => {
-                if check_tool && (!matches!(tool.kind, CamToolKind::FlatEndMill | CamToolKind::BullNoseEndMill | CamToolKind::BallEndMill | CamToolKind::FaceMill) || !tool.center_cutting) {
+                if check_tool
+                    && (!matches!(
+                        tool.kind,
+                        CamToolKind::FlatEndMill
+                            | CamToolKind::BullNoseEndMill
+                            | CamToolKind::BallEndMill
+                            | CamToolKind::FaceMill
+                    ) || !tool.center_cutting)
+                {
                     return Err(format!(
                         "contour operation '{label}' requires a center-cutting milling tool: the entry plunges at the lead start, which the operator places"
                     ));
@@ -1779,8 +1878,10 @@ impl CamOperationDto {
                 }
                 if *roughing_passes > 1 {
                     match roughing_step_over {
-                        Some(step) if step.is_finite() && *step > 0.0 && (!check_tool || *step <= tool.diameter) => {
-                        }
+                        Some(step)
+                            if step.is_finite()
+                                && *step > 0.0
+                                && (!check_tool || *step <= tool.diameter) => {}
                         _ => {
                             return Err(format!(
                                 "contour operation '{label}' with multiple roughing passes needs a radial step-over that is positive and no larger than the tool diameter"
@@ -1987,7 +2088,15 @@ impl CamOperationDto {
                 step_over,
                 ..
             } => {
-                if check_tool && (!matches!(tool.kind, CamToolKind::FlatEndMill | CamToolKind::BullNoseEndMill | CamToolKind::BallEndMill | CamToolKind::FaceMill) || !tool.center_cutting) {
+                if check_tool
+                    && (!matches!(
+                        tool.kind,
+                        CamToolKind::FlatEndMill
+                            | CamToolKind::BullNoseEndMill
+                            | CamToolKind::BallEndMill
+                            | CamToolKind::FaceMill
+                    ) || !tool.center_cutting)
+                {
                     return Err(format!(
                         "pocket operation '{label}' requires a center-cutting milling tool until ramp or helical entries are supported"
                     ));
@@ -2006,14 +2115,24 @@ impl CamOperationDto {
                     return Err(format!("pocket operation '{label}' outline has zero area"));
                 }
                 validate_depth_range(label, *top_z, *bottom_z, *step_down, within_z)?;
-                if !step_over.is_finite() || *step_over <= 0.0 || (check_tool && *step_over > tool.diameter) {
+                if !step_over.is_finite()
+                    || *step_over <= 0.0
+                    || (check_tool && *step_over > tool.diameter)
+                {
                     return Err(format!(
                         "pocket operation '{label}' stepover must be positive and no larger than the tool diameter"
                     ));
                 }
             }
             Self::Chamfer2d {
-                path, closed, modeled_chamfer, chain_ref, top_z, chamfer_width, tip_offset, wall_side,
+                path,
+                closed,
+                modeled_chamfer,
+                chain_ref,
+                top_z,
+                chamfer_width,
+                tip_offset,
+                wall_side,
                 ..
             } => {
                 if check_tool && tool.kind != CamToolKind::ChamferMill {
@@ -2032,7 +2151,12 @@ impl CamOperationDto {
                         "chamfer operation '{label}' must declare which side of the path the material wall is on"
                     ));
                 }
-                if *closed == matches!(wall_side, ContourCompensation::Left | ContourCompensation::Right) {
+                if *closed
+                    == matches!(
+                        wall_side,
+                        ContourCompensation::Left | ContourCompensation::Right
+                    )
+                {
                     return Err(format!(
                         "chamfer operation '{label}' needs inside/outside material for a closed chain and left/right material for an open chain"
                     ));
@@ -2057,9 +2181,13 @@ impl CamOperationDto {
                     ));
                 }
                 if let Some(modeled) = modeled_chamfer {
-                    if !modeled.additional_width.is_finite() || modeled.additional_width < 0.0
+                    if !modeled.additional_width.is_finite()
+                        || modeled.additional_width < 0.0
                         || modeled.additional_width >= *chamfer_width
-                        || !chain_ref.as_ref().is_some_and(|r| r.source == CamChainSource::Model && !r.keys.is_empty()) {
+                        || !chain_ref.as_ref().is_some_and(|r| {
+                            r.source == CamChainSource::Model && !r.keys.is_empty()
+                        })
+                    {
                         return Err(format!("chamfer operation '{label}' modeled geometry needs associated model edges and a nonnegative added width"));
                     }
                 }
@@ -2457,7 +2585,9 @@ impl CamSetupDto {
     /// Everything except the operation checks. Load-time leniency reports
     /// structural issues as warnings instead of blocking the open.
     pub(crate) fn validate_structure(&self) -> Result<(), String> {
-        if let Some(machine) = &self.machine { machine.validate()?; }
+        if let Some(machine) = &self.machine {
+            machine.validate()?;
+        }
         if self.id == 0 {
             return Err("CAM setup ids must be non-zero".to_string());
         }
@@ -2818,10 +2948,10 @@ impl CamOperationHeightExpressionsDto {
                         | CamOperationDto::Chamfer2d { chain_ref, .. } => chain_ref.as_ref(),
                         _ => None,
                     };
-                    if !reference.is_some_and(|reference| {
-                        !reference.keys.is_empty()
-                    }) {
-                        return Err("Selection height requires associated edge or sketch geometry".into());
+                    if !reference.is_some_and(|reference| !reference.keys.is_empty()) {
+                        return Err(
+                            "Selection height requires associated edge or sketch geometry".into(),
+                        );
                     }
                 }
                 _ => {}
@@ -3051,7 +3181,11 @@ impl CamDocumentDto {
                 .operations
                 .iter()
                 .enumerate()
-                .filter(|(_, operation)| operation.validate_with_tool_checks(setup, &tools, false).is_err())
+                .filter(|(_, operation)| {
+                    operation
+                        .validate_with_tool_checks(setup, &tools, false)
+                        .is_err()
+                })
                 .map(|(index, _)| index)
                 .collect();
             for index in failing {
@@ -3359,7 +3493,11 @@ impl CamDocumentDto {
         if let Some(profile) = &self.post_defaults.siemens_828d {
             profile.validate()?;
         }
-        if self.post_defaults.machine_retract_z.is_some_and(|z| !z.is_finite()) {
+        if self
+            .post_defaults
+            .machine_retract_z
+            .is_some_and(|z| !z.is_finite())
+        {
             return Err("Machine retract Z must be finite".into());
         }
 

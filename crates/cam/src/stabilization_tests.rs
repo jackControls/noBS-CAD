@@ -8,8 +8,8 @@
 use crate::model::{
     CamHoleDto, CamResolvedStockDto, CamStockSpecDto, DrillCycle, WcsOriginSpecDto,
 };
-use crate::*;
 use crate::post::post_setup_unchecked as post_setup;
+use crate::*;
 
 fn cutting(feed_xy: f64, feed_z: f64) -> CuttingParametersDto {
     CuttingParametersDto {
@@ -184,7 +184,7 @@ fn assert_retract_then_clearance(program: &CamProgramDto, retract_z: f64, cleara
 #[test]
 fn golden_job_stays_aligned_across_save_plan_post_and_simulation() {
     let mut document = golden_document();
-    crate::post::tests::bind_test_names(&mut document, &[(1,"EM6"),(2,"DRILL5_5")]);
+    crate::post::tests::bind_test_names(&mut document, &[(1, "EM6"), (2, "DRILL5_5")]);
     document.validate().expect("golden document validates");
 
     // Project persistence must not change generated motion.
@@ -218,7 +218,7 @@ fn golden_job_stays_aligned_across_save_plan_post_and_simulation() {
         .iter()
         .any(|command| matches!(command, CamCommandDto::CutterCompensationOff)));
 
-    crate::post::tests::bind_test_names(&mut reopened, &[(1,"EM6"),(2,"DRILL5_5")]);
+    crate::post::tests::bind_test_names(&mut reopened, &[(1, "EM6"), (2, "DRILL5_5")]);
     let posted = post_setup(
         &reopened,
         &CamPostRequestDto {
@@ -247,7 +247,10 @@ fn golden_job_stays_aligned_across_save_plan_post_and_simulation() {
     assert!(posted.nc.contains("T=\"DRILL5_5\""));
     assert!(posted.nc.contains("G1 G41 NORM"));
     assert!(posted.nc.contains("G1 G40"));
-    assert!(posted.nc.lines().any(|line| line.ends_with(" M5") || line == "M5"));
+    assert!(posted
+        .nc
+        .lines()
+        .any(|line| line.ends_with(" M5") || line == "M5"));
 
     let simulation = simulate_setup(
         &reopened,
