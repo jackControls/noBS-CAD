@@ -1,6 +1,8 @@
 # Install noBS CAD
 
-Download the **[showcase prerelease](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12.2)**
+> **Publication pending.** These instructions describe planned showcase preview 2026-09-12.2, which is under review and not yet public. The [older public preview](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12) remains available; consult its release notes for the features it includes.
+
+After publication, download the **[showcase prerelease](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12.2)**
 for your computer. The application includes the Scripts library and MCP server;
 you do not need Rust, Node.js or an agent to use it. Choose an application package,
 not GitHub's **Source code** archives.

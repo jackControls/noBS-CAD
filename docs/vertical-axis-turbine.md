@@ -6,6 +6,11 @@ drawing package. The same source builds the model in fast mode or teaches the
 construction in presentation mode, with pause, step and speed controls. There is no second animation model or imported
 STL/STEP geometry.
 
+The [drawing guide](2D_DRAWINGS.md) records an unresolved live presentation gap:
+the assembly sheet can show crosshairs without linework even when the native
+SVG/DXF exports contain the placed geometry. Part sheets and the BOM rendered
+in the inspected run; that does not qualify the missing live assembly views.
+
 Choose **Vertical-axis turbine** in **Scripts**, then **Run in new design**.
 For independent headless comparisons, follow the
 [developer replay guide](DEVELOPMENT.md#replay-a-recipe) with recipe ID

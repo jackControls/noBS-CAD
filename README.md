@@ -3,9 +3,11 @@
 Free, open-source parametric CAD for mechanical parts, assemblies and drawings.
 Design locally, keep editable files, and work by hand or with your own MCP agent.
 
-**Pre-alpha · [Showcase preview 2026-09-12.2](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12.2)**
+**Pre-alpha · Planned showcase preview 2026-09-12.2**
 · [Build and checks](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12.2)
 · [Installation help](docs/INSTALL.md)
+
+> **Publication pending.** The showcase update below is under review. Its package, video and editable-model downloads are not yet public; the recipe-link installation also requires this update. The [older public preview](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12) is available now and does not include the latest changes.
 
 **Download:** [Windows x64](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS-CAD-0.1.0-windows-x64.zip)
 · [Windows ARM64](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS-CAD-0.1.0-windows-arm64.zip)

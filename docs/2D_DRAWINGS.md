@@ -8,6 +8,12 @@ view. Add projected views and dimensions, then save the project. The
 [vise](d-screw-vise.md) and [turbine](vertical-axis-turbine.md) include complete
 example drawing packages to inspect in CAD.
 
+During the turbine's live presentation, the assembly sheet has been observed
+showing view crosshairs without projected linework. The same run's native SVG
+and DXF exports contain the placed geometry. This live rendering gap remains
+unresolved; successful export checks alone do not validate what the sheet shows.
+See the [drawing workstream](https://github.com/jackControls/noBS-CAD/issues/93).
+
 ## Export and print
 
 - **Interactive Drawing workspace:** export sheet DXF or use the platform's
