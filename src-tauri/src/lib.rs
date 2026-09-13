@@ -10,6 +10,9 @@
 mod cam_library;
 mod cam_playback;
 mod cam_posts;
+#[cfg(feature = "dev-bevy-host")]
+mod native_editor;
+mod native_forms;
 mod native_menu;
 pub mod native_viewport;
 mod recipe_links;
@@ -18,8 +21,6 @@ mod session_bridge;
 mod six_dof_mouse;
 mod state;
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -48,8 +49,8 @@ fn ping() -> String {
 }
 
 #[tauri::command]
-fn native_build_info() -> nbcad_core::BuildInfo {
-    nbcad_core::build_info()
+fn native_build_info() -> nbcad_build_info::BuildInfo {
+    nbcad_build_info::build_info()
 }
 
 #[derive(Serialize)]
@@ -1062,8 +1063,6 @@ fn engine_export_3mf(state: tauri::State<'_, AppState>, payload: &str) -> Result
     state.export_3mf(payload)
 }
 
-const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
-
 fn cam_library_config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_config_dir()
@@ -1186,47 +1185,14 @@ async fn cam_library_set_location(
 
 #[tauri::command]
 fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
-    let metadata = fs::metadata(&path).map_err(|error| format!("could not read file: {error}"))?;
-    if metadata.len() > MAX_FILE_BYTES {
-        return Err("file is larger than the 256 MB safety limit".to_string());
-    }
-    fs::read(path).map_err(|error| format!("could not read file: {error}"))
+    nbcad_project_file::read_binary_file(Path::new(&path)).map_err(|error| error.to_string())
 }
 
 /// Write bytes to a path atomically (temp file + rename).
 #[tauri::command]
 fn write_binary_file_atomic(path: String, bytes: Vec<u8>) -> Result<(), String> {
-    if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err("file is larger than the 256 MB safety limit".to_string());
-    }
-    let target = PathBuf::from(path);
-    let parent = target
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let file_name = target
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| "save path has no valid file name".to_string())?;
-    let temporary = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&temporary)
-            .map_err(|error| format!("could not create temporary save file: {error}"))?;
-        file.write_all(&bytes)
-            .map_err(|error| format!("could not write save file: {error}"))?;
-        file.sync_all()
-            .map_err(|error| format!("could not flush save file: {error}"))?;
-        fs::rename(&temporary, &target)
-            .map_err(|error| format!("could not replace save file: {error}"))
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(temporary);
-    }
-    result
+    nbcad_project_file::write_binary_file_atomic(Path::new(&path), &bytes)
+        .map_err(|error| error.to_string())
 }
 
 pub fn run() {

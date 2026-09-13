@@ -1,6 +1,6 @@
 # ADR 0002 — Native Bevy viewport boundary
 
-- Status: Accepted
+- Status: Accepted viewport contract; shell/composition ownership superseded by [ADR 0003](0003-bevy-interface.md)
 - Date: 2026-07-30
 - Tracking: [#20](https://github.com/jackControls/noBS-CAD/issues/20)
 

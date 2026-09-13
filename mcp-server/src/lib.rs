@@ -4117,8 +4117,8 @@ fn handle_message(server: &mut CadServer, message: Value) -> Vec<Value> {
                     "serverInfo": {
                         "name": "nbcad",
                         "title": "noBS CAD",
-                        "version": nbcad_core::build_info().display_version(),
-                        "_meta": {"nbcad/build": nbcad_core::build_info()}
+                        "version": nbcad_build_info::build_info().display_version(),
+                        "_meta": {"nbcad/build": nbcad_build_info::build_info()}
                     },
                     "instructions": stdio::instructions(server.desktop_binding.is_some())
                 }),

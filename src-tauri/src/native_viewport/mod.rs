@@ -17,14 +17,28 @@ mod platform;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub(crate) use platform::script_preview;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod interface_shell;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod profile_outline;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod ui;
+#[cfg(feature = "dev-bevy-host")]
+pub(crate) use platform::apply_interface_viewport;
+#[cfg(all(test, feature = "dev-bevy-host"))]
+pub(crate) use platform::interface_scene_fixture;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub(crate) use platform::{
+    apply_interface_model, apply_interface_preview, apply_interface_view, interface_body_transform,
+    interface_preview_snapshot, interface_sketch_point, interface_view_snapshot,
+    interface_visible_occurrences,
+};
 #[cfg(all(
     any(target_os = "macos", target_os = "windows", target_os = "linux"),
     feature = "dev-ui-lab"
 ))]
 pub mod ui_lab;
+#[cfg(feature = "dev-bevy-host")]
+pub mod winit_host;
 
 use nbcad_core::BodyAppearance;
 use nbcad_sketch::{BodyPoseDto, InstanceBodyPoseDto, SketchDto};
@@ -326,7 +340,7 @@ impl Default for ViewportHud {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportCamera {
     pub position: [f32; 3],
@@ -657,6 +671,21 @@ pub struct NativeViewport {
 }
 
 impl NativeViewport {
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    pub fn interface(&self) -> interface_shell::NativeInterfaceHandle {
+        self.inner.interface()
+    }
+
+    /// Apply retained interface changes on the one native renderer thread.
+    /// The caller supplies the existing application's typed reducer/view model.
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    pub(crate) fn update_interface(
+        &self,
+        update: impl FnOnce(&mut bevy::prelude::World) + Send + 'static,
+    ) -> Result<(), String> {
+        self.inner.update_interface(update)
+    }
+
     pub fn install(app: &mut App) -> Result<Self, String> {
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {

@@ -1,0 +1,556 @@
+//! Native field adapters. Parley/Bevy owns Unicode editing and text layout;
+//! committed values take the same owned SetValue path as MCP.
+
+use bevy::{
+    input::{
+        keyboard::{Key, KeyboardInput},
+        ButtonState,
+    },
+    prelude::*,
+    text::{EditableText, FontWeight, PreeditCursor, TextEdit},
+    ui::{widget::TextScroll, ComputedUiRenderTargetInfo, UiGlobalTransform, UiScale, UiSystems},
+    window::{Ime, PrimaryWindow, WindowEvent},
+};
+use nbcad_interface::{ControlInput, ControlKey, Field};
+
+use super::{InterfaceControl, InterfaceLayout, NativeInterfaceAction, NativeInterfaceHandle};
+use crate::native_viewport::{
+    ui::{ViewportUiAssets, ViewportUiTheme},
+    winit_host::Modifiers,
+};
+
+#[derive(Component)]
+pub(crate) struct NativeTextField {
+    baseline: String,
+    queued: Option<String>,
+    binding: u64,
+    theme: ViewportUiTheme,
+}
+
+#[derive(Resource, Default)]
+struct EditorSession {
+    active: Option<NativeInterfaceAction>,
+}
+
+pub(crate) fn install(app: &mut App) {
+    app.init_resource::<EditorSession>()
+        .add_systems(Update, synchronize_fields.after(super::InterfaceReduction))
+        .add_systems(
+            PostUpdate,
+            update_ime.after(InterfaceLayout).after(UiSystems::Stack),
+        );
+}
+
+/// Root binds the returned real widget to its typed form field, exactly as it
+/// binds buttons. The editable value is not rendered by a hidden proxy.
+pub(crate) fn spawn_text_field(
+    commands: &mut Commands,
+    camera: Entity,
+    node: Node,
+    mut control: InterfaceControl,
+    theme: ViewportUiTheme,
+    assets: &ViewportUiAssets,
+) -> Result<Entity, String> {
+    let Field::Text { value, .. } = &control.field else {
+        return Err("Native text widget needs a text field".into());
+    };
+    let value = value.clone();
+    control.text_editing = true;
+    control.role = "textbox".into();
+    Ok(commands
+        .spawn((
+            Name::new(format!("Native text: {}", control.label)),
+            NativeTextField {
+                baseline: value.clone(),
+                queued: None,
+                binding: control.binding,
+                theme,
+            },
+            EditableText::new(value),
+            control,
+            node,
+            UiTargetCamera(camera),
+            theme.text(assets, 13.0, FontWeight::NORMAL),
+            TextColor(theme.ink),
+            BackgroundColor(theme.panel),
+            BorderColor::all(theme.edge),
+            ZIndex(31),
+        ))
+        .id())
+}
+
+fn active_entity(action: &NativeInterfaceAction) -> Entity {
+    Entity::from_bits(action.control.key.0)
+}
+
+fn validate_editor(
+    world: &World,
+    handle: &NativeInterfaceHandle,
+    action: &NativeInterfaceAction,
+) -> Result<(), String> {
+    handle.validate_action(action)?;
+    let control = world
+        .get::<InterfaceControl>(active_entity(action))
+        .ok_or("Native text field was removed")?;
+    if control.binding != action.control.binding() || !control.visible || control.disabled {
+        return Err("Native text field changed before input could run".into());
+    }
+    Ok(())
+}
+
+fn flush_edits(world: &mut World) -> Result<(), String> {
+    world
+        .run_system_cached(bevy::text::apply_text_edits)
+        .map_err(|error| format!("Native text edit failed: {error}"))
+}
+
+/// Flush before changing focus, including background clicks and Tab. This
+/// captures the original binding before root reduces the value; stale owners
+/// can never be repaired by resolving their field in a replacement document.
+fn commit_active(
+    world: &mut World,
+    handle: &NativeInterfaceHandle,
+) -> Result<Option<NativeInterfaceAction>, String> {
+    let Some(action) = world.resource::<EditorSession>().active.clone() else {
+        return Ok(None);
+    };
+    if let Err(error) = validate_editor(world, handle, &action) {
+        world.resource_mut::<EditorSession>().active = None;
+        return Err(error);
+    }
+    flush_edits(world)?;
+    let entity = active_entity(&action);
+    let value = world
+        .get::<EditableText>(entity)
+        .ok_or("Native text editor was removed")?
+        .value()
+        .to_string();
+    if world
+        .get::<NativeTextField>(entity)
+        .is_some_and(|field| field.baseline == value || field.queued.as_ref() == Some(&value))
+    {
+        return Ok(None);
+    }
+    let committed = handle.resolve_input(
+        action.control.key,
+        ControlInput::SetValue(value.clone()),
+        &action.context,
+    )?;
+    world
+        .get_mut::<NativeTextField>(entity)
+        .ok_or("Native text editor was removed")?
+        .queued = Some(value);
+    Ok(Some(committed))
+}
+
+/// Only accepted SetValue commits advance the editor baseline. A rejected
+/// draft stays dirty, so the next Apply cannot use the old accepted value.
+pub(crate) fn acknowledge_control_input(
+    world: &mut World,
+    action: &NativeInterfaceAction,
+    accepted: bool,
+) {
+    let ControlInput::SetValue(value) = &action.control.input else {
+        return;
+    };
+    let entity = active_entity(action);
+    if let Some(mut field) = world.get_mut::<NativeTextField>(entity) {
+        if field.binding != action.control.binding() {
+            return;
+        }
+        if field.queued.as_ref() == Some(value) {
+            field.queued = None;
+        }
+        if accepted {
+            field.baseline.clone_from(value);
+        }
+        drop(field);
+        if accepted {
+            if let Some(mut editor) = world.get_mut::<EditableText>(entity) {
+                if editor.value().to_string() != *value {
+                    editor.editor.set_text(value);
+                    editor.pending_edits.clear();
+                    editor.pending_paste = None;
+                    editor.queue_edit(TextEdit::clear_ime_compose());
+                    editor.queue_edit(TextEdit::TextEnd(false));
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;
+
+/// The shared reducer applies these preceding commits, checks their results,
+/// then revalidates and applies the original target. A failed blur commit must
+/// never allow an Apply button to run against the previous value.
+pub(crate) fn prepare_control_input(
+    world: &mut World,
+    handle: &NativeInterfaceHandle,
+    action: &NativeInterfaceAction,
+) -> Result<Vec<NativeInterfaceAction>, String> {
+    handle.validate_action(action)?;
+    if !world.contains_resource::<EditorSession>() {
+        return Ok(Vec::new());
+    }
+    // A direct SetValue on the current field replaces its draft; committing
+    // that old draft immediately before it would create an unnecessary edit.
+    if matches!(action.control.input, ControlInput::SetValue(_))
+        && world
+            .resource::<EditorSession>()
+            .active
+            .as_ref()
+            .is_some_and(|active| active.control.key == action.control.key)
+    {
+        return Ok(Vec::new());
+    }
+    Ok(commit_active(world, handle)?.into_iter().collect())
+}
+
+/// Called for every original OS event before general UI/model routing. This
+/// preserves typing → Tab → typing order even within one event-loop update.
+pub(crate) fn before_window_input(
+    world: &mut World,
+    handle: &NativeInterfaceHandle,
+    event: &WindowEvent,
+    cursor: Option<Vec2>,
+    modifiers: Modifiers,
+) -> Result<bool, String> {
+    if !world.contains_resource::<EditorSession>() {
+        return Ok(false);
+    }
+    let Some(action) = world.resource::<EditorSession>().active.clone() else {
+        return Ok(false);
+    };
+    if validate_editor(world, handle, &action).is_err() {
+        world.resource_mut::<EditorSession>().active = None;
+        // Drop late IME delivery instead of applying it to a new field.
+        return Ok(matches!(event, WindowEvent::Ime(_)));
+    }
+    let entity = active_entity(&action);
+    let composing = world
+        .get::<EditableText>(entity)
+        .is_some_and(EditableText::is_composing);
+    let edit = match event {
+        WindowEvent::Ime(Ime::Preedit { value, cursor, .. }) => Some(TextEdit::ImeSetCompose {
+            value: value.as_str().into(),
+            cursor: cursor.map(|(anchor, focus)| PreeditCursor { anchor, focus }),
+        }),
+        WindowEvent::Ime(Ime::Commit { value, .. }) => Some(TextEdit::ImeCommit {
+            value: value.as_str().into(),
+        }),
+        WindowEvent::Ime(Ime::Enabled { .. } | Ime::Disabled { .. }) => {
+            Some(TextEdit::clear_ime_compose())
+        }
+        WindowEvent::KeyboardInput(input) if input.state == ButtonState::Pressed => {
+            if composing {
+                return Ok(true);
+            }
+            if input.logical_key == Key::Tab || input.logical_key == Key::Enter {
+                if let Some(commit) = commit_active(world, handle)? {
+                    handle.enqueue_action(commit)?;
+                }
+                return Ok(input.logical_key == Key::Enter);
+            }
+            keyboard_edit(input, modifiers)
+        }
+        WindowEvent::MouseButtonInput(input) if input.state == ButtonState::Pressed => {
+            let target = cursor.and_then(|cursor| handle.hit_key(cursor.as_dvec2().to_array()));
+            if target != Some(action.control.key) {
+                if let Some(commit) = commit_active(world, handle)? {
+                    handle.enqueue_action(commit)?;
+                }
+                world.resource_mut::<EditorSession>().active = None;
+                handle.blur();
+            }
+            None
+        }
+        WindowEvent::WindowFocused(event) if !event.focused => {
+            if let Some(commit) = commit_active(world, handle)? {
+                handle.enqueue_action(commit)?;
+            }
+            world.resource_mut::<EditorSession>().active = None;
+            None
+        }
+        _ => None,
+    };
+    if let Some(edit) = edit {
+        let read_only = matches!(
+            world
+                .get::<InterfaceControl>(entity)
+                .map(|control| &control.field),
+            Some(Field::Text {
+                read_only: true,
+                ..
+            })
+        );
+        if !read_only
+            || matches!(
+                edit,
+                TextEdit::Copy
+                    | TextEdit::SelectAll
+                    | TextEdit::Left(_)
+                    | TextEdit::Right(_)
+                    | TextEdit::Up(_)
+                    | TextEdit::Down(_)
+                    | TextEdit::LineStart(_)
+                    | TextEdit::LineEnd(_)
+                    | TextEdit::WordLeft(_)
+                    | TextEdit::WordRight(_)
+                    | TextEdit::TextStart(_)
+                    | TextEdit::TextEnd(_)
+            )
+        {
+            world
+                .get_mut::<EditableText>(entity)
+                .ok_or("Native text editor was removed")?
+                .queue_edit(edit);
+            // IME composition state must be current before the next native
+            // event in this same batch, especially Tab/Enter.
+            flush_edits(world)?;
+            handle.request_redraw();
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+pub(crate) fn after_window_input(
+    world: &mut World,
+    handle: &NativeInterfaceHandle,
+) -> Result<(), String> {
+    if !world.contains_resource::<EditorSession>() {
+        return Ok(());
+    }
+    let next = handle.focused_key().filter(|key| {
+        world
+            .get::<NativeTextField>(Entity::from_bits(key.0))
+            .is_some()
+    });
+    let current = world
+        .resource::<EditorSession>()
+        .active
+        .as_ref()
+        .map(|active| active.control.key);
+    if current == next {
+        return Ok(());
+    }
+    if let Some(commit) = commit_active(world, handle)? {
+        handle.enqueue_action(commit)?;
+    }
+    let action = next.map(|key| handle.resolve_retained(key)).transpose()?;
+    world.resource_mut::<EditorSession>().active = action;
+    Ok(())
+}
+
+pub(crate) fn after_pointer_input(
+    world: &mut World,
+    handle: &NativeInterfaceHandle,
+    event: &WindowEvent,
+    cursor: Option<Vec2>,
+    modifiers: Modifiers,
+) -> Result<(), String> {
+    let Some(action) = world
+        .get_resource::<EditorSession>()
+        .and_then(|state| state.active.clone())
+    else {
+        return Ok(());
+    };
+    let Some(cursor) = cursor else {
+        return Ok(());
+    };
+    let press = matches!(event, WindowEvent::MouseButtonInput(input) if input.button == MouseButton::Left && input.state == ButtonState::Pressed);
+    let drag = matches!(event, WindowEvent::CursorMoved(_)) && handle.has_capture();
+    if !press && !drag {
+        return Ok(());
+    }
+    validate_editor(world, handle, &action)?;
+    let entity = active_entity(&action);
+    let Some(node) = world.get::<ComputedNode>(entity) else {
+        return Ok(());
+    };
+    let Some(transform) = world
+        .get::<UiGlobalTransform>(entity)
+        .and_then(UiGlobalTransform::try_inverse)
+    else {
+        return Ok(());
+    };
+    let Some(target) = world.get::<ComputedUiRenderTargetInfo>(entity) else {
+        return Ok(());
+    };
+    let scale = world.resource::<UiScale>().0;
+    let scroll = world
+        .get::<TextScroll>(entity)
+        .map_or(Vec2::ZERO, |scroll| scroll.0);
+    let point = transform.transform_point2(cursor * target.scale_factor() / scale)
+        - node.content_box().min
+        + scroll;
+    let edit = if drag {
+        TextEdit::ExtendSelectionToPoint(point)
+    } else if modifiers.shift {
+        TextEdit::ShiftClickExtension(point)
+    } else {
+        TextEdit::MoveToPoint(point)
+    };
+    world
+        .get_mut::<EditableText>(entity)
+        .ok_or("Native text editor was removed")?
+        .queue_edit(edit);
+    flush_edits(world)?;
+    Ok(())
+}
+
+fn keyboard_edit(input: &KeyboardInput, modifiers: Modifiers) -> Option<TextEdit> {
+    let command = if cfg!(target_os = "macos") {
+        modifiers.meta
+    } else {
+        modifiers.ctrl
+    };
+    let word = if cfg!(target_os = "macos") {
+        modifiers.alt
+    } else {
+        modifiers.ctrl
+    };
+    let shift = modifiers.shift;
+    match &input.logical_key {
+        Key::Character(value) if command && value.eq_ignore_ascii_case("a") => {
+            Some(TextEdit::SelectAll)
+        }
+        Key::Character(value) if command && value.eq_ignore_ascii_case("c") => Some(TextEdit::Copy),
+        Key::Character(value) if command && value.eq_ignore_ascii_case("x") => Some(TextEdit::Cut),
+        Key::Character(value) if command && value.eq_ignore_ascii_case("v") => {
+            Some(TextEdit::Paste)
+        }
+        Key::Copy => Some(TextEdit::Copy),
+        Key::Cut => Some(TextEdit::Cut),
+        Key::Paste => Some(TextEdit::Paste),
+        Key::Backspace => Some(if word {
+            TextEdit::BackspaceWord
+        } else {
+            TextEdit::Backspace
+        }),
+        Key::Delete => Some(if word {
+            TextEdit::DeleteWord
+        } else {
+            TextEdit::Delete
+        }),
+        Key::ArrowLeft => Some(if word {
+            TextEdit::WordLeft(shift)
+        } else {
+            TextEdit::Left(shift)
+        }),
+        Key::ArrowRight => Some(if word {
+            TextEdit::WordRight(shift)
+        } else {
+            TextEdit::Right(shift)
+        }),
+        Key::ArrowUp => Some(if command {
+            TextEdit::TextStart(shift)
+        } else {
+            TextEdit::Up(shift)
+        }),
+        Key::ArrowDown => Some(if command {
+            TextEdit::TextEnd(shift)
+        } else {
+            TextEdit::Down(shift)
+        }),
+        Key::Home => Some(if command {
+            TextEdit::TextStart(shift)
+        } else {
+            TextEdit::LineStart(shift)
+        }),
+        Key::End => Some(if command {
+            TextEdit::TextEnd(shift)
+        } else {
+            TextEdit::LineEnd(shift)
+        }),
+        Key::Character(_) | Key::Space if !modifiers.ctrl && !modifiers.meta && !modifiers.alt => {
+            input.text.clone().map(TextEdit::Insert)
+        }
+        _ => None,
+    }
+}
+
+fn synchronize_fields(
+    handle: Res<NativeInterfaceHandle>,
+    mut focus: ResMut<bevy::input_focus::InputFocus>,
+    mut fields: Query<(
+        Entity,
+        &InterfaceControl,
+        &mut NativeTextField,
+        &mut EditableText,
+        &mut Node,
+        &mut BorderColor,
+    )>,
+) {
+    let focused = handle.focused_key();
+    // Text layout needs the actual editable entity. AccessKit maps this same
+    // focus to its guarded proxy after layout, before publishing its tree.
+    let editor_focus = focused.filter(|key| fields.get(Entity::from_bits(key.0)).is_ok());
+    if let Some(key) = editor_focus {
+        focus.set(
+            Entity::from_bits(key.0),
+            bevy::input_focus::FocusCause::Navigated,
+        );
+    }
+    for (entity, control, mut field, mut editor, mut node, mut border) in &mut fields {
+        let Field::Text { value, .. } = &control.field else {
+            continue;
+        };
+        if field.binding != control.binding || field.baseline != *value {
+            editor.editor.set_text(value);
+            editor.pending_edits.clear();
+            editor.queue_edit(TextEdit::TextEnd(false));
+            field.baseline.clone_from(value);
+            field.binding = control.binding;
+            field.queued = None;
+        }
+        let display = if control.visible {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != display {
+            node.display = display;
+        }
+        let edge = BorderColor::all(if focused == Some(ControlKey(entity.to_bits())) {
+            field.theme.accent
+        } else {
+            field.theme.edge
+        });
+        if *border != edge {
+            *border = edge;
+        }
+    }
+}
+
+fn update_ime(
+    handle: Res<NativeInterfaceHandle>,
+    fields: Query<
+        (
+            &EditableText,
+            &ComputedNode,
+            &UiGlobalTransform,
+            &ComputedUiRenderTargetInfo,
+            &TextScroll,
+        ),
+        With<NativeTextField>,
+    >,
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    scale: Res<UiScale>,
+) {
+    let Ok(mut window) = windows.single_mut() else {
+        return;
+    };
+    let focused = handle
+        .focused_key()
+        .and_then(|key| fields.get(Entity::from_bits(key.0)).ok());
+    window.ime_enabled = focused.is_some();
+    if let Some((editor, node, transform, target, scroll)) = focused {
+        let area = editor.editor.ime_cursor_area();
+        let local = Vec2::new(area.x0 as f32, area.y1 as f32) + node.content_box().min - scroll.0;
+        window.ime_position =
+            transform.affine().transform_point2(local) * scale.0 / target.scale_factor();
+    }
+}
