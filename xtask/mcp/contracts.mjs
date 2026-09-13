@@ -237,6 +237,8 @@ try {
   const settings = settingsPage.getByTestId('appearance-dialog');
   await settings.getByText(/0123456789abcdef0123456789abcdef01234567ab.*modified source/).waitFor();
   await settingsPage.waitForFunction(() => document.activeElement === document.querySelector('[data-settings-dialog] button'));
+  console.log('PASS production Settings native history: '+JSON.stringify(await settingsPage.evaluate(() => window.settingsContract.checkNativeHistory())));
+  await settingsPage.waitForFunction(() => document.activeElement === document.querySelector('[data-settings-dialog] button'));
   await settingsPage.keyboard.press('Shift+Tab');
   assert.equal(await settingsPage.evaluate(() => document.activeElement === document.querySelector('[data-settings-dialog] footer button')), true, 'Settings Shift+Tab stays inside the modal');
   await settingsPage.keyboard.press('Tab');

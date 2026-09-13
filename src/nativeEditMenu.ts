@@ -31,6 +31,7 @@ function availability(): { canUndo: boolean; canRedo: boolean } {
   // longer supplies the responder-chain Undo item after we replace it with a
   // CAD command, so the event handler below delegates back to WebKit.
   if (activeTextEditor()) return { canUndo: true, canRedo: true };
+  if (useAppStore.getState().settingsOpen) return { canUndo: false, canRedo: false };
 
   return {
     canUndo: canUndoApplicationHistory(),
@@ -43,6 +44,9 @@ export async function runNativeEditCommand(command: NativeEditCommand): Promise<
     document.execCommand(command);
     return;
   }
+  // Native menu events bypass the browser key router. Also guard execution:
+  // an event can already be queued when the modal disables its menu items.
+  if (useAppStore.getState().settingsOpen) return;
   if (command === 'undo') await undoApplicationHistory();
   else await redoApplicationHistory();
 }
