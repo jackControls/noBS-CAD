@@ -2,6 +2,13 @@
 
 ## 2026-09-11
 
+- **Machine-design help**: scaffolded `knowledge/machine-design/` (taxonomy,
+  SOURCES with stable ids, six seed concepts), distill-vs-link policy,
+  adversarial review fixes (preferred-fit table removed, SA link-only,
+  Rule #1 / checklist honesty, DFM attribution), and help-search ADR
+  (Rust `nbcad-help` + in-process Tantivy; Node help scripts transitional).
+- **Validation**: `check:help-sources` + `build:help-index` (to be replaced by
+  Rust `nbcad-help check|export` — see ADR).
 - **Update**: Added actual G-code footprint, bridge-anchor and preceding-layer checks; zero support paths alone do not establish printability.
 - **Update**: Added small-generator/rotor/load matching and bearing/axial-retention guidance, with manufacturer and experimental references. Both use the existing automatic MCP resource inventory.
 - **Update**: Added sourced gear-identification/pair-design and additive-workholding guidance.
