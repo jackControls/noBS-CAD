@@ -2187,6 +2187,12 @@
       "id": "Frame deck / 230 by 160 by 14_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "Frame deck / 230 by 160 by 14_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "call": {
         "arguments": {
           "body_id": {
@@ -2594,6 +2600,12 @@
         "operation": "project_set_visibility"
       },
       "id": "Fixed jaw / 100 mm face and 25 mm stock_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "Fixed jaw / 100 mm face and 25 mm stock_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "let": {
@@ -3367,6 +3379,12 @@
         "operation": "project_set_visibility"
       },
       "id": "Captured rail right / 45 degree flanks_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "Captured rail right / 45 degree flanks_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "call": {
@@ -5577,6 +5595,12 @@
       "id": "completed_frame_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_frame_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "chapter": "Captured carriage",
       "duration_ms": 1800,
       "note": "The 72 mm carriage has two wide dovetail channels, a 100 mm gripping face and a broad support datum. It enters from the open rear before the bridge is installed. The front underside clears the fixed-jaw root at full closure. Print gripping face down, with channels parallel to the print direction."
@@ -5838,6 +5862,12 @@
       "id": "Carriage / 72 mm captured bearing length_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "Carriage / 72 mm captured bearing length_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "document/appearance",
@@ -6061,6 +6091,12 @@
         "operation": "project_set_visibility"
       },
       "id": "Moving jaw / 100 mm gripping face_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "Moving jaw / 100 mm gripping face_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "call": {
@@ -7399,6 +7435,12 @@
         "operation": "project_set_visibility"
       },
       "id": "Jaw dovetail right / profile clearance_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "Jaw dovetail right / profile clearance_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "call": {
@@ -10155,6 +10197,12 @@
       "id": "completed_jaw_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_jaw_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "chapter": "A replaceable bridge with positive keys",
       "duration_ms": 1800,
       "note": "The bridge itself is the wear nut. Its two feet enter recessed deck sockets; those shoulders carry axial load, while accessible M6 bolts retain the feet. Removing the bridge exposes the carriage entry. Print on the X end so the full 28 mm female thread is vertical; sideways bolt bores have 45 degree print roofs."
@@ -10454,6 +10502,12 @@
         "operation": "project_set_visibility"
       },
       "id": "Threaded bridge / central housing_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "Threaded bridge / central housing_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "call": {
@@ -12983,6 +13037,12 @@
       "id": "completed_nut_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_nut_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "chapter": "A compact rounded grip and a shallower flat",
       "duration_ms": 1800,
       "note": "The 24 mm shaft has a 4 mm lead and a flat 7 mm below its axis. With the 20 mm root cylinder this starts near a 45 degree underside. A thick rounded T-grip shares that bed plane and clears a tabletop by more than 25 mm throughout rotation. Fit and turning effort still need a real print coupon."
@@ -13305,6 +13365,12 @@
         "operation": "project_set_visibility"
       },
       "id": "Screw / 24 mm rounded-thread blank_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "Screw / 24 mm rounded-thread blank_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "call": {
@@ -14040,6 +14106,12 @@
         "operation": "project_set_visibility"
       },
       "id": "Screw grip / thick comfortable T profile_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "Screw grip / thick comfortable T profile_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "let": {
@@ -16224,6 +16296,12 @@
       "id": "Thrust fitting / 32 mm load head_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "Thrust fitting / 32 mm load head_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "document/appearance",
@@ -17457,6 +17535,12 @@
       "id": "completed_thrust_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_thrust_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "chapter": "Accessible keeper with printed bearing shoulders",
       "duration_ms": 1800,
       "note": "A thick U keeper drops over the full round sleeve. Its diagonal rear ears bear on matching jaw shoulders after 0.4 mm axial seating. A recessed M5 x 90 cross-pin keeps it from lifting; its 1 mm elongated keeper bore lets the bearing faces seat first. The open rear relief removes the former broad print bridge."
@@ -17732,6 +17816,12 @@
         "operation": "project_set_visibility"
       },
       "id": "Keeper / 11.2 mm cross plate_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "Keeper / 11.2 mm cross plate_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "call": {
@@ -18814,6 +18904,12 @@
         "operation": "project_set_visibility"
       },
       "id": "Keeper / downward installation throat_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "Keeper / downward installation throat_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "call": {
@@ -20092,6 +20188,12 @@
         "operation": "project_set_visibility"
       },
       "id": "completed_keeper_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_keeper_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "chapter": "Real installation hardware envelopes",
@@ -32196,6 +32298,12 @@
       "id": "completed_screw_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_screw_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "let": {
         "frame_body": {
           "$select": {
@@ -42642,6 +42750,12 @@
       "id": "restore_frame_visibility"
     },
     {
+      "duration_ms": 650,
+      "fit": true,
+      "id": "restore_frame_assembly_fit",
+      "view": "isometric"
+    },
+    {
       "chapter": "Print orientation: jaw",
       "duration_ms": 1800,
       "note": "This native plate exports only the named printable part. Use the intended material/profile, inspect the toolpath, and qualify short bridges, flat contact and fitted surfaces before treating the no-support orientation as proven."
@@ -42884,6 +42998,12 @@
         "operation": "project_set_visibility"
       },
       "id": "restore_jaw_visibility"
+    },
+    {
+      "duration_ms": 650,
+      "fit": true,
+      "id": "restore_jaw_assembly_fit",
+      "view": "isometric"
     },
     {
       "chapter": "Print orientation: nut",
@@ -43130,6 +43250,12 @@
       "id": "restore_nut_visibility"
     },
     {
+      "duration_ms": 650,
+      "fit": true,
+      "id": "restore_nut_assembly_fit",
+      "view": "isometric"
+    },
+    {
       "chapter": "Print orientation: screw",
       "duration_ms": 1800,
       "note": "This native plate exports only the named printable part. Use the intended material/profile, inspect the toolpath, and qualify short bridges, flat contact and fitted surfaces before treating the no-support orientation as proven."
@@ -43372,6 +43498,12 @@
         "operation": "project_set_visibility"
       },
       "id": "restore_screw_visibility"
+    },
+    {
+      "duration_ms": 650,
+      "fit": true,
+      "id": "restore_screw_assembly_fit",
+      "view": "isometric"
     },
     {
       "chapter": "Print orientation: thrust",
@@ -43618,6 +43750,12 @@
       "id": "restore_thrust_visibility"
     },
     {
+      "duration_ms": 650,
+      "fit": true,
+      "id": "restore_thrust_assembly_fit",
+      "view": "isometric"
+    },
+    {
       "chapter": "Print orientation: keeper",
       "duration_ms": 1800,
       "note": "This native plate exports only the named printable part. Use the intended material/profile, inspect the toolpath, and qualify short bridges, flat contact and fitted surfaces before treating the no-support orientation as proven."
@@ -43860,6 +43998,12 @@
         "operation": "project_set_visibility"
       },
       "id": "restore_keeper_visibility"
+    },
+    {
+      "duration_ms": 650,
+      "fit": true,
+      "id": "restore_keeper_assembly_fit",
+      "view": "isometric"
     },
     {
       "call": {

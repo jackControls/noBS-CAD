@@ -4179,6 +4179,12 @@
       "id": "stage_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "stage_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "let": {
         "stage_body": {
           "$select": {
@@ -4480,6 +4486,12 @@
         "operation": "project_set_visibility"
       },
       "id": "stage_hub_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "stage_hub_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "call": {
@@ -5347,6 +5359,12 @@
       "id": "bucket_half_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "bucket_half_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "call": {
         "arguments": {
           "axis_direction": {
@@ -5694,6 +5712,12 @@
         "operation": "project_set_visibility"
       },
       "id": "stage_shaft_fit_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "stage_shaft_fit_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "call": {
@@ -7431,6 +7455,12 @@
       "id": "completed_stage_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_stage_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "let": {
         "stage_upper_body": {
           "$ref": "stage_body"
@@ -8231,6 +8261,12 @@
       "id": "completed_cap_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_cap_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "chapter": "A supported axial stack",
       "duration_ms": 3000,
       "note": "Two 608ZZ bearings support a common uncut 300 mm shaft. Narrow purchased shims contact the inner rings only. An accessible lower collar sets 0.2 mm endplay without compressing a between-bearing spacer. A printed sleeve carries the rotor onto the gear hub and upper inner-ring shim."
@@ -8650,6 +8686,12 @@
         "operation": "project_set_visibility"
       },
       "id": "base_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "base_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "let": {
@@ -14228,6 +14270,12 @@
       "id": "completed_base_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_base_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "document/appearance",
@@ -14515,6 +14563,12 @@
         "operation": "project_set_visibility"
       },
       "id": "tower_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "tower_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "let": {
@@ -18170,6 +18224,12 @@
         "operation": "project_set_visibility"
       },
       "id": "completed_tower_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_tower_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "call": {
@@ -22460,6 +22520,12 @@
       "id": "completed_rotor_support_sleeve_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_rotor_support_sleeve_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "chapter": "A measurable generator cartridge",
       "duration_ms": 3000,
       "note": "The replacement cradle provides 12 mm of actual axial adjustment, an open terminal recess, and an independent wire channel. Measure the delivered motor: the default 28 mm case and 6 mm projecting shaft are explicitly provisional, not dimensions inferred from a supplier envelope."
@@ -26012,6 +26078,12 @@
       "id": "completed_motor_bracket_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_motor_bracket_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "document/appearance",
@@ -26565,6 +26637,12 @@
         "operation": "project_set_visibility"
       },
       "id": "motor_mount_cavity_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "motor_mount_cavity_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "call": {
@@ -31061,6 +31139,12 @@
         "operation": "project_set_visibility"
       },
       "id": "completed_motor_mount_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_motor_mount_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "call": {
@@ -38110,6 +38194,12 @@
       "id": "guard_wire_exit_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "guard_wire_exit_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "document/appearance",
@@ -38827,6 +38917,12 @@
         "operation": "project_set_visibility"
       },
       "id": "completed_guard_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_guard_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "call": {
@@ -40521,6 +40617,12 @@
       "id": "completed_guard_lid_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_guard_lid_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "chapter": "A real 4:1 spur pair",
       "duration_ms": 3000,
       "note": "A native patterned involute gives 72 and 18 teeth at module 1, 20 degrees, with 0.10 mm tooth thinning each and 45.25 mm shaft spacing. The generator pinion has a real captive M2 nut, and all screw envelopes participate in the assembly checks."
@@ -40869,6 +40971,12 @@
         "operation": "project_set_visibility"
       },
       "id": "rotor_gear_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "rotor_gear_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "let": {
@@ -44000,6 +44108,12 @@
       "id": "completed_rotor_gear_presentation_restore"
     },
     {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_rotor_gear_presentation_restore_fit",
+      "view": "isometric"
+    },
+    {
       "call": {
         "arguments": {},
         "group": "document/appearance",
@@ -44347,6 +44461,12 @@
         "operation": "project_set_visibility"
       },
       "id": "pinion_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "pinion_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "let": {
@@ -47480,6 +47600,12 @@
         "operation": "project_set_visibility"
       },
       "id": "completed_pinion_presentation_restore"
+    },
+    {
+      "duration_ms": 600,
+      "fit": true,
+      "id": "completed_pinion_presentation_restore_fit",
+      "view": "isometric"
     },
     {
       "call": {
@@ -88444,6 +88570,12 @@
         "operation": "project_set_visibility"
       },
       "id": "plate_restore_visibility"
+    },
+    {
+      "duration_ms": 650,
+      "fit": true,
+      "id": "plate_restore_assembly_fit",
+      "view": "isometric"
     },
     {
       "call": {

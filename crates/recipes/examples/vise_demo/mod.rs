@@ -60,6 +60,11 @@ pub(super) fn show_part(a: &mut Author, id: &str, part: &str, caption: &str) {
         "project_set_visibility",
         reference(&saved, ""),
     );
+    // Restoring visibility also restores the context of the explanation.
+    // Do not leave the complete assembly behind the isolated-part close-up.
+    a.steps
+        .push(json!({"id":format!("{id}_presentation_restore_fit"),
+        "view":"isometric","fit":true,"duration_ms":600}));
 }
 
 pub(super) fn run(a: &mut Author) {

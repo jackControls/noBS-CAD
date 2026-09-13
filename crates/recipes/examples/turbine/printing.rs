@@ -133,6 +133,10 @@ impl Author {
             "project_set_visibility",
             r("plate_home_visibility"),
         );
+        // All occurrences are back in their assembly poses. Discard the last
+        // print-plate close-up before re-enabling joints and opening drawings.
+        self.steps.push(json!({"id":"plate_restore_assembly_fit",
+            "view":"isometric","fit":true,"duration_ms":650}));
         for name in &joint_names {
             self.call(
                 &format!("plate_enable_{name}"),

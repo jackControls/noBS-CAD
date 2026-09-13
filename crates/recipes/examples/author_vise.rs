@@ -1791,6 +1791,11 @@ fn main() {
             "project_set_visibility",
             reference("assembled_visibility", ""),
         );
+        // The plate camera belongs to one small part. Reframe the restored
+        // assembly before the next chapter or joint-restoration calls run.
+        a.steps
+            .push(json!({"id":format!("restore_{part}_assembly_fit"),
+            "view":"isometric","fit":true,"duration_ms":650}));
     }
     for name in &joint_names {
         a.call(

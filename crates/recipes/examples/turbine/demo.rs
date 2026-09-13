@@ -56,6 +56,11 @@ pub(super) fn show_body(a: &mut Author, id: &str, body: Value, caption: &str) {
         "project_set_visibility",
         r(&saved),
     );
+    // Restore framing with visibility so later modeling does not inherit an
+    // isolated hub, gear or bracket camera for the full assembly.
+    a.steps
+        .push(json!({"id":format!("{id}_presentation_restore_fit"),
+        "view":"isometric","fit":true,"duration_ms":600}));
 }
 
 pub(super) fn run(a: &mut Author) {
