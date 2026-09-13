@@ -17,6 +17,15 @@ pub fn run_stdio() -> Result<(), String> {
     run(CadServer::new, None)
 }
 
+/// Call before creating desktop threads or platform helpers. Their inherited
+/// stdout must not retain the agent's pipe after this transport disconnects.
+pub fn prepare_desktop_stdio() -> Result<(), String> {
+    #[cfg(unix)]
+    output_pipe::prepare_stdout_pipe()
+        .map_err(|error| format!("MCP stdout inheritance: {error}"))?;
+    Ok(())
+}
+
 /// Run on a worker while the native event loop remains on the main thread.
 /// Merely opening CAD does not allocate a second kernel or document.
 pub fn run_desktop_stdio() -> Result<(), String> {

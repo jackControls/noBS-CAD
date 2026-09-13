@@ -53,6 +53,12 @@ fn main() -> std::process::ExitCode {
         // Wayland desktop supplies XWayland for this compatibility path.
         std::env::set_var("GDK_BACKEND", "x11");
     }
+    // Prepare before either worker or GUI startup: WebKitGTK can spawn helpers
+    // immediately, and none may inherit the agent's output pipe.
+    if let Err(error) = nbcad_mcp::prepare_desktop_stdio() {
+        eprintln!("Could not prepare local stdio MCP: {error}");
+        return std::process::ExitCode::FAILURE;
+    }
     // Tauri owns the main thread and application lifetime. Agent disconnects
     // retire only this worker; never join its potentially blocked stdin reader.
     if let Err(error) = std::thread::Builder::new()

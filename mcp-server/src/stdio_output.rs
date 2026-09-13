@@ -1,6 +1,8 @@
 //! End a disconnected desktop's MCP output without ending its native window.
 //! Only pipes are retired; terminals, files, and absent GUI stdio stay untouched.
 
+#[cfg(unix)]
+pub(super) use platform::prepare_stdout_pipe;
 pub(super) use platform::retire_stdout_pipe;
 
 #[cfg(windows)]
@@ -178,33 +180,73 @@ mod platform {
 mod platform {
     use std::{
         ffi::c_int,
-        fs::File,
+        fs::{File, Metadata},
         io,
         os::fd::{AsRawFd, FromRawFd},
         os::unix::fs::{FileTypeExt, MetadataExt},
     };
 
-    // POSIX signatures shared by Linux and macOS. Rust's standard runtime
-    // already links the system C library; no additional Rust dependency.
-    unsafe extern "C" {
-        fn dup(fd: c_int) -> c_int;
-        fn dup2(old: c_int, new: c_int) -> c_int;
-        #[cfg(test)]
-        fn pipe(fds: *mut c_int) -> c_int;
+    fn descriptor_control(fd: c_int, command: c_int, argument: c_int) -> io::Result<c_int> {
+        loop {
+            let result = unsafe { libc::fcntl(fd, command, argument) };
+            if result >= 0 {
+                return Ok(result);
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
     }
 
-    fn inspect(fd: c_int) -> io::Result<File> {
-        let duplicate = unsafe { dup(fd) };
-        if duplicate < 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(unsafe { File::from_raw_fd(duplicate) })
+    fn inspect(fd: c_int) -> io::Result<Option<File>> {
+        // Stdio may be absent. Only construct an owned descriptor after the
+        // OS returns a valid duplicate; never borrow a possibly closed fd.
+        // Atomic CLOEXEC prevents even inspection from leaking into helpers.
+        match descriptor_control(fd, libc::F_DUPFD_CLOEXEC, 3) {
+            Ok(duplicate) => Ok(Some(unsafe { File::from_raw_fd(duplicate) })),
+            Err(error) if error.raw_os_error() == Some(libc::EBADF) => Ok(None),
+            Err(error) => Err(error),
         }
+    }
+
+    fn aliased_pipe(error: Option<c_int>, output: &Metadata) -> io::Result<bool> {
+        let Some(fd) = error else { return Ok(false) };
+        let Some(file) = inspect(fd)? else {
+            return Ok(false);
+        };
+        let metadata = file.metadata()?;
+        Ok(metadata.file_type().is_fifo()
+            && metadata.dev() == output.dev()
+            && metadata.ino() == output.ino())
+    }
+
+    fn prepare_pipe(output: c_int, error: Option<c_int>) -> io::Result<bool> {
+        let Some(output_file) = inspect(output)? else {
+            return Ok(false);
+        };
+        let metadata = output_file.metadata()?;
+        if !metadata.file_type().is_fifo() {
+            return Ok(false);
+        }
+        let alias = aliased_pipe(error, &metadata)?;
+        for fd in [Some(output), error.filter(|_| alias)]
+            .into_iter()
+            .flatten()
+        {
+            let flags = descriptor_control(fd, libc::F_GETFD, 0)?;
+            descriptor_control(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC)?;
+        }
+        Ok(true)
+    }
+
+    pub(crate) fn prepare_stdout_pipe() -> io::Result<()> {
+        prepare_pipe(libc::STDOUT_FILENO, Some(libc::STDERR_FILENO)).map(|_| ())
     }
 
     fn replace(sink: &File, target: c_int) -> io::Result<()> {
         loop {
-            if unsafe { dup2(sink.as_raw_fd(), target) } >= 0 {
+            if unsafe { libc::dup2(sink.as_raw_fd(), target) } >= 0 {
                 return Ok(());
             }
             let error = io::Error::last_os_error();
@@ -219,20 +261,14 @@ mod platform {
     }
 
     fn retire_pipe(output: c_int, error: Option<c_int>) -> io::Result<bool> {
-        let output_file = inspect(output)?;
+        let Some(output_file) = inspect(output)? else {
+            return Ok(false);
+        };
         let metadata = output_file.metadata()?;
         if !metadata.file_type().is_fifo() {
             return Ok(false);
         }
-        let error_file = error.and_then(|fd| inspect(fd).ok());
-        let aliased_error = error_file
-            .as_ref()
-            .and_then(|file| file.metadata().ok())
-            .is_some_and(|other| {
-                other.file_type().is_fifo()
-                    && other.dev() == metadata.dev()
-                    && other.ino() == metadata.ino()
-            });
+        let aliased_error = aliased_pipe(error, &metadata)?;
         let sink = File::options().write(true).open("/dev/null")?;
         replace(&sink, output)?;
         if aliased_error {
@@ -247,15 +283,16 @@ mod platform {
     mod tests {
         use super::*;
         use std::{
-            io::{Read, Write},
+            io::{BufRead, BufReader, Read, Write},
+            process::{Child, Command, Stdio},
             sync::mpsc,
             thread,
-            time::Duration,
+            time::{Duration, Instant},
         };
 
         fn owned_pipe() -> (File, File) {
             let mut fds = [-1; 2];
-            assert_eq!(unsafe { pipe(fds.as_mut_ptr()) }, 0);
+            assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
             unsafe { (File::from_raw_fd(fds[0]), File::from_raw_fd(fds[1])) }
         }
 
@@ -287,6 +324,161 @@ mod platform {
             assert!(retire_pipe(writer.as_raw_fd(), Some(error.as_raw_fd())).unwrap());
             error.write_all(b"diagnostic").unwrap();
             expect_eof(reader);
+        }
+
+        #[test]
+        fn inheritance_preparation_preserves_non_pipes_and_unrelated_stderr() {
+            assert!(inspect(-1).unwrap().is_none());
+            assert!(!prepare_pipe(-1, Some(-1)).unwrap());
+            assert!(!retire_pipe(-1, Some(-1)).unwrap());
+            let sink = File::options().write(true).open("/dev/null").unwrap();
+            let before = descriptor_control(sink.as_raw_fd(), libc::F_GETFD, 0).unwrap();
+            assert!(!prepare_pipe(sink.as_raw_fd(), None).unwrap());
+            assert_eq!(
+                descriptor_control(sink.as_raw_fd(), libc::F_GETFD, 0).unwrap(),
+                before
+            );
+
+            let (_reader, writer) = owned_pipe();
+            let (_error_reader, error) = owned_pipe();
+            let error_flags = descriptor_control(error.as_raw_fd(), libc::F_GETFD, 0).unwrap();
+            assert!(prepare_pipe(writer.as_raw_fd(), Some(error.as_raw_fd())).unwrap());
+            assert_eq!(
+                descriptor_control(error.as_raw_fd(), libc::F_GETFD, 0).unwrap(),
+                error_flags
+            );
+            let duplicate = inspect(writer.as_raw_fd()).unwrap().unwrap();
+            assert_ne!(
+                descriptor_control(duplicate.as_raw_fd(), libc::F_GETFD, 0).unwrap()
+                    & libc::FD_CLOEXEC,
+                0
+            );
+        }
+
+        struct OwnedChild(Child);
+        impl Drop for OwnedChild {
+            fn drop(&mut self) {
+                if self.0.try_wait().ok().flatten().is_none() {
+                    let _ = self.0.kill();
+                    let _ = self.0.wait();
+                }
+            }
+        }
+
+        // Re-enter only this test in a separate process so its standard fd
+        // changes cannot affect concurrently running tests or the test host.
+        #[test]
+        fn subprocess_stdio_helper() {
+            let Ok(mode) = std::env::var("NBCAD_STDIO_PIPE_HELPER") else {
+                return;
+            };
+            let mut diagnostics = inspect(libc::STDERR_FILENO).unwrap().unwrap();
+            if mode == "alias" {
+                assert_eq!(
+                    unsafe { libc::dup2(libc::STDOUT_FILENO, libc::STDERR_FILENO) },
+                    libc::STDERR_FILENO
+                );
+            }
+            prepare_stdout_pipe().unwrap();
+            // Like a GUI helper, this child inherits standard descriptors and
+            // remains alive waiting for input. Spawn returns after exec, so no
+            // sleep is needed to establish the inheritance boundary.
+            let mut helper = OwnedChild(
+                Command::new("/bin/sh")
+                    .args(["-c", "IFS= read -r release || :"])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit())
+                    .spawn()
+                    .unwrap(),
+            );
+            println!("mcp-response");
+            io::stdout().flush().unwrap();
+            writeln!(diagnostics, "helper-ready").unwrap();
+            diagnostics.flush().unwrap();
+            let mut control = io::stdin().lock();
+            let mut line = String::new();
+            control.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "retire");
+            retire_stdout_pipe().unwrap();
+            assert!(helper.0.try_wait().unwrap().is_none());
+            writeln!(diagnostics, "retired-with-helper-alive").unwrap();
+            diagnostics.flush().unwrap();
+            line.clear();
+            control.read_line(&mut line).unwrap();
+            assert_eq!(line.trim(), "release");
+            drop(helper.0.stdin.take());
+            assert!(helper.0.wait().unwrap().success());
+        }
+
+        #[test]
+        fn desktop_helpers_cannot_keep_retired_stdout_open() {
+            for mode in ["separate", "alias"] {
+                let mut desktop = OwnedChild(
+                    Command::new(std::env::current_exe().unwrap())
+                        .args(["subprocess_stdio_helper", "--nocapture"])
+                        .env("NBCAD_STDIO_PIPE_HELPER", mode)
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .spawn()
+                        .unwrap(),
+                );
+                let mut output = desktop.0.stdout.take().unwrap();
+                let diagnostics = desktop.0.stderr.take().unwrap();
+                let (output_tx, output_rx) = mpsc::channel();
+                let output_reader = thread::spawn(move || {
+                    let mut bytes = Vec::new();
+                    let result = output.read_to_end(&mut bytes).map(|_| bytes);
+                    let _ = output_tx.send(result);
+                });
+                let (diagnostic_tx, diagnostic_rx) = mpsc::channel();
+                let diagnostic_reader = thread::spawn(move || {
+                    for line in BufReader::new(diagnostics).lines() {
+                        if diagnostic_tx.send(line).is_err() {
+                            break;
+                        }
+                    }
+                });
+                assert_eq!(
+                    diagnostic_rx
+                        .recv_timeout(Duration::from_secs(5))
+                        .unwrap()
+                        .unwrap(),
+                    "helper-ready"
+                );
+                writeln!(desktop.0.stdin.as_mut().unwrap(), "retire").unwrap();
+                desktop.0.stdin.as_mut().unwrap().flush().unwrap();
+                assert_eq!(
+                    diagnostic_rx
+                        .recv_timeout(Duration::from_secs(5))
+                        .unwrap()
+                        .unwrap(),
+                    "retired-with-helper-alive"
+                );
+                let bytes = output_rx
+                    .recv_timeout(Duration::from_secs(3))
+                    .expect("A GUI helper retained the MCP pipe after desktop output retirement")
+                    .unwrap();
+                assert!(String::from_utf8_lossy(&bytes).contains("mcp-response"));
+                assert!(
+                    desktop.0.try_wait().unwrap().is_none(),
+                    "EOF must not require desktop exit"
+                );
+                writeln!(desktop.0.stdin.as_mut().unwrap(), "release").unwrap();
+                drop(desktop.0.stdin.take());
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let status = loop {
+                    if let Some(status) = desktop.0.try_wait().unwrap() {
+                        break status;
+                    }
+                    assert!(Instant::now() < deadline, "Owned helper did not finish");
+                    thread::sleep(Duration::from_millis(10));
+                };
+                assert!(status.success());
+                output_reader.join().unwrap();
+                diagnostic_reader.join().unwrap();
+            }
         }
     }
 }

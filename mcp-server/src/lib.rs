@@ -17,7 +17,7 @@ mod knowledge;
 mod session;
 mod stdio;
 
-pub use stdio::{run_desktop_stdio, run_stdio, shutdown_desktop_stdio};
+pub use stdio::{prepare_desktop_stdio, run_desktop_stdio, run_stdio, shutdown_desktop_stdio};
 
 use disclosure::{
     auto_focus_for_tool, tags_for_tool, AdvertisementState, DisclosureMode, DisclosureState,

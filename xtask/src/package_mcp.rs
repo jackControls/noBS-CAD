@@ -494,6 +494,265 @@ fn startup_diagnostics(sessions: &SessionDirectory, pid: u32) -> Value {
         "documents":documents,"entry_limit":MAX_ENTRIES})
 }
 
+// A WebKit descendant can keep the host's output pipe open after the desktop
+// retires its own writer. Diagnose only this fixture's process tree and only
+// descriptors for that original pipe; never collect process commands or data.
+#[cfg(any(target_os = "linux", test))]
+mod stdout_diagnostics {
+    use super::*;
+    use std::collections::VecDeque;
+
+    const MAX_PROCESSES: usize = 32;
+    const MAX_THREADS: usize = 64;
+    const MAX_FDS: usize = 256;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct Identity {
+        pid: u32,
+        parent: u32,
+        started: u64,
+    }
+
+    pub(super) struct Pipe {
+        owner: Identity,
+        target: PathBuf,
+    }
+
+    fn read_small(path: &Path) -> Result<String> {
+        let mut text = String::new();
+        fs::File::open(path)?.take(4097).read_to_string(&mut text)?;
+        ensure!(
+            text.len() <= 4096,
+            "Process metadata exceeds diagnostic limit"
+        );
+        Ok(text)
+    }
+
+    fn identity(root: &Path, pid: u32) -> Result<Identity> {
+        let text = read_small(&root.join(pid.to_string()).join("stat"))?;
+        // comm may contain spaces and parentheses. Read only identity fields
+        // after its final ')', and never retain or print the process name.
+        let (_, fields) = text.rsplit_once(')').context("Missing process identity")?;
+        let fields: Vec<_> = fields.split_whitespace().collect();
+        Ok(Identity {
+            pid,
+            parent: fields.get(1).context("Missing parent PID")?.parse()?,
+            started: fields
+                .get(19)
+                .context("Missing process start time")?
+                .parse()?,
+        })
+    }
+
+    pub(super) fn capture(
+        root: &Path,
+        pid: u32,
+        read_link: impl Fn(&Path) -> std::io::Result<PathBuf>,
+    ) -> Result<Pipe> {
+        let owner = identity(root, pid)?;
+        let target = read_link(&root.join(pid.to_string()).join("fd/1"))?;
+        ensure!(
+            target
+                .to_str()
+                .and_then(|text| text.strip_prefix("pipe:["))
+                .and_then(|text| text.strip_suffix(']'))
+                .and_then(|inode| inode.parse::<u64>().ok())
+                .is_some(),
+            "Owned stdout did not identify a pipe"
+        );
+        ensure!(
+            identity(root, pid)? == owner,
+            "Owned process identity changed"
+        );
+        Ok(Pipe { owner, target })
+    }
+
+    pub(super) fn inspect(
+        root: &Path,
+        captured: &Result<Pipe>,
+        read_link: impl Fn(&Path) -> std::io::Result<PathBuf>,
+    ) -> Value {
+        let pipe = match captured {
+            Ok(pipe) => pipe,
+            Err(error) => return json!({"capture_error":format!("{error:#}")}),
+        };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut pending = VecDeque::from([pipe.owner]);
+        let mut seen = HashSet::from([pipe.owner.pid]);
+        let mut writers = Vec::new();
+        let mut skipped = Vec::new();
+        let mut limited = false;
+        let mut checked = 0;
+        while let Some(process) = pending.pop_front() {
+            if Instant::now() >= deadline {
+                limited = true;
+                break;
+            }
+            if identity(root, process.pid).ok() != Some(process) {
+                skipped.push(json!({"pid":process.pid,"reason":"exited_or_identity_changed"}));
+                continue;
+            }
+            checked += 1;
+            let directory = root.join(process.pid.to_string());
+            if let Ok(entries) = fs::read_dir(directory.join("fd")) {
+                for (index, entry) in entries.enumerate() {
+                    if index == MAX_FDS || Instant::now() >= deadline {
+                        limited = true;
+                        break;
+                    }
+                    let Ok(entry) = entry else { continue };
+                    let Some(fd) = entry
+                        .file_name()
+                        .to_str()
+                        .and_then(|fd| fd.parse::<u32>().ok())
+                    else {
+                        continue;
+                    };
+                    if read_link(&entry.path()).ok().as_ref() != Some(&pipe.target) {
+                        continue;
+                    }
+                    // fdinfo flags are octal. O_WRONLY=1/O_RDWR=2 own writers;
+                    // the host/descendant read end does not prevent EOF.
+                    let flags = read_small(&directory.join("fdinfo").join(fd.to_string()))
+                        .ok()
+                        .and_then(|text| {
+                            text.lines().find_map(|line| {
+                                line.strip_prefix("flags:")
+                                    .map(str::trim)
+                                    .map(str::to_owned)
+                            })
+                        })
+                        .and_then(|flags| u32::from_str_radix(&flags, 8).ok());
+                    if flags.is_none_or(|flags| flags & 3 != 0)
+                        && identity(root, process.pid).ok() == Some(process)
+                        && read_link(&entry.path()).ok().as_ref() == Some(&pipe.target)
+                    {
+                        writers.push(json!({"pid":process.pid,"parent_pid":process.parent,
+                            "fd":fd,"flags_octal":flags.map(|flags| format!("{flags:o}")),
+                            "writer":flags.map(|flags| flags & 3 != 0)}));
+                    }
+                }
+            }
+            // Children may have been created by any thread in the desktop or
+            // a WebKit helper. Never enumerate unrelated /proc processes.
+            if let Ok(threads) = fs::read_dir(directory.join("task")) {
+                for (index, thread) in threads.enumerate() {
+                    if index == MAX_THREADS || Instant::now() >= deadline {
+                        limited = true;
+                        break;
+                    }
+                    let Ok(thread) = thread else { continue };
+                    let Ok(children) = read_small(&thread.path().join("children")) else {
+                        continue;
+                    };
+                    for pid in children
+                        .split_whitespace()
+                        .filter_map(|pid| pid.parse::<u32>().ok())
+                    {
+                        if Instant::now() >= deadline {
+                            limited = true;
+                            break;
+                        }
+                        if seen.contains(&pid) {
+                            continue;
+                        }
+                        if seen.len() == MAX_PROCESSES {
+                            limited = true;
+                            break;
+                        }
+                        // Recheck PPID before following a child PID, guarding
+                        // against a short-lived helper's PID being recycled.
+                        if let Ok(child) = identity(root, pid) {
+                            if child.parent == process.pid
+                                && identity(root, process.pid).ok() == Some(process)
+                            {
+                                seen.insert(pid);
+                                pending.push_back(child);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        json!({"owned_pid":pipe.owner.pid,"original_stdout":pipe.target,
+            "matching_writers":writers,"processes_checked":checked,"skipped":skipped,
+            "limited":limited,"limits":{"processes":MAX_PROCESSES,"threads_per_process":MAX_THREADS,
+                "fds_per_process":MAX_FDS,"elapsed_ms":2000}})
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn evidence_follows_only_current_owned_descendants_and_reports_its_bounds() {
+            let sessions = SessionDirectory::create().unwrap();
+            let root = &sessions.0;
+            let process = |pid: u32, parent: u32, started: u64| {
+                let directory = root.join(pid.to_string());
+                fs::create_dir_all(directory.join("fd")).unwrap();
+                fs::create_dir_all(directory.join("fdinfo")).unwrap();
+                fs::create_dir_all(directory.join("task").join(pid.to_string())).unwrap();
+                let mut fields = vec!["0".to_owned(); 20];
+                fields[0] = "S".into();
+                fields[1] = parent.to_string();
+                fields[19] = started.to_string();
+                fs::write(
+                    directory.join("stat"),
+                    format!("{pid} (private ) name) {}", fields.join(" ")),
+                )
+                .unwrap();
+                directory
+            };
+            let fd = |directory: &Path, fd: u32, target: &str, flags: &str| {
+                fs::write(directory.join("fd").join(fd.to_string()), target).unwrap();
+                fs::write(
+                    directory.join("fdinfo").join(fd.to_string()),
+                    format!("flags:\t{flags}\n"),
+                )
+                .unwrap();
+            };
+            let owner = process(10, 1, 100);
+            fd(&owner, 1, "pipe:[987]", "1");
+            let child = process(11, 10, 101);
+            fd(&child, 1, "pipe:[987]", "1");
+            fd(&child, 2, "pipe:[987]", "0");
+            fd(&child, 3, "pipe:[unrelated]", "1");
+            let foreign = process(12, 999, 102);
+            fd(&foreign, 1, "pipe:[987]", "1");
+            fs::write(owner.join("task/10/children"), "11 12").unwrap();
+            // Regular files substitute for proc symlinks on Windows runners.
+            let read_link = |path: &Path| fs::read_to_string(path).map(PathBuf::from);
+            let captured = capture(root, 10, read_link);
+            fs::write(owner.join("fd/1"), "/dev/null").unwrap();
+            let evidence = inspect(root, &captured, read_link);
+            assert_eq!(
+                evidence["matching_writers"],
+                json!([{"pid":11,"parent_pid":10,"fd":1,"flags_octal":"1","writer":true}])
+            );
+            assert_eq!(evidence["processes_checked"], 2);
+            assert!(!evidence.to_string().contains("private"));
+            assert!(!evidence.to_string().contains("unrelated"));
+            let children = (20..20 + MAX_PROCESSES as u32 + 2)
+                .map(|pid| {
+                    process(pid, 10, pid as u64);
+                    pid.to_string()
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            fs::write(owner.join("task/10/children"), children).unwrap();
+            let limited = inspect(root, &captured, read_link);
+            assert_eq!(limited["limited"], true);
+            assert_eq!(limited["processes_checked"], MAX_PROCESSES);
+            process(10, 1, 999);
+            let recycled = inspect(root, &captured, read_link);
+            assert_eq!(recycled["processes_checked"], 0);
+            assert_eq!(recycled["matching_writers"], json!([]));
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
 /// The process lease can appear before its matching heartbeat/model identity
 /// finishes publishing. Retry that specific startup state, never modeling errors.
 fn initial_project_model(client: &mut Client, timeout: Duration) -> Result<Value> {
@@ -568,6 +827,9 @@ fn verify_desktop(options: &Options) -> Result<Value> {
         Some(options.timeout),
     )?;
     let pid = desktop.process_id();
+    #[cfg(target_os = "linux")]
+    let original_stdout =
+        stdout_diagnostics::capture(Path::new("/proc"), pid, |path| fs::read_link(path));
     let initialization = desktop.initialization().clone();
     let listing = desktop.rpc("tools/list", json!({}))?;
     ensure!(
@@ -669,7 +931,18 @@ fn verify_desktop(options: &Options) -> Result<Value> {
         "Fixture did not create an unsaved edit after Save"
     );
     desktop.close_input();
-    desktop.require_stdout_eof(Duration::from_secs(10))?;
+    let stdout_eof = desktop.require_stdout_eof(Duration::from_secs(10));
+    #[cfg(target_os = "linux")]
+    let stdout_eof =
+        stdout_eof.with_context(|| {
+            format!(
+                "Owned stdout EOF evidence: {}",
+                stdout_diagnostics::inspect(Path::new("/proc"), &original_stdout, |path| {
+                    fs::read_link(path)
+                })
+            )
+        });
+    stdout_eof?;
     let survival_deadline = Instant::now() + Duration::from_secs(1);
     while Instant::now() < survival_deadline {
         ensure!(
