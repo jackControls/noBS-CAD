@@ -19,6 +19,12 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::SUCCESS;
     }
 
+    #[cfg(feature = "dev-bevy-host")]
+    if matches!(startup, Startup::Recipe(_)) {
+        eprintln!("Recipe URL editing has not yet migrated to this development-only Bevy host. Use the regular build until that surface is complete.");
+        return std::process::ExitCode::from(2);
+    }
+
     // Browser URL launches may reuse one live window without loading its model
     // or suppressing ordinary independent launches. Validate before GUI init.
     if let Startup::Recipe(recipe) = startup {
@@ -44,7 +50,7 @@ fn main() -> std::process::ExitCode {
         };
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(feature = "dev-bevy-host")))]
     {
         // GTK 3 exposes child widget windows as real X11 windows, which lets
         // wgpu own a Vulkan surface beneath WebKitGTK. Under native Wayland it
@@ -59,7 +65,7 @@ fn main() -> std::process::ExitCode {
         eprintln!("Could not prepare local stdio MCP: {error}");
         return std::process::ExitCode::FAILURE;
     }
-    // Tauri owns the main thread and application lifetime. Agent disconnects
+    // The selected native host owns the main thread and application lifetime. Agent disconnects
     // retire only this worker; never join its potentially blocked stdin reader.
     if let Err(error) = std::thread::Builder::new()
         .name("cad-stdio".into())
@@ -71,6 +77,13 @@ fn main() -> std::process::ExitCode {
     {
         eprintln!("Could not start local stdio MCP: {error}");
     }
-    nbcad_lib::run();
-    std::process::ExitCode::SUCCESS
+    #[cfg(feature = "dev-bevy-host")]
+    {
+        nbcad_lib::native_viewport::winit_host::run()
+    }
+    #[cfg(not(feature = "dev-bevy-host"))]
+    {
+        nbcad_lib::run();
+        std::process::ExitCode::SUCCESS
+    }
 }

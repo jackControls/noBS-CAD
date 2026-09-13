@@ -56,7 +56,10 @@ use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Mutex,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
@@ -67,12 +70,21 @@ use nbcad_mcp_mutate::ExecutionKind;
 
 use crate::state::{AppState, BOOTSTRAP_SESSION_ID};
 
+mod native_history;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub(crate) mod native_interface;
+
 /// Placeholder key used before the window is bound to a native project tab.
 const UNBOUND_PROJECT: &str = "__unbound__";
 
 #[derive(Debug)]
 struct ProjectPublisher {
     session_id: String,
+    /// Native control ownership follows document incarnation, not the mutable
+    /// engine revision or a reusable tab id. Retiring this publisher also
+    /// retires every queued native action for its incarnation.
+    native_interface_epoch: u64,
+    native_history: native_history::SolidHistory,
     /// Monotonic export ticket; independent of model mutations.
     next_export_sequence: u64,
     /// Latest export ticket written, including repeated exports of one revision.
@@ -94,9 +106,16 @@ struct ProjectPublisher {
 
 impl ProjectPublisher {
     fn new() -> Self {
+        static NEXT_NATIVE_EPOCH: AtomicU64 = AtomicU64::new(1);
         Self {
             session_id: Uuid::new_v4().to_string(),
+            native_interface_epoch: NEXT_NATIVE_EPOCH
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |epoch| {
+                    epoch.checked_add(1)
+                })
+                .expect("native document incarnations exhausted"),
             next_export_sequence: 0,
+            native_history: native_history::SolidHistory::default(),
             last_export_sequence: 0,
             published_generation: 0,
             last_model_generation: None,
@@ -346,23 +365,7 @@ impl SessionBridgeState {
         if let Some(project_session_id) = project_session_id {
             publisher.rebind_to(project_session_id);
         }
-        let project = publisher.active_mut();
-        project.next_export_sequence = project
-            .next_export_sequence
-            .checked_add(1)
-            .ok_or_else(|| "session generation exhausted".to_string())?;
-        project
-            .pending_exports
-            .insert(project.next_export_sequence, project.engine_revision);
-        let result = json!({
-            "session_id": project.session_id,
-            "window_id": window_label,
-            "generation": project.next_export_sequence,
-            "engine_revision": project.engine_revision,
-            "project_session_id": publisher.active_project_session_id,
-            "document_id": publisher.active_project_session_id,
-            "session_mode": "read_only_snapshot",
-        });
+        let result = reserve_project_export(publisher, window_label)?;
         drop(publishers);
         let _ = self.write_process_instance_file();
         Ok(result)
@@ -747,6 +750,61 @@ fn dispatch_inbox_on_engine(
     parse_engine_envelope(engine.apply_encoded_mutate(spec.engine_method, &encoded, solid))
 }
 
+fn reserve_project_export(
+    publisher: &mut WindowPublisher,
+    window_label: &str,
+) -> Result<Value, String> {
+    let project = publisher.active_mut();
+    project.next_export_sequence = project
+        .next_export_sequence
+        .checked_add(1)
+        .ok_or("Session generation exhausted")?;
+    project
+        .pending_exports
+        .insert(project.next_export_sequence, project.engine_revision);
+    Ok(json!({
+        "session_id": project.session_id,
+        "window_id": window_label,
+        "generation": project.next_export_sequence,
+        "engine_revision": project.engine_revision,
+        "project_session_id": publisher.active_project_session_id,
+        "document_id": publisher.active_project_session_id,
+        "session_mode": "read_only_snapshot",
+    }))
+}
+
+fn is_project_replacement(name: &str) -> bool {
+    matches!(name, "cad_new_project" | "cad_load_project_model")
+}
+
+/// The native interface and inbox use the same replacement dispatcher and
+/// unchanged marker. The caller owns the publisher lock and retirement.
+fn dispatch_project_replacement(
+    engine: &AppState,
+    name: &str,
+    arguments: &Value,
+) -> (Result<Value, String>, bool) {
+    let Some(spec) = nbcad_mcp_mutate::lookup_mutate(name).filter(|_| is_project_replacement(name))
+    else {
+        return (
+            Err("Not a whole-project replacement operation".into()),
+            false,
+        );
+    };
+    match nbcad_mcp_mutate::encode_payload(spec.payload, arguments) {
+        Ok(payload) => {
+            let raw = if name == "cad_load_project_model" {
+                engine.project_load(&payload)
+            } else {
+                engine.project_new()
+            };
+            let changed = !project_replacement_is_unchanged(&raw);
+            (parse_engine_envelope(raw), changed)
+        }
+        Err(error) => (Err(error), false),
+    }
+}
+
 fn archive_inbox_op(session_id: &str, seq: u64) -> Result<(), String> {
     let src = inbox_dir(session_id).join(format!("{seq}.json"));
     let dest_dir = inbox_dir(session_id).join("applied");
@@ -950,7 +1008,7 @@ impl SessionBridgeState {
         result
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "dev-bevy-host"))]
     fn engine_revision_for_window(&self, window_label: &str) -> Result<Option<u64>, String> {
         let mut publishers = self
             .publishers
@@ -1132,21 +1190,7 @@ fn apply_project_replacement_inbox(
     let session_id = publisher.active_mut().session_id.clone();
     let document = engine.active_project_session_id();
     let arguments = request.get("arguments").cloned().unwrap_or(json!({}));
-    let spec = nbcad_mcp_mutate::lookup_mutate(name).expect("validated replacement operation");
-    let (outcome, changed) = match nbcad_mcp_mutate::encode_payload(spec.payload, &arguments) {
-        Ok(payload) => {
-            let raw = if name == "cad_load_project_model" {
-                // Preserve the unchanged marker for malformed/unsupported
-                // project data rejected before native recomputation begins.
-                engine.project_load(&payload)
-            } else {
-                engine.project_new()
-            };
-            let changed = !project_replacement_is_unchanged(&raw);
-            (parse_engine_envelope(raw), changed)
-        }
-        Err(error) => (Err(error), false),
-    };
+    let (outcome, changed) = dispatch_project_replacement(engine, name, &arguments);
     let replacement = changed.then(ProjectPublisher::new);
     let mut receipt = request.clone();
     let mut response = json!({
@@ -1452,7 +1496,7 @@ fn apply_or_reject_one_inbox_op(
             "engine_revision": project.engine_revision,
         }));
     }
-    if matches!(name.as_str(), "cad_new_project" | "cad_load_project_model") {
+    if is_project_replacement(&name) {
         let result = apply_project_replacement_inbox(
             publisher,
             window_label,
@@ -1913,7 +1957,7 @@ mod tests {
     use super::*;
 
     /// Serialize bridge tests because they share `NBCAD_SESSION_DIR`.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    pub(super) static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn reserve(state: &SessionBridgeState, window_label: &str) -> (String, u64) {
         let result = state.reserve_for_window(window_label).unwrap();

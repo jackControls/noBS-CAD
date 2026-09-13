@@ -1,0 +1,1154 @@
+//! Main-window controller using the existing native document and MCP services.
+//! The development host exposes only migrated, functional controls; it does
+//! not publish synthetic counterparts for the remaining web-shell controls.
+
+use super::*;
+use crate::native_viewport::{
+    interface_shell::{self, spawn_button, InterfaceCamera, InterfaceFrame, InterfaceLayout},
+    ui::{ViewportUiAssets, ViewportUiTheme},
+    winit_host::NativeHostInput,
+    ViewportPalette,
+};
+use crate::session_bridge::{apply_or_reject_one_inbox_op, control_for_window, now_ms};
+use bevy::{
+    ecs::{message::MessageCursor, system::SystemState},
+    prelude::*,
+    text::FontWeight,
+    window::{PrimaryWindow, WindowEvent},
+};
+use nbcad_interface::{Canvas, ControlRequest, DocumentContext, Rect as InterfaceRect, Surface};
+use serde_json::{json, Value};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+
+#[derive(Resource, Clone)]
+pub(crate) struct NativeServices {
+    pub engine: Arc<AppState>,
+    pub bridge: Arc<SessionBridgeState>,
+}
+impl Default for NativeServices {
+    fn default() -> Self {
+        Self {
+            engine: Arc::new(AppState::new()),
+            bridge: Arc::new(SessionBridgeState::default()),
+        }
+    }
+}
+
+struct PendingControl {
+    response: Value,
+    owner: DocumentContext,
+    presentation_deadline: u64,
+}
+
+#[derive(Resource)]
+struct Controller {
+    window_id: String,
+    initial_model: Option<String>,
+    initialized: bool,
+    initial_revision: u64,
+    initial_owner: Option<DocumentContext>,
+    input: MessageCursor<NativeHostInput>,
+    bodies: Vec<(u64, String)>,
+    synchronized: Option<(DocumentContext, u64)>,
+    controls: HashMap<String, Entity>,
+    decoration: HashMap<String, Entity>,
+    sidebar_scroll: f32,
+    pending: Option<PendingControl>,
+    status: String,
+    close_pending: bool,
+    exit_after_receipt: bool,
+    stop_watcher: Arc<AtomicBool>,
+}
+impl Controller {
+    fn new(
+        window_id: String,
+        initial_model: Option<String>,
+        stop_watcher: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            window_id,
+            initial_model,
+            initialized: false,
+            initial_revision: 0,
+            initial_owner: None,
+            input: MessageCursor::default(),
+            bodies: vec![],
+            synchronized: None,
+            controls: HashMap::new(),
+            decoration: HashMap::new(),
+            sidebar_scroll: 0.,
+            pending: None,
+            status: String::new(),
+            close_pending: false,
+            exit_after_receipt: false,
+            stop_watcher,
+        }
+    }
+}
+impl Drop for Controller {
+    fn drop(&mut self) {
+        self.stop_watcher.store(true, Ordering::Release);
+    }
+}
+
+/// Called only by the explicitly built native host. No new MCP endpoint or
+/// independent engine is introduced when running the existing Tauri host.
+pub(crate) fn install(
+    app: &mut App,
+    handle: NativeInterfaceHandle,
+    services: NativeServices,
+    window_id: String,
+    initial_model: Option<String>,
+) {
+    let stop = Arc::new(AtomicBool::new(false));
+    start_watcher(&services, &window_id, handle.clone(), stop.clone());
+    app.insert_resource(services)
+        .insert_resource(Controller::new(window_id, initial_model, stop));
+    interface_shell::install(app, handle, update);
+    app.add_systems(PostUpdate, complete_control.after(InterfaceLayout));
+}
+
+fn start_watcher(
+    services: &NativeServices,
+    window_id: &str,
+    handle: NativeInterfaceHandle,
+    stop: Arc<AtomicBool>,
+) {
+    let bridge = Arc::downgrade(&services.bridge);
+    let window = window_id.to_owned();
+    let _ = std::thread::Builder::new()
+        .name("cad-native-inbox".into())
+        .spawn(move || {
+            let mut keepalive = now_ms();
+            while !stop.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(25));
+                if stop.load(Ordering::Acquire) {
+                    break;
+                }
+                let Some(bridge) = bridge.upgrade() else {
+                    break;
+                };
+                if now_ms().saturating_sub(keepalive) >= 10_000 {
+                    keepalive = now_ms();
+                    let _ = bridge.heartbeat_for_window(&window);
+                }
+                let Ok(Some(session)) = bridge.session_id_for_window(&window) else {
+                    continue;
+                };
+                let root = crate::session_bridge::session_root().join(session);
+                let controls =
+                    std::fs::read_dir(root.join("controls"))
+                        .ok()
+                        .is_some_and(|entries| {
+                            entries.filter_map(Result::ok).any(|entry| {
+                                entry
+                                    .file_name()
+                                    .to_string_lossy()
+                                    .ends_with(".request.json")
+                            })
+                        });
+                let inbox = std::fs::read_dir(root.join("inbox"))
+                    .ok()
+                    .is_some_and(|entries| {
+                        entries.filter_map(Result::ok).any(|entry| {
+                            entry.file_type().is_ok_and(|kind| kind.is_file())
+                                && entry.path().extension().is_some_and(|ext| ext == "json")
+                        })
+                    });
+                if controls || inbox {
+                    handle.request_redraw();
+                }
+            }
+        });
+}
+
+fn update(world: &mut World, handle: &NativeInterfaceHandle) {
+    let services = world.resource::<NativeServices>().clone();
+    world.resource_scope(|world, mut state: Mut<Controller>| {
+        let result = update_inner(world, handle, &services, &mut state);
+        if let Err(error) = result {
+            state.status = error;
+        }
+    });
+}
+
+fn update_inner(
+    world: &mut World,
+    handle: &NativeInterfaceHandle,
+    services: &NativeServices,
+    state: &mut Controller,
+) -> Result<(), String> {
+    let engine = &services.engine;
+    let bridge = &services.bridge;
+    if !state.initialized {
+        let owner = bridge.native_document_context(&state.window_id, engine)?;
+        if let Some(model) = state.initial_model.take() {
+            bridge.apply_native_mutation(
+                engine,
+                &owner,
+                "cad_load_project_model",
+                &json!({"model_json":model}),
+                || Ok(()),
+            )?;
+        }
+        let owner = bridge.native_document_context(&state.window_id, engine)?;
+        bridge.with_native_document_owner(engine, &owner, || {
+            refresh_native_model(engine, world, true)
+        })?;
+        bridge.publish_native_document(engine, &owner, "solid")?;
+        state.initial_revision = bridge
+            .engine_revision_for_window(&state.window_id)?
+            .unwrap_or(1);
+        state.initial_owner = Some(owner);
+        state.initialized = true;
+    }
+
+    // Raw OS events are already ordered and stamped by the Winit adapter.
+    // Reading them here prevents a close delivered with A from closing B.
+    let events = state
+        .input
+        .read(world.resource::<Messages<NativeHostInput>>())
+        .cloned()
+        .collect::<Vec<_>>();
+    for mut event in events {
+        if let Err(error) =
+            crate::native_viewport::winit_host::prepare_native_input(world, handle, &mut event)
+        {
+            state.status = error;
+            continue;
+        }
+        let mut accepted = true;
+        for action in std::mem::take(&mut event.actions) {
+            if let Err(error) = apply_queued_control(world, handle, services, state, &action) {
+                state.status = error;
+                accepted = false;
+                break;
+            }
+        }
+        process_modal_keys(handle, bridge, engine, state)?;
+        if !accepted {
+            continue;
+        }
+        if let WindowEvent::MouseWheel(wheel) = &event.event {
+            if !state.close_pending {
+                if let (Some(cursor), Some(frame)) = (event.cursor, handle.frame()) {
+                    if event.context.as_ref() != Some(&frame.context) {
+                        continue;
+                    }
+                    if let Some(canvas) = frame
+                        .canvases
+                        .iter()
+                        .find(|canvas| canvas.name == "viewport")
+                    {
+                        if cursor.x >= 0.
+                            && f64::from(cursor.x) < canvas.bounds.x
+                            && f64::from(cursor.y) >= canvas.bounds.y
+                        {
+                            let factor = if matches!(
+                                wheel.unit,
+                                bevy::input::mouse::MouseScrollUnit::Line
+                            ) {
+                                36.
+                            } else {
+                                1.
+                            };
+                            state.sidebar_scroll =
+                                (state.sidebar_scroll - wheel.y * factor).max(0.);
+                        }
+                    }
+                }
+            }
+        }
+        if matches!(event.event, WindowEvent::WindowCloseRequested(_)) {
+            if let Some(owner) = &event.context {
+                bridge.with_native_document_owner(engine, owner, || Ok(()))?;
+                request_close(state, bridge, engine)?;
+            }
+        }
+        if !event.consumed {
+            if let Err(error) = crate::native_editor::process_one(world, handle, services, &event) {
+                state.status = error;
+            }
+        }
+    }
+
+    for action in handle.take_actions()? {
+        if let Err(error) = apply_queued_control(world, handle, services, state, &action) {
+            state.status = error;
+        }
+    }
+    process_modal_keys(handle, bridge, engine, state)?;
+    // Serialize controls through their completed semantic frame. The native
+    // apply function remains the sole inbox dispatcher and OCC gate.
+    if state.pending.is_none() {
+        let reject = state
+            .close_pending
+            .then_some("A close confirmation is waiting for input");
+        let applied = apply_or_reject_one_inbox_op(bridge, &state.window_id, engine, reject, None)?;
+        if applied["applied"] == true {
+            let owner = bridge.native_document_context(&state.window_id, engine)?;
+            let result = NativeMutationResult {
+                context: owner,
+                engine_revision: bridge
+                    .engine_revision_for_window(&state.window_id)?
+                    .unwrap_or(1),
+                value: applied,
+            };
+            state.status = summary(&finish_mutation(engine, bridge, world, "inbox", result));
+        }
+    }
+    if state.pending.is_none() {
+        let owner = bridge.native_document_context(&state.window_id, engine)?;
+        let request = control_for_window(bridge, &state.window_id, engine, None)?;
+        if request.get("id").is_some() {
+            let mut response =
+                json!({"request_id":request["id"],"session_id":request["session_id"]});
+            let outcome = apply_control(world, handle, services, state, &owner, &request);
+            let current = bridge.native_document_context(&state.window_id, engine)?;
+            match outcome {
+                Ok(value) => {
+                    apply_host_result(state, &value);
+                    response["status"] = json!("applied");
+                    response["value"] = value;
+                }
+                Err(error) => {
+                    response["status"] = json!("failed");
+                    response["error"] = json!(error);
+                }
+            }
+            response["awaiting_input"] = json!(state.close_pending);
+            state.pending = Some(PendingControl {
+                response,
+                owner: current,
+                presentation_deadline: now_ms().saturating_add(2_000).min(
+                    request["expires_ms"]
+                        .as_u64()
+                        .unwrap_or(0)
+                        .saturating_sub(100),
+                ),
+            });
+        }
+    }
+    synchronize(world, handle, services, state)
+}
+
+fn process_modal_keys(
+    handle: &NativeInterfaceHandle,
+    bridge: &SessionBridgeState,
+    engine: &AppState,
+    state: &mut Controller,
+) -> Result<(), String> {
+    for request in handle.take_modal_keys()? {
+        bridge.with_native_document_owner(engine, &request.context, || {
+            handle.validate_modal_key(&request)
+        })?;
+        if request.modal_scope == "close-document"
+            && request.key.key == "Escape"
+            && !request.key.ctrl
+            && !request.key.meta
+            && !request.key.alt
+            && !request.key.shift
+        {
+            state.close_pending = false;
+        }
+    }
+    Ok(())
+}
+
+/// Human, accessibility and MCP actions all flush the same editor transaction
+/// before activation. Only an accepted SetValue becomes the field baseline.
+fn reduce_control_input(
+    engine: &AppState,
+    bridge: &SessionBridgeState,
+    world: &mut World,
+    handle: &NativeInterfaceHandle,
+    action: &NativeInterfaceAction,
+) -> Result<Value, String> {
+    use crate::native_viewport::interface_shell::fields;
+    for preceding in fields::prepare_control_input(world, handle, action)? {
+        let result = reduce_action(engine, bridge, world, handle, &preceding);
+        fields::acknowledge_control_input(world, &preceding, result.is_ok());
+        result?;
+    }
+    handle.prepare_activation(action)?;
+    let result = reduce_action(engine, bridge, world, handle, action);
+    fields::acknowledge_control_input(world, action, result.is_ok());
+    // A committed operation must not be reported as failed if subsequent
+    // editor focus synchronization fails: retrying it could duplicate a part.
+    let focus = fields::after_window_input(world, handle);
+    let mut value = result?;
+    if let Err(error) = focus {
+        value["focus_error"] = json!(error);
+    }
+    Ok(value)
+}
+
+fn apply_queued_control(
+    world: &mut World,
+    handle: &NativeInterfaceHandle,
+    services: &NativeServices,
+    state: &mut Controller,
+    action: &NativeInterfaceAction,
+) -> Result<(), String> {
+    let value = reduce_control_input(&services.engine, &services.bridge, world, handle, action)?;
+    apply_host_result(state, &value);
+    state.status = summary(&value);
+    Ok(())
+}
+
+fn summary(value: &Value) -> String {
+    if value["publication_pending"] == true {
+        "Model changed; snapshot publication needs retry".into()
+    } else if let Some(error) = value["render_error"].as_str() {
+        error.into()
+    } else {
+        String::new()
+    }
+}
+
+fn apply_host_result(state: &mut Controller, value: &Value) {
+    match value["close_decision"].as_str() {
+        Some("cancel") => state.close_pending = false,
+        Some("discard") if state.close_pending => {
+            state.close_pending = false;
+            state.exit_after_receipt = true;
+        }
+        _ => {}
+    }
+}
+
+fn request_close(
+    state: &mut Controller,
+    bridge: &SessionBridgeState,
+    engine: &AppState,
+) -> Result<(), String> {
+    let owner = bridge.native_document_context(&state.window_id, engine)?;
+    let dirty = state.initial_owner.as_ref() != Some(&owner)
+        || bridge
+            .engine_revision_for_window(&state.window_id)?
+            .is_some_and(|revision| revision != state.initial_revision);
+    if dirty {
+        state.close_pending = true;
+    } else {
+        state.exit_after_receipt = true;
+    }
+    Ok(())
+}
+
+fn apply_control(
+    world: &mut World,
+    handle: &NativeInterfaceHandle,
+    services: &NativeServices,
+    state: &mut Controller,
+    owner: &DocumentContext,
+    request: &Value,
+) -> Result<Value, String> {
+    if request["expires_ms"].as_u64().unwrap_or(0) < now_ms() {
+        return Err("Native control request expired".into());
+    }
+    let Some(ui) = request.get("ui") else {
+        // Do not silently ignore presentation targets/orbits that have not
+        // yet migrated: a receipt must describe the operation actually run.
+        if request.get("target").is_some()
+            || request.get("body_id").is_some()
+            || request.get("component_id").is_some()
+            || request.get("orbit_degrees").is_some()
+        {
+            return Err("This view target or orbit is not yet migrated to the native host".into());
+        }
+        let view = request["view"].as_str().ok_or("Missing view direction")?;
+        return services
+            .bridge
+            .with_native_document_owner(&services.engine, owner, || {
+                if view == "current" && request["fit"] == false {
+                    let (_, camera, _, _) = native_viewport::interface_view_snapshot(world);
+                    return Ok(json!({"camera":camera}));
+                }
+                let command = if view == "current" {
+                    NativeCommand::Fit
+                } else {
+                    NativeCommand::Orient(ViewDirection::parse(view)?)
+                };
+                view::apply(&services.engine, world, owner, command)
+            });
+    };
+    match ui["action"].as_str().unwrap_or("") {
+        "inspect" => Ok(Value::Null),
+        "file" if ui["command"] == "exit" => {
+            request_close(state, &services.bridge, &services.engine)?;
+            Ok(json!({"awaiting_input":state.close_pending}))
+        }
+        "window" => {
+            let mut query = world.query_filtered::<&mut Window, With<PrimaryWindow>>();
+            let mut window = query
+                .single_mut(world)
+                .map_err(|_| "Native window is unavailable")?;
+            match ui["mode"].as_str().unwrap_or("inspect") {
+                "inspect" => {}
+                "foreground" => {
+                    window.visible = true;
+                    window.focused = true;
+                }
+                "background" => {
+                    return Err(
+                        "Moving this native window behind other applications is not yet supported"
+                            .into(),
+                    );
+                }
+                "hide" => window.visible = false,
+                _ => return Err("Unknown native window action".into()),
+            }
+            let visible = window.visible;
+            let focused = world
+                .get_resource::<crate::native_viewport::winit_host::NativeRenderAvailability>()
+                .is_some_and(|state| state.focused);
+            Ok(json!({"visible":visible,"focused":focused}))
+        }
+        _ => {
+            let request: ControlRequest = serde_json::from_value(ui.clone())
+                .map_err(|error| format!("Native interface action: {error}"))?;
+            let action = handle.resolve(&request, owner)?;
+            reduce_control_input(&services.engine, &services.bridge, world, handle, &action)
+        }
+    }
+}
+
+fn synchronize(
+    world: &mut World,
+    handle: &NativeInterfaceHandle,
+    services: &NativeServices,
+    state: &mut Controller,
+) -> Result<(), String> {
+    let owner = services
+        .bridge
+        .native_document_context(&state.window_id, &services.engine)?;
+    let revision = services
+        .bridge
+        .engine_revision_for_window(&state.window_id)?
+        .unwrap_or(1);
+    if state.synchronized.as_ref() != Some(&(owner.clone(), revision)) {
+        if let Some(cached) = world
+            .get_resource::<NativeRenderedDocument>()
+            .filter(|cached| cached.owner == owner && cached.revision == revision)
+        {
+            state.bodies = cached.bodies.clone();
+        } else {
+            let reset = state
+                .synchronized
+                .as_ref()
+                .is_none_or(|(prior, _)| prior != &owner);
+            state.bodies =
+                services
+                    .bridge
+                    .with_native_document_owner(&services.engine, &owner, || {
+                        refresh_native_model(&services.engine, world, reset)
+                    })?;
+            world.insert_resource(NativeRenderedDocument {
+                owner: owner.clone(),
+                revision,
+                bodies: state.bodies.clone(),
+            });
+        }
+        state.synchronized = Some((owner.clone(), revision));
+    }
+    let mut windows = world.query_filtered::<&Window, With<PrimaryWindow>>();
+    let window = windows
+        .single(world)
+        .map_err(|_| "Native window is unavailable")?;
+    let width = window.width().max(1.);
+    let height = window.height().max(1.);
+    let scale = window.resolution.scale_factor();
+    let visible = window.visible;
+    let side = (width * 0.22).clamp(140., 260.).min(width * 0.45);
+    let top = 112_f32.min(height * 0.3);
+    let bottom = 26_f32.min(height * 0.1);
+    state.sidebar_scroll = state
+        .sidebar_scroll
+        .min((state.bodies.len() as f32 * 36. - (height - top - bottom)).max(0.));
+    let canvas = Rect::from_corners(
+        Vec2::new(side, top),
+        Vec2::new(width, (height - bottom).max(top + 1.)),
+    );
+    native_viewport::apply_interface_viewport(
+        world,
+        InterfaceRect {
+            x: canvas.min.x as f64,
+            y: canvas.min.y as f64,
+            width: canvas.width() as f64,
+            height: canvas.height() as f64,
+        },
+        scale,
+    )?;
+    let mut cameras = world.query_filtered::<Entity, With<InterfaceCamera>>();
+    let Ok(camera) = cameras.single(world) else {
+        return Ok(());
+    };
+    let history = services
+        .bridge
+        .native_history_available(&services.engine, &owner)?;
+    extrude::synchronize(&services.engine, &services.bridge, world, &owner)?;
+    crate::native_editor::synchronize_controls(
+        world,
+        handle,
+        services,
+        &owner,
+        InterfaceRect {
+            x: 160.,
+            y: 38.,
+            width: (width - 160.).max(1.) as f64,
+            height: 72.,
+        },
+    )?;
+    let (_, _, presentation, _) = native_viewport::interface_view_snapshot(world);
+    let mut rows = vec![
+        (
+            "undo".to_owned(),
+            "Undo".to_owned(),
+            NativeCommand::Undo,
+            !history.0,
+            0.,
+            0.,
+            78.,
+        ),
+        (
+            "redo".to_owned(),
+            "Redo".to_owned(),
+            NativeCommand::Redo,
+            !history.1,
+            80.,
+            0.,
+            78.,
+        ),
+        (
+            "fit".to_owned(),
+            "Fit".to_owned(),
+            NativeCommand::Fit,
+            false,
+            160.,
+            0.,
+            78.,
+        ),
+        (
+            "isometric".to_owned(),
+            "Isometric".to_owned(),
+            NativeCommand::Orient(ViewDirection::Isometric),
+            false,
+            240.,
+            0.,
+            100.,
+        ),
+        (
+            "front".to_owned(),
+            "Front".to_owned(),
+            NativeCommand::Orient(ViewDirection::Front),
+            false,
+            342.,
+            0.,
+            78.,
+        ),
+        (
+            "top".to_owned(),
+            "Top".to_owned(),
+            NativeCommand::Orient(ViewDirection::Top),
+            false,
+            422.,
+            0.,
+            78.,
+        ),
+        (
+            "clear".to_owned(),
+            "Clear selection".to_owned(),
+            NativeCommand::ClearSelection,
+            false,
+            0.,
+            38.,
+            158.,
+        ),
+    ];
+    for (index, (body_id, name)) in state.bodies.iter().enumerate() {
+        let y = top + index as f32 * 36. - state.sidebar_scroll;
+        rows.push((
+            format!("body-{body_id}"),
+            name.clone(),
+            NativeCommand::SelectBody {
+                body_id: *body_id,
+                occurrence_id: None,
+            },
+            false,
+            0.,
+            y,
+            side - 68.,
+        ));
+        rows.push((
+            format!("visibility-{body_id}"),
+            if presentation.hidden_body_ids.contains(body_id) {
+                "Show"
+            } else {
+                "Hide"
+            }
+            .into(),
+            NativeCommand::ToggleBodyVisibility(*body_id),
+            false,
+            side - 66.,
+            y,
+            64.,
+        ));
+    }
+    if state.close_pending {
+        rows.push((
+            "cancel-close".into(),
+            "Keep working".into(),
+            NativeCommand::CancelClose,
+            false,
+            (width / 2. - 190.).max(0.),
+            height / 2.,
+            180.,
+        ));
+        rows.push((
+            "discard-close".into(),
+            "Discard changes and close".into(),
+            NativeCommand::DiscardAndClose,
+            false,
+            width / 2.,
+            height / 2.,
+            220.,
+        ));
+    }
+    let assets = world.resource::<ViewportUiAssets>().clone();
+    let theme = ViewportUiTheme::from_palette(&ViewportPalette::default());
+    decorate(
+        world,
+        state,
+        camera,
+        &assets,
+        theme,
+        "toolbar",
+        0.,
+        0.,
+        width,
+        top,
+        None,
+        Some(theme.header),
+        10,
+    );
+    decorate(
+        world,
+        state,
+        camera,
+        &assets,
+        theme,
+        "browser",
+        0.,
+        top,
+        side,
+        height - top - bottom,
+        None,
+        Some(theme.panel),
+        10,
+    );
+    let status = if state.status.is_empty() {
+        crate::native_editor::status(world).unwrap_or_default()
+    } else {
+        state.status.clone()
+    };
+    decorate(
+        world,
+        state,
+        camera,
+        &assets,
+        theme,
+        "status",
+        4.,
+        height - bottom,
+        width - 8.,
+        bottom,
+        Some(&status),
+        Some(theme.header),
+        20,
+    );
+    if state.close_pending {
+        decorate(
+            world,
+            state,
+            camera,
+            &assets,
+            theme,
+            "close-shade",
+            0.,
+            0.,
+            width,
+            height,
+            None,
+            Some(Color::srgba(0., 0., 0., 0.45)),
+            40,
+        );
+        decorate(
+            world,
+            state,
+            camera,
+            &assets,
+            theme,
+            "close-panel",
+            (width / 2. - 240.).max(0.),
+            height / 2. - 80.,
+            480_f32.min(width),
+            135.,
+            None,
+            Some(theme.panel),
+            41,
+        );
+        decorate(
+            world,
+            state,
+            camera,
+            &assets,
+            theme,
+            "close-message",
+            (width / 2. - 220.).max(0.),
+            height / 2. - 60.,
+            440_f32.min(width),
+            48.,
+            Some("Unsaved changes\nKeep working, or discard changes and close."),
+            None,
+            42,
+        );
+    } else {
+        for key in ["close-shade", "close-panel", "close-message"] {
+            if let Some(entity) = state.decoration.remove(key) {
+                world.despawn(entity);
+            }
+        }
+    }
+    let live = rows
+        .iter()
+        .map(|row| row.0.clone())
+        .collect::<std::collections::HashSet<_>>();
+    state.controls.retain(|key, entity| {
+        if live.contains(key) {
+            true
+        } else {
+            world.despawn(*entity);
+            false
+        }
+    });
+    for (key, label, command, disabled, x, y, width) in rows {
+        let is_body = key.starts_with("body-") || key.starts_with("visibility-");
+        let surface = command_group(&command);
+        let entity = if let Some(entity) = state.controls.get(&key) {
+            *entity
+        } else {
+            let mut system = SystemState::<Commands>::new(world);
+            let entity = {
+                let mut commands = system.get_mut(world).map_err(|error| error.to_string())?;
+                spawn_button(
+                    &mut commands,
+                    camera,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(x),
+                        top: px(y),
+                        width: px(width),
+                        height: px(32.),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        border: UiRect::all(px(1.)),
+                        ..default()
+                    },
+                    InterfaceControl::button(surface, &label),
+                    theme,
+                    &assets,
+                )
+            };
+            system.apply(world);
+            bind_command(world, entity, command.clone())?;
+            state.controls.insert(key, entity);
+            entity
+        };
+        let desired = Node {
+            position_type: PositionType::Absolute,
+            left: px(x),
+            top: px(y),
+            width: px(width),
+            height: px(32.),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            border: UiRect::all(px(1.)),
+            ..default()
+        };
+        if world.get::<Node>(entity) != Some(&desired) {
+            world.entity_mut(entity).insert(desired);
+        }
+        let mut control = world
+            .get_mut::<InterfaceControl>(entity)
+            .ok_or("Native control was removed")?;
+        if control.label != label {
+            control.label = label;
+        }
+        if control.disabled != disabled {
+            control.disabled = disabled;
+        }
+        let visible = !is_body || (y >= top && y + 32. <= height - bottom);
+        if control.visible != visible {
+            control.visible = visible;
+        }
+        let scope = matches!(
+            command,
+            NativeCommand::CancelClose | NativeCommand::DiscardAndClose
+        )
+        .then(|| "close-document".to_owned());
+        if control.modal_scope != scope {
+            control.modal_scope = scope;
+        }
+        let selected = match command {
+            NativeCommand::SelectBody { body_id, .. } => {
+                Some(presentation.selected_body_ids.contains(&body_id))
+            }
+            _ => None,
+        };
+        if control.selected != selected {
+            control.selected = selected;
+        }
+        drop(control);
+        let z = if matches!(
+            command,
+            NativeCommand::CancelClose | NativeCommand::DiscardAndClose
+        ) {
+            50
+        } else {
+            30
+        };
+        if world.get::<ZIndex>(entity) != Some(&ZIndex(z)) {
+            world.entity_mut(entity).insert(ZIndex(z));
+        }
+    }
+    let client = InterfaceRect {
+        x: 0.,
+        y: 0.,
+        width: width as f64,
+        height: height as f64,
+    };
+    let document = services.engine.document_snapshot();
+    handle.present(InterfaceFrame {
+        context: owner,
+        client,
+        surface: client,
+        canvases: vec![Canvas {
+            name: "viewport".into(),
+            bounds: InterfaceRect {
+                x: canvas.min.x as f64,
+                y: canvas.min.y as f64,
+                width: canvas.width() as f64,
+                height: canvas.height() as f64,
+            },
+        }],
+        surfaces: vec![
+            Surface {
+                name: "document/session".into(),
+                text: Some(if state.close_pending {
+                    "This document has unsaved changes. Keep working or discard changes and close."
+                        .into()
+                } else {
+                    document.name
+                }),
+            },
+            Surface {
+                name: "document/history".into(),
+                text: None,
+            },
+            Surface {
+                name: "solid/selection".into(),
+                text: None,
+            },
+            Surface {
+                name: "document/appearance".into(),
+                text: None,
+            },
+            Surface {
+                name: "sketch/draw".into(),
+                text: None,
+            },
+            Surface {
+                name: "sketch/modify".into(),
+                text: None,
+            },
+        ],
+        modal_stack: if state.close_pending {
+            vec!["close-document".into()]
+        } else {
+            vec![]
+        },
+        document_visible: visible,
+    })?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decorate(
+    world: &mut World,
+    state: &mut Controller,
+    camera: Entity,
+    assets: &ViewportUiAssets,
+    theme: ViewportUiTheme,
+    key: &str,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    text: Option<&str>,
+    background: Option<Color>,
+    z: i32,
+) {
+    let entity = *state.decoration.entry(key.into()).or_insert_with(|| {
+        world
+            .spawn((
+                Name::new(format!("Application {key}")),
+                UiTargetCamera(camera),
+            ))
+            .id()
+    });
+    let node = Node {
+        position_type: PositionType::Absolute,
+        left: px(x),
+        top: px(y),
+        width: px(width),
+        height: px(height),
+        overflow: Overflow::clip(),
+        ..default()
+    };
+    if world.get::<Node>(entity) != Some(&node) {
+        world.entity_mut(entity).insert(node);
+    }
+    if world.get::<ZIndex>(entity) != Some(&ZIndex(z)) {
+        world.entity_mut(entity).insert(ZIndex(z));
+    }
+    if let Some(background) = background {
+        if world.get::<BackgroundColor>(entity) != Some(&BackgroundColor(background)) {
+            world.entity_mut(entity).insert(BackgroundColor(background));
+        }
+    }
+    if let Some(text) = text {
+        if world
+            .get::<Text>(entity)
+            .is_none_or(|value| value.0 != text)
+        {
+            world.entity_mut(entity).insert((
+                Text::new(text),
+                theme.text(assets, 13., FontWeight::NORMAL),
+                TextColor(theme.ink),
+            ));
+        }
+    }
+}
+
+fn command_group(command: &NativeCommand) -> &'static str {
+    match command {
+        NativeCommand::Sketch(_) => "sketch/draw",
+        NativeCommand::Extrude(_) => nbcad_interface::catalog::group_for("solid_extrude")
+            .expect("Extrude is in the product catalog"),
+        NativeCommand::Mutation { operation, .. } => {
+            nbcad_interface::catalog::group_for(operation).unwrap_or("document/session")
+        }
+        NativeCommand::Undo | NativeCommand::Redo => "document/history",
+        NativeCommand::ClearSelection | NativeCommand::SelectBody { .. } => "solid/selection",
+        NativeCommand::ToggleBodyVisibility(_) => {
+            nbcad_interface::catalog::group_for("project_set_visibility")
+                .expect("Visibility is in the product catalog")
+        }
+        _ => nbcad_interface::catalog::group_for("cad_interface")
+            .expect("Interface is in the product catalog"),
+    }
+}
+
+/// This runs after actual native layout. Merely queuing an action or updating
+/// a component cannot produce a completed inspection receipt.
+fn complete_control(world: &mut World) {
+    let services = world.resource::<NativeServices>().clone();
+    let handle = world.resource::<NativeInterfaceHandle>().clone();
+    world.resource_scope(|world, mut state: Mut<Controller>| {
+        if let Some(mut pending) = state.pending.take() {
+            let drawable = world
+                .get_resource::<crate::native_viewport::winit_host::NativeRenderAvailability>()
+                .is_some_and(|availability| availability.drawable);
+            let deadline_elapsed = now_ms() >= pending.presentation_deadline;
+            let mut presented = false;
+            let mut render_status = "unavailable";
+            let current = services
+                .bridge
+                .native_document_context(&state.window_id, &services.engine);
+            if current.as_ref() != Ok(&pending.owner) {
+                pending.response["status"] = json!("failed");
+                pending.response["error"] =
+                    json!("Document changed before native presentation completed");
+            } else {
+                let receipt = handle.render_receipt().unwrap_or_default();
+                if drawable && receipt.laid_out_revision > 0 {
+                    presented = handle.wait_for_submission(receipt.laid_out_revision);
+                    if !presented && !deadline_elapsed {
+                        state.pending = Some(pending);
+                        return;
+                    }
+                    render_status = if presented {
+                        "submitted"
+                    } else {
+                        "submission_timeout"
+                    };
+                }
+                match handle.inspect() {
+                    Ok(snapshot) => {
+                        pending.response["ui"] = snapshot;
+                    }
+                    Err(error) => {
+                        if !deadline_elapsed {
+                            state.pending = Some(pending);
+                            handle.request_redraw();
+                            return;
+                        }
+                        // The operation already ran. Preserve that outcome
+                        // and make missing publication explicit, without
+                        // suggesting that retrying a mutation is safe.
+                        pending.response["presentation_pending"] = json!(true);
+                        pending.response["presentation_error"] = json!(error);
+                        presented = false;
+                        render_status = "layout_timeout";
+                    }
+                }
+            }
+            handle.cancel_submission_wait();
+            let receipt = handle.render_receipt().unwrap_or_default();
+            pending.response["native_layout_revision"] = json!(receipt.laid_out_revision);
+            pending.response["native_submitted_revision"] = json!(receipt.submitted_revision);
+            // This certifies renderer submission of the requested native
+            // frame; it never claims physical display or GPU completion.
+            pending.response["presented"] = json!(presented);
+            pending.response["render_status"] = json!(render_status);
+            if pending.response["value"].get("focused").is_some() {
+                pending.response["value"]["focused"] = json!(world
+                    .get_resource::<crate::native_viewport::winit_host::NativeRenderAvailability>()
+                    .is_some_and(|availability| availability.focused));
+            }
+            if let Err(error) = control_for_window(
+                &services.bridge,
+                &state.window_id,
+                &services.engine,
+                Some(pending.response),
+            ) {
+                state.status = error;
+            }
+        }
+        if state.exit_after_receipt && state.pending.is_none() {
+            state.stop_watcher.store(true, Ordering::Release);
+            services.bridge.drop_window(&state.window_id);
+            world.write_message(AppExit::Success);
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests;

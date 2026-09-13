@@ -1,0 +1,10 @@
+[package]
+name = "nbcad-build-info"
+version = "0.1.0"
+edition = "2021"
+description = "Compiled application identity without invalidating the CAD engine dependency graph"
+license = "LGPL-2.1-or-later"
+repository = "https://github.com/jackControls/noBS-CAD"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

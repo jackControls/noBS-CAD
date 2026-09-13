@@ -24,6 +24,9 @@ custom-protocol = ["tauri/custom-protocol"]
 # Tauri binary keeps using the embedded native view and does not include the
 # capture entry point.
 dev-ui-lab = ["bevy/bevy_log"]
+# Temporary migration host for the existing binary. Remove this switch after
+# native surface parity; it is not an additional user-facing application mode.
+dev-bevy-host = ["bevy/bevy_winit", "bevy/bevy_input_focus", "bevy/system_clipboard", "bevy/x11", "bevy/wayland", "bevy/accesskit_unix", "dep:accesskit", "dep:time"]
 
 [[bin]]
 name = "bevy-ui-lab"
@@ -34,6 +37,8 @@ required-features = ["dev-ui-lab"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+nbcad-build-info = { path = "../crates/build-info" }
+time = { version = "=0.3.53", features = ["formatting"], optional = true }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-deep-link = "2"
@@ -43,6 +48,8 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 uuid = { version = "1", features = ["v4"] }
 nbcad-core = { path = "../crates/core" }
+nbcad-interface = { path = "../crates/interface" }
+nbcad-project-file = { path = "../crates/project-file" }
 nbcad-cam = { path = "../crates/cam" }
 nbcad-sketch = { path = "../crates/sketch" }
 nbcad-solid = { path = "../crates/solid" }
@@ -83,6 +90,7 @@ bevy_ecs = "0.19.0"
 bevy_gizmos = "0.19.0"
 bevy_reflect = "0.19.0"
 raw-window-handle = "0.6"
+accesskit = { version = "=0.24.1", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # GTK/WebKitGTK remain the React/Tauri shell. An X11 child DrawingArea beneath

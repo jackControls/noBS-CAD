@@ -225,6 +225,31 @@ There is **no separate implemented Help/search panel in this baseline**. Existin
 
 ## Validation to carry forward
 
+The native migration currently has a working Winit/Bevy host behind the temporary
+`dev-bevy-host` build feature, using the same executable, document engine,
+operation dispatcher and local stdio MCP. Real Bevy controls publish their
+layout, enabled state, focus and owner-bound identity to MCP and AccessKit.
+The ordinary build still uses the existing shell while migration is incomplete.
+
+The first native checkpoint passes 172 native library tests (two existing
+intentional ignores), including real sketch/solid history, creation gestures,
+Extrude apply/edit and transient preview ownership, project archive retention,
+input ordering, Unicode IME editing, stale controls and render submission
+receipts. The project-file tests also exercise concurrent Save As writers with
+exactly one successful no-overwrite result. Live MCP launch, sketch creation,
+extrusion, camera orientation, body visibility and undo/redo have been exercised
+in one isolated native test window. These checks are foundation evidence, not
+completed surface parity.
+
+Required work remains: responsive background modeling without rendering-thread
+lock waits; complete File/tab controls; catalog-driven menus and overflow;
+native form rendering for all features; sketch preview, dynamic input,
+selection, dimensions and modification; assembly and motion controls; drawings;
+CAM; script editing, teaching and playback; settings, shortcuts and text undo;
+and full live/platform verification. Retain this PR as a draft and keep the
+existing shell available until the acceptance routes above pass. A control or
+form service that has only engine tests is not a completed visible surface.
+
 Use the existing test organization and strengthen meaningful behavioral checks as each surface moves. Avoid a second exhaustive list of tool names or tests that merely duplicate catalog entries. Preserve failure, cancellation, ownership, persistence, and semantic inspection contracts even when DOM-based fixtures must be replaced.
 
 - Existing [MCP contracts](../../xtask/mcp/contracts.mjs) and Rust/script checks remain the operation, resource, publication, replay and final-model boundary. Pair them with visible interaction tests; direct API success is not UI parity.
