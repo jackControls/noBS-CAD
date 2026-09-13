@@ -134,8 +134,10 @@ improvement. [Contributing](CONTRIBUTING.md) · [Developer setup](docs/DEVELOPME
 · [Documentation](docs/INDEX.md)
 
 We are working toward guided design lessons and conversational wizards, and
-exploring **3-axis CAM**. Toolpath generation and strength analysis are future
-capabilities. [Project direction](docs/goals.md)
+developing an early **3-axis CAM** foundation with toolpath generation, stock
+simulation and machine-aware posts. It is not production-safe CAM; review the
+[CAM guides and safety limits](docs/cam/README.md). Strength analysis remains a
+future capability. [Project direction](docs/goals.md)
 
 ## Open-source foundations
 

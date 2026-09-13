@@ -8,6 +8,7 @@ import { useLocaleStore } from '../i18n/localeStore';
 import { cx } from '../lib/cx';
 import { useAppStore } from '../store/appStore';
 import type { ThemePreference } from '../theme';
+import { CamLibrarySettings } from './cam/CamLibrarySettings';
 import {
   DEFAULT_SIX_DOF_SPEED,
   MAX_SIX_DOF_SPEED,
@@ -115,10 +116,10 @@ export function AppearanceDialog() {
         aria-modal="true"
         aria-labelledby="appearance-title"
         data-testid="appearance-dialog"
-        className="feature-dialog max-h-[95vh] w-[430px] max-w-full overflow-y-auto border border-edge bg-panel text-ink"
+        className="feature-dialog flex max-h-[calc(100vh-48px)] w-[480px] max-w-full flex-col overflow-hidden border border-edge bg-panel text-ink"
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="feature-dialog-header flex h-11 items-center gap-2 border-b border-edge px-4">
+        <header className="feature-dialog-header flex h-11 shrink-0 items-center gap-2 border-b border-edge px-4">
           <Monitor size={16} className="text-accent" />
           <h2 id="appearance-title" className="flex-1 text-sm font-semibold">
             {t('appearance.title')}
@@ -133,7 +134,7 @@ export function AppearanceDialog() {
           </button>
         </header>
 
-        <div className="p-4">
+        <div className="min-h-0 overflow-y-auto p-4">
           <section aria-label="About noBS CAD" className="mb-4 border-b border-edge pb-3">
             <h3 className="text-xs font-semibold">About noBS CAD</h3>
             <p className="mt-1 select-text break-all text-xs text-mute">{build
@@ -270,6 +271,7 @@ export function AppearanceDialog() {
             </div>
           </div>
 
+          <CamLibrarySettings />
           <div
             className="mt-4 border-t border-edge pt-4"
             data-testid="legal-credits"
@@ -289,7 +291,7 @@ export function AppearanceDialog() {
           </div>
         </div>
 
-        <footer className="flex justify-end border-t border-edge bg-header/35 px-4 py-3">
+        <footer className="flex shrink-0 justify-end border-t border-edge bg-header/35 px-4 py-3">
           <button
             type="button"
             onClick={() => setOpen(false)}

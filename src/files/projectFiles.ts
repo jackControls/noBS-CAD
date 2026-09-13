@@ -300,7 +300,7 @@ export async function openProject(options?: { filePath: string; discardChanges?:
       changed = !(error instanceof ProjectLoadError && error.engineState === 'unchanged');
       throw error;
     });
-    const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility] = await Promise.all([
+    const [finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility, camDocument] = await Promise.all([
       engine.finishedSketches(),
       engine.datumPlaneDefinitions(),
       engine.bodyAppearances(),
@@ -308,6 +308,7 @@ export async function openProject(options?: { filePath: string; discardChanges?:
       engine.assemblyDocument(),
       engine.assemblySolution(),
       engine.projectVisibility(),
+      engine.camDocument(),
     ]);
     // A legacy project is readable, but the next Save must choose a new
     // `.nbcad` destination instead of silently overwriting the old container.
@@ -326,6 +327,7 @@ export async function openProject(options?: { filePath: string; discardChanges?:
         assemblyDocument,
         projectVisibility,
         assemblySolution,
+        camDocument,
       );
     published = true;
     await recordActiveProjectOpen(modelJson, reusableTarget);

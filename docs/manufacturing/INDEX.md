@@ -1,13 +1,14 @@
 # Manufacturing export — index
 
-Additive manufacturing export (STEP / 3MF / STL), materials, and slicer targets.
+Manufacturing documentation. This directory currently covers additive export
+(STEP / 3MF / STL), materials, and slicer targets. The subtractive 3-axis CAM
+documentation starts at [../cam/README.md](../cam/README.md).
 
 | Doc | Purpose |
 |-----|---------|
 | [OKRs.md](OKRs.md) | Objectives & key results for this subsystem |
 | [materials.md](materials.md) | BodyAppearance + brand filament catalog |
 | [slicer-targets.md](slicer-targets.md) | Standard / Bambu / Orca / Prusa / Cura 3MF |
-| [REVIEW.md](REVIEW.md) | Plan vs achieved + research notes |
 | [VALIDATION.md](VALIDATION.md) | Automated + manual validation checklist |
 | `../../crates/export/fixtures/` | KR3.6 smoke `.3mf` samples |
 | [MAINTENANCE.md](MAINTENANCE.md) | How agents maintain these files |

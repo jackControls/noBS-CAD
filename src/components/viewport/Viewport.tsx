@@ -3,6 +3,8 @@ import { registerSessionCamera, unregisterSessionCamera, notifySessionCameraChan
 import { presentation } from '../../operationPlayback';
 import { listenForModelKeys } from '../../modelKeyboard';
 import { consumeOpenedProjectFraming, subscribeOpenedProjectFraming } from '../../files/openProjectFraming';
+import { hoverCamChain, pickCamChain } from '../../cam/chainPicking';
+
 /**
  * Native Bevy viewport interaction layer with noBS CAD navigation and the
  * sketch environment.
@@ -173,6 +175,11 @@ import {
   type NativeViewportTransient,
 } from './nativeViewportBridge';
 import { triangulateProfileRegion } from './profileTriangulation';
+import { collectCamOverlay } from '../../cam/overlay';
+import { camWorkpiecePresentation } from '../../cam/view';
+import { camPickCandidateKey, completeCamPointPick } from '../../cam/pointPick';
+import { activeCamSetup } from '../../cam/document';
+import { camHoleFromCylinderFace, faceVerticesOfRange } from '../../cam/geometry';
 
 function hasMovableJointPath(
   joints: JointDefinitionDto[],
@@ -1503,6 +1510,12 @@ export function Viewport() {
       };
       const appendLineLayer = (source: LineLayer) => {
         const key = layerKey(source.color, source.width, source.pattern);
+        if (source.playback) {
+          // Keep timing aligned one-for-one with segments, separate from
+          // untimed guides of the same color. Clock updates never resend it.
+          lineLayers.set(`${key}|playback:${source.playback.pathId}`, source);
+          return;
+        }
         let target = lineLayers.get(key);
         if (!target) {
           target = {
@@ -1514,6 +1527,16 @@ export function Viewport() {
           lineLayers.set(key, target);
         }
         target.segments.push(...source.segments);
+      };
+      const appendPointLayer = (source: PointLayer) => {
+        const hollow = source.hollow ?? false;
+        const key = pointKey(source.color, source.radius, hollow);
+        let target = pointLayers.get(key);
+        if (!target) {
+          target = { color: source.color, radius: source.radius, hollow, positions: [] };
+          pointLayers.set(key, target);
+        }
+        target.positions.push(...source.positions);
       };
       const appendPoint = (
         color: Rgba,
@@ -3337,6 +3360,33 @@ export function Viewport() {
           xray: true,
         });
       }
+
+      // Manufacturing overlays (stock ghost, WCS axes, the selected
+      // operation's toolpath, simulated remaining stock, point-pick
+      // candidates) ride the same transient channel, so the manufacturing tab
+      // presents them inside this shared viewport.
+      const camOverlay = collectCamOverlay({
+        activeTab: transientState.activeTab,
+        camDocument: transientState.camDocument,
+        selectedCamOperationId: transientState.selectedCamOperationId,
+        camProgram: transientState.camProgram,
+        camSimulation: transientState.camSimulation,
+        camSimulationTimeline: transientState.camSimulationTimeline,
+        camSimulationPlayback: transientState.camSimulationPlayback,
+        camWorkpieceView: transientState.camWorkpieceView,
+        camToolpathsVisible: transientState.camToolpathsVisible,
+        renderPlaybackTool: !nativeViewportIsActive(),
+        camPointPick: transientState.camPointPick,
+        camHolePick: transientState.camHolePick,
+        camLoopPick: transientState.camLoopPick,
+        camChainPick: transientState.camChainPick,
+        camDialogOpen: transientState.camDialog !== null,
+        solidScene: transientState.solidScene,
+      });
+      for (const layer of camOverlay.lines) appendLineLayer(layer);
+      for (const layer of camOverlay.points) appendPointLayer(layer);
+      triangles.push(...camOverlay.triangles);
+      arrows.push(...camOverlay.arrows);
 
       let marker: NativeViewportTransient['marker'] = null;
       if (sketchGroup.visible && snapMarker.visible) {
@@ -5393,6 +5443,9 @@ export function Viewport() {
       startY: number;
       moved: boolean;
     } | null = null;
+    /** True while a CAM point-pick session owns the cursor style; the next
+     *  plain move after the session resets it. */
+    let camPickCursorActive = false;
     /** Transient direct manipulation for the selected motion joint.
      * Release keeps a preview only; the Assembly panel owns Capture/Revert. */
     let jointMotionDrag: {
@@ -8831,6 +8884,13 @@ export function Viewport() {
       const selectedBodyIds = new Set(feedback.selectedBodyIds);
       const selectedFaceIds = new Set(feedback.selectedFaceIds);
       const hidden = hiddenBodyIds();
+      const camView = camWorkpiecePresentation({ ...s, camDialogOpen: s.camDialog !== null });
+      // Toggle retained meshes/materials only. No geometry rebuild on view or
+      // stock-frame changes; browser fallback follows the native policy.
+      for (const child of solidGroup.children) {
+        const bodyId = child.userData.bodyId as number;
+        child.visible = !hidden.has(bodyId) && !camView.hiddenBodyIds.includes(bodyId);
+      }
       const hoveredBodyId = feedback.hoveredBodyId;
       const faceHighlights: Array<{
         bodyId: number;
@@ -8847,6 +8907,12 @@ export function Viewport() {
         if (object instanceof CAD.Mesh && object.userData.solidFace === true) {
           const material = object.material as CAD.MeshStandardMaterial;
           const bodyId = object.userData.bodyId as number;
+          const ghosted = camView.ghostedBodyIds.includes(bodyId);
+          material.transparent = ghosted;
+          material.opacity = ghosted ? 0.18 : 1;
+          material.depthWrite = !ghosted;
+          material.depthTest = !ghosted;
+          object.renderOrder = ghosted ? 3 : 0;
           const occurrenceId = object.userData.occurrenceId as number | null | undefined;
           const bodySelectionIndex = s.selectedBodies.indexOf(bodyId);
           const bodySelected = s.selectedOccurrenceId !== null
@@ -9979,6 +10045,32 @@ export function Viewport() {
     const clearViewportSelection = (state: ViewportState) => {
       releaseJointSelection(state);
       state.clearSolidSelection();
+      // Manufacturing: an empty-space click also drops the operation
+      // selection, which hides the toolpath/tool/simulation overlays.
+      if (state.selectedCamOperationId !== null) state.setSelectedCamOperationId(null);
+    };
+    /** CAM hole picking: resolve the pointer to a drillable cylindrical face
+     *  (axis parallel to setup Z — fixed-axis constraint), or null when it is
+     *  not over one. The recorded axis on the pick is the seam reserved for
+     *  a future indexed/5-axis tool orientation. */
+    const pickCamHole = (e: PointerEvent, state: ViewportState) => {
+      const faceHit = pickSolidFace(e);
+      if (!faceHit) return null;
+      const setup = activeCamSetup(state.camDocument);
+      if (!setup) return null;
+      const body = state.solidScene.bodies.find((candidate) => candidate.id === faceHit.bodyId);
+      const face = body?.faces.find((candidate) => candidate.id === faceHit.faceId);
+      if (!body || !face?.cylinder) return null;
+      // The face's own triangle vertices span the hole's real top/bottom in
+      // setup Z — stepped bosses and blind bores machine across exactly
+      // their own height.
+      const faceVertices = faceVerticesOfRange(
+        body.mesh.positions,
+        body.mesh.indices,
+        face.first_index,
+        face.index_count,
+      );
+      return camHoleFromCylinderFace(faceHit.bodyId, faceHit.faceId, face.cylinder, setup, faceVertices);
     };
     const hideActiveToolCursor = () => {
       activeToolCursorScreen = null;
@@ -10016,9 +10108,182 @@ export function Viewport() {
       badge.style.display = 'flex';
       badge.style.transform = `translate3d(${centerX - badgeHalf}px, ${centerY - badgeHalf}px, 0)`;
     };
+    /** CAM loop picking: resolve the pointer to a closed sketch loop by
+     *  screen-space proximity — inside the projected polygon counts as a
+     *  direct hit, otherwise the nearest segment within 14 px wins. Loops
+     *  are few and short, so an exhaustive pass per pointer event is cheap. */
+    const pickCamLoop = (e: PointerEvent, state: ViewportState) => {
+      const session = state.camLoopPick;
+      if (!session) return null;
+      const rect = surface.domElement.getBoundingClientRect();
+      const px = e.clientX;
+      const py = e.clientY;
+      const projected = new CAD.Vector3();
+      let bestKey: string | null = null;
+      let bestDistance = 14;
+      for (const loop of session.loops) {
+        const screen: Array<{ x: number; y: number }> = [];
+        let clipped = false;
+        for (const point of loop.modelPoints) {
+          projected.set(point.x, point.y, point.z).project(camera);
+          if (projected.z < -1 || projected.z > 1) {
+            clipped = true;
+            break;
+          }
+          screen.push({
+            x: rect.left + ((projected.x + 1) * rect.width) / 2,
+            y: rect.top + ((1 - projected.y) * rect.height) / 2,
+          });
+        }
+        if (clipped || screen.length < 3) continue;
+        // Point-in-polygon (even-odd) first: clicking inside a closed profile
+        // selects it without aiming at a segment.
+        let inside = false;
+        for (let i = 0, j = screen.length - 1; i < screen.length; j = i, i += 1) {
+          const a = screen[i];
+          const b = screen[j];
+          if (a.y > py !== b.y > py && px < ((b.x - a.x) * (py - a.y)) / (b.y - a.y) + a.x) {
+            inside = !inside;
+          }
+        }
+        let nearest = inside ? 0 : Infinity;
+        if (!inside) {
+          for (let i = 0; i < screen.length; i += 1) {
+            const a = screen[i];
+            const b = screen[(i + 1) % screen.length];
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const lengthSq = dx * dx + dy * dy;
+            const t = lengthSq > 0
+              ? Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / lengthSq))
+              : 0;
+            const distance = Math.hypot(px - (a.x + dx * t), py - (a.y + dy * t));
+            if (distance < nearest) nearest = distance;
+          }
+        }
+        if (nearest <= bestDistance) {
+          bestDistance = nearest;
+          bestKey = loop.key;
+        }
+      }
+      return bestKey;
+    };
+    /** CAM chain picking (contour): resolve the pointer to the nearest
+     *  sketch curve entity by screen-space distance to its tessellation —
+     *  10 px, no interior hit (chains are built edge by edge). */
+    const pickCamChainEntity = (e: PointerEvent, state: ViewportState) => {
+      const session = state.camChainPick;
+      if (!session) return null;
+      const rect = surface.domElement.getBoundingClientRect();
+      const px = e.clientX;
+      const py = e.clientY;
+      const projected = new CAD.Vector3();
+      let bestKey: string | null = null;
+      let bestScore = Infinity;
+      for (const entity of session.entities) {
+        const screen: Array<{ x: number; y: number }> = [];
+        let clipped = false;
+        for (const point of entity.modelPoints) {
+          projected.set(point.x, point.y, point.z).project(camera);
+          if (projected.z < -1 || projected.z > 1) {
+            clipped = true;
+            break;
+          }
+          screen.push({
+            x: rect.left + ((projected.x + 1) * rect.width) / 2,
+            y: rect.top + ((1 - projected.y) * rect.height) / 2,
+          });
+        }
+        if (clipped || screen.length < 2) continue;
+        const count = entity.closed || entity.kind === 'circle' ? screen.length : screen.length - 1;
+        for (let i = 0; i < count; i += 1) {
+          const a = screen[i];
+          const b = screen[(i + 1) % screen.length];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const lengthSq = dx * dx + dy * dy;
+          const t = lengthSq > 0
+            ? Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / lengthSq))
+            : 0;
+          const distance = Math.hypot(px - (a.x + dx * t), py - (a.y + dy * t));
+          // At a hole's seam the rim and the sloping bevel edge project to
+          // the same pixel. Automatic loops favor the setup-planar rim;
+          // manual/Option picking keeps the unmodified nearest-edge rule.
+          const score = distance + (session.mode === 'closed' && !e.altKey && entity.planarInSetup === false ? 0.5 : 0);
+          if (distance <= 10 && score <= bestScore) {
+            bestScore = score;
+            bestKey = entity.key;
+          }
+        }
+      }
+      return bestKey;
+    };
     const onPointerMove = (e: PointerEvent) => {
       wakeControllerFrame();
       const state = store.getState();
+
+      // CAM point-pick sessions own the pointer: hover-highlight the nearest
+      // candidate (same 16 px rule as the click commit) and style the cursor;
+      // navigation and hover-picking stay suspended for the session.
+      const camPick = state.camPointPick;
+      if (camPick) {
+        hideActiveToolCursor();
+        const rect = surface.domElement.getBoundingClientRect();
+        const projected = new CAD.Vector3();
+        let bestKey: string | null = null;
+        let bestDistance = 16;
+        for (const candidate of camPick.candidates) {
+          projected.set(candidate.point.x, candidate.point.y, candidate.point.z).project(camera);
+          if (projected.z < -1 || projected.z > 1) continue;
+          const sx = rect.left + ((projected.x + 1) * rect.width) / 2;
+          const sy = rect.top + ((1 - projected.y) * rect.height) / 2;
+          const distance = Math.hypot(sx - e.clientX, sy - e.clientY);
+          if (distance <= bestDistance) {
+            bestDistance = distance;
+            bestKey = camPickCandidateKey(candidate);
+          }
+        }
+        state.setCamPointPickHover(bestKey);
+        surface.domElement.style.cursor = bestKey ? 'pointer' : 'crosshair';
+        camPickCursorActive = true;
+        return;
+      }
+      if (camPickCursorActive) {
+        camPickCursorActive = false;
+        surface.domElement.style.cursor = '';
+      }
+
+      // CAM hole-pick sessions: hovering highlights only drillable
+      // cylindrical faces; everything else stays inert for the session.
+      if (state.camHolePick) {
+        hideActiveToolCursor();
+        const hole = pickCamHole(e, state);
+        state.setCamHolePickHover(hole?.key ?? null);
+        state.setHoveredFace(hole ? hole.faceId : null);
+        surface.domElement.style.cursor = hole ? 'pointer' : 'crosshair';
+        return;
+      }
+
+      // CAM loop-pick sessions: hovering highlights the closed sketch loop
+      // under the pointer; navigation and solid hover stay suspended.
+      if (state.camLoopPick) {
+        hideActiveToolCursor();
+        const key = pickCamLoop(e, state);
+        state.setCamLoopPickHover(key);
+        surface.domElement.style.cursor = key ? 'pointer' : 'crosshair';
+        return;
+      }
+
+      // CAM chain-pick sessions (contour): hovering highlights the sketch
+      // curve entity under the pointer.
+      if (state.camChainPick) {
+        hideActiveToolCursor();
+        const key = pickCamChainEntity(e, state);
+        void hoverCamChain(key);
+        surface.domElement.style.cursor = key ? 'pointer' : 'crosshair';
+        return;
+      }
+
       updateActiveToolCursor(state, e);
       if (jointMotionDrag && e.pointerId === jointMotionDrag.pointerId) {
         const drag = jointMotionDrag;
@@ -10543,6 +10808,54 @@ export function Viewport() {
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
       const state = store.getState();
+
+      // CAM point-pick sessions own the left button: choose the nearest
+      // highlighted candidate (model coordinates) and never fall through
+      // into navigation tools or selection.
+      const camPick = state.camPointPick;
+      if (camPick) {
+        const rect = surface.domElement.getBoundingClientRect();
+        const projected = new CAD.Vector3();
+        let best: (typeof camPick.candidates)[number] | null = null;
+        let bestDistance = 16;
+        for (const candidate of camPick.candidates) {
+          projected.set(candidate.point.x, candidate.point.y, candidate.point.z).project(camera);
+          if (projected.z < -1 || projected.z > 1) continue;
+          const sx = rect.left + ((projected.x + 1) * rect.width) / 2;
+          const sy = rect.top + ((1 - projected.y) * rect.height) / 2;
+          const distance = Math.hypot(sx - e.clientX, sy - e.clientY);
+          if (distance <= bestDistance) {
+            best = candidate;
+            bestDistance = distance;
+          }
+        }
+        if (best) completeCamPointPick(best);
+        return;
+      }
+
+      // CAM hole-pick sessions: left-click toggles the cylindrical face
+      // under the pointer as a drilling/threading hole.
+      if (state.camHolePick) {
+        const hole = pickCamHole(e, state);
+        if (hole) state.toggleCamHolePickHole(hole);
+        return;
+      }
+
+      // CAM loop-pick sessions: left-click makes the closed sketch loop under
+      // the pointer the operation's path.
+      if (state.camLoopPick) {
+        const key = pickCamLoop(e, state);
+        if (key) state.selectCamLoopPickLoop(key);
+        return;
+      }
+
+      // CAM chain-pick sessions (contour): left-click toggles the sketch
+      // curve entity under the pointer into/out of the chain.
+      if (state.camChainPick) {
+        const key = pickCamChainEntity(e, state);
+        if (key) void pickCamChain(key, e.altKey);
+        return;
+      }
 
       // Modal nav tool: left-drag applies it (a clean click in pick-plane
       // mode still picks the plane — handled on pointerup).
@@ -12345,6 +12658,8 @@ export function Viewport() {
     // --- Store subscription: mode transitions, snapshots, hover sync ---
     const store = useAppStore;
     let nativeTransientDirty = true;
+    const onCutterMeshReady = () => { nativeTransientDirty = true; wakeControllerFrame(); };
+    window.addEventListener('cam-cutter-mesh-ready', onCutterMeshReady);
     let prevMode = store.getState().mode;
     let lastReferencePickerVisible = referencePickerVisible(store.getState());
     let lastSketch: SketchDto | null = null;
@@ -12464,7 +12779,6 @@ export function Viewport() {
       dimensions: store.getState().palette.dimensions,
       constraints: store.getState().palette.constraints,
     };
-
     // Track ground-grid rebuild with fade-aware opacity.
     const updateGridFades = (dt: number) => {
       const step = dt * 4; // ~250 ms fade
@@ -12489,9 +12803,39 @@ export function Viewport() {
       );
     };
 
-    const unsub = store.subscribe((s) => {
-      nativeTransientDirty = true;
-      wakeControllerFrame();
+    const unsub = store.subscribe((s, previous) => {
+      const playbackClockChanged =
+        s.camSimulationPlayback !== previous.camSimulationPlayback;
+      const nativeStockFrameChanged = s.camSimulation !== previous.camSimulation
+        && s.camSimulation?.native_stock_present === true
+        && previous.camSimulation?.native_stock_present === true
+        && s.camSimulationPlayback !== null
+        && s.camSimulation.setup_id === previous.camSimulation.setup_id
+        && s.camSimulation.through_operation_id === previous.camSimulation.through_operation_id;
+      const playbackOnlyUpdate = (playbackClockChanged || nativeStockFrameChanged)
+        && (s.camSimulationPlayback === null) === (previous.camSimulationPlayback === null)
+        && s.activeTab === previous.activeTab
+        && s.camDocument === previous.camDocument
+        && s.selectedCamOperationId === previous.selectedCamOperationId
+        && s.camProgram === previous.camProgram
+        && (s.camSimulation === previous.camSimulation || nativeStockFrameChanged)
+        && s.camSimulationTimeline === previous.camSimulationTimeline
+        && s.camWorkpieceView === previous.camWorkpieceView
+        && s.camToolpathsVisible === previous.camToolpathsVisible
+        && s.camPointPick === previous.camPointPick
+        && s.camHolePick === previous.camHolePick
+        && s.camLoopPick === previous.camLoopPick
+        && s.camChainPick === previous.camChainPick
+        && s.camDialog === previous.camDialog
+        && s.solidScene === previous.solidScene;
+      // Native playback sends a retained semantic cutter pose through the
+      // lightweight presentation channel. Do not re-hash/re-upload the stock
+      // mesh and full toolpath for a clock-only update. Any simultaneous CAM
+      // or scene change still rebuilds the preview, including project resets.
+      if (!playbackOnlyUpdate) {
+        nativeTransientDirty = true;
+        wakeControllerFrame();
+      }
       const referencesVisible = referencePickerVisible(s);
       if (referencesVisible !== lastReferencePickerVisible) {
         lastReferencePickerVisible = referencesVisible;
@@ -12579,6 +12923,12 @@ export function Viewport() {
       }
       if (
         s.selectedBody !== lastSolidSelection.body ||
+        s.activeTab !== previous.activeTab ||
+        s.camWorkpieceView !== previous.camWorkpieceView ||
+        s.camDialog !== previous.camDialog ||
+        s.selectedCamOperationId !== previous.selectedCamOperationId ||
+        s.camDocument !== previous.camDocument ||
+        (!playbackOnlyUpdate && (s.camSimulation !== previous.camSimulation || s.camSimulationTimeline !== previous.camSimulationTimeline)) ||
         s.selectedBodies.join(',') !== lastSolidSelection.bodies ||
         s.selectedFace !== lastSolidSelection.face ||
         s.selectedFaces.join(',') !== lastSolidSelection.faces ||
@@ -12881,6 +13231,7 @@ export function Viewport() {
       resizeObserver.disconnect();
       unsub();
       unsubscribeOpenedFraming();
+      window.removeEventListener('cam-cutter-mesh-ready', onCutterMeshReady);
       surface.domElement.removeEventListener('pointerdown', onNavPointerDown);
       surface.domElement.removeEventListener('pointermove', onPointerMove);
       surface.domElement.removeEventListener('pointerleave', onPointerLeave);

@@ -37,8 +37,13 @@
     "test:viewport-theme": "tsx src/theme/viewportInteractionTheme.test.ts",
     "test:project-archive": "tsx src/files/nbcad.test.ts && node scripts/test-project-archive.mjs",
     "test:profile-picker": "tsx src/modeling/profileRegionPicker.test.ts",
+    "test:cam-path-progress": "tsx scripts/test-cam-path-progress.ts",
     "check:knowledge": "node scripts/check-knowledge.mjs",
     "audit:icons": "node scripts/audit-icons.mjs",
+    "e2e:cam-icons": "node scripts/run-e2e.mjs e2e-cam-icons.mjs e2e-cam-icon-consistency.mjs",
+    "e2e:cam-browser-editing": "node scripts/run-e2e.mjs e2e-cam-browser-editing.mjs",
+    "test:cam-editing": "tsx scripts/test-cam-editing.ts",
+    "test:cam-cutting": "tsx scripts/test-cam-cutting.ts",
     "e2e": "node scripts/run-e2e.mjs",
     "e2e:release": "node scripts/run-e2e.mjs e2e-sketch.mjs e2e-sketch-constraint-hardening.mjs e2e-reference-dimensions.mjs e2e-m1b.mjs e2e-m1c.mjs e2e-m1c2.mjs e2e-m1d.mjs e2e-m1d-fixes.mjs e2e-input-selection.mjs e2e-adaptive-grid.mjs e2e-origin-chain.mjs e2e-point-extension.mjs e2e-overlapping-profile.mjs e2e-shared-profile-extrude.mjs e2e-internal-datum-profile.mjs e2e-solid-edge-picking.mjs e2e-selection-readout.mjs e2e-extrude-enter-profile.mjs e2e-extrude-planar-face.mjs e2e-modeling-picker-state.mjs e2e-face-sketch-profile-picking.mjs e2e-surface-point-feedback.mjs e2e-history-plane-stability.mjs e2e-timeline-drag-delete.mjs e2e-hole-multi-point.mjs e2e-hole-thread.mjs e2e-external-thread.mjs e2e-slot.mjs e2e-spline.mjs e2e-m2.mjs e2e-revolve.mjs e2e-advanced-solids.mjs e2e-project-lifecycle.mjs e2e-theme.mjs e2e-six-dof-mouse.mjs e2e-drawing.mjs e2e-joints.mjs",
     "e2e:drawing": "node scripts/run-e2e.mjs e2e-drawing.mjs",
@@ -78,6 +83,7 @@
     "e2e:theme": "node scripts/run-e2e.mjs e2e-theme.mjs",
     "e2e:six-dof": "node scripts/run-e2e.mjs e2e-six-dof-mouse.mjs",
     "e2e:bevy-kernel": "node scripts/run-e2e.mjs e2e-bevy-interaction-kernel.mjs",
+    "e2e:ribbon": "node scripts/run-e2e.mjs e2e-ribbon-responsive.mjs",
     "e2e:files": "node scripts/run-e2e.mjs e2e-m2.mjs"
   },
   "dependencies": {

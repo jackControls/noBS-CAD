@@ -69,6 +69,7 @@ export function ProjectMenuControls() {
   const drawingSheetReady = useAppStore((s) => s.drawingDocument.active_sheet_id !== null
     && s.drawingDocument.sheets.some((sheet) => sheet.id === s.drawingDocument.active_sheet_id)
     && !s.drawingSheetSetupOpen);
+  const camWorkspace = useAppStore((s) => s.activeTab === 'cam');
   const modelBusy = useAppStore((s) => s.solidBusy);
   const projectBusy = useAppStore((s) => s.projectBusy);
   const historyEditing = useAppStore((s) => s.historyEdit !== null);
@@ -339,6 +340,16 @@ export function ProjectMenuControls() {
                     }}
                   />
                 </>
+              )}
+              {camWorkspace && (
+                <FileMenuItem
+                  icon={<FileDown size={14} />}
+                  label={t('file.exportCamNc')}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    useAppStore.getState().setCamDialog({ type: 'post' });
+                  }}
+                />
               )}
               <div className="my-1 border-t border-edge" />
               <FileMenuItem

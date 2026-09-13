@@ -140,7 +140,7 @@ function selectBrowserJoint(joint: JointDefinitionDto) {
   state.setSelectedJointId(joint.id);
 }
 
-export function BrowserTree() {
+export function BrowserTree({ embedded = false }: { embedded?: boolean }) {
   const { t } = useTranslation();
   const document = useAppStore((s) => s.document);
   const mode = useAppStore((s) => s.mode);
@@ -393,7 +393,11 @@ export function BrowserTree() {
   return (
     <aside
       data-testid="browser-panel"
-      className="flex w-60 shrink-0 flex-col border-r border-edge bg-panel"
+      className={
+        embedded
+          ? 'flex h-full w-full flex-col bg-panel'
+          : 'flex w-60 shrink-0 flex-col border-r border-edge bg-panel'
+      }
     >
       <div className="flex h-7 shrink-0 items-center border-b border-edge px-2">
         <span className="text-[10px] font-semibold tracking-widest text-mute">

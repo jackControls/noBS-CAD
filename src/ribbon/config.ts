@@ -29,7 +29,15 @@ export type RibbonAction =
   | 'drawingTool'
   | 'drawingExportDxf'
   | 'drawingExportProfileDxf'
-  | 'drawingPrint';
+  | 'drawingPrint'
+  | 'camWorkspace'
+  | 'camNewSetup'
+  | 'camToolLibrary'
+  | 'camAddOperation'
+  | 'camPost'
+  | 'camSimulate'
+  | 'camSimulateNc'
+  | 'camExportEvents';
 
 export type MenuEntry =
   | {
@@ -82,5 +90,9 @@ export const SOLID_TAB = workspace('solid');
 export const SKETCH_TAB = workspace('sketch');
 export const DRAWING_TAB = workspace('drawing');
 export const ASSEMBLY_TAB = workspace('assembly');
+export const CAM_TAB = workspace('cam');
+/** Task pages share the same CAM document, viewport and prepared simulation. */
+export const CAM_SIMULATE_TAB = workspace('cam-simulate');
+export const CAM_OUTPUT_TAB = workspace('cam-output');
 export const SOLID_WORKSPACE_TABS = [SOLID_TAB].map(({id,labelKey,enabled})=>({id,labelKey,enabled}));
 export function ribbonTabById(id: string): RibbonTab { return catalog.workspaces.find(t=>t.id===id) as RibbonTab ?? SOLID_TAB; }

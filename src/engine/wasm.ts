@@ -63,6 +63,20 @@ type WasmEngineMethods = WasmEngineInner & {
   assembly_evaluate_motion_study(payload: string): string;
   assembly_swept_collision_check(payload: string): string;
   assembly_set_grounded_body(payload: string): string;
+  cam_document(): string;
+  geometry_edge_chain(payload: string): string;
+  cam_chamfer_geometry(payload: string): string;
+  cam_cutter_mesh(payload: string): string;
+  cam_set_document(payload: string): string;
+  cam_toolpath_statuses(): string;
+  cam_regenerate_operation(payload: string): string;
+  cam_regenerate_setup(payload: string): string;
+  cam_plan(payload: string): string;
+  cam_post(payload: string): string;
+  cam_analyze_nbpost(payload: string): string;
+  cam_simulate(payload: string): string;
+  cam_simulate_gcode(payload: string): string;
+  cam_post_events(payload: string): string;
 };
 import type {
   AddConstraintResult,
@@ -73,6 +87,16 @@ import type {
   ArcCenterRequest,
   BreakRequest,
   BodyAppearance,
+  CamDocumentDto,
+  CamGcodeSimulationRequestDto,
+  CamPostRequestDto,
+  CamPostResultDto,
+  CamProgramDto,
+  CamSimulationRequestDto,
+  CamSimulationResultDto,
+  CamToolpathStatusDto,
+  NbPostAnalysisDto,
+  NbPostAnalysisRequestDto,
   BodyFeatureDefinitionDto,
   BodyFeatureRequestDto,
   ChamferRequest,
@@ -121,6 +145,7 @@ import type {
   DrawingDocumentDto,
   DrawingProjectionDto,
   DrawingProjectionRequest,
+  PostEventStreamDto,
   FaceSketchOrigin,
   EditDimensionRequest,
   EndSketchResult,
@@ -508,6 +533,83 @@ export class WasmEngine implements Engine {
       if (scene.bodies.length === 0) throw new Error('The selected assembly drawing contains no visible body occurrences.');
     }
     return projectSceneForDrawing(scene, request);
+  }
+
+  async geometryEdgeChain(request: import('./types').GeometryEdgeChainRequest): Promise<import('./types').GeometryEdgeChain> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).geometry_edge_chain(JSON.stringify(request)));
+  }
+
+  async camChamferGeometry(request: import('./types').CamChamferGeometryRequest): Promise<import('./types').CamChamferGeometry> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).cam_chamfer_geometry(JSON.stringify(request)));
+  }
+
+  async camDocument(): Promise<CamDocumentDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).cam_document());
+  }
+
+  async camCutterMesh(geometry: import('./types').CamCutterGeometryDto): Promise<import('./types').CamCutterMeshDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).cam_cutter_mesh(JSON.stringify(geometry)));
+  }
+
+  async setCamDocument(document: CamDocumentDto): Promise<CamDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_set_document(JSON.stringify(document)),
+    );
+  }
+
+  async camToolpathStatuses(): Promise<CamToolpathStatusDto[]> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).cam_toolpath_statuses());
+  }
+
+  async camRegenerateOperation(operationId: number): Promise<CamDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_regenerate_operation(JSON.stringify(operationId)),
+    );
+  }
+
+  async camRegenerateSetup(setupId: number): Promise<CamDocumentDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_regenerate_setup(JSON.stringify(setupId)),
+    );
+  }
+
+  async camPlan(setupId: number, throughOperationId?: number): Promise<CamProgramDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_plan(JSON.stringify(throughOperationId == null ? setupId
+        : { setup_id: setupId, through_operation_id: throughOperationId })),
+    );
+  }
+
+  async camPost(request: CamPostRequestDto): Promise<CamPostResultDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_post(JSON.stringify(request)),
+    );
+  }
+
+  async camAnalyzeNbPost(request: NbPostAnalysisRequestDto): Promise<NbPostAnalysisDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_analyze_nbpost(JSON.stringify(request)),
+    );
+  }
+
+  async camSimulate(request: CamSimulationRequestDto): Promise<CamSimulationResultDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_simulate(JSON.stringify(request)),
+    );
+  }
+
+  async camSimulateGcode(
+    request: CamGcodeSimulationRequestDto,
+  ): Promise<CamSimulationResultDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_simulate_gcode(JSON.stringify(request)),
+    );
+  }
+
+  async camPostEvents(setupId: number): Promise<PostEventStreamDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).cam_post_events(JSON.stringify(setupId)),
+    );
   }
 
   async setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]> {

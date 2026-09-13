@@ -10,10 +10,12 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const sourcePath = resolve(root, 'src/components/icons.tsx');
+const camSourcePath = resolve(root, 'src/components/cam/CamToolIcon.tsx');
 const brandPath = resolve(root, 'public/app-icon.svg');
 const provenancePath = resolve(root, 'docs/ICON_PROVENANCE.md');
-const [source, brand, provenance] = await Promise.all([
+const [source, camSource, brand, provenance] = await Promise.all([
   readFile(sourcePath, 'utf8'),
+  readFile(camSourcePath, 'utf8'),
   readFile(brandPath, 'utf8'),
   readFile(provenancePath, 'utf8'),
 ]);
@@ -24,6 +26,12 @@ const glyphBlock = source.match(
 if (!glyphBlock) {
   throw new Error('Could not locate the product-owned GLYPHS registry.');
 }
+const camGlyphBlock = camSource.match(
+  /const CAM_GLYPHS: Record<CamIconId, ReactNode> = \{([\s\S]*?)\n\};\n\n\/\*\* Stable inventory/,
+);
+if (!camGlyphBlock) {
+  throw new Error('Could not locate the product-owned CAM_GLYPHS registry.');
+}
 
 const inventoryBlock = provenance.match(
   /<!-- custom-icon-inventory:start -->([\s\S]*?)<!-- custom-icon-inventory:end -->/,
@@ -33,7 +41,9 @@ if (!inventoryBlock) {
 }
 
 const sourceIds = [
-  ...glyphBlock[1].matchAll(/^\s{2}([A-Za-z][A-Za-z0-9]*):\s*\(/gm),
+  // A glyph may be a JSX component as well as a parenthesized fragment.
+  ...glyphBlock[1].matchAll(/^ {2}([A-Za-z][A-Za-z0-9]*):/gm),
+  ...camGlyphBlock[1].matchAll(/^ {2}([A-Za-z][A-Za-z0-9]*):/gm),
 ].map((match) => match[1]);
 const documentedIds = [
   ...inventoryBlock[1].matchAll(/`([A-Za-z][A-Za-z0-9]*)`/g),
@@ -53,7 +63,7 @@ const forbiddenAssetPatterns = [
   [/\bfrom\s+['"][^'"]+\.(?:svg|png|jpe?g|webp)['"]/i, 'imported image asset'],
 ];
 const forbiddenAssets = forbiddenAssetPatterns
-  .filter(([pattern]) => pattern.test(glyphBlock[1]))
+  .filter(([pattern]) => pattern.test(glyphBlock[1]) || pattern.test(camSource))
   .map(([, description]) => description);
 
 const problems = [];
@@ -73,11 +83,13 @@ if (problems.length) {
 }
 
 const glyphDigest = createHash('sha256').update(source).digest('hex');
+const camGlyphDigest = createHash('sha256').update(camSource).digest('hex');
 const brandDigest = createHash('sha256').update(brand).digest('hex');
 console.log(
   [
     `Icon provenance OK: ${sourceSet.length} custom glyphs`,
     `${relative(root, sourcePath)} sha256 ${glyphDigest}`,
+    `${relative(root, camSourcePath)} sha256 ${camGlyphDigest}`,
     `${relative(root, brandPath)} sha256 ${brandDigest}`,
   ].join('; '),
 );
