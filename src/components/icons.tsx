@@ -5,12 +5,16 @@
  * rounded monochrome strokes, open construction geometry, and small directional
  * markers. They describe an operation instead of imitating a physical toolbar
  * button. General-purpose UI symbols come from the ISC-licensed Lucide library.
+ * CAM operations use the separate steel-and-blue machining pictogram family.
  *
  * The custom inventory and its construction rationale are recorded in
  * docs/ICON_PROVENANCE.md. Do not paste, trace, or adapt vendor icon paths here.
  */
 import type { ReactNode } from 'react';
+import { CAM_ICON_IDS, CamToolIcon, isCamIcon } from './cam/CamToolIcon';
 import {
+  Code2,
+  Cuboid,
   Crosshair,
   Equal,
   FlipHorizontal2,
@@ -355,7 +359,7 @@ const GLYPHS: Record<string, ReactNode> = {
 };
 
 /** Stable inventory used by documentation and lightweight integrity checks. */
-export const CUSTOM_ICON_IDS: readonly string[] = Object.freeze(Object.keys(GLYPHS));
+export const CUSTOM_ICON_IDS: readonly string[] = Object.freeze([...Object.keys(GLYPHS), ...CAM_ICON_IDS]);
 
 /* ------------------------------------------------------------------ */
 /* Licensed general-purpose icons                                      */
@@ -373,6 +377,8 @@ const LUCIDE: Record<string, LucideIcon> = {
   measure: Ruler,
   select: MousePointer2,
   fixLucide: Lock,
+  code: Code2,
+  box: Cuboid,
 };
 
 /** Glyph ids rendered in the constraint color. */
@@ -404,6 +410,10 @@ export function ToolIcon({
   className?: string;
 }) {
   const colorClass = tone === 'constraint' ? 'text-[#e07878]' : undefined;
+
+  if (isCamIcon(id)) {
+    return <CamToolIcon id={id} size={size} className={className} />;
+  }
 
   if (id && GLYPHS[id]) {
     return (

@@ -19,10 +19,11 @@ pub enum FocusPack {
     History,
     Inspect,
     Print,
+    Cam,
 }
 
 impl FocusPack {
-    pub const ALL: [FocusPack; 10] = [
+    pub const ALL: [FocusPack; 11] = [
         FocusPack::Document,
         FocusPack::Assembly,
         FocusPack::Sketch,
@@ -33,6 +34,7 @@ impl FocusPack {
         FocusPack::History,
         FocusPack::Inspect,
         FocusPack::Print,
+        FocusPack::Cam,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -47,6 +49,7 @@ impl FocusPack {
             FocusPack::History => "history",
             FocusPack::Inspect => "inspect",
             FocusPack::Print => "print",
+            FocusPack::Cam => "cam",
         }
     }
 
@@ -62,6 +65,7 @@ impl FocusPack {
             "history" => Some(FocusPack::History),
             "inspect" => Some(FocusPack::Inspect),
             "print" => Some(FocusPack::Print),
+            "cam" => Some(FocusPack::Cam),
             _ => None,
         }
     }
@@ -83,6 +87,9 @@ impl FocusPack {
             FocusPack::Inspect => "Read-only solid and sketch definition catalogs.",
             FocusPack::Print => {
                 "Manufacturing export: 3MF/STL/STEP, materials, appearance, and print demos."
+            }
+            FocusPack::Cam => {
+                "Machining: CAM document, tool library, manual setups, toolpath planning, posting, and simulation."
             }
         }
     }
@@ -637,6 +644,14 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
         | "project_visibility"
         | "project_set_visibility"
         | "demo_export_pip_3mf" => FocusPack::Print,
+        "cam_get_document"
+        | "cam_set_document"
+        | "cam_toolpath_statuses"
+        | "cam_regenerate_operation"
+        | "cam_regenerate_setup"
+        | "cam_plan_setup"
+        | "cam_post_setup"
+        | "cam_simulate_setup" => FocusPack::Cam,
         _ => FocusPack::Document,
     };
     (pack, false)
@@ -718,6 +733,19 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
     }
     if matches!(
         name,
+        "cam_get_document"
+            | "cam_set_document"
+            | "cam_toolpath_statuses"
+            | "cam_regenerate_operation"
+            | "cam_regenerate_setup"
+            | "cam_plan_setup"
+            | "cam_post_setup"
+            | "cam_simulate_setup"
+    ) {
+        return Some(FocusPack::Cam);
+    }
+    if matches!(
+        name,
         "cad_set_document_name"
             | "cad_project_model"
             | "cad_load_project_model"
@@ -775,6 +803,7 @@ pub fn focus_from_ui(
         "history" => FocusPack::History,
         "inspect" => FocusPack::Inspect,
         "print" | "export" => FocusPack::Print,
+        "cam" | "manufacture" => FocusPack::Cam,
         _ => FocusPack::Document,
     }
 }
@@ -959,8 +988,16 @@ mod tests {
             "cad_document",
             "solid_scene",
             "solid_recompute",
+            "cam_get_document",
+            "cam_set_document",
+            "cam_toolpath_statuses",
+            "cam_regenerate_operation",
+            "cam_regenerate_setup",
+            "cam_plan_setup",
+            "cam_post_setup",
+            "cam_simulate_setup",
         ];
-        assert_eq!(modeling.len(), 119);
+        assert_eq!(modeling.len(), 127);
         for name in modeling {
             let (pack, spine) = tags_for_tool(name);
             assert!(

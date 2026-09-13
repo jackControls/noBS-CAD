@@ -44,6 +44,7 @@
     "export3mfSelected": "Export Selected Body as 3MF…",
     "exportDrawingDxf": "Export Active Drawing as DXF…",
     "exportManufacturingProfileDxf": "Export 1:1 Manufacturing Profile DXF…",
+    "exportCamNc": "Post Active CAM Setup as NC…",
     "stlDropsAppearance": "STL has no materials or colors — appearance will be omitted.",
     "zipHint": ".nbcad is a versioned ZIP archive containing manifest.json and model.json.",
     "unsaved": "Unsaved changes",
@@ -126,7 +127,9 @@
       "drawing": "DRAWING",
       "drawingWorkspace": "Drawing",
       "assembly": "ASSEMBLY",
-      "assemblyWorkspace": "Assembly"
+      "assemblyWorkspace": "Assembly",
+      "cam": "MANUFACTURE",
+      "camWorkspace": "Manufacture"
     },
     "panels": {
       "profile": "PROFILE",
@@ -149,7 +152,11 @@
       "symbols": "SYMBOLS",
       "output": "OUTPUT",
       "sheet": "SHEET",
-      "joints": "JOINTS"
+      "joints": "JOINTS",
+      "manufacturing": "MANUFACTURING",
+      "toolpaths": "TOOLPATHS",
+      "setup": "SETUP",
+      "manage": "MANAGE"
     },
     "finishSketch": "FINISH SKETCH",
     "solid": {
@@ -239,6 +246,31 @@
       "exportDxf": "Export DXF",
       "exportProfileDxf": "Profile DXF",
       "print": "Print / PDF"
+    },
+    "cam": {
+      "taskTabs": "Manufacture tasks",
+      "programTab": "Program",
+      "simulateTab": "Simulate",
+      "outputTab": "Output",
+      "advanced": "Advanced",
+      "playback": "Playback",
+      "display": "Display",
+      "simulationIdle": "Choose CAM Sim or NC Sim to begin.",
+      "open": "CAM",
+      "model": "3D Model",
+      "newSetup": "New Setup",
+      "toolLibrary": "Tool Library",
+      "face": "Face",
+      "adaptive": "High Speed Roughing",
+      "contour": "2D Contour",
+      "pocket": "2D Pocket",
+      "chamfer": "2D Chamfer",
+      "drill": "Drill",
+      "thread": "Thread",
+      "post": "Post NC",
+      "events": "Post Events",
+      "simulate": "CAM Sim",
+      "simulateNc": "NC Sim"
     },
     "sketch": {
       "line": "Line",

@@ -58,6 +58,7 @@ export async function checkInboxCompletion() {
         if (command === 'engine_solid_scene') return ok(scene);
         if (command === 'engine_drawing_document') return ok(initial.drawingDocument);
         if (command === 'engine_assembly_document') return ok(initial.assemblyDocument);
+        if (command === 'engine_cam_document') return ok(initial.camDocument);
         if (command === 'engine_assembly_solution') return ok(initial.assemblySolution);
         if (command === 'engine_finished_sketches' && phase === 'hydration-failure') throw new Error('Replacement metadata is unavailable');
         if (['engine_finished_sketches', 'engine_datum_plane_definitions', 'engine_body_appearances'].includes(command)) return ok([]);

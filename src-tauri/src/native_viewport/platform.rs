@@ -102,6 +102,7 @@ use {
     gtk::prelude::*,
 };
 
+use super::path_progress::{active_cursor, split_segment};
 use super::profile_outline::{base_curve_remainder, profile_outline_segments, BaseCurveRemainder};
 use super::ui::{
     self, HudAxisLabel, HudAxisMark, NativeHudRoot, ViewportUiAssets, ViewportUiTheme,
@@ -109,10 +110,10 @@ use super::ui::{
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", test))]
 use super::ViewportRect;
 use super::{
-    NativePick, NativePickPurpose, NativeViewportMetrics, ViewportAnnotationKind, ViewportCamera,
-    ViewportHud, ViewportLayout, ViewportLinePattern, ViewportMode, ViewportModel,
-    ViewportOriginPlane, ViewportPalette, ViewportPresentation, ViewportPreview, ViewportSnapKind,
-    ViewportSnapMarker,
+    NativePick, NativePickPurpose, NativeViewportMetrics, ViewportAnnotationKind, ViewportCamStock,
+    ViewportCamTool, ViewportCamera, ViewportHud, ViewportLayout, ViewportLinePattern,
+    ViewportMode, ViewportModel, ViewportOriginPlane, ViewportPalette, ViewportPresentation,
+    ViewportPreview, ViewportSnapKind, ViewportSnapMarker,
 };
 use crate::state::BOOTSTRAP_SESSION_ID;
 
@@ -123,6 +124,9 @@ pub(crate) mod script_preview;
 const INITIAL_PHYSICAL_SIZE: u32 = 1;
 #[cfg(not(target_os = "linux"))]
 const INITIAL_PHYSICAL_SIZE: u32 = 32;
+// 4x is portable for our color/depth targets; 8x fails validation on Apple M4.
+// Keep the model and overlay cameras on the same supported sample count.
+pub(super) const VIEWPORT_MSAA: Msaa = Msaa::Sample4;
 /// Base mesh size; a camera-aware transform keeps its screen footprint stable.
 const REFERENCE_PLANE_HALF_SIZE: f32 = 50.0;
 const REFERENCE_PLANE_SCREEN_FRACTION: f32 = 0.32;
@@ -224,19 +228,23 @@ enum RenderCommand {
     DropModelSession(String),
     Camera(ViewportCamera),
     Preview(ViewportPreview),
+    CamStock(Option<ViewportCamStock>),
     Presentation(ViewportPresentation),
 }
 
 #[derive(Default)]
 struct PendingRenderCommands {
+    app: Option<tauri::AppHandle>,
     resize: Option<(f64, f64, f64, ViewportPalette, ViewportHud)>,
     model: Option<ViewportModel>,
     rebind_model_sessions: Vec<(String, String)>,
     drop_model_sessions: Vec<String>,
     camera: Option<ViewportCamera>,
     preview: Option<ViewportPreview>,
+    cam_stock: Option<Option<ViewportCamStock>>,
     presentation: Option<ViewportPresentation>,
     scheduled: bool,
+    settle_frames: usize,
 }
 
 struct MainThreadRenderRuntime {
@@ -289,7 +297,10 @@ impl PlatformNativeViewport {
             .ok_or_else(|| "main Tauri webview window is missing".to_string())?;
         let app_handle = app.handle().clone();
         let runtime = Arc::new(AtomicUsize::new(0));
-        let pending = Arc::new(Mutex::new(PendingRenderCommands::default()));
+        let pending = Arc::new(Mutex::new(PendingRenderCommands {
+            app: Some(app_handle.clone()),
+            ..default()
+        }));
         let pick_state = Arc::new(Mutex::new(PickState::default()));
         let layout_revision = Arc::new(AtomicU64::new(0));
         let last_layout = Arc::new(Mutex::new(None));
@@ -630,7 +641,34 @@ impl PlatformNativeViewport {
         {
             return Err("native transient presentation is too large".to_string());
         }
+        if preview.lines.iter().any(|layer| {
+            layer
+                .playback
+                .as_ref()
+                .is_some_and(|playback| !playback.is_valid_for(layer.segments.len()))
+        }) {
+            return Err("native timed path has invalid segment timing".to_string());
+        }
         self.enqueue(RenderCommand::Preview(preview))
+    }
+
+    pub fn set_cam_stock(&self, stock: Option<ViewportCamStock>) -> Result<(), String> {
+        const MAX_CAM_STOCK_FLOATS: usize = 9 * 262_144;
+        if let Some(stock) = &stock {
+            if stock.positions.is_empty()
+                || !stock.positions.len().is_multiple_of(9)
+                || stock.positions.len() > MAX_CAM_STOCK_FLOATS
+                || (!stock.normals.is_empty() && stock.normals.len() != stock.positions.len())
+                || !stock
+                    .positions
+                    .iter()
+                    .chain(stock.normals.iter())
+                    .all(|value| value.is_finite())
+            {
+                return Err("native CAM stock surface is invalid or too large".to_string());
+            }
+        }
+        self.enqueue(RenderCommand::CamStock(stock))
     }
 
     pub fn set_presentation(&self, presentation: ViewportPresentation) -> Result<(), String> {
@@ -679,12 +717,12 @@ impl PlatformNativeViewport {
         if !should_schedule {
             return Ok(());
         }
-        let runtime = self.runtime.clone();
-        let pending = self.pending.clone();
-        let metrics = self.metrics.clone();
-        if let Err(error) = self.app.run_on_main_thread(move || {
-            drain_render_commands(&runtime, &pending, &metrics);
-        }) {
+        if let Err(error) = schedule_render_drain(
+            self.app.clone(),
+            self.runtime.clone(),
+            self.pending.clone(),
+            self.metrics.clone(),
+        ) {
             if let Ok(mut pending) = self.pending.lock() {
                 pending.scheduled = false;
             }
@@ -2098,6 +2136,12 @@ struct PreviewResource {
     mesh_revision: u64,
 }
 
+#[derive(Resource, Default)]
+struct CamStockResource {
+    value: Option<ViewportCamStock>,
+    revision: u64,
+}
+
 #[derive(Resource, Clone, Copy, Default)]
 struct PaletteResource(ViewportPalette);
 
@@ -2150,6 +2194,7 @@ struct RenderedRevisions {
     hud: u64,
     annotations: u64,
     preview_meshes: u64,
+    cam_stock: u64,
 }
 
 #[derive(Component)]
@@ -2193,6 +2238,21 @@ struct NativeOverlayCamera;
 #[derive(Component)]
 struct NativePreviewMesh;
 
+#[derive(Component)]
+struct NativeCamStockMesh;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NativeCamToolPartKind {
+    Flute,
+    Shank,
+}
+
+#[derive(Component, Clone, Copy)]
+struct NativeCamToolPart {
+    kind: NativeCamToolPartKind,
+    geometry: nbcad_cam::CamCutterGeometryDto,
+}
+
 #[derive(Clone, Copy)]
 enum NativePreviewArrowPartKind {
     Shaft,
@@ -2231,6 +2291,12 @@ struct NativeAnnotationRoot;
 
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct CadHighlightGizmos;
+
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct CamUpcomingPathGizmos;
+
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct CamCompletedPathGizmos;
 
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct CadSketchGizmos;
@@ -2346,6 +2412,8 @@ fn build_bevy_app(
 /// in separate worlds. A preview never replaces the live model or camera.
 fn install_cad_scene(app: &mut bevy::app::App) {
     app.init_gizmo_group::<CadHighlightGizmos>()
+        .init_gizmo_group::<CamUpcomingPathGizmos>()
+        .init_gizmo_group::<CamCompletedPathGizmos>()
         .init_gizmo_group::<CadSketchGizmos>()
         .init_gizmo_group::<CadPickFeedbackHaloGizmos>()
         .init_gizmo_group::<CadPickFeedbackGizmos>()
@@ -2364,6 +2432,7 @@ fn install_cad_scene(app: &mut bevy::app::App) {
         .init_resource::<ModelGeometryCache>()
         .init_resource::<CameraResource>()
         .init_resource::<PreviewResource>()
+        .init_resource::<CamStockResource>()
         .init_resource::<PaletteResource>()
         .init_resource::<HudResource>()
         .init_resource::<ViewportSizeResource>()
@@ -2381,6 +2450,9 @@ fn install_cad_scene(app: &mut bevy::app::App) {
                 rebuild_native_face_overlays,
                 apply_body_poses,
                 rebuild_native_preview_meshes,
+                rebuild_native_cam_stock,
+                update_native_cam_stock_visibility,
+                update_native_cam_tool,
                 update_native_preview_arrows,
                 rebuild_native_annotations,
                 rebuild_native_hud,
@@ -2409,6 +2481,18 @@ fn setup_scene(
     );
     let (highlight_config, _) = gizmo_config.config_mut::<CadHighlightGizmos>();
     highlight_config.depth_bias = -1.0;
+    // Bevy line pipelines write depth and compare Greater (reverse Z).
+    // Submission order cannot resolve coincident plunge/retract strokes.
+    // Give completed CAM travel a distinct nearer depth, without moving the
+    // physical line or tool. Avoid -1's near-plane rounding on both groups.
+    gizmo_config
+        .config_mut::<CamUpcomingPathGizmos>()
+        .0
+        .depth_bias = -0.98;
+    gizmo_config
+        .config_mut::<CamCompletedPathGizmos>()
+        .0
+        .depth_bias = -0.995;
     let (sketch_config, _) = gizmo_config.config_mut::<CadSketchGizmos>();
     // Visible sketches are reference graphics, not occluded model edges.
     // Match the browser renderer's depthTest:false contract so a sketch on a
@@ -2435,6 +2519,7 @@ fn setup_scene(
             NativeViewportCamera,
             NativeCadCamera,
             Camera3d::default(),
+            VIEWPORT_MSAA,
             BoxShadowSamples(6),
             Projection::Perspective(PerspectiveProjection {
                 fov: camera.vertical_fov_degrees.to_radians(),
@@ -2453,6 +2538,7 @@ fn setup_scene(
             NativeOverlayCamera,
             IsDefaultUiCamera,
             Camera3d::default(),
+            VIEWPORT_MSAA,
             Camera {
                 order: 1,
                 clear_color: ClearColorConfig::None,
@@ -2667,10 +2753,12 @@ fn rebuild_occt_meshes(
 fn apply_camera(
     camera: Res<CameraResource>,
     image_target: Option<Res<SceneImageTarget>>,
+    presentation: Res<PresentationResource>,
+    mut ambient: ResMut<GlobalAmbientLight>,
     mut revisions: ResMut<RenderedRevisions>,
     mut query: Query<(&mut Transform, &mut Projection), With<NativeViewportCamera>>,
     mut key_lights: Query<
-        &mut Transform,
+        (&mut Transform, &mut DirectionalLight),
         (
             With<CadKeyLight>,
             Without<CadFillLight>,
@@ -2678,7 +2766,7 @@ fn apply_camera(
         ),
     >,
     mut fill_lights: Query<
-        &mut Transform,
+        (&mut Transform, &mut DirectionalLight),
         (
             With<CadFillLight>,
             Without<CadKeyLight>,
@@ -2686,10 +2774,13 @@ fn apply_camera(
         ),
     >,
 ) {
-    if revisions.camera == camera.revision {
+    let cam_lighting = presentation.0.cam_stock_visible;
+    let ambient_brightness = if cam_lighting { 500.0 } else { 900.0 };
+    if revisions.camera == camera.revision && ambient.brightness == ambient_brightness {
         return;
     }
     revisions.camera = camera.revision;
+    ambient.brightness = ambient_brightness;
     for (mut transform, mut projection) in &mut query {
         *transform = camera_transform(camera.camera);
         if let Projection::Perspective(perspective) = &mut *projection {
@@ -2706,12 +2797,53 @@ fn apply_camera(
             }
         }
     }
-    let (key_transform, fill_transform) = camera_relative_light_transforms(camera.camera);
-    for mut transform in &mut key_lights {
+    let (key_transform, fill_transform) = if cam_lighting {
+        cam_light_transforms(camera.camera)
+    } else {
+        camera_relative_light_transforms(camera.camera)
+    };
+    for (mut transform, mut light) in &mut key_lights {
         *transform = key_transform;
+        light.illuminance = if cam_lighting { 2_600.0 } else { 2_200.0 };
     }
-    for mut transform in &mut fill_lights {
+    for (mut transform, mut light) in &mut fill_lights {
         *transform = fill_transform;
+        light.illuminance = if cam_lighting { 750.0 } else { 2_200.0 };
+    }
+}
+
+/// An oblique key and softer fill reveal concave drill tips without an extra
+/// shadow/SSAO pass. Only remaining-stock inspection uses this rig; the CAD
+/// workspace retains its original symmetric studio lighting.
+pub(super) fn cam_light_transforms(camera: ViewportCamera) -> (Transform, Transform) {
+    let target = Vec3::from_array(camera.target);
+    let view = (Vec3::from_array(camera.position) - target)
+        .try_normalize()
+        .unwrap_or(Vec3::Y);
+    let up = Vec3::from_array(camera.up)
+        .try_normalize()
+        .unwrap_or(Vec3::Z);
+    let right = view
+        .cross(up)
+        .try_normalize()
+        .unwrap_or_else(|| view.any_orthonormal_vector());
+    let key = target + (view + right * 0.85 + up * 0.2).normalize_or_zero() * 100.0;
+    let fill = target + (view - right * 0.4).normalize_or_zero() * 100.0;
+    (
+        Transform::from_translation(key).looking_at(target, stable_view_up(target - key, up)),
+        Transform::from_translation(fill).looking_at(target, stable_view_up(target - fill, up)),
+    )
+}
+
+pub(super) fn cam_stock_material() -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::srgb(0.16, 0.6, 0.25),
+        alpha_mode: AlphaMode::Opaque,
+        metallic: 0.0,
+        perceptual_roughness: 0.68,
+        double_sided: true,
+        cull_mode: None,
+        ..default()
     }
 }
 
@@ -2787,6 +2919,16 @@ fn configure_viewport_line_widths(
 ) {
     let scale = viewport_line_raster_scale(logical_width, logical_height, backing_scale);
     gizmo_config.config_mut::<CadHighlightGizmos>().0.line.width = HIGHLIGHT_LINE_WIDTH * scale;
+    gizmo_config
+        .config_mut::<CamUpcomingPathGizmos>()
+        .0
+        .line
+        .width = HIGHLIGHT_LINE_WIDTH * scale;
+    gizmo_config
+        .config_mut::<CamCompletedPathGizmos>()
+        .0
+        .line
+        .width = HIGHLIGHT_LINE_WIDTH * scale;
     gizmo_config.config_mut::<CadSketchGizmos>().0.line.width = SKETCH_LINE_WIDTH * scale;
     gizmo_config
         .config_mut::<CadPickFeedbackGizmos>()
@@ -2989,12 +3131,23 @@ fn apply_native_presentation_styles(
         } else {
             body_appearance_color(&model, body.body_id, palette.0.body)
         };
-        material.base_color = color;
-        material.emissive = if selected_body_index.is_some() {
-            color.to_linear() * 0.08
+        // Ghosted bodies (CAM stock-vs-model inspection): faint translucent
+        // shell so the simulated stock underneath stays readable; edges are
+        // forced through-geometry in the gizmo pass below.
+        let ghosted = state.ghosted_body_ids.contains(&body.body_id);
+        if ghosted {
+            material.base_color = color.with_alpha(0.1);
+            material.alpha_mode = AlphaMode::Blend;
+            material.emissive = LinearRgba::BLACK;
         } else {
-            LinearRgba::BLACK
-        };
+            material.base_color = color;
+            material.alpha_mode = AlphaMode::Opaque;
+            material.emissive = if selected_body_index.is_some() {
+                color.to_linear() * 0.08
+            } else {
+                LinearRgba::BLACK
+            };
+        }
     }
 
     for (plane, geometry, handle, mut visibility) in &mut datum_planes {
@@ -3213,9 +3366,10 @@ fn apply_body_poses(
     }
 }
 
-/// Rebuilds only command-owned transient fills and manipulators. These meshes
-/// are intentionally separate from OCCT scene geometry: they may be
-/// translucent, depth-independent, and replaced on every debounced edit.
+/// Rebuilds renderer-neutral transient surfaces and manipulators. These meshes
+/// stay separate from OCCT scene geometry: command fills may be translucent
+/// overlays, while CAM remaining stock uses an opaque lit physical material.
+/// Both remain replaceable at the simulator/editor's debounced update rate.
 fn rebuild_native_preview_meshes(
     mut commands: Commands,
     preview: Res<PreviewResource>,
@@ -3253,30 +3407,66 @@ fn rebuild_native_preview_meshes(
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
         );
+        let all_positions_valid = positions.len() * 3 == layer.positions.len();
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-        mesh.compute_flat_normals();
+        let normals = layer
+            .normals
+            .chunks_exact(3)
+            .filter_map(|normal| {
+                normal
+                    .iter()
+                    .all(|value| value.is_finite())
+                    .then_some([normal[0], normal[1], normal[2]])
+            })
+            .collect::<Vec<_>>();
+        if all_positions_valid
+            && layer.normals.len() == layer.positions.len()
+            && normals.len() * 3 == layer.normals.len()
+        {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+        } else {
+            mesh.compute_flat_normals();
+        }
         let color = Color::srgba(
             layer.color[0].clamp(0.0, 1.0),
             layer.color[1].clamp(0.0, 1.0),
             layer.color[2].clamp(0.0, 1.0),
             layer.color[3].clamp(0.0, 1.0),
         );
+        let machined_stock =
+            layer.material == crate::native_viewport::ViewportTriangleMaterial::MachinedStock;
         let mut entity = commands.spawn((
-            Name::new("Native command profile/tool fill"),
+            Name::new(if machined_stock {
+                "Native CAM remaining stock"
+            } else {
+                "Native command profile/tool fill"
+            }),
             NativePreviewMesh,
             Mesh3d(meshes.add(mesh)),
             MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: color,
-                alpha_mode: AlphaMode::Blend,
-                unlit: true,
+                base_color: if machined_stock {
+                    color.with_alpha(1.0)
+                } else {
+                    color
+                },
+                alpha_mode: if machined_stock {
+                    AlphaMode::Opaque
+                } else {
+                    AlphaMode::Blend
+                },
+                unlit: !machined_stock,
+                metallic: 0.0,
+                perceptual_roughness: if machined_stock { 0.74 } else { 0.5 },
                 double_sided: true,
                 cull_mode: None,
-                depth_bias: 2.0,
+                depth_bias: if machined_stock { 0.0 } else { 2.0 },
                 ..default()
             })),
             NotShadowCaster,
-            NotShadowReceiver,
         ));
+        if !machined_stock {
+            entity.insert(NotShadowReceiver);
+        }
         if layer.xray {
             entity.insert(RenderLayers::layer(1));
         }
@@ -3367,6 +3557,223 @@ fn rebuild_native_preview_meshes(
             base.insert(layer);
         }
     }
+}
+
+/// Upload the desktop simulator's retained stock directly from Rust. This is
+/// intentionally independent of `PreviewResource`: toolpath/highlight updates
+/// from React can no longer tear down or resend the large physical stock mesh.
+#[derive(Default)]
+struct CamDisplayMeshCache {
+    entries: std::collections::VecDeque<(ViewportCamStock, Handle<Mesh>)>,
+}
+
+fn rebuild_native_cam_stock(
+    mut commands: Commands,
+    stock: Res<CamStockResource>,
+    presentation: Res<PresentationResource>,
+    mut revisions: ResMut<RenderedRevisions>,
+    existing: Query<(Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>), With<NativeCamStockMesh>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut cache: Local<CamDisplayMeshCache>,
+) {
+    if revisions.cam_stock == stock.revision {
+        return;
+    }
+    revisions.cam_stock = stock.revision;
+
+    let Some(stock) = &stock.value else {
+        for (entity, _mesh, material) in &existing {
+            materials.remove(material.0.id());
+            commands.entity(entity).despawn();
+        }
+        for (_, mesh) in cache.entries.drain(..) {
+            meshes.remove(mesh.id());
+        }
+        return;
+    };
+    let cached = cache
+        .entries
+        .iter()
+        .position(|(source, _)| {
+            source.positions == stock.positions && source.normals == stock.normals
+        })
+        .and_then(|index| cache.entries.remove(index));
+    let handle = if let Some(entry) = cached {
+        let handle = entry.1.clone();
+        cache.entries.push_back(entry);
+        handle
+    } else {
+        let positions = stock
+            .positions
+            .chunks_exact(3)
+            .map(|point| [point[0], point[1], point[2]])
+            .collect::<Vec<_>>();
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        if stock.normals.len() == stock.positions.len() {
+            mesh.insert_attribute(
+                Mesh::ATTRIBUTE_NORMAL,
+                stock
+                    .normals
+                    .chunks_exact(3)
+                    .map(|normal| [normal[0], normal[1], normal[2]])
+                    .collect::<Vec<_>>(),
+            );
+        } else {
+            mesh.compute_flat_normals();
+        }
+        let handle = meshes.add(mesh);
+        cache.entries.push_back((stock.clone(), handle.clone()));
+        // CPU mesh + Bevy main-world + GPU copies: cap total estimated retention,
+        // not just number of stages. Playback replaces oldest transient surfaces.
+        while cache.entries.len() > 4
+            || (cache.entries.len() > 1
+                && cache
+                    .entries
+                    .iter()
+                    .map(|(source, _)| (source.positions.len() + source.normals.len()) * 4 * 3)
+                    .sum::<usize>()
+                    > 32 * 1024 * 1024)
+        {
+            if let Some((_, old)) = cache.entries.pop_front() {
+                meshes.remove(old.id());
+            }
+        }
+        handle
+    };
+    if let Some((entity, _, _)) = existing.iter().next() {
+        // Replacing only the mesh keeps material/pipeline/entity identity
+        // stable; frame playback is not a repeated scene teardown.
+        commands.entity(entity).insert(Mesh3d(handle));
+        return;
+    }
+    commands.spawn((
+        Name::new("Native retained CAM remaining stock"),
+        NativeCamStockMesh,
+        Mesh3d(handle),
+        MeshMaterial3d(materials.add(cam_stock_material())),
+        if presentation.0.cam_stock_visible {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        },
+        NotShadowCaster,
+    ));
+}
+
+fn update_native_cam_stock_visibility(
+    presentation: Res<PresentationResource>,
+    mut stock: Query<&mut Visibility, With<NativeCamStockMesh>>,
+) {
+    if !presentation.is_changed() {
+        return;
+    }
+    let visibility = if presentation.0.cam_stock_visible {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    for mut current in &mut stock {
+        *current = visibility;
+    }
+}
+
+/// The playback cutter is semantic retained Bevy geometry, not transient
+/// triangle soup. A clock tick therefore moves two unit cylinders without
+/// hashing, serializing, or reallocating the static stock and toolpath meshes.
+fn update_native_cam_tool(
+    mut commands: Commands,
+    presentation: Res<PresentationResource>,
+    mut existing: Query<(&mut NativeCamToolPart, &Mesh3d, &mut Transform, &mut Visibility)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    if !presentation.is_changed() { return; }
+    let Some(tool) = presentation.0.cam_tool else {
+        for (_, _, _, mut visibility) in &mut existing { *visibility = Visibility::Hidden; }
+        return;
+    };
+    // Geometry identity excludes pose: no tessellation or asset allocation
+    // during playback/orbit. Reuse two mesh handles across tool changes.
+    let needs_mesh = existing.iter().count() < 2
+        || existing.iter().any(|(part, _, _, _)| part.geometry != tool.geometry);
+    let shape = if needs_mesh {
+        match nbcad_cam::cutter_mesh(tool.geometry) {
+            Ok(shape) => Some(shape),
+            Err(_) => {
+                for (_, _, _, mut visibility) in &mut existing { *visibility = Visibility::Hidden; }
+                return;
+            }
+        }
+    } else { None };
+    let mut found_flute = false;
+    let mut found_shank = false;
+    for (mut part, handle, mut transform, mut visibility) in &mut existing {
+        match part.kind {
+            NativeCamToolPartKind::Flute => found_flute = true,
+            NativeCamToolPartKind::Shank => found_shank = true,
+        }
+        if part.geometry != tool.geometry {
+            if let Some(shape) = &shape {
+                let source = match part.kind {
+                    NativeCamToolPartKind::Flute => &shape.cutter,
+                    NativeCamToolPartKind::Shank => &shape.shank,
+                };
+                if let Some(mut mesh) = meshes.get_mut(&handle.0) { *mesh = cam_cutter_mesh(source); }
+            }
+            part.geometry = tool.geometry;
+        }
+        if let Some(next) = cam_tool_part_transform(tool, part.kind) {
+            *transform = next;
+            *visibility = Visibility::Inherited;
+        } else { *visibility = Visibility::Hidden; }
+    }
+    if found_flute && found_shank { return; }
+    let Some(shape) = shape else { return; };
+    for (kind, color, name, source) in [
+        (NativeCamToolPartKind::Flute, Color::srgba(0.78, 0.80, 0.84, 0.85), "CAM cutter", &shape.cutter),
+        (NativeCamToolPartKind::Shank, Color::srgba(0.62, 0.65, 0.70, 0.42), "CAM shank", &shape.shank),
+    ] {
+        if (kind == NativeCamToolPartKind::Flute && found_flute)
+            || (kind == NativeCamToolPartKind::Shank && found_shank) { continue; }
+        let transform = cam_tool_part_transform(tool, kind);
+        commands.spawn((
+            Name::new(name),
+            NativeCamToolPart { kind, geometry: tool.geometry },
+            Mesh3d(meshes.add(cam_cutter_mesh(source))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: color, alpha_mode: AlphaMode::Blend,
+                metallic: 0.65, perceptual_roughness: 0.32, cull_mode: None, ..default()
+            })),
+            transform.unwrap_or_default(),
+            if transform.is_some() { Visibility::Inherited } else { Visibility::Hidden },
+            NotShadowCaster, NotShadowReceiver,
+        ));
+    }
+}
+
+fn cam_cutter_mesh(source: &nbcad_cam::CamCutterMeshPartDto) -> Mesh {
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION,
+        source.positions.chunks_exact(3).map(|p| [p[0],p[1],p[2]]).collect::<Vec<_>>());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL,
+        source.normals.chunks_exact(3).map(|n| [n[0],n[1],n[2]]).collect::<Vec<_>>());
+    mesh
+}
+
+fn cam_tool_part_transform(tool: ViewportCamTool, kind: NativeCamToolPartKind) -> Option<Transform> {
+    let tip = Vec3::from_array(tool.tip);
+    let axis = Vec3::from_array(tool.axis).normalize_or_zero();
+    if !tip.is_finite() || !axis.is_finite() || axis == Vec3::ZERO
+        || (kind == NativeCamToolPartKind::Shank && tool.geometry.overall_length <= tool.geometry.flute_length)
+    { return None; }
+    // Meshes carry real dimensions and are tip-anchored along +Z.
+    Some(Transform::from_translation(tip).with_rotation(Quat::from_rotation_arc(Vec3::Z, axis)))
 }
 
 /// Preserve a constant logical-pixel arrow footprint without touching GPU
@@ -3840,7 +4247,11 @@ fn draw_cad_gizmos(
     mut sketch_gizmos: Gizmos<CadSketchGizmos>,
     mut sketch_point_outlines: Gizmos<CadSketchPointOutlineGizmos>,
     mut sketch_points: Gizmos<CadSketchPointGizmos>,
-    mut highlights: Gizmos<CadHighlightGizmos>,
+    cam_paths: (
+        Gizmos<CadHighlightGizmos>,
+        Gizmos<CamUpcomingPathGizmos>,
+        Gizmos<CamCompletedPathGizmos>,
+    ),
     mut pick_halo: Gizmos<CadPickFeedbackHaloGizmos>,
     mut pick_feedback: Gizmos<CadPickFeedbackGizmos>,
     mut direct_pick_feedback: Gizmos<CadDirectPickFeedbackGizmos>,
@@ -3853,6 +4264,7 @@ fn draw_cad_gizmos(
     presentation: Res<PresentationResource>,
     face_boundaries: Query<(&NativeCadFace, &NativeModelGeometry)>,
 ) {
+    let (mut highlights, mut cam_upcoming, mut cam_completed) = cam_paths;
     let state = &presentation.0;
     let fine = rgba(palette.0.grid_fine, 0.28);
     let major = rgba(palette.0.grid_major, 0.48);
@@ -3866,6 +4278,8 @@ fn draw_cad_gizmos(
     // segment. It produces no pixels, but makes the first frame after an
     // invalid -> valid picker transition update an existing GPU asset.
     keep_gizmo_asset_resident(&mut highlights);
+    keep_gizmo_asset_resident(&mut cam_upcoming);
+    keep_gizmo_asset_resident(&mut cam_completed);
     keep_gizmo_asset_resident(&mut pick_halo);
     keep_gizmo_asset_resident(&mut pick_feedback);
     keep_gizmo_asset_resident(&mut direct_pick_feedback);
@@ -3995,12 +4409,16 @@ fn draw_cad_gizmos(
                 body.id.0,
                 occurrence_id,
             );
+            // Ghosted bodies (CAM simulation inspection) always draw their
+            // full wireframe, through geometry, so the part reads over the
+            // remaining-stock mesh.
+            let ghosted_body = state.ghosted_body_ids.contains(&body.id.0);
             let draw_default_edges = occurrence_edges_are_visible(
                 local_bounds,
                 &body_transform,
                 camera.camera,
                 *viewport,
-            );
+            ) || ghosted_body;
 
             if selected_body_index.is_some() || hovered_body {
                 let color = if selected_body_index == Some(0) {
@@ -4050,7 +4468,12 @@ fn draw_cad_gizmos(
                 } else {
                     palette.0.edge
                 };
-                draw_edge_segments(&mut gizmos, edge, rgba(color, 0.92), &body_transform);
+                if ghosted_body && !selected && !hovered && selected_body_index.is_none() {
+                    // Through-geometry wireframe for the ghosted part.
+                    draw_edge_segments(&mut highlights, edge, rgb(color), &body_transform);
+                } else {
+                    draw_edge_segments(&mut gizmos, edge, rgba(color, 0.92), &body_transform);
+                }
                 if selected || hovered {
                     draw_edge_segments(
                         &mut pick_halo,
@@ -4462,55 +4885,106 @@ fn draw_cad_gizmos(
         );
     }
 
-    for layer in &preview.value.lines {
-        let color = Color::srgba(
-            layer.color[0],
-            layer.color[1],
-            layer.color[2],
-            layer.color[3].clamp(0.0, 1.0),
-        );
-        for segment in layer.segments.chunks_exact(6) {
-            let start = Vec3::new(segment[0], segment[1], segment[2]);
-            let end = Vec3::new(segment[3], segment[4], segment[5]);
-            if layer.pattern == ViewportLinePattern::Dotted {
-                let delta = end - start;
-                let length = delta.length();
-                if length <= f32::EPSILON {
-                    continue;
+    // Completed travel has a distinct nearer depth so a later overlapping
+    // peck/retract cannot win a depth tie. Strokes are emitted once;
+    // whole upcoming/completed segments skip the opposite traversal early.
+    for completed_pass in [false, true] {
+        for layer in &preview.value.lines {
+            let playback = layer.playback.as_ref();
+            // Presentation and preview arrive independently. Never attach the
+            // new cutter's cursor to a still-visible previous timeline.
+            let cursor = active_cursor(playback, state.cam_path_progress);
+            if completed_pass && cursor.is_none() {
+                continue;
+            }
+            let completed_color = playback.map_or(layer.color, |path| path.completed_color);
+            for (index, segment) in layer.segments.chunks_exact(6).enumerate() {
+                let start = Vec3::new(segment[0], segment[1], segment[2]);
+                let end = Vec3::new(segment[3], segment[4], segment[5]);
+                let timing = playback
+                    .and_then(|path| path.segment_times.get(index * 2..index * 2 + 2))
+                    .map(|pair| [pair[0], pair[1]]);
+                if let (Some([begin, finish]), Some(cursor)) = (timing, cursor) {
+                    if (completed_pass
+                        && cursor.time_seconds <= begin + 1e-9
+                        && cursor.time_seconds + 1e-9 < finish)
+                        || (!completed_pass && cursor.time_seconds + 1e-9 >= finish)
+                    {
+                        continue;
+                    }
                 }
-                let world_per_pixel =
-                    world_per_pixel_at(camera.camera, *viewport, start.lerp(end, 0.5))
-                        .max(f32::EPSILON);
-                // Tiny screen-space strokes read as dots without relying on
-                // a renderer-specific dash shader. Cap the subdivision so a
-                // pathological guide cannot degrade pointer latency.
-                let dot_length = world_per_pixel * 1.25;
-                let requested_period = world_per_pixel * 4.25;
-                let direction = delta / length;
-                let requested_count = ((length / requested_period).ceil() as usize).max(1);
-                let dot_count = requested_count.min(512);
-                let period = if requested_count > dot_count {
-                    length / dot_count as f32
-                } else {
-                    requested_period
+                let mut draw = |start, end, timing| {
+                    for part in
+                        split_segment(start, end, layer.color, completed_color, timing, cursor)
+                            .into_iter()
+                            .flatten()
+                    {
+                        if part.completed != completed_pass {
+                            continue;
+                        }
+                        let color = Color::srgba(
+                            part.color[0],
+                            part.color[1],
+                            part.color[2],
+                            part.color[3].clamp(0.0, 1.0),
+                        );
+                        if cursor.is_some() {
+                            if part.completed {
+                                cam_completed.line(part.start, part.end, color);
+                            } else {
+                                cam_upcoming.line(part.start, part.end, color);
+                            }
+                        } else if layer.width >= 2.0 {
+                            highlights.line(part.start, part.end, color);
+                        } else {
+                            gizmos.line(part.start, part.end, color);
+                        }
+                    }
                 };
-                for dot_index in 0..dot_count {
-                    let distance = dot_index as f32 * period;
-                    if distance >= length {
-                        break;
+                if layer.pattern == ViewportLinePattern::Dotted {
+                    let delta = end - start;
+                    let length = delta.length();
+                    if length <= f32::EPSILON {
+                        continue;
                     }
-                    let dot_start = start + direction * distance;
-                    let dot_end = start + direction * (distance + dot_length).min(length);
-                    if layer.width >= 2.0 {
-                        highlights.line(dot_start, dot_end, color);
+                    let world_per_pixel =
+                        world_per_pixel_at(camera.camera, *viewport, start.lerp(end, 0.5))
+                            .max(f32::EPSILON);
+                    // Tiny screen-space strokes read as dots without relying on
+                    // a renderer-specific dash shader. Cap the subdivision so a
+                    // pathological guide cannot degrade pointer latency.
+                    let dot_length = world_per_pixel * 1.25;
+                    let requested_period = world_per_pixel * 4.25;
+                    let direction = delta / length;
+                    let requested_count = ((length / requested_period).ceil() as usize).max(1);
+                    let dot_count = requested_count.min(512);
+                    let period = if requested_count > dot_count {
+                        length / dot_count as f32
                     } else {
-                        gizmos.line(dot_start, dot_end, color);
+                        requested_period
+                    };
+                    for dot_index in 0..dot_count {
+                        let distance = dot_index as f32 * period;
+                        if distance >= length {
+                            break;
+                        }
+                        let dot_start = start + direction * distance;
+                        let end_distance = (distance + dot_length).min(length);
+                        let dot_end = start + direction * end_distance;
+                        // Keep the original dash phase while the color advances;
+                        // do not restart dotted rapids at the moving cursor.
+                        let dot_timing = timing.map(|[begin, finish]| {
+                            let duration = finish - begin;
+                            [
+                                begin + duration * f64::from(distance / length),
+                                begin + duration * f64::from(end_distance / length),
+                            ]
+                        });
+                        draw(dot_start, dot_end, dot_timing);
                     }
+                } else {
+                    draw(start, end, timing);
                 }
-            } else if layer.width >= 2.0 {
-                highlights.line(start, end, color);
-            } else {
-                gizmos.line(start, end, color);
             }
         }
     }
@@ -5215,6 +5689,7 @@ fn push_render_command(
         }
         RenderCommand::Camera(camera) => pending.camera = Some(camera),
         RenderCommand::Preview(preview) => pending.preview = Some(preview),
+        RenderCommand::CamStock(stock) => pending.cam_stock = Some(stock),
         RenderCommand::Presentation(presentation) => {
             pending.presentation = Some(presentation);
         }
@@ -5227,8 +5702,50 @@ fn push_render_command(
     }
 }
 
+#[cfg(target_os = "linux")]
+fn render_frame_count(
+    resize_requested: bool,
+    requires_pipeline_settle: bool,
+    cam_stock_requested: bool,
+) -> usize {
+    if resize_requested {
+        1
+    } else if cam_stock_requested {
+        3
+    } else if requires_pipeline_settle {
+        2
+    } else {
+        1
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn render_frame_count(
+    _resize_requested: bool,
+    requires_pipeline_settle: bool,
+    cam_stock_requested: bool,
+) -> usize {
+    if cam_stock_requested {
+        3
+    } else if requires_pipeline_settle {
+        2
+    } else {
+        1
+    }
+}
+
 /// Drains coalesced mutations on the platform UI thread. The Bevy App is kept
 /// behind a process-lifetime pointer that is never dereferenced elsewhere.
+fn schedule_render_drain(
+    app: tauri::AppHandle,
+    runtime: Arc<AtomicUsize>,
+    pending: Arc<Mutex<PendingRenderCommands>>,
+    metrics: Arc<Mutex<MetricsState>>,
+) -> Result<(), String> {
+    app.run_on_main_thread(move || drain_render_commands(&runtime, &pending, &metrics))
+        .map_err(|error| error.to_string())
+}
+
 fn drain_render_commands(
     runtime_pointer: &Arc<AtomicUsize>,
     pending: &Arc<Mutex<PendingRenderCommands>>,
@@ -5245,7 +5762,7 @@ fn drain_render_commands(
     }
     let runtime = unsafe { &mut *(pointer as *mut MainThreadRenderRuntime) };
 
-    loop {
+    {
         let commands = {
             let Ok(mut pending) = pending.lock() else {
                 return;
@@ -5256,7 +5773,9 @@ fn drain_render_commands(
                 && pending.drop_model_sessions.is_empty()
                 && pending.camera.is_none()
                 && pending.preview.is_none()
+                && pending.cam_stock.is_none()
                 && pending.presentation.is_none()
+                && pending.settle_frames == 0
             {
                 pending.scheduled = false;
                 return;
@@ -5268,15 +5787,19 @@ fn drain_render_commands(
                 std::mem::take(&mut pending.drop_model_sessions),
                 pending.camera.take(),
                 pending.preview.take(),
+                pending.cam_stock.take(),
                 pending.presentation.take(),
+                std::mem::take(&mut pending.settle_frames),
             )
         };
         let resize_requested = commands.0.is_some();
+        let cam_stock_requested = commands.6.is_some();
         let requires_pipeline_settle = resize_requested
             || commands.1.is_some()
             || !commands.2.is_empty()
             || !commands.3.is_empty()
-            || commands.5.is_some();
+            || commands.5.is_some()
+            || commands.6.is_some();
 
         if let Ok(mut current) = metrics.lock() {
             current.wakeups += 1;
@@ -5326,7 +5849,10 @@ fn drain_render_commands(
                 &mut dirty,
             );
         }
-        if let Some(presentation) = commands.6 {
+        if let Some(stock) = commands.6 {
+            apply_render_command(RenderCommand::CamStock(stock), runtime, metrics, &mut dirty);
+        }
+        if let Some(presentation) = commands.7 {
             apply_render_command(
                 RenderCommand::Presentation(presentation),
                 runtime,
@@ -5334,29 +5860,44 @@ fn drain_render_commands(
                 &mut dirty,
             );
         }
-        if dirty {
-            // Structural changes get a second update to settle Bevy's
-            // extracted render world. Camera and presentation-only
-            // changes use one frame on every platform; rendering them twice
-            // adds pointer latency without creating any new GPU pipelines.
-            // A Linux Vulkan surface can reject the first frames after the
-            // embedded X11 drawable changes extent. Drain that short-lived
-            // stale-surface window here instead of running a continuous idle
-            // renderer. Normal interaction remains one frame per bridge wake.
-            #[cfg(target_os = "linux")]
-            let frame_count = if resize_requested {
-                1
-            } else if requires_pipeline_settle {
-                2
+        if dirty || commands.8 > 0 {
+            // Never run several GPU presents back-to-back in one AppKit
+            // callback. Settling an uploaded asset still needs follow-up
+            // updates, but pointer and webview events get serviced between
+            // them. The queue coalesces a new camera/tool pose into each one.
+            let frame_count = if dirty {
+                render_frame_count(
+                    resize_requested,
+                    requires_pipeline_settle,
+                    cam_stock_requested,
+                )
             } else {
-                1
-            };
-            #[cfg(not(target_os = "linux"))]
-            let frame_count = if requires_pipeline_settle { 2 } else { 1 };
-            render_frames(&mut runtime.app, frame_count, metrics);
+                0
+            }
+            .max(commands.8);
+            render_frames(&mut runtime.app, 1, metrics);
+            if let Ok(mut pending) = pending.lock() {
+                pending.settle_frames = pending.settle_frames.max(frame_count.saturating_sub(1));
+            }
             maybe_write_ready_probe(metrics);
         }
     }
+    let Some(app) = pending.lock().ok().and_then(|pending| pending.app.clone()) else {
+        return;
+    };
+    let runtime = runtime_pointer.clone();
+    let pending = pending.clone();
+    let metrics = metrics.clone();
+    // One bounded continuation, not an always-running render loop. Scheduling
+    // off the UI thread prevents run_on_main_thread from executing recursively.
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        if schedule_render_drain(app, runtime, pending.clone(), metrics).is_err() {
+            if let Ok(mut pending) = pending.lock() {
+                pending.scheduled = false;
+            }
+        }
+    });
 }
 
 fn apply_render_command(
@@ -5514,6 +6055,12 @@ fn apply_render_command(
             if preview_mesh_content_changed(&resource.value, &next) {
                 resource.mesh_revision = resource.mesh_revision.wrapping_add(1);
             }
+            resource.value = next;
+            resource.revision = resource.revision.wrapping_add(1);
+            *dirty = true;
+        }
+        RenderCommand::CamStock(next) => {
+            let mut resource = runtime.app.world_mut().resource_mut::<CamStockResource>();
             resource.value = next;
             resource.revision = resource.revision.wrapping_add(1);
             *dirty = true;
@@ -6162,6 +6709,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cam_stock_upload_gets_a_dedicated_asset_settle_frame() {
+        assert_eq!(render_frame_count(false, true, true), 3);
+        assert_eq!(render_frame_count(false, true, false), 2);
+        assert_eq!(render_frame_count(false, false, false), 1);
+    }
+
+    #[test]
+    fn viewport_cameras_use_portable_msaa() {
+        let mut gizmo_config = GizmoConfigStore::default();
+        gizmo_config.insert(GizmoConfig::default(), CadHighlightGizmos::default());
+        gizmo_config.insert(GizmoConfig::default(), CamUpcomingPathGizmos::default());
+        gizmo_config.insert(GizmoConfig::default(), CamCompletedPathGizmos::default());
+        gizmo_config.insert(GizmoConfig::default(), CadSketchGizmos::default());
+        gizmo_config.insert(GizmoConfig::default(), CadPickFeedbackGizmos::default());
+        gizmo_config.insert(
+            GizmoConfig::default(),
+            CadDirectPickFeedbackGizmos::default(),
+        );
+        gizmo_config.insert(GizmoConfig::default(), CadProfileBorderGizmos::default());
+        gizmo_config.insert(GizmoConfig::default(), CadPickFeedbackHaloGizmos::default());
+        gizmo_config.insert(
+            GizmoConfig::default(),
+            CadSketchPointOutlineGizmos::default(),
+        );
+        gizmo_config.insert(GizmoConfig::default(), CadSketchPointGizmos::default());
+
+        let mut app = App::new();
+        app.insert_resource(gizmo_config)
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Startup, setup_scene);
+        app.update();
+
+        let world = app.world_mut();
+        let configs = world.resource::<GizmoConfigStore>();
+        let upcoming = configs.config::<CamUpcomingPathGizmos>().0.depth_bias;
+        let completed = configs.config::<CamCompletedPathGizmos>().0.depth_bias;
+        assert!(-1.0 < completed && completed < upcoming && upcoming < 0.0,
+            "completed plunge must win over an overlapping upcoming retract without a near-plane tie");
+        let mut cameras = world.query_filtered::<&Msaa, With<NativeViewportCamera>>();
+        let sample_counts: Vec<Msaa> = cameras.iter(world).copied().collect();
+        assert_eq!(
+            sample_counts,
+            vec![Msaa::Sample4; 2],
+            "both CAD and overlay cameras must use portable 4x multisampling"
+        );
+    }
+
+    #[test]
     fn shared_native_edge_eligibility_distinguishes_straight_from_bent_edges() {
         let edge = |points: &[[f64; 3]]| nbcad_solid::EdgeDto {
             id: nbcad_core::EdgeId(1),
@@ -6237,6 +6833,61 @@ mod tests {
                 "camera transform must remain finite at position {position:?}"
             );
         }
+    }
+
+    #[test]
+    fn retained_cam_tool_places_flute_and_shank_from_the_tip_axis() {
+        let geometry = nbcad_cam::CamCutterGeometryDto {
+            kind: nbcad_cam::CamToolKind::Drill, diameter: 6., flute_length: 20., overall_length: 50.,
+            point_angle_degrees: Some(118.), corner_radius: None, corner_chamfer: None,
+        };
+        let tool = ViewportCamTool { tip: [1.,2.,3.], axis: [1.,0.,0.], geometry };
+        let flute = cam_tool_part_transform(tool, NativeCamToolPartKind::Flute).unwrap();
+        let shank = cam_tool_part_transform(tool, NativeCamToolPartKind::Shank).unwrap();
+        assert_eq!(flute, shank);
+        assert!(flute.translation.abs_diff_eq(Vec3::new(1.,2.,3.), 1e-6));
+        assert!(flute.scale.abs_diff_eq(Vec3::ONE, 1e-6));
+        assert!((flute.rotation * Vec3::Z).abs_diff_eq(Vec3::X, 1e-6));
+        let source = nbcad_cam::cutter_mesh(geometry).unwrap();
+        let mesh = cam_cutter_mesh(&source.cutter);
+        assert_eq!(mesh.count_vertices(), source.cutter.positions.len()/3);
+        assert!(mesh.contains_attribute(Mesh::ATTRIBUTE_NORMAL));
+        // A pose change has identical geometry and therefore reuses handles.
+        let moved = ViewportCamTool { tip: [3.,4.,5.], ..tool };
+        assert_eq!(moved.geometry, tool.geometry);
+    }
+
+    #[test]
+    fn retained_cam_cutter_reuses_gpu_assets_during_motion_and_tool_changes() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        let mut tool = ViewportCamTool { tip: [0.;3], axis: [0.,0.,1.], geometry: nbcad_cam::CamCutterGeometryDto {
+            kind: nbcad_cam::CamToolKind::Drill, diameter: 6., flute_length: 20., overall_length: 50.,
+            point_angle_degrees: Some(118.), corner_radius: None, corner_chamfer: None,
+        }};
+        app.insert_resource(PresentationResource(ViewportPresentation { cam_tool: Some(tool), ..default() }));
+        app.add_systems(Update, update_native_cam_tool);
+        app.update();
+        let handles = app.world().resource::<Assets<Mesh>>().ids().collect::<Vec<_>>();
+        assert_eq!(handles.len(), 2);
+        for i in 0..120 {
+            tool.tip = [i as f32, (i as f32 / 10.).sin(), -1.];
+            if i == 60 {
+                tool.geometry.kind = nbcad_cam::CamToolKind::BullNoseEndMill;
+                tool.geometry.point_angle_degrees = None;
+                tool.geometry.corner_radius = Some(1.);
+            }
+            app.world_mut().resource_mut::<PresentationResource>().0.cam_tool = Some(tool);
+            app.update();
+            assert_eq!(app.world().resource::<Assets<Mesh>>().ids().collect::<Vec<_>>(), handles);
+            assert_eq!(app.world().resource::<Assets<StandardMaterial>>().len(), 2);
+        }
+        tool.geometry.corner_radius = Some(f64::NAN);
+        app.world_mut().resource_mut::<PresentationResource>().0.cam_tool = Some(tool);
+        app.update();
+        assert!(app.world_mut().query_filtered::<&Visibility, With<NativeCamToolPart>>()
+            .iter(app.world()).all(|v| *v == Visibility::Hidden));
     }
 
     #[test]
@@ -6429,6 +7080,8 @@ mod tests {
                 "triangles": [{
                     "color": [1.0, 0.4, 0.2, 0.25],
                     "positions": [0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 5.0, 0.0],
+                    "normals": [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+                    "material": "machined_stock",
                     "xray": true
                 }],
                 "arrows": [{
@@ -6454,6 +7107,11 @@ mod tests {
         assert_eq!(preview.lines[0].segments.len(), 6);
         assert!(preview.triangles[0].xray);
         assert_eq!(preview.triangles[0].positions.len(), 9);
+        assert_eq!(preview.triangles[0].normals.len(), 9);
+        assert_eq!(
+            preview.triangles[0].material,
+            crate::native_viewport::ViewportTriangleMaterial::MachinedStock
+        );
         assert_eq!(preview.arrows[0].end, [0.0, 0.0, 10.0]);
         assert_eq!(preview.arrows[0].width, 2.0);
         assert!(HIGHLIGHT_LINE_WIDTH <= 2.0);
@@ -6488,6 +7146,10 @@ mod tests {
             }"#,
         )
         .expect("preview should deserialize");
+        assert_eq!(
+            base.triangles[0].material,
+            crate::native_viewport::ViewportTriangleMaterial::Overlay
+        );
         let mut moved_annotation = base.clone();
         moved_annotation.annotations[0].screen = [420.0, 240.0];
         assert!(
@@ -7149,6 +7811,8 @@ mod tests {
             faces: vec![nbcad_solid::FaceDto {
                 id: nbcad_core::FaceId(70),
                 key: "cylindrical-wall".to_string(),
+                edge_keys: vec![],
+                cone: None,
                 first_index: 0,
                 index_count: 6,
                 plane: None,

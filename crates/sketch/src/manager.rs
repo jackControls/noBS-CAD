@@ -6,6 +6,8 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::f64::consts::TAU;
 
+use serde::Serialize;
+
 use nbcad_assembly::{
     approximate_interference_report, approximate_pair_result, contact_violation_score,
     ApplyJointMotionsRequestDto, AssemblyDocumentDto, AssemblyPositionDto, AssemblyPositionId,
@@ -21,6 +23,15 @@ use nbcad_assembly::{
     SetOccurrenceGroundedRequestDto, SetOccurrencePoseRequestDto, SweptCollisionEventDto,
     SweptCollisionReportDto, SweptCollisionRequestDto, UpdateComponentRequestDto,
     UpdateJointRequestDto, UpdateOccurrenceRequestDto,
+};
+use nbcad_cam::{
+    analyze_nbpost, plan_setup, post_event_stream, post_setup, simulate_gcode, simulate_setup,
+    CamAdaptiveGeometryDto, CamChainSource, CamDocumentDto, CamGcodeSimulationRequestDto,
+    CamHeightExpressionDto, CamHeightReferenceDto, CamHoleDto, CamOperationDto,
+    CamOperationHeightExpressionsDto, CamPostRequestDto, CamPostResultDto, CamProgramDto,
+    CamResolvedStockDto, CamSetupDto, CamSimulationRequestDto, CamSimulationResultDto,
+    CamSimulationTargetDto, CamStockMeshDto, CamToolpathGenerationDto, CamToolpathStateDto,
+    CamToolpathStatusDto, NbPostAnalysisDto, NbPostAnalysisRequestDto, PostEventStreamDto,
 };
 use nbcad_core::{
     BodyAppearance, BodyId, BrowserNodeKind, Document, DocumentDto, EdgeId, FaceId, Feature,
@@ -59,7 +70,7 @@ use crate::dto::{
 };
 use crate::entity::EntityId;
 use crate::project::{
-    decode_project, ProjectCountersV2, ProjectDocumentV2, ProjectModelV6, ProjectPreferencesV2,
+    decode_project, ProjectCountersV2, ProjectDocumentV2, ProjectModelV7, ProjectPreferencesV2,
     PROJECT_FORMAT, PROJECT_SCHEMA_VERSION,
 };
 use crate::session::{
@@ -114,6 +125,8 @@ pub struct SketchManager {
     assembly_solution_cache: RefCell<Option<AssemblySolutionDto>>,
     /// Persistent Browser visibility expressed with stable model identities.
     project_visibility: ProjectVisibilityDto,
+    /// Persistent 3-axis manufacturing setups, tools, and operation intent.
+    cam: CamDocumentDto,
     /// Candidate manager held until its OCCT replay commits successfully.
     /// Keeping the current manager alive makes Open transactional.
     pending_project: Option<PendingProject>,
@@ -126,6 +139,44 @@ pub struct SketchManager {
 struct PendingProject {
     transaction_id: u64,
     manager: Box<SketchManager>,
+}
+
+/// Bump this whenever planner semantics change in a way that should force
+/// existing operations through explicit regeneration before NC posting.
+const CAM_TOOLPATH_PLANNER_REVISION: u32 = 10;
+
+#[cfg(test)]
+#[path = "cam_verification_tests.rs"]
+mod cam_verification_tests;
+
+#[cfg(test)]
+#[path = "cam_order_tests.rs"]
+mod cam_order_tests;
+
+#[cfg(test)]
+#[path = "cam_tool_compatibility_tests.rs"]
+mod cam_tool_compatibility_tests;
+
+struct CamSetupDependencyFingerprints {
+    model: String,
+    setup: String,
+    upstream: String,
+}
+
+fn stable_cam_fingerprint<T: Serialize + ?Sized>(value: &T) -> Result<String, SessionError> {
+    let bytes = serde_json::to_vec(value).map_err(|error| {
+        SessionError::Solid(format!("could not fingerprint CAM inputs: {error}"))
+    })?;
+    // FNV-1a 128 is deterministic across hosts and project reopenings. This
+    // is change detection, not authentication; 128 bits keeps accidental
+    // collisions negligible without adding a platform crypto dependency.
+    let mut hash = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d_u128;
+    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
+    for byte in bytes {
+        hash ^= u128::from(byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    Ok(format!("{hash:032x}"))
 }
 
 impl SketchManager {
@@ -154,6 +205,7 @@ impl SketchManager {
             assembly: AssemblyDocumentDto::default(),
             assembly_solution_cache: RefCell::new(None),
             project_visibility: ProjectVisibilityDto::default(),
+            cam: CamDocumentDto::default(),
             pending_project: None,
             pending_joint_body_deletion: None,
         }
@@ -186,7 +238,7 @@ impl SketchManager {
                 "finish the active sketch before saving the project".to_string(),
             ));
         }
-        let model = ProjectModelV6 {
+        let model = ProjectModelV7 {
             format: PROJECT_FORMAT.to_string(),
             schema_version: PROJECT_SCHEMA_VERSION,
             document: ProjectDocumentV2 {
@@ -213,6 +265,7 @@ impl SketchManager {
             drawings: self.drawings.clone(),
             assembly: self.assembly.clone(),
             visibility: self.scrubbed_project_visibility(),
+            cam: self.cam.clone(),
             counters: ProjectCountersV2 {
                 sketch: self.sketch_count,
                 extrude: self.extrude_count,
@@ -327,6 +380,7 @@ impl SketchManager {
             assembly: model.assembly,
             assembly_solution_cache: RefCell::new(None),
             project_visibility: model.visibility,
+            cam: model.cam,
             pending_project: None,
             pending_joint_body_deletion: None,
         };
@@ -1350,6 +1404,1168 @@ impl SketchManager {
         )
         .map_err(SessionError::Solid)?;
         Ok(self.drawings.clone())
+    }
+
+    pub fn geometry_edge_chain(&self, request: crate::EdgeChainRequest) -> Result<nbcad_core::edge_chain::Chain, SessionError> {
+        let sketches = if request.source == crate::ChainSource::Sketch { self.finished_sketches() } else { Vec::new() };
+        crate::edge_selection::resolve(self.solids.scene(), &sketches, &request)
+            .map_err(SessionError::Solid)
+    }
+
+    pub fn cam_chamfer_geometry(&self, request: crate::CamChamferGeometryRequest) -> Result<crate::CamChamferGeometry, SessionError> {
+        let setup=self.cam.setups.iter().find(|s|s.id==request.setup_id)
+            .ok_or_else(||SessionError::Solid("The CAM setup no longer exists.".into()))?;
+        crate::cam_chamfer::resolve(self.solids.scene(),setup,&request.chain_ref).map_err(SessionError::Solid)
+    }
+
+    pub fn cam_document(&self) -> CamDocumentDto {
+        self.cam.clone()
+    }
+
+    pub fn set_cam_document(
+        &mut self,
+        mut cam: CamDocumentDto,
+    ) -> Result<CamDocumentDto, SessionError> {
+        cam.migrate_legacy();
+        cam.validate_for_editing().map_err(SessionError::Solid)?;
+        // Structural/parameter validation passed. Incompatible tool use is
+        // retained as an invalid operation, not a rejected library edit.
+        // Recompute non-fatal warnings so
+        // fixed operations clear their badge and still-broken disabled ones
+        // keep theirs.
+        cam.refresh_load_warnings();
+        self.upgrade_verified_legacy_cam_generations(&mut cam);
+        self.cam = cam;
+        Ok(self.cam.clone())
+    }
+
+    /// Translate old full-prefix stamps against the PRE-EDIT document only.
+    /// This avoids forcing a one-time regeneration for an unchanged reviewed
+    /// job, without blessing a stale stamp or the reordered/edited inputs.
+    fn upgrade_verified_legacy_cam_generations(&self, next: &mut CamDocumentDto) {
+        if !next
+            .toolpath_generations
+            .iter()
+            .any(|s| s.order_dependencies.is_none())
+        {
+            return;
+        }
+        for setup in &self.cam.setups {
+            let Ok(dependencies) = self.cam_setup_dependency_fingerprints(setup) else {
+                continue; // A broken old setup must not block its repair.
+            };
+            for operation in setup.operations.iter().filter(|o| o.enabled()) {
+                let Some(saved) = self.cam.toolpath_generations.iter().find(|s| {
+                    s.operation_id == operation.id() && s.order_dependencies.is_none()
+                }) else {
+                    continue;
+                };
+                let Some(incoming) = next.toolpath_generations.iter_mut().find(|s| *s == saved)
+                else {
+                    continue;
+                };
+                let Ok(legacy) =
+                    self.cam_generation_signature(setup, operation, &dependencies, true)
+                else {
+                    continue;
+                };
+                if *saved == legacy {
+                    if let Ok(upgraded) =
+                        self.current_cam_generation(setup, operation, &dependencies)
+                    {
+                        *incoming = upgraded;
+                    }
+                }
+            }
+        }
+    }
+
+    fn cam_setup_dependency_fingerprints(
+        &self,
+        setup: &CamSetupDto,
+    ) -> Result<CamSetupDependencyFingerprints, SessionError> {
+        let mut setup_intent = setup.clone();
+        setup_intent.operations.clear();
+        // Current fixed-axis motion is target-independent. A different post
+        // rechecks compatibility, not geometric freshness; future target-
+        // dependent linking must add its resolved capabilities to this key.
+        setup_intent.machine = None;
+
+        let mut body_ids = BTreeSet::new();
+        let mut upstream_setups = Vec::new();
+        let mut visited = BTreeSet::from([setup.id]);
+        let mut cursor = setup;
+        loop {
+            body_ids.extend(cursor.body_ids.iter().copied());
+            if let CamResolvedStockDto::ModelBody { body_id } = &cursor.resolved_stock {
+                body_ids.insert(BodyId(*body_id));
+            }
+            let CamResolvedStockDto::Rest { source_setup_id } = &cursor.resolved_stock else {
+                break;
+            };
+            let source_setup_id = *source_setup_id;
+            if !visited.insert(source_setup_id) {
+                return Err(SessionError::Solid(
+                    "CAM rest-stock dependency contains a cycle".to_string(),
+                ));
+            }
+            let source = self
+                .cam
+                .setups
+                .iter()
+                .find(|candidate| candidate.id == source_setup_id)
+                .ok_or_else(|| {
+                    SessionError::Solid(format!(
+                        "CAM rest-stock source setup {source_setup_id} no longer exists"
+                    ))
+                })?;
+            let mut upstream_intent = source.clone();
+            upstream_intent.machine = None;
+            upstream_setups.push(upstream_intent);
+            cursor = source;
+        }
+
+        let bodies = self
+            .solids
+            .scene()
+            .bodies
+            .iter()
+            .filter(|body| body_ids.contains(&body.id))
+            .collect::<Vec<_>>();
+        // CAM operations created before associative loop references existed
+        // may still contain sketch-derived coordinates. Including finished
+        // sketches is deliberately conservative: a false stale warning is
+        // safer than silently trusting a path after its source sketch moved.
+        let sketches = self
+            .finished
+            .iter()
+            .map(|finished| finished.session.dto())
+            .collect::<Vec<_>>();
+        let upstream_tool_ids = upstream_setups
+            .iter()
+            .flat_map(|source| source.operations.iter().map(CamOperationDto::tool_id))
+            .collect::<BTreeSet<_>>();
+        let upstream_tools = self
+            .cam
+            .tools
+            .iter()
+            .filter(|tool| upstream_tool_ids.contains(&tool.id))
+            .collect::<Vec<_>>();
+        let upstream_operation_ids = upstream_setups
+            .iter()
+            .flat_map(|s| s.operations.iter().map(CamOperationDto::id))
+            .collect::<BTreeSet<_>>();
+        let upstream_linking = self
+            .cam
+            .linking
+            .iter()
+            .filter(|l| upstream_operation_ids.contains(&l.operation_id))
+            .collect::<Vec<_>>();
+
+        Ok(CamSetupDependencyFingerprints {
+            model: stable_cam_fingerprint(&(
+                "cam-model-dependencies",
+                CAM_TOOLPATH_PLANNER_REVISION,
+                &body_ids,
+                bodies,
+                sketches,
+            ))?,
+            setup: stable_cam_fingerprint(&(
+                "cam-setup-dependencies",
+                CAM_TOOLPATH_PLANNER_REVISION,
+                setup_intent,
+            ))?,
+            upstream: stable_cam_fingerprint(&(
+                "cam-upstream-dependencies",
+                CAM_TOOLPATH_PLANNER_REVISION,
+                upstream_setups,
+                upstream_tools,
+                upstream_linking,
+            ))?,
+        })
+    }
+
+    fn current_cam_generation(
+        &self,
+        setup: &CamSetupDto,
+        operation: &CamOperationDto,
+        dependencies: &CamSetupDependencyFingerprints,
+    ) -> Result<CamToolpathGenerationDto, SessionError> {
+        self.cam_generation_signature(setup, operation, dependencies, false)
+    }
+
+    fn cam_generation_signature(
+        &self,
+        setup: &CamSetupDto,
+        operation: &CamOperationDto,
+        dependencies: &CamSetupDependencyFingerprints,
+        legacy_prefix: bool,
+    ) -> Result<CamToolpathGenerationDto, SessionError> {
+        let tool = self
+            .cam
+            .tools
+            .iter()
+            .find(|candidate| candidate.id == operation.tool_id())
+            .ok_or_else(|| {
+                SessionError::Solid(format!(
+                    "operation '{}' references a missing tool",
+                    operation.name()
+                ))
+            })?;
+        let height_expressions = self
+            .cam
+            .height_expressions
+            .iter()
+            .find(|expressions| expressions.operation_id == operation.id());
+        let linking = self
+            .cam
+            .linking
+            .iter()
+            .find(|item| item.operation_id == operation.id());
+        let source_inputs = |o: &CamOperationDto| {
+            (
+                o.clone(),
+                self.cam.tool(o.tool_id()),
+                self.cam
+                    .height_expressions
+                    .iter()
+                    .find(|h| h.operation_id == o.id()),
+                self.cam.linking.iter().find(|l| l.operation_id == o.id()),
+            )
+        };
+        let operation_fingerprint = if legacy_prefix {
+            // Preserve the exact old encoding solely to verify/migrate it.
+            let prefix = setup
+                .operations
+                .iter()
+                .take_while(|o| o.id() != operation.id())
+                .filter(|o| o.enabled())
+                .map(source_inputs)
+                .collect::<Vec<_>>();
+            stable_cam_fingerprint(&(
+                "cam-operation-dependencies",
+                CAM_TOOLPATH_PLANNER_REVISION,
+                operation,
+                height_expressions,
+                linking,
+                prefix,
+            ))?
+        } else {
+            stable_cam_fingerprint(&(
+                "cam-operation-intent",
+                CAM_TOOLPATH_PLANNER_REVISION,
+                operation,
+                height_expressions,
+                linking,
+            ))?
+        };
+        let order_dependencies = if legacy_prefix {
+            None
+        } else {
+            let rules = nbcad_cam::cam_operation_dependencies(setup, operation, linking);
+            let fingerprint = |kind| {
+                let sources = rules
+                    .iter()
+                    .filter(|d| d.kind == kind)
+                    .filter_map(|d| setup.operations.iter().find(|o| o.id() == d.operation_id))
+                    .map(source_inputs)
+                    .collect::<Vec<_>>();
+                stable_cam_fingerprint(&(
+                    "cam-order-evidence",
+                    nbcad_cam::CAM_ORDER_DEPENDENCY_RULES_REVISION,
+                    sources,
+                ))
+            };
+            Some(nbcad_cam::CamToolpathOrderDependenciesDto {
+                rules_revision: nbcad_cam::CAM_ORDER_DEPENDENCY_RULES_REVISION,
+                stock_height_fingerprint: fingerprint(
+                    nbcad_cam::CamOperationDependencyKind::IncomingStockHeight,
+                )?,
+                predrill_fingerprint: fingerprint(
+                    nbcad_cam::CamOperationDependencyKind::PredrilledEntry,
+                )?,
+            })
+        };
+        Ok(CamToolpathGenerationDto {
+            operation_id: operation.id(),
+            planner_revision: CAM_TOOLPATH_PLANNER_REVISION,
+            model_fingerprint: dependencies.model.clone(),
+            setup_fingerprint: dependencies.setup.clone(),
+            operation_fingerprint,
+            tool_fingerprint: stable_cam_fingerprint(&(
+                "cam-tool-dependencies",
+                CAM_TOOLPATH_PLANNER_REVISION,
+                tool,
+            ))?,
+            upstream_fingerprint: dependencies.upstream.clone(),
+            order_dependencies,
+        })
+    }
+
+    fn ensure_cam_model_references_exist(&self, setup: &CamSetupDto) -> Result<(), SessionError> {
+        let available_body_ids = self
+            .solids
+            .scene()
+            .bodies
+            .iter()
+            .map(|body| body.id)
+            .collect::<BTreeSet<_>>();
+        let mut required_body_ids = BTreeSet::new();
+        let mut visited = BTreeSet::from([setup.id]);
+        let mut cursor = setup;
+        loop {
+            required_body_ids.extend(cursor.body_ids.iter().copied());
+            if let CamResolvedStockDto::ModelBody { body_id } = &cursor.resolved_stock {
+                required_body_ids.insert(BodyId(*body_id));
+            }
+            let CamResolvedStockDto::Rest { source_setup_id } = &cursor.resolved_stock else {
+                break;
+            };
+            let source_setup_id = *source_setup_id;
+            if !visited.insert(source_setup_id) {
+                return Err(SessionError::Solid(
+                    "CAM rest-stock dependency contains a cycle".to_string(),
+                ));
+            }
+            cursor = self
+                .cam
+                .setups
+                .iter()
+                .find(|candidate| candidate.id == source_setup_id)
+                .ok_or_else(|| {
+                    SessionError::Solid(format!(
+                        "CAM rest-stock source setup {source_setup_id} no longer exists"
+                    ))
+                })?;
+        }
+        let missing = required_body_ids
+            .difference(&available_body_ids)
+            .map(|id| id.0.to_string())
+            .collect::<Vec<_>>();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        Err(SessionError::Solid(format!(
+            "Cannot regenerate setup '{}': referenced CAD bod{} {} no longer exist{}. Repair the setup/model selection first.",
+            setup.name,
+            if missing.len() == 1 { "y" } else { "ies" },
+            missing.join(", "),
+            if missing.len() == 1 { "s" } else { "" },
+        )))
+    }
+
+    pub fn cam_toolpath_statuses(&self) -> Result<Vec<CamToolpathStatusDto>, SessionError> {
+        let mut statuses = Vec::new();
+        for setup in &self.cam.setups {
+            if !setup.operations.iter().any(CamOperationDto::enabled) {
+                continue;
+            }
+            let dependencies = self.cam_setup_dependency_fingerprints(setup)?;
+            for operation in setup
+                .operations
+                .iter()
+                .filter(|operation| operation.enabled())
+            {
+                if let Err(reason) = operation.validate(setup, &self.cam.tools) {
+                    statuses.push(CamToolpathStatusDto {
+                        setup_id: setup.id,
+                        operation_id: operation.id(),
+                        state: CamToolpathStateDto::Invalid,
+                        reasons: vec![reason],
+                    });
+                    continue;
+                }
+                let saved = self
+                    .cam
+                    .toolpath_generations
+                    .iter()
+                    .find(|generation| generation.operation_id == operation.id());
+                let Some(saved) = saved else {
+                    statuses.push(CamToolpathStatusDto {
+                        setup_id: setup.id,
+                        operation_id: operation.id(),
+                        state: CamToolpathStateDto::NeverGenerated,
+                        reasons: vec![
+                            "Toolpath has not been regenerated and checked for this project version."
+                                .to_string(),
+                        ],
+                    });
+                    continue;
+                };
+                let current = self.cam_generation_signature(
+                    setup,
+                    operation,
+                    &dependencies,
+                    saved.order_dependencies.is_none(),
+                )?;
+                let mut reasons = Vec::new();
+                if saved.planner_revision != current.planner_revision {
+                    reasons
+                        .push("The CAM planner changed since this path was generated.".to_string());
+                }
+                if saved.model_fingerprint != current.model_fingerprint {
+                    reasons.push("Referenced CAD model or sketch geometry changed.".to_string());
+                }
+                if saved.setup_fingerprint != current.setup_fingerprint {
+                    reasons.push("Setup, WCS, stock, or work-offset settings changed.".to_string());
+                }
+                if saved.operation_fingerprint != current.operation_fingerprint {
+                    reasons.push(if saved.order_dependencies.is_none() {
+                        "Legacy generation inputs or preceding toolpath order changed; regenerate to verify the new dependency rules."
+                    } else {
+                        "Operation geometry or cutting/linking settings changed."
+                    }.to_string());
+                }
+                if let (Some(saved), Some(current)) = (&saved.order_dependencies, &current.order_dependencies) {
+                    if saved.rules_revision != current.rules_revision {
+                        reasons.push("The CAM order-dependency rules changed; regenerate this path.".to_string());
+                    }
+                    if saved.stock_height_fingerprint != current.stock_height_fingerprint {
+                        reasons.push("Earlier facing operations used to establish incoming stock height moved, changed, or were suppressed.".to_string());
+                    }
+                    if saved.predrill_fingerprint != current.predrill_fingerprint {
+                        reasons.push("Earlier drilling required by this path's Predrill entry moved, changed, or was suppressed.".to_string());
+                    }
+                }
+                if saved.tool_fingerprint != current.tool_fingerprint {
+                    reasons.push("The operation's tool definition changed.".to_string());
+                }
+                if saved.upstream_fingerprint != current.upstream_fingerprint {
+                    reasons.push("An upstream rest-stock setup or tool changed.".to_string());
+                }
+                statuses.push(CamToolpathStatusDto {
+                    setup_id: setup.id,
+                    operation_id: operation.id(),
+                    state: if reasons.is_empty() {
+                        CamToolpathStateDto::Current
+                    } else {
+                        CamToolpathStateDto::Stale
+                    },
+                    reasons,
+                });
+            }
+        }
+        Ok(statuses)
+    }
+
+    pub fn cam_toolpath_safety_warning(
+        &self,
+        setup_id: u64,
+    ) -> Result<Option<String>, SessionError> {
+        let stale = self
+            .cam_toolpath_statuses()?
+            .into_iter()
+            .filter(|status| {
+                status.setup_id == setup_id && status.state != CamToolpathStateDto::Current
+            })
+            .collect::<Vec<_>>();
+        if stale.is_empty() {
+            return Ok(None);
+        }
+        let invalid = stale.iter().filter(|status| status.state == CamToolpathStateDto::Invalid)
+            .flat_map(|status| status.reasons.iter().cloned()).collect::<Vec<_>>();
+        if !invalid.is_empty() {
+            return Ok(Some(format!("SAFETY: Invalid toolpath configuration: {}. Correct the assigned tool or operation, then regenerate before posting NC.", invalid.join("; "))));
+        }
+        let names = stale
+            .iter()
+            .filter_map(|status| {
+                self.cam
+                    .setups
+                    .iter()
+                    .flat_map(|setup| setup.operations.iter())
+                    .find(|operation| operation.id() == status.operation_id)
+                    .map(|operation| operation.name())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        Ok(Some(format!(
+            "SAFETY: {} enabled toolpath{} out of date ({names}). Regenerate before posting NC.",
+            stale.len(),
+            if stale.len() == 1 { " is" } else { "s are" },
+        )))
+    }
+
+    fn ensure_cam_toolpaths_current(&self, setup_id: u64) -> Result<(), SessionError> {
+        if let Some(warning) = self.cam_toolpath_safety_warning(setup_id)? {
+            return Err(SessionError::Solid(format!(
+                "NC posting blocked. {warning} Right-click the setup to regenerate all paths, or regenerate each affected path individually."
+            )));
+        }
+        Ok(())
+    }
+
+    /// Resolve persisted height expressions only during an explicit
+    /// regeneration transaction. Operations without an expression record are
+    /// legacy/manual absolute-Z programs and are intentionally left alone.
+    fn resolve_cam_height_expressions(
+        &self,
+        setup: &mut CamSetupDto,
+        only_operation: Option<u64>,
+    ) -> Result<(), SessionError> {
+        let scene = self.solids.scene();
+        let sketches = self.finished_sketches();
+        let wanted_bodies = setup.body_ids.iter().copied().collect::<BTreeSet<_>>();
+        let mut model_top = f64::NEG_INFINITY;
+        let mut model_bottom = f64::INFINITY;
+        for body in scene
+            .bodies
+            .iter()
+            .filter(|body| wanted_bodies.contains(&body.id))
+        {
+            for point in body.mesh.positions.chunks_exact(3) {
+                let projected = cam_model_point_to_setup(
+                    [
+                        f64::from(point[0]),
+                        f64::from(point[1]),
+                        f64::from(point[2]),
+                    ],
+                    setup,
+                );
+                model_top = model_top.max(projected.z);
+                model_bottom = model_bottom.min(projected.z);
+            }
+        }
+        if !model_top.is_finite() {
+            model_top = setup.stock.max.z;
+        }
+        if !model_bottom.is_finite() {
+            model_bottom = setup.stock.min.z;
+        }
+        let setup_snapshot = setup.clone();
+
+        for operation in &mut setup.operations {
+            if !operation.enabled() || only_operation.is_some_and(|id| operation.id() != id) {
+                continue;
+            }
+            let mut matching_expressions = self
+                .cam
+                .height_expressions
+                .iter()
+                .filter(|entry| entry.operation_id == operation.id());
+            let Some(expressions) = matching_expressions.next().cloned() else {
+                continue;
+            };
+            let label = operation.name().to_string();
+            if matching_expressions.next().is_some() {
+                return Err(SessionError::Solid(format!(
+                    "Cannot regenerate operation '{label}': duplicate associative height records must be repaired first."
+                )));
+            }
+            expressions
+                .validate_for_operation(operation)
+                .map_err(|message| {
+                    SessionError::Solid(format!(
+                        "Cannot regenerate operation '{label}': invalid associative height intent: {message}."
+                    ))
+                })?;
+            let holes: &[CamHoleDto] = match operation {
+                CamOperationDto::Drill { holes, .. } | CamOperationDto::Thread { holes, .. } => {
+                    holes
+                }
+                _ => &[],
+            };
+            let hole_top = holes.iter().map(|hole| hole.top_z).reduce(f64::max);
+            let hole_bottom = holes.iter().map(|hole| hole.bottom_z).reduce(f64::min);
+            let selection_z = if cam_height_expressions_use_selection(&expressions) {
+                Some(cam_selection_reference_z(
+                    operation,
+                    &setup_snapshot,
+                    &scene,
+                    &sketches,
+                    &label,
+                )?)
+            } else {
+                None
+            };
+            let resolve = |expression: &CamHeightExpressionDto,
+                           bottom: Option<f64>,
+                           top: Option<f64>,
+                           feed: Option<f64>,
+                           retract: Option<f64>|
+             -> Result<f64, SessionError> {
+                let base = match expression.reference {
+                    CamHeightReferenceDto::ModelTop => model_top,
+                    CamHeightReferenceDto::ModelBottom => model_bottom,
+                    CamHeightReferenceDto::StockTop => setup_snapshot.stock.max.z,
+                    CamHeightReferenceDto::StockBottom => setup_snapshot.stock.min.z,
+                    CamHeightReferenceDto::Origin => 0.0,
+                    CamHeightReferenceDto::HoleTop => hole_top.ok_or_else(|| {
+                        SessionError::Solid(format!(
+                            "Cannot regenerate operation '{label}': its height references picked-hole tops, but no associated hole faces remain. Reselect the holes."
+                        ))
+                    })?,
+                    CamHeightReferenceDto::HoleBottom => hole_bottom.ok_or_else(|| {
+                        SessionError::Solid(format!(
+                            "Cannot regenerate operation '{label}': its height references picked-hole bottoms, but no associated hole faces remain. Reselect the holes."
+                        ))
+                    })?,
+                    CamHeightReferenceDto::Bottom => bottom.ok_or_else(|| {
+                        SessionError::Solid(format!(
+                            "Cannot regenerate operation '{label}': a height references Bottom before Bottom is available."
+                        ))
+                    })?,
+                    CamHeightReferenceDto::Top => top.ok_or_else(|| {
+                        SessionError::Solid(format!(
+                            "Cannot regenerate operation '{label}': a height references Top before Top is available."
+                        ))
+                    })?,
+                    CamHeightReferenceDto::Feed => feed.ok_or_else(|| {
+                        SessionError::Solid(format!(
+                            "Cannot regenerate operation '{label}': a height references Feed before Feed is available."
+                        ))
+                    })?,
+                    CamHeightReferenceDto::Retract => retract.ok_or_else(|| {
+                        SessionError::Solid(format!(
+                            "Cannot regenerate operation '{label}': a height references Retract before Retract is available."
+                        ))
+                    })?,
+                    CamHeightReferenceDto::Selection => selection_z.ok_or_else(|| {
+                        SessionError::Solid(format!(
+                            "Cannot regenerate operation '{label}': its Selection height has no associated sketch plane. Reselect its geometry."
+                        ))
+                    })?,
+                };
+                let value = base + expression.offset;
+                if value.is_finite() {
+                    Ok(value)
+                } else {
+                    Err(SessionError::Solid(format!(
+                        "Cannot regenerate operation '{label}': a height expression is not finite."
+                    )))
+                }
+            };
+
+            let needs_bottom = !matches!(operation, CamOperationDto::Chamfer2d { .. });
+            let bottom = match &expressions.bottom {
+                Some(expression) if needs_bottom => {
+                    Some(resolve(expression, None, None, None, None)?)
+                }
+                None if !needs_bottom => None,
+                Some(_) => {
+                    return Err(SessionError::Solid(format!(
+                        "Cannot regenerate operation '{label}': this operation does not take a Bottom height."
+                    )))
+                }
+                None => {
+                    return Err(SessionError::Solid(format!(
+                        "Cannot regenerate operation '{label}': its associative Bottom height is missing."
+                    )))
+                }
+            };
+            let top = match operation {
+                CamOperationDto::Chamfer2d { modeled_chamfer:Some(_), .. } => operation.chamfer_chains().iter().map(|c| c.top_z).fold(f64::NEG_INFINITY, f64::max),
+                _=>resolve(&expressions.top, bottom, None, None, None)?,
+            };
+            let feed = resolve(&expressions.feed, bottom, Some(top), None, None)?;
+            let retract = resolve(&expressions.retract, bottom, Some(top), Some(feed), None)?;
+            let clearance = resolve(
+                &expressions.clearance,
+                bottom,
+                Some(top),
+                Some(feed),
+                Some(retract),
+            )?;
+            cam_apply_resolved_heights(operation, bottom, top, feed, retract, clearance)?;
+        }
+        Ok(())
+    }
+
+    fn resolve_cam_adaptive_geometry(
+        &self,
+        setup: &mut CamSetupDto,
+        only_operation: Option<u64>,
+    ) -> Result<(), SessionError> {
+        if !setup.operations.iter().any(|op| {
+            op.enabled()
+                && only_operation.is_none_or(|id| op.id() == id)
+                && matches!(op, CamOperationDto::Adaptive3d { .. })
+        }) {
+            return Ok(());
+        }
+        if setup.body_ids.is_empty() {
+            return Err(SessionError::Solid(
+                "High Speed Roughing needs target bodies selected in the setup.".into(),
+            ));
+        }
+        let scene = self.solids.scene();
+        let mesh_for = |id: BodyId| -> Result<CamStockMeshDto, SessionError> {
+            let body = scene
+                .bodies
+                .iter()
+                .find(|body| body.id == id)
+                .ok_or_else(|| {
+                    SessionError::Solid(format!(
+                        "High Speed Roughing target body {} no longer exists.",
+                        id.0
+                    ))
+                })?;
+            Ok(CamStockMeshDto {
+                positions: body.mesh.positions.iter().map(|&v| f64::from(v)).collect(),
+                indices: body.mesh.indices.clone(),
+            })
+        };
+        let geometry = CamAdaptiveGeometryDto {
+            targets: setup
+                .body_ids
+                .iter()
+                .copied()
+                .map(mesh_for)
+                .collect::<Result<Vec<_>, _>>()?,
+            stock: if let CamResolvedStockDto::ModelBody { body_id } = &setup.resolved_stock {
+                Some(mesh_for(BodyId(*body_id))?)
+            } else {
+                None
+            },
+        };
+        for operation in &mut setup.operations {
+            if !operation.enabled() || only_operation.is_some_and(|id| operation.id() != id) {
+                continue;
+            }
+            if let CamOperationDto::Adaptive3d {
+                geometry: snapshot, ..
+            } = operation
+            {
+                *snapshot = Some(geometry.clone());
+            }
+        }
+        Ok(())
+    }
+
+    /// Re-resolve every persisted model/sketch association before a
+    /// regeneration is allowed to earn a fresh dependency stamp. Raw manual
+    /// coordinates remain raw; referenced chains and cylindrical faces may
+    /// never silently fall back to their last baked coordinates.
+    fn resolve_cam_associative_geometry(
+        &self,
+        setup: &mut CamSetupDto,
+        only_operation: Option<u64>,
+    ) -> Result<(), SessionError> {
+        let scene = self.solids.scene();
+        let sketches = self.finished_sketches();
+        let setup_snapshot = setup.clone();
+        for operation in &mut setup.operations {
+            if !operation.enabled() || only_operation.is_some_and(|id| operation.id() != id) {
+                continue;
+            }
+            match operation {
+                CamOperationDto::Contour2d {
+                    name,
+                    path,
+                    closed,
+                    chain_ref: Some(reference),
+                    ..
+                } => {
+                    let resolved = resolve_cam_chain(
+                        reference.source,
+                        &reference.keys,
+                        reference.reversed,
+                        &setup_snapshot,
+                        scene,
+                        &sketches,
+                        false,
+                    )
+                    .map_err(|message| {
+                        SessionError::Solid(format!(
+                            "Cannot regenerate contour '{name}': {message} Reselect its geometry."
+                        ))
+                    })?;
+                    *path = resolved.0;
+                    *closed = resolved.1;
+                }
+                CamOperationDto::Pocket2d {
+                    name,
+                    outline,
+                    chain_ref: Some(reference),
+                    ..
+                }
+                => {
+                    let (resolved, closed) = resolve_cam_chain(
+                        reference.source,
+                        &reference.keys,
+                        reference.reversed,
+                        &setup_snapshot,
+                        scene,
+                        &sketches,
+                        true,
+                    )
+                    .map_err(|message| {
+                        SessionError::Solid(format!(
+                            "Cannot regenerate operation '{name}': {message} Reselect its geometry."
+                        ))
+                    })?;
+                    if !closed {
+                        return Err(SessionError::Solid(format!(
+                            "Cannot regenerate operation '{name}': its referenced entities no longer form a closed loop. Reselect its geometry."
+                        )));
+                    }
+                    *outline = resolved;
+                }
+                CamOperationDto::Chamfer2d { .. } => {
+                    let name = operation.name().to_owned();
+                    let mut chains = operation.chamfer_chains();
+                    for (i, chain) in chains.iter_mut().enumerate() {
+                        let Some(reference) = &chain.chain_ref else { continue; };
+                        let failure = |e| SessionError::Solid(format!("Cannot regenerate chamfer '{name}', chain {}: {e}", i + 1));
+                        if let Some(modeled) = &chain.modeled_chamfer {
+                            let resolved = crate::cam_chamfer::resolve(scene, &setup_snapshot, reference).map_err(failure)?;
+                            chain.path = resolved.path; chain.closed = resolved.closed; chain.top_z = resolved.top_z;
+                            chain.chamfer_width = resolved.width + modeled.additional_width; chain.wall_side = resolved.wall_side;
+                        } else {
+                            let resolved = resolve_cam_chain(reference.source, &reference.keys, reference.reversed,
+                                &setup_snapshot, scene, &sketches, true).map_err(failure)?;
+                            chain.path = resolved.0; chain.closed = resolved.1;
+                        }
+                    }
+                    operation.set_chamfer_chains(chains);
+                }
+                CamOperationDto::Drill { name, holes, .. }
+                | CamOperationDto::Thread { name, holes, .. } => {
+                    for hole in holes {
+                        let Some(reference) = hole.face_key.clone() else {
+                            continue;
+                        };
+                        resolve_cam_hole(&reference, hole, &setup_snapshot, scene).map_err(
+                            |message| {
+                                SessionError::Solid(format!(
+                                    "Cannot regenerate operation '{name}': {message} Reselect the hole face."
+                                ))
+                            },
+                        )?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    pub fn cam_regenerate_operation(
+        &mut self,
+        operation_id: u64,
+    ) -> Result<CamDocumentDto, SessionError> {
+        let (setup_id, operation) = self
+            .cam
+            .setups
+            .iter()
+            .find_map(|setup| {
+                setup
+                    .operations
+                    .iter()
+                    .find(|operation| operation.id() == operation_id)
+                    .map(|operation| (setup.id, operation.clone()))
+            })
+            .ok_or_else(|| SessionError::Solid("CAM operation does not exist".to_string()))?;
+        if !operation.enabled() {
+            return Err(SessionError::Solid(
+                "Resume the operation before regenerating its toolpath.".to_string(),
+            ));
+        }
+        let setup = self
+            .cam
+            .setups
+            .iter()
+            .find(|setup| setup.id == setup_id)
+            .expect("operation owner was found above");
+        self.ensure_cam_model_references_exist(setup)?;
+        let mut resolved_setup = setup.clone();
+        self.resolve_cam_associative_geometry(&mut resolved_setup, Some(operation_id))?;
+        self.resolve_cam_height_expressions(&mut resolved_setup, Some(operation_id))?;
+        self.resolve_cam_adaptive_geometry(&mut resolved_setup, Some(operation_id))?;
+        let operation = resolved_setup
+            .operations
+            .iter()
+            .find(|op| op.id() == operation_id)
+            .expect("operation owner was found above")
+            .clone();
+
+        // Plan through the requested operation, retaining its incoming-stock
+        // evidence (e.g. enabled whole-stock facing). Later operations must
+        // not block individual regeneration, but deleting the prefix here
+        // would incorrectly reject a valid lower feed plane after facing.
+        // Generation remains distinct from export's all-operation freshness
+        // and geometric verification gates.
+        let mut isolated = self.cam.clone();
+        if let Some(setup) = isolated
+            .setups
+            .iter_mut()
+            .find(|setup| setup.id == setup_id)
+        {
+            *setup = resolved_setup.clone();
+            let through = setup
+                .operations
+                .iter()
+                .position(|candidate| candidate.id() == operation_id)
+                .expect("validated operation")
+                + 1;
+            setup.operations.truncate(through);
+        }
+        let kept = isolated
+            .setups
+            .iter()
+            .flat_map(|s| s.operations.iter().map(CamOperationDto::id))
+            .collect::<BTreeSet<_>>();
+        isolated
+            .height_expressions
+            .retain(|h| kept.contains(&h.operation_id));
+        isolated.linking.retain(|l| kept.contains(&l.operation_id));
+        plan_setup(&isolated, setup_id).map_err(|error| SessionError::Solid(error.to_string()))?;
+
+        let dependencies = self.cam_setup_dependency_fingerprints(&resolved_setup)?;
+        let generation = self.current_cam_generation(&resolved_setup, &operation, &dependencies)?;
+        *self
+            .cam
+            .setups
+            .iter_mut()
+            .find(|setup| setup.id == setup_id)
+            .expect("validated owner") = resolved_setup;
+        self.cam
+            .toolpath_generations
+            .retain(|saved| saved.operation_id != operation_id);
+        self.cam.toolpath_generations.push(generation);
+        self.cam
+            .toolpath_generations
+            .sort_by_key(|saved| saved.operation_id);
+        Ok(self.cam.clone())
+    }
+
+    pub fn cam_regenerate_setup(&mut self, setup_id: u64) -> Result<CamDocumentDto, SessionError> {
+        let setup = self
+            .cam
+            .setups
+            .iter()
+            .find(|setup| setup.id == setup_id)
+            .ok_or_else(|| SessionError::Solid("CAM setup does not exist".to_string()))?;
+        self.ensure_cam_model_references_exist(setup)?;
+        let mut resolved_setup = setup.clone();
+        self.resolve_cam_associative_geometry(&mut resolved_setup, None)?;
+        self.resolve_cam_height_expressions(&mut resolved_setup, None)?;
+        self.resolve_cam_adaptive_geometry(&mut resolved_setup, None)?;
+        let mut candidate = self.cam.clone();
+        *candidate
+            .setups
+            .iter_mut()
+            .find(|s| s.id == setup_id)
+            .expect("validated setup") = resolved_setup.clone();
+        plan_setup(&candidate, setup_id).map_err(|error| SessionError::Solid(error.to_string()))?;
+        let setup = &resolved_setup;
+        let dependencies = self.cam_setup_dependency_fingerprints(setup)?;
+        let operation_ids = setup
+            .operations
+            .iter()
+            .map(CamOperationDto::id)
+            .collect::<BTreeSet<_>>();
+        let generations = setup
+            .operations
+            .iter()
+            .filter(|operation| operation.enabled())
+            .map(|operation| self.current_cam_generation(setup, operation, &dependencies))
+            .collect::<Result<Vec<_>, _>>()?;
+        *self
+            .cam
+            .setups
+            .iter_mut()
+            .find(|s| s.id == setup_id)
+            .expect("validated setup") = resolved_setup;
+        self.cam
+            .toolpath_generations
+            .retain(|saved| !operation_ids.contains(&saved.operation_id));
+        self.cam.toolpath_generations.extend(generations);
+        self.cam
+            .toolpath_generations
+            .sort_by_key(|saved| saved.operation_id);
+        Ok(self.cam.clone())
+    }
+
+    pub fn cam_plan(&self, setup_id: u64) -> Result<CamProgramDto, SessionError> {
+        let mut program = plan_setup(&self.cam, setup_id)
+            .map_err(|error| SessionError::Solid(error.to_string()))?;
+        if let Some(warning) = self.cam_toolpath_safety_warning(setup_id)? {
+            program.warnings.insert(0, warning);
+        }
+        Ok(program)
+    }
+
+    pub fn cam_plan_through(&self, setup_id: u64, operation_id: u64) -> Result<CamProgramDto, SessionError> {
+        let mut program = nbcad_cam::plan_setup_through(&self.cam, setup_id, operation_id)
+            .map_err(|error| SessionError::Solid(error.to_string()))?;
+        if let Some(warning) = self.cam_toolpath_safety_warning(setup_id)? {
+            program.warnings.insert(0, warning);
+        }
+        Ok(program)
+    }
+
+    pub fn cam_post(&self, request: CamPostRequestDto) -> Result<CamPostResultDto, SessionError> {
+        self.ensure_cam_toolpaths_current(request.setup_id)?;
+        let mut result = post_setup(&self.cam, &request)
+            .map_err(|error| SessionError::Solid(error.to_string()))?;
+        let verification = self.cam_post_verification(request.setup_id)?;
+        result.warnings.extend(verification);
+        Ok(result)
+    }
+
+    /// Fresh generation is not geometric verification. Recheck current
+    /// incoming stock, project tool offsets, WCS and target meshes before
+    /// either export route. The kernel's content-keyed bounded cache reuses
+    /// evidence only for identical inputs; no persisted "passed" bit can
+    /// survive an edit or a different controller radius assumption.
+    fn cam_post_verification(&self, setup_id: u64) -> Result<Vec<String>, SessionError> {
+        let setup = self
+            .cam
+            .setup(setup_id)
+            .ok_or_else(|| SessionError::Solid("CAM setup no longer exists".into()))?;
+        let scene = self.solids.scene();
+        let mesh_for = |id: BodyId| -> Result<CamStockMeshDto, SessionError> {
+            let body = scene
+                .bodies
+                .iter()
+                .find(|body| body.id == id)
+                .ok_or_else(|| {
+                    SessionError::Solid(format!(
+                        "Cannot verify CAM export: body {} no longer exists",
+                        id.0
+                    ))
+                })?;
+            Ok(CamStockMeshDto {
+                positions: body.mesh.positions.iter().map(|&v| f64::from(v)).collect(),
+                indices: body.mesh.indices.clone(),
+            })
+        };
+        let target = if setup.body_ids.is_empty() {
+            None
+        } else {
+            Some(CamSimulationTargetDto {
+                cache_key: None,
+                tolerance_mm: 0.1,
+                meshes: setup
+                    .body_ids
+                    .iter()
+                    .copied()
+                    .map(mesh_for)
+                    .collect::<Result<Vec<_>, _>>()?,
+            })
+        };
+        let mut source = setup;
+        for _ in 0..self.cam.setups.len() {
+            if let CamResolvedStockDto::Rest { source_setup_id } = source.resolved_stock {
+                source = self.cam.setup(source_setup_id).ok_or_else(|| {
+                    SessionError::Solid(
+                        "Cannot verify CAM export: missing rest-stock source".into(),
+                    )
+                })?;
+            } else {
+                break;
+            }
+        }
+        let stock_mesh = if let CamResolvedStockDto::ModelBody { body_id } = source.resolved_stock {
+            Some(mesh_for(BodyId(body_id))?)
+        } else {
+            None
+        };
+        let checked_target = target.is_some();
+        let result = simulate_setup(
+            &self.cam,
+            &CamSimulationRequestDto {
+                setup_id,
+                voxel_size: None,
+                max_voxels: None,
+                stock_mesh,
+                target,
+                through_operation_id: None,
+                completed_steps: None,
+                playback_time_seconds: None,
+            },
+        )
+        .map_err(|error| SessionError::Solid(format!("CAM export verification failed: {error}")))?;
+        let program = plan_setup(&self.cam, setup_id)
+            .map_err(|error| SessionError::Solid(error.to_string()))?;
+        let axial_stock_removal: std::collections::HashSet<usize> = result
+            .steps
+            .iter()
+            .filter(|step| {
+                step.removed_voxels > 0
+                    && step.from.zip(step.to).is_some_and(|(from, to)| {
+                        (from.x - to.x).abs() < 1e-8
+                            && (from.y - to.y).abs() < 1e-8
+                            && to.z < from.z - 1e-8
+                    })
+            })
+            .map(|step| step.command_index)
+            .collect();
+        let mut thread_section = false;
+        for (index, command) in program.commands.iter().enumerate() {
+            if let nbcad_cam::CamCommandDto::SectionStart { operation_id, .. } = command {
+                thread_section = setup.operations.iter().any(|op| {
+                    op.id() == *operation_id && matches!(op, CamOperationDto::Thread { .. })
+                });
+            }
+            if thread_section
+                && axial_stock_removal.contains(&index)
+                && matches!(command, nbcad_cam::CamCommandDto::Linear { .. })
+            {
+                return Err(SessionError::Solid(format!("CAM export blocked: thread-tool entry at motion {} removes incoming stock. Generate the upstream bore and verify its full-diameter depth, including the drill point, before thread milling", index + 1)));
+            }
+        }
+        if let Some(issue) = result.collisions.first() {
+            return Err(SessionError::Solid(format!("CAM export blocked by current stock/target verification at motion {}: {}. Inspect CAM Sim and regenerate corrected paths", issue.command_index + 1, issue.message)));
+        }
+        if result
+            .comparison
+            .as_ref()
+            .is_some_and(|comparison| comparison.initial_shortfall_voxels > 0)
+        {
+            return Err(SessionError::Solid("CAM export blocked: incoming stock is already missing protected target volume; inspect stock/WCS and earlier rest-source operations".into()));
+        }
+        if let Some(warning) = result
+            .warnings
+            .iter()
+            .find(|warning| warning.contains("unpaired surface crossings"))
+        {
+            return Err(SessionError::Solid(format!(
+                "CAM export could not verify mesh closure: {warning}"
+            )));
+        }
+        let mut warnings = result.warnings;
+        warnings.push(if checked_target {
+            "Current stock and target checked at the simulation's disclosed voxel tolerance using the project cutter diameter. Match the controller's radius offset; fixtures, holders and machine motion remain unverified.".into()
+        } else {
+            "Stock-contact check completed, but no target bodies are selected: part-gouge clearance is UNVERIFIED. Select setup target bodies for geometric comparison. Fixtures, holders and machine motion remain unverified.".into()
+        });
+        Ok(warnings)
+    }
+
+    pub fn cam_analyze_nbpost(
+        &self,
+        request: NbPostAnalysisRequestDto,
+    ) -> Result<NbPostAnalysisDto, SessionError> {
+        analyze_nbpost(&request).map_err(|error| SessionError::Solid(error.to_string()))
+    }
+
+    pub fn cam_simulate(
+        &self,
+        request: CamSimulationRequestDto,
+    ) -> Result<CamSimulationResultDto, SessionError> {
+        let mut result = simulate_setup(&self.cam, &request)
+            .map_err(|error| SessionError::Solid(error.to_string()))?;
+        if let Some(warning) = self.cam_toolpath_safety_warning(request.setup_id)? {
+            result.warnings.insert(0, warning);
+        }
+        Ok(result)
+    }
+
+    pub fn cam_simulate_gcode(
+        &self,
+        request: CamGcodeSimulationRequestDto,
+    ) -> Result<CamSimulationResultDto, SessionError> {
+        simulate_gcode(&self.cam, &request).map_err(|error| SessionError::Solid(error.to_string()))
+    }
+
+    pub fn cam_post_events(&self, setup_id: u64) -> Result<PostEventStreamDto, SessionError> {
+        self.ensure_cam_toolpaths_current(setup_id)?;
+        let verification = self.cam_post_verification(setup_id)?;
+        let mut program = self.cam_plan(setup_id)?;
+        program.warnings.extend(verification);
+        Ok(post_event_stream(&self.cam, &program))
     }
 
     pub fn set_body_appearance(
@@ -3682,6 +4898,327 @@ fn max_feature_number(document: &Document, prefix: &str) -> u32 {
         .unwrap_or(0)
 }
 
+
+fn cam_model_point_to_setup(point: [f64; 3], setup: &CamSetupDto) -> nbcad_cam::Point3Dto {
+    let delta = [
+        point[0] - setup.wcs.origin.x,
+        point[1] - setup.wcs.origin.y,
+        point[2] - setup.wcs.origin.z,
+    ];
+    let project = |axis: [f64; 3]| delta[0] * axis[0] + delta[1] * axis[1] + delta[2] * axis[2];
+    nbcad_cam::Point3Dto::new(
+        project(setup.wcs.x_axis),
+        project(setup.wcs.y_axis),
+        project(setup.wcs.z_axis),
+    )
+}
+
+fn cam_direction_to_setup(direction: [f64; 3], setup: &CamSetupDto) -> [f64; 3] {
+    let project =
+        |axis: [f64; 3]| direction[0] * axis[0] + direction[1] * axis[1] + direction[2] * axis[2];
+    [
+        project(setup.wcs.x_axis),
+        project(setup.wcs.y_axis),
+        project(setup.wcs.z_axis),
+    ]
+}
+
+
+fn resolve_cam_chain(
+    source: CamChainSource,
+    keys: &[String],
+    reversed: bool,
+    setup: &CamSetupDto,
+    scene: &SolidSceneDto,
+    sketches: &[SketchDto],
+    planar: bool,
+) -> Result<(Vec<nbcad_cam::Point2Dto>, bool), String> {
+    let chain = crate::edge_selection::resolve(scene, sketches, &crate::EdgeChainRequest {
+        source: match source {
+            CamChainSource::Model => crate::ChainSource::Model,
+            CamChainSource::Sketch => crate::ChainSource::Sketch,
+        },
+        body_ids: setup.body_ids.clone(),
+        normal: Some(setup.wcs.z_axis),
+        keys: keys.to_vec(),
+        mode: crate::ChainMode::Manual,
+        reversed,
+    })?;
+    if planar {
+        let z = cam_model_point_to_setup(chain.points[0], setup).z;
+        if chain.points.iter().any(|p| (cam_model_point_to_setup(*p, setup).z - z).abs() > nbcad_core::edge_chain::JOIN_TOLERANCE) {
+            return Err("The selected 2D boundary must lie in one setup-Z plane.".into());
+        }
+    }
+    Ok((chain.points.into_iter().map(|p| {
+        let p = cam_model_point_to_setup(p, setup);
+        nbcad_cam::Point2Dto::new(p.x, p.y)
+    }).collect(), chain.closed))
+}
+
+fn resolve_cam_hole(
+    reference: &str,
+    hole: &mut CamHoleDto,
+    setup: &CamSetupDto,
+    scene: &SolidSceneDto,
+) -> Result<(), String> {
+    let (body_text, face_text) = reference
+        .split_once(':')
+        .ok_or_else(|| format!("hole reference '{reference}' is malformed."))?;
+    let body_id = body_text
+        .parse::<u64>()
+        .map_err(|_| format!("hole reference '{reference}' has an invalid body id."))?;
+    let face_id = face_text
+        .parse::<u64>()
+        .map_err(|_| format!("hole reference '{reference}' has an invalid face id."))?;
+    let body = scene
+        .bodies
+        .iter()
+        .find(|body| body.id.0 == body_id)
+        .ok_or_else(|| format!("referenced hole body {body_id} no longer exists."))?;
+    let face = body
+        .faces
+        .iter()
+        .find(|face| face.id.0 == face_id)
+        .ok_or_else(|| format!("referenced cylindrical face {reference} no longer exists."))?;
+    let cylinder = face
+        .cylinder
+        .ok_or_else(|| format!("referenced face {reference} is no longer cylindrical."))?;
+    let center = cam_model_point_to_setup(
+        [cylinder.origin.x, cylinder.origin.y, cylinder.origin.z],
+        setup,
+    );
+    let axis = cam_direction_to_setup([cylinder.axis.x, cylinder.axis.y, cylinder.axis.z], setup);
+    let axis_length = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+    if !axis_length.is_finite()
+        || axis_length <= 1.0e-9
+        || (axis[2] / axis_length).abs() < 1.0 - 1.0e-6
+    {
+        return Err(format!(
+            "referenced face {reference} is no longer aligned with setup Z."
+        ));
+    }
+    let mut top = f64::NEG_INFINITY;
+    let mut bottom = f64::INFINITY;
+    let start = face.first_index as usize;
+    let end = start.saturating_add(face.index_count as usize);
+    for &vertex in body.mesh.indices.get(start..end).unwrap_or_default() {
+        let base = vertex as usize * 3;
+        let Some((&x, rest)) = body
+            .mesh
+            .positions
+            .get(base)
+            .zip(body.mesh.positions.get(base + 1..))
+        else {
+            continue;
+        };
+        let Some((&y, rest)) = rest.split_first() else {
+            continue;
+        };
+        let Some(&z) = rest.first() else {
+            continue;
+        };
+        let point = cam_model_point_to_setup([f64::from(x), f64::from(y), f64::from(z)], setup);
+        top = top.max(point.z);
+        bottom = bottom.min(point.z);
+    }
+    if !top.is_finite() || !bottom.is_finite() || top <= bottom + 1.0e-9 {
+        return Err(format!(
+            "referenced face {reference} has no trustworthy axial span."
+        ));
+    }
+    hole.point = nbcad_cam::Point2Dto::new(center.x, center.y);
+    hole.top_z = top;
+    hole.bottom_z = bottom;
+    hole.axis = [
+        axis[0] / axis_length,
+        axis[1] / axis_length,
+        axis[2] / axis_length,
+    ];
+    Ok(())
+}
+
+fn cam_height_expressions_use_selection(expressions: &CamOperationHeightExpressionsDto) -> bool {
+    [
+        &expressions.clearance,
+        &expressions.retract,
+        &expressions.feed,
+        &expressions.top,
+    ]
+    .into_iter()
+    .chain(expressions.bottom.iter())
+    .any(|expression| expression.reference == CamHeightReferenceDto::Selection)
+}
+
+fn cam_selection_reference_z(
+    operation: &CamOperationDto,
+    setup: &CamSetupDto,
+    scene: &SolidSceneDto,
+    sketches: &[SketchDto],
+    label: &str,
+) -> Result<f64, SessionError> {
+    if matches!(operation, CamOperationDto::Chamfer2d { additional_chains, .. } if !additional_chains.is_empty()) {
+        return operation.chamfer_chains().into_iter().map(|chain| {
+            cam_selection_reference_z(&operation.with_chamfer_chain(chain), setup, scene, sketches, label)
+        }).try_fold(f64::NEG_INFINITY, |highest, z| z.map(|z| highest.max(z)));
+    }
+    let reference = match operation {
+        CamOperationDto::Contour2d { chain_ref, .. }
+        | CamOperationDto::Pocket2d { chain_ref, .. }
+        | CamOperationDto::Chamfer2d { chain_ref, .. } => chain_ref.as_ref(),
+        _ => None,
+    }
+    .ok_or_else(|| {
+        SessionError::Solid(format!(
+            "Cannot regenerate operation '{label}': its Selection height has no persisted geometry reference. Reselect its sketch loop."
+        ))
+    })?;
+    if reference.source == CamChainSource::Model {
+        let chain = crate::edge_selection::resolve(scene, sketches, &crate::EdgeChainRequest {
+            source: crate::ChainSource::Model, body_ids: setup.body_ids.clone(),
+            normal: Some(setup.wcs.z_axis), keys: reference.keys.clone(),
+            mode: crate::ChainMode::Manual, reversed: false,
+        }).map_err(|e| SessionError::Solid(format!("Cannot regenerate operation '{label}': {e}")))?;
+        let levels: Vec<_> = chain.points.iter().map(|p| cam_model_point_to_setup(*p, setup).z).collect();
+        let z = levels[0];
+        if levels.iter().any(|v| (v - z).abs() > nbcad_core::edge_chain::JOIN_TOLERANCE) {
+            return Err(SessionError::Solid(format!("Cannot regenerate operation '{label}': Selection height requires a chain in one setup-Z plane.")));
+        }
+        return Ok(z);
+    }
+    let key = reference.keys.first().ok_or_else(|| {
+        SessionError::Solid(format!(
+            "Cannot regenerate operation '{label}': its Selection height has an empty sketch reference."
+        ))
+    })?;
+    let value = key.strip_prefix("sketch:").ok_or_else(|| {
+        SessionError::Solid(format!(
+            "Cannot regenerate operation '{label}': its Selection height reference is malformed."
+        ))
+    })?;
+    let (sketch_name, entity_id) = value.rsplit_once(':').ok_or_else(|| {
+        SessionError::Solid(format!(
+            "Cannot regenerate operation '{label}': its Selection height reference is malformed."
+        ))
+    })?;
+    entity_id.parse::<u64>().map_err(|_| {
+        SessionError::Solid(format!(
+            "Cannot regenerate operation '{label}': its Selection height entity id is malformed."
+        ))
+    })?;
+    let sketch = sketches
+        .iter()
+        .find(|sketch| sketch.name == sketch_name)
+        .ok_or_else(|| {
+            SessionError::Solid(format!(
+                "Cannot regenerate operation '{label}': referenced sketch '{sketch_name}' no longer exists. Reselect its geometry."
+            ))
+        })?;
+    let point = cam_model_point_to_setup(sketch.basis.origin, setup);
+    Ok(point.z)
+}
+
+fn cam_apply_resolved_heights(
+    operation: &mut CamOperationDto,
+    bottom: Option<f64>,
+    top: f64,
+    feed: f64,
+    retract: f64,
+    clearance: f64,
+) -> Result<(), SessionError> {
+    let label = operation.name().to_string();
+    let required_bottom = || {
+        bottom.ok_or_else(|| {
+            SessionError::Solid(format!(
+                "Cannot regenerate operation '{}': resolved Bottom height is missing.",
+                label
+            ))
+        })
+    };
+    match operation {
+        CamOperationDto::Adaptive3d {
+            top_z,
+            bottom_z,
+            feed_height_z,
+            retract_z,
+            clearance_z,
+            ..
+        }
+        | CamOperationDto::Contour2d {
+            top_z,
+            bottom_z,
+            feed_height_z,
+            retract_z,
+            clearance_z,
+            ..
+        }
+        | CamOperationDto::Pocket2d {
+            top_z,
+            bottom_z,
+            feed_height_z,
+            retract_z,
+            clearance_z,
+            ..
+        }
+        | CamOperationDto::Thread {
+            top_z,
+            bottom_z,
+            feed_height_z,
+            retract_z,
+            clearance_z,
+            ..
+        }
+        | CamOperationDto::Drill {
+            top_z,
+            bottom_z,
+            feed_height_z,
+            retract_z,
+            clearance_z,
+            ..
+        } => {
+            *top_z = top;
+            *bottom_z = required_bottom()?;
+            *feed_height_z = feed;
+            *retract_z = retract;
+            *clearance_z = clearance;
+        }
+        CamOperationDto::Face {
+            top_z,
+            target_z,
+            feed_height_z,
+            retract_z,
+            clearance_z,
+            ..
+        } => {
+            *top_z = top;
+            *target_z = required_bottom()?;
+            *feed_height_z = feed;
+            *retract_z = retract;
+            *clearance_z = clearance;
+        }
+        CamOperationDto::Chamfer2d {
+            top_z,
+            modeled_chamfer,
+            additional_chains,
+            feed_height_z,
+            retract_z,
+            clearance_z,
+            ..
+        } => {
+            // Modeled chains retain their individually measured top levels.
+            // Sharp chains use the operation's common explicit top plane.
+            if modeled_chamfer.is_none() { *top_z = top; }
+            for chain in additional_chains {
+                if chain.modeled_chamfer.is_none() { chain.top_z = top; }
+            }
+            *feed_height_z = feed;
+            *retract_z = retract;
+            *clearance_z = clearance;
+        }
+    }
+    Ok(())
+}
+
 impl Default for SketchManager {
     fn default() -> Self {
         Self::new()
@@ -4252,12 +5789,20 @@ mod project_tests {
         DrawingTolerancePreset, DrawingTopologyAnchorRefDto, DrawingViewAlignment, DrawingViewDto,
         DrawingViewKind,
     };
+    use nbcad_cam::{
+        CamChainRefDto, CamChainSource, CamHeightExpressionDto, CamHeightReferenceDto, CamHoleDto,
+        CamOperationDto, CamOperationHeightExpressionsDto, CamPostConfigDto, CamSetupDto,
+        CamToolDto, CamToolKind, CamUnits, CompensationMode, ContourCompensation, CoolantMode,
+        CuttingParametersDto, DrillCycle, MillingDirection, Point2Dto as CamPoint2Dto,
+        Point3Dto as CamPoint3Dto, Rect2Dto as CamRect2Dto, StockBoxDto, WcsOriginSpecDto,
+        WorkCoordinateSystemDto, WorkOffset,
+    };
     use nbcad_core::{BodyId, DimensionStyle, OriginPlane};
     use nbcad_solid::{
-        ExtrudeExtent, ExtrudeOperation, HoleExtent, HoleStyle, ImportStepRequest, KernelBodyDto,
-        KernelCurveDto, KernelEdgeDto, KernelFaceDto, KernelJobDto, KernelSceneDto, LoftRequest,
-        PlanarFaceSignatureDto, Point3Dto, ProfileRefDto, ReorderFeatureRequest, RibRequest,
-        SweepRequest,
+        CylindricalSurfaceDto, ExtrudeExtent, ExtrudeOperation, HoleExtent, HoleStyle,
+        ImportStepRequest, KernelBodyDto, KernelCurveDto, KernelEdgeDto, KernelFaceDto,
+        KernelJobDto, KernelSceneDto, LoftRequest, PlanarFaceSignatureDto, Point3Dto,
+        ProfileRefDto, ReorderFeatureRequest, RibRequest, SweepRequest,
     };
 
     fn raw_body(body_id: BodyId, basis: nbcad_core::PlaneBasis) -> KernelBodyDto {
@@ -4285,6 +5830,8 @@ mod project_tests {
                     edge_count: 3,
                 }),
                 cylinder: None,
+                edge_keys: Vec::new(),
+                cone: None,
             }],
             edges: vec![
                 KernelEdgeDto {
@@ -5211,6 +6758,1097 @@ mod project_tests {
             })
             .unwrap();
         assert_eq!(loaded.assembly_document(), assembly);
+    }
+
+    pub(super) fn cam_roundtrip_fixture() -> CamDocumentDto {
+        let cam = CamDocumentDto {
+            linking: Vec::new(),
+            load_warnings: Vec::new(),
+            toolpath_generations: Vec::new(),
+            height_expressions: vec![CamOperationHeightExpressionsDto {
+                operation_id: 7,
+                clearance: CamHeightExpressionDto {
+                    reference: CamHeightReferenceDto::StockTop,
+                    offset: 8.0,
+                },
+                retract: CamHeightExpressionDto {
+                    reference: CamHeightReferenceDto::StockTop,
+                    offset: 2.0,
+                },
+                feed: CamHeightExpressionDto {
+                    reference: CamHeightReferenceDto::StockTop,
+                    offset: 1.0,
+                },
+                top: CamHeightExpressionDto {
+                    reference: CamHeightReferenceDto::StockTop,
+                    offset: 0.0,
+                },
+                bottom: Some(CamHeightExpressionDto {
+                    reference: CamHeightReferenceDto::StockTop,
+                    offset: -1.0,
+                }),
+            }],
+            setups: vec![CamSetupDto {
+                id: 3,
+                name: "Top setup".to_string(),
+                wcs: WorkCoordinateSystemDto::default(),
+                wcs_origin: WcsOriginSpecDto::Explicit,
+                work_offset: WorkOffset::G55,
+                work_offset_count: 1,
+                stock_spec: nbcad_cam::CamStockSpecDto::LegacyBox,
+                resolved_stock: nbcad_cam::CamResolvedStockDto::Box,
+                stock: StockBoxDto {
+                    min: CamPoint3Dto::new(0.0, 0.0, -12.0),
+                    max: CamPoint3Dto::new(30.0, 20.0, 0.0),
+                },
+                stock_model_box: None,
+                body_ids: vec![],
+                machine: Some(nbcad_cam::CamMachineAssignmentDto::three_axis(CamPostConfigDto::default())),
+                legacy_clearance_z: None,
+                legacy_retract_z: None,
+                operations: vec![CamOperationDto::Face {
+                    id: 7,
+                    name: "Face stock".to_string(),
+                    enabled: true,
+                    tool_id: 5,
+                    bounds: CamRect2Dto {
+                        min: CamPoint2Dto::new(0.0, 0.0),
+                        max: CamPoint2Dto::new(30.0, 20.0),
+                    },
+                    top_z: 0.0,
+                    target_z: -1.0,
+                    step_over: 3.0,
+                    step_down: 1.0,
+                    safe_distance: 5.0,
+                    direction: nbcad_cam::FaceDirection::BothWays,
+                    clearance_z: 8.0,
+                    retract_z: 2.0,
+                    feed_height_z: 1.0,
+                    cutting: CuttingParametersDto {
+                        spindle_rpm: 12_000,
+                        feed_xy: 800.0,
+                        feed_z: 200.0,
+                        coolant: CoolantMode::Flood,
+                    },
+                }],
+            }],
+            active_setup_id: Some(3),
+            tools: vec![CamToolDto {
+                id: 5,
+                number: Some(1),
+                name: "6 mm flat end mill".to_string(),
+                kind: CamToolKind::FlatEndMill,
+                diameter: 6.0,
+                flute_length: 20.0,
+                overall_length: 50.0,
+                center_cutting: true,
+                flute_count: 4,
+                point_angle_degrees: None,
+                corner_radius: None,
+                corner_chamfer: None,
+                cutting: CuttingParametersDto::default(),
+                cutting_presets: vec![],
+                default_step_down: None,
+                default_step_over: None,
+            }],
+            units: CamUnits::Millimeters,
+            post_defaults: CamPostConfigDto::default(),
+            next_setup_id: 4,
+            next_operation_id: 8,
+            next_tool_id: 6,
+        };
+        cam
+    }
+
+    #[test]
+    fn project_migration_preserves_cam_chains_and_placed_drawing_intent_together() {
+        let mut manager = SketchManager::new();
+        let mut cam = cam_roundtrip_fixture();
+        cam.height_expressions.clear();
+        cam.tools[0].kind = CamToolKind::ChamferMill;
+        cam.tools[0].point_angle_degrees = Some(90.0);
+        cam.setups[0].operations[0] = serde_json::from_value(serde_json::json!({
+            "kind":"chamfer2d", "id":7, "name":"Two chamfer chains", "tool_id":5,
+            "path":[{"x":0.0,"y":0.0},{"x":10.0,"y":0.0},{"x":10.0,"y":10.0}],
+            "closed":true, "top_z":0.0, "chamfer_width":0.5, "tip_offset":1.0,
+            "wall_side":"outside", "clearance_z":8.0, "retract_z":2.0, "feed_height_z":1.0,
+            "cutting":{"spindle_rpm":6000,"feed_xy":600.0,"feed_z":100.0,"coolant":"flood"},
+            "additional_chains":[{
+                "path":[{"x":20.0,"y":0.0},{"x":30.0,"y":0.0},{"x":30.0,"y":10.0}],
+                "closed":true,"top_z":-1.0,"chamfer_width":0.5,"wall_side":"outside"
+            }]
+        })).unwrap();
+        manager.set_cam_document(cam.clone()).unwrap();
+        manager.drawing_command(serde_json::from_value(serde_json::json!({
+            "type":"create_sheet", "arguments":{
+                "name":"Manufacturing", "format":"a4", "orientation":"landscape"
+            }
+        })).unwrap()).unwrap();
+        let mut drawings = manager.drawing_document();
+        drawings.sheets[0].views.push(serde_json::from_value(serde_json::json!({
+            "id":1,"name":"Placed assembly", "kind":"top", "scope":"assembly",
+            "occurrence_ids":[], "direction":[0.0,0.0,1.0],"up":[0.0,1.0,0.0],
+            "position":[80.0,60.0],"scale":1.0
+        })).unwrap());
+        drawings.next_view_id = 2;
+        manager.set_drawing_document(drawings.clone()).unwrap();
+        let mut model: serde_json::Value =
+            serde_json::from_str(&manager.export_project_model().unwrap()).unwrap();
+        assert_eq!(model["schema_version"], 7);
+        // Both previously released main readers and CAM preview readers must
+        // migrate without dropping the other workspace's persisted data.
+        for version in [3, 4, 5, 6, 7] {
+            model["schema_version"] = version.into();
+            let mut loaded = SketchManager::new();
+            let plan = loaded.prepare_load_project(model.to_string()).unwrap();
+            loaded.commit_solid(CommitKernelRequest {
+                transaction_id: plan.transaction_id,
+                scene: KernelSceneDto::default(),
+            }).unwrap();
+            assert_eq!(loaded.cam_document(), cam, "CAM migration from schema {version}");
+            assert_eq!(loaded.drawing_document(), drawings, "Drawing migration from schema {version}");
+            assert_eq!(loaded.cam_document().setups[0].operations[0].chamfer_chains().len(), 2);
+            let saved: serde_json::Value =
+                serde_json::from_str(&loaded.export_project_model().unwrap()).unwrap();
+            assert_eq!(saved["schema_version"], PROJECT_SCHEMA_VERSION);
+        }
+    }
+
+    #[test]
+    fn project_roundtrip_preserves_cam_intent_and_regenerates_motion() {
+        let cam = cam_roundtrip_fixture();
+        let mut manager = SketchManager::new();
+        manager.set_cam_document(cam.clone()).unwrap();
+
+        let statuses = manager.cam_toolpath_statuses().unwrap();
+        assert_eq!(statuses[0].state, CamToolpathStateDto::NeverGenerated);
+        let blocked = manager
+            .cam_post(CamPostRequestDto {
+                setup_id: 3,
+                post: None,
+                program_name: None,
+            })
+            .unwrap_err();
+        assert!(blocked.to_string().contains("NC posting blocked"));
+        let regenerated = manager.cam_regenerate_setup(3).unwrap();
+        assert_eq!(
+            manager.cam_toolpath_statuses().unwrap()[0].state,
+            CamToolpathStateDto::Current
+        );
+
+        let json = manager.export_project_model().unwrap();
+        let mut loaded = SketchManager::new();
+        let replay = loaded.prepare_load_project(json).unwrap();
+        assert!(replay.jobs.is_empty());
+        loaded
+            .commit_solid(CommitKernelRequest {
+                transaction_id: replay.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: Vec::new(),
+                    errors: Vec::new(),
+                },
+            })
+            .unwrap();
+
+        assert_eq!(loaded.cam_document(), regenerated);
+        assert_eq!(
+            loaded.cam_toolpath_statuses().unwrap()[0].state,
+            CamToolpathStateDto::Current
+        );
+        let program = loaded.cam_plan(3).unwrap();
+        assert_eq!(program.stats.operation_count, 1);
+        assert!(program.stats.cutting_distance > 0.0);
+        let posted = loaded
+            .cam_post(CamPostRequestDto {
+                setup_id: 3,
+                post: None,
+                program_name: None,
+            })
+            .unwrap();
+        assert!(posted.nc.contains("G55"));
+
+        // Height expressions survive project replay and follow their current
+        // stock reference during explicit regeneration. The stale absolute
+        // Z values are never silently re-certified.
+        let mut raised_stock = loaded.cam_document();
+        raised_stock.setups[0].stock.max.z = 2.0;
+        loaded.set_cam_document(raised_stock).unwrap();
+        assert_eq!(
+            loaded.cam_toolpath_statuses().unwrap()[0].state,
+            CamToolpathStateDto::Stale
+        );
+        loaded.cam_regenerate_operation(7).unwrap();
+        let CamOperationDto::Face {
+            top_z,
+            target_z,
+            feed_height_z,
+            retract_z,
+            clearance_z,
+            ..
+        } = &loaded.cam.setups[0].operations[0]
+        else {
+            unreachable!();
+        };
+        assert_eq!(
+            (*top_z, *target_z, *feed_height_z, *retract_z, *clearance_z),
+            (2.0, 1.0, 3.0, 4.0, 10.0)
+        );
+
+        let mut edited = loaded.cam_document();
+        edited.tools[0].diameter = 6.1;
+        loaded.set_cam_document(edited).unwrap();
+        let stale = &loaded.cam_toolpath_statuses().unwrap()[0];
+        assert_eq!(stale.state, CamToolpathStateDto::Stale);
+        assert!(stale
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("tool definition")));
+        assert!(loaded
+            .cam_post(CamPostRequestDto {
+                setup_id: 3,
+                post: None,
+                program_name: None,
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("NC posting blocked"));
+        loaded.cam_regenerate_operation(7).unwrap();
+        assert_eq!(
+            loaded.cam_toolpath_statuses().unwrap()[0].state,
+            CamToolpathStateDto::Current
+        );
+
+        let mut setup_edited = loaded.cam_document();
+        setup_edited.setups[0].work_offset = WorkOffset::G56;
+        loaded.set_cam_document(setup_edited).unwrap();
+        let stale = &loaded.cam_toolpath_statuses().unwrap()[0];
+        assert_eq!(stale.state, CamToolpathStateDto::Stale);
+        assert!(stale
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("Setup, WCS, stock")));
+        loaded.cam_regenerate_operation(7).unwrap();
+
+        let mut missing_model = loaded.cam_document();
+        missing_model.setups[0].body_ids = vec![BodyId(999)];
+        loaded.set_cam_document(missing_model).unwrap();
+        let stale = &loaded.cam_toolpath_statuses().unwrap()[0];
+        assert_eq!(stale.state, CamToolpathStateDto::Stale);
+        assert!(stale
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("CAD model")));
+        let missing_error = loaded.cam_regenerate_setup(3).unwrap_err().to_string();
+        assert!(missing_error.contains("referenced CAD body 999 no longer exists"));
+    }
+
+    #[test]
+    fn machine_edits_preserve_generation_but_recheck_production_output() {
+        let mut manager = SketchManager::new();
+        manager.set_cam_document(cam_roundtrip_fixture()).unwrap();
+        manager.cam_regenerate_setup(3).unwrap();
+        let before = manager.cam_document();
+        let program = manager.cam_plan(3).unwrap();
+        let mut generic = before.clone();
+        generic.setups[0].machine = None;
+        manager.set_cam_document(generic).unwrap();
+        assert_eq!(manager.cam_toolpath_statuses().unwrap()[0].state, CamToolpathStateDto::Current);
+        assert_eq!(manager.cam_plan(3).unwrap(), program);
+        assert!(manager.cam_post(CamPostRequestDto { setup_id: 3, post: None, program_name: None }).unwrap_err().to_string().contains("select a machine/controller"));
+        let mut bound = manager.cam_document();
+        bound.setups[0].machine = Some(nbcad_cam::CamMachineAssignmentDto::three_axis(CamPostConfigDto {
+            dialect: nbcad_cam::PostDialect::Siemens828d,
+            siemens_828d: Some(nbcad_cam::Siemens828dPostConfigDto::default()),
+            ..Default::default()
+        }));
+        let tool_id = bound.tools[0].id;
+        bound.setups[0].machine.as_mut().unwrap().tool_calls = vec![nbcad_cam::CamMachineToolBindingDto {
+            tool_id, call: nbcad_cam::CamMachineToolCallDto::Name { name: "HostTest_EM6".into() },
+        }];
+        manager.set_cam_document(bound).unwrap();
+        assert_eq!(manager.cam_toolpath_statuses().unwrap()[0].state, CamToolpathStateDto::Current);
+        assert_eq!(manager.cam_document().toolpath_generations, before.toolpath_generations);
+        let output = manager.cam_post(CamPostRequestDto { setup_id: 3, post: None, program_name: None }).unwrap();
+        assert_eq!(output.dialect, nbcad_cam::PostDialect::Siemens828d);
+        assert!(manager.cam_post(CamPostRequestDto { setup_id: 3, post: Some(CamPostConfigDto::default()), program_name: None }).unwrap_err().to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn cam_linking_and_order_invalidate_only_affected_generation_prefixes() {
+        let mut cam = cam_roundtrip_fixture();
+        let mut second = cam.setups[0].operations[0].clone();
+        if let CamOperationDto::Face { id, name, .. } = &mut second {
+            *id = 8;
+            *name = "Second face".into();
+        }
+        cam.setups[0].operations.push(second);
+        cam.next_operation_id = 9;
+        cam.linking.push(nbcad_cam::CamLinkingDto {
+            operation_id: 7,
+            ..Default::default()
+        });
+        let mut manager = SketchManager::new();
+        manager.set_cam_document(cam).unwrap();
+        manager.cam_regenerate_setup(3).unwrap();
+        // Re-resolving an earlier height must stamp the resolved prefix,
+        // not the pre-regeneration absolute coordinates.
+        let mut raised = manager.cam_document();
+        raised.setups[0].stock.max.z = 0.2;
+        manager.set_cam_document(raised).unwrap();
+        manager.cam_regenerate_setup(3).unwrap();
+        assert!(manager
+            .cam_toolpath_statuses()
+            .unwrap()
+            .iter()
+            .all(|s| s.state == CamToolpathStateDto::Current));
+        assert!(manager
+            .cam_toolpath_statuses()
+            .unwrap()
+            .iter()
+            .all(|s| s.state == CamToolpathStateDto::Current));
+        let original = manager.cam_document();
+        let mut edited = original.clone();
+        edited.linking[0].lead_in.vertical_radius = 0.4;
+        manager.set_cam_document(edited).unwrap();
+        assert!(manager
+            .cam_toolpath_statuses()
+            .unwrap()
+            .iter()
+            .all(|s| s.state == CamToolpathStateDto::Stale));
+        let mut reordered = original.clone();
+        reordered.setups[0].operations.swap(0, 1);
+        manager.set_cam_document(reordered).unwrap();
+        assert!(manager
+            .cam_toolpath_statuses()
+            .unwrap()
+            .iter()
+            .all(|s| s.state == CamToolpathStateDto::Stale));
+        assert!(manager
+            .cam_post(CamPostRequestDto {
+                setup_id: 3,
+                post: None,
+                program_name: None
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("NC posting blocked"));
+        manager.cam_regenerate_setup(3).unwrap();
+        let mut edited = manager.cam_document();
+        edited.linking[0].lead_in_feed *= 0.5;
+        manager.set_cam_document(edited).unwrap();
+        let statuses = manager.cam_toolpath_statuses().unwrap();
+        assert_eq!(
+            statuses.iter().find(|s| s.operation_id == 8).unwrap().state,
+            CamToolpathStateDto::Current
+        );
+        assert_eq!(
+            statuses.iter().find(|s| s.operation_id == 7).unwrap().state,
+            CamToolpathStateDto::Stale
+        );
+        let mut ordered = manager.cam_document();
+        let mut rest = ordered.setups[0].clone();
+        rest.id = 4;
+        rest.name = "Rest setup".into();
+        rest.operations.clear();
+        rest.resolved_stock = CamResolvedStockDto::Rest { source_setup_id: 3 };
+        rest.stock_spec = nbcad_cam::CamStockSpecDto::RestFromSetup { setup_id: 3 };
+        ordered.setups.push(rest);
+        ordered.next_setup_id = 5;
+        manager.set_cam_document(ordered.clone()).unwrap();
+        ordered.setups.swap(0, 1);
+        let error = manager.set_cam_document(ordered).unwrap_err().to_string();
+        assert!(error.contains("must follow"), "{error}");
+        let json = manager.export_project_model().unwrap();
+        let mut loaded = SketchManager::new();
+        let replay = loaded.prepare_load_project(json).unwrap();
+        loaded
+            .commit_solid(CommitKernelRequest {
+                transaction_id: replay.transaction_id,
+                scene: KernelSceneDto::default(),
+            })
+            .unwrap();
+        assert_eq!(
+            loaded.cam_document().linking,
+            manager.cam_document().linking
+        );
+        assert_eq!(loaded.cam_document().setups[0].operations[0].id(), 8);
+    }
+
+    #[test]
+    fn contour_regeneration_re_resolves_current_model_edges_and_fails_on_broken_refs() {
+        let mut manager = SketchManager::new();
+        let basis = PlaneRef::OriginPlane {
+            plane: OriginPlane::Xy,
+        }
+        .origin_basis()
+        .unwrap();
+        let plan = manager
+            .prepare_body_feature(BodyFeatureRequestDto::ImportStep(ImportStepRequest {
+                file_name: "associative-contour.stp".into(),
+                data_base64: "U1RFUA==".into(),
+            }))
+            .unwrap();
+        let body_id = result_body_ids(&plan.jobs[0])[0];
+        let mut body = raw_body(body_id, basis);
+        manager
+            .commit_solid(CommitKernelRequest {
+                transaction_id: plan.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![body.clone()],
+                    errors: vec![],
+                },
+            })
+            .unwrap();
+
+        let mut cam = CamDocumentDto::default();
+        cam.tools = vec![CamToolDto {
+            id: 1,
+            number: Some(1),
+            name: "EM4".into(),
+            kind: CamToolKind::FlatEndMill,
+            diameter: 4.0,
+            flute_length: 12.0,
+            overall_length: 35.0,
+            center_cutting: true,
+            flute_count: 3,
+            point_angle_degrees: None,
+            corner_radius: None,
+            corner_chamfer: None,
+            cutting: CuttingParametersDto::default(),
+            cutting_presets: vec![],
+            default_step_down: None,
+            default_step_over: None,
+        }];
+        cam.setups = vec![CamSetupDto {
+            id: 1,
+            name: "Associative setup".into(),
+            wcs: WorkCoordinateSystemDto::default(),
+            wcs_origin: WcsOriginSpecDto::Explicit,
+            work_offset: WorkOffset::G54,
+            work_offset_count: 1,
+            stock_spec: nbcad_cam::CamStockSpecDto::LegacyBox,
+            resolved_stock: CamResolvedStockDto::Box,
+            stock: StockBoxDto {
+                min: CamPoint3Dto::new(-5.0, -5.0, -5.0),
+                max: CamPoint3Dto::new(30.0, 15.0, 0.0),
+            },
+            stock_model_box: None,
+            body_ids: vec![body_id],
+            machine: None,
+            legacy_clearance_z: None,
+            legacy_retract_z: None,
+            operations: vec![CamOperationDto::Contour2d {
+                id: 1,
+                name: "Associative edge".into(),
+                enabled: true,
+                tool_id: 1,
+                path: vec![CamPoint2Dto::new(5.0, 5.0), CamPoint2Dto::new(6.0, 5.0)],
+                closed: false,
+                top_z: 0.0,
+                bottom_z: -1.0,
+                step_down: 1.0,
+                compensation: ContourCompensation::On,
+                compensation_mode: CompensationMode::InSoftware,
+                lead_in: 2.0,
+                lead_out: 2.0,
+                lead_arc_radius: None,
+                direction: MillingDirection::Climb,
+                roughing_passes: 1,
+                roughing_step_over: None,
+                finishing_pass: false,
+                finish_allowance: 0.0,
+                finish_feed: None,
+                spring_pass: false,
+                chain_ref: Some(CamChainRefDto {
+                    source: CamChainSource::Model,
+                    keys: vec![format!("edge:{}:edge:0", body_id.0)],
+                    reversed: false,
+                }),
+                clearance_z: 8.0,
+                retract_z: 3.0,
+                feed_height_z: 1.0,
+                cutting: CuttingParametersDto {
+                    spindle_rpm: 8_000,
+                    feed_xy: 500.0,
+                    feed_z: 150.0,
+                    coolant: CoolantMode::Flood,
+                },
+            }],
+        }];
+        cam.active_setup_id = Some(1);
+        cam.next_setup_id = 2;
+        cam.next_operation_id = 2;
+        cam.next_tool_id = 2;
+        manager.set_cam_document(cam).unwrap();
+
+        manager.cam_regenerate_operation(1).unwrap();
+        let resolved_path = |manager: &SketchManager| match &manager.cam.setups[0].operations[0] {
+            CamOperationDto::Contour2d { path, .. } => path.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            resolved_path(&manager),
+            vec![CamPoint2Dto::new(0.0, 0.0), CamPoint2Dto::new(20.0, 0.0)]
+        );
+
+        // Recompute the same stable edge at a new endpoint. Regeneration must
+        // use the current scene, not the baked 20 mm path from the last pass.
+        body.edges[0].points[1].x = 24.0;
+        let recompute = manager.prepare_recompute().unwrap();
+        manager
+            .commit_solid(CommitKernelRequest {
+                transaction_id: recompute.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![body],
+                    errors: vec![],
+                },
+            })
+            .unwrap();
+        manager.cam_regenerate_operation(1).unwrap();
+        assert_eq!(resolved_path(&manager)[1], CamPoint2Dto::new(24.0, 0.0));
+
+        let mut broken = manager.cam_document();
+        let CamOperationDto::Contour2d {
+            chain_ref: Some(reference),
+            ..
+        } = &mut broken.setups[0].operations[0]
+        else {
+            unreachable!();
+        };
+        reference.keys[0] = format!("edge:{}:missing", body_id.0);
+        manager.set_cam_document(broken).unwrap();
+        let before = manager.cam_document();
+        let error = manager.cam_regenerate_operation(1).unwrap_err().to_string();
+        assert!(error.contains("no longer exists"));
+        assert!(error.contains("Reselect"));
+        assert_eq!(
+            manager.cam_document(),
+            before,
+            "failed resolution is transactional"
+        );
+    }
+
+    #[test]
+    fn hole_regeneration_re_resolves_current_cylindrical_face() {
+        let mut manager = SketchManager::new();
+        let basis = PlaneRef::OriginPlane {
+            plane: OriginPlane::Xy,
+        }
+        .origin_basis()
+        .unwrap();
+        let plan = manager
+            .prepare_body_feature(BodyFeatureRequestDto::ImportStep(ImportStepRequest {
+                file_name: "associative-hole.stp".into(),
+                data_base64: "U1RFUA==".into(),
+            }))
+            .unwrap();
+        let body_id = result_body_ids(&plan.jobs[0])[0];
+        let mut body = raw_body(body_id, basis);
+        body.positions = vec![4.0, 3.0, 0.0, 6.0, 3.0, 0.0, 4.0, 3.0, -8.0, 6.0, 3.0, -8.0];
+        body.normals = vec![0.0_f32, -1.0, 0.0].repeat(4);
+        body.indices = vec![0, 1, 2, 1, 3, 2];
+        body.faces[0].first_index = 0;
+        body.faces[0].index_count = 6;
+        body.faces[0].plane = None;
+        body.faces[0].signature = None;
+        body.faces[0].cylinder = Some(CylindricalSurfaceDto {
+            origin: Point3Dto::from([5.0, 3.0, 0.0]),
+            axis: Point3Dto::from([0.0, 0.0, 1.0]),
+            reference: Point3Dto::from([1.0, 0.0, 0.0]),
+            radius: 1.0,
+        });
+        manager
+            .commit_solid(CommitKernelRequest {
+                transaction_id: plan.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![body.clone()],
+                    errors: vec![],
+                },
+            })
+            .unwrap();
+        let face_id = manager.solids.scene().bodies[0].faces[0].id.0;
+        let face_key = format!("{}:{face_id}", body_id.0);
+
+        let mut cam = CamDocumentDto::default();
+        cam.tools = vec![CamToolDto {
+            id: 1,
+            number: Some(1),
+            name: "D1".into(),
+            kind: CamToolKind::Drill,
+            diameter: 1.0,
+            flute_length: 20.0,
+            overall_length: 40.0,
+            center_cutting: true,
+            flute_count: 2,
+            point_angle_degrees: Some(118.0),
+            corner_radius: None,
+            corner_chamfer: None,
+            cutting: CuttingParametersDto::default(),
+            cutting_presets: vec![],
+            default_step_down: None,
+            default_step_over: None,
+        }];
+        cam.setups = vec![CamSetupDto {
+            id: 1,
+            name: "Hole setup".into(),
+            wcs: WorkCoordinateSystemDto::default(),
+            wcs_origin: WcsOriginSpecDto::Explicit,
+            work_offset: WorkOffset::G54,
+            work_offset_count: 1,
+            stock_spec: nbcad_cam::CamStockSpecDto::LegacyBox,
+            resolved_stock: CamResolvedStockDto::Box,
+            stock: StockBoxDto {
+                min: CamPoint3Dto::new(0.0, 0.0, -10.0),
+                max: CamPoint3Dto::new(15.0, 10.0, 0.0),
+            },
+            stock_model_box: None,
+            body_ids: vec![body_id],
+            machine: None,
+            legacy_clearance_z: None,
+            legacy_retract_z: None,
+            operations: vec![CamOperationDto::Drill {
+                id: 1,
+                name: "Associative hole".into(),
+                enabled: true,
+                tool_id: 1,
+                points: vec![],
+                holes: vec![CamHoleDto {
+                    point: CamPoint2Dto::new(9.0, 9.0),
+                    top_z: -1.0,
+                    bottom_z: -2.0,
+                    axis: [0.0, 0.0, 1.0],
+                    face_key: Some(face_key),
+                }],
+                top_z: 0.0,
+                bottom_z: -8.0,
+                retract_z: 2.0,
+                drill_tip_through: false,
+                breakthrough_depth: 0.0,
+                peck_depth: None,
+                dwell_seconds: 0.0,
+                clearance_z: 5.0,
+                feed_height_z: 1.0,
+                cycle: DrillCycle::Drill,
+                peck_retract: None,
+                thread_pitch: None,
+                floating_tap_holder: false,
+                feed_out: None,
+                cutting: CuttingParametersDto {
+                    spindle_rpm: 4_000,
+                    feed_xy: 200.0,
+                    feed_z: 100.0,
+                    coolant: CoolantMode::Flood,
+                },
+            }],
+        }];
+        cam.active_setup_id = Some(1);
+        cam.next_setup_id = 2;
+        cam.next_operation_id = 2;
+        cam.next_tool_id = 2;
+        manager.set_cam_document(cam).unwrap();
+        manager.cam_regenerate_operation(1).unwrap();
+        let resolved_hole = |manager: &SketchManager| match &manager.cam.setups[0].operations[0] {
+            CamOperationDto::Drill { holes, .. } => holes[0].clone(),
+            _ => unreachable!(),
+        };
+        let hole = resolved_hole(&manager);
+        assert_eq!(hole.point, CamPoint2Dto::new(5.0, 3.0));
+        assert!((hole.top_z - 0.0).abs() < 1.0e-9);
+        assert!((hole.bottom_z - -8.0).abs() < 1.0e-9);
+
+        for point in body.positions.chunks_exact_mut(3) {
+            point[0] += 2.0;
+        }
+        body.faces[0].cylinder.as_mut().unwrap().origin.x += 2.0;
+        let recompute = manager.prepare_recompute().unwrap();
+        manager
+            .commit_solid(CommitKernelRequest {
+                transaction_id: recompute.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![body.clone()],
+                    errors: vec![],
+                },
+            })
+            .unwrap();
+        manager.cam_regenerate_operation(1).unwrap();
+        assert_eq!(resolved_hole(&manager).point, CamPoint2Dto::new(7.0, 3.0));
+
+        body.faces[0].cylinder = None;
+        let recompute = manager.prepare_recompute().unwrap();
+        manager
+            .commit_solid(CommitKernelRequest {
+                transaction_id: recompute.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![body],
+                    errors: vec![],
+                },
+            })
+            .unwrap();
+        let before = manager.cam_document();
+        let error = manager.cam_regenerate_operation(1).unwrap_err().to_string();
+        assert!(error.contains("no longer cylindrical"));
+        assert_eq!(
+            manager.cam_document(),
+            before,
+            "failed resolution is transactional"
+        );
+    }
+
+    #[test]
+    fn adaptive_regeneration_captures_current_cad_and_preserves_it_on_failure() {
+        let mut manager = SketchManager::new();
+        let basis = PlaneRef::OriginPlane {
+            plane: OriginPlane::Xy,
+        }
+        .origin_basis()
+        .unwrap();
+        let plan = manager
+            .prepare_body_feature(BodyFeatureRequestDto::ImportStep(ImportStepRequest {
+                file_name: "adaptive-fixture.stp".into(),
+                data_base64: "U1RFUA==".into(),
+            }))
+            .unwrap();
+        let body_id = result_body_ids(&plan.jobs[0])[0];
+        let mut body = raw_body(body_id, basis);
+        body.positions = vec![4.0, 3.0, 0.0, 6.0, 3.0, 0.0, 6.0, 5.0, 0.0, 4.0, 5.0, 0.0];
+        body.normals = vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        body.indices = vec![0, 1, 2, 0, 2, 3];
+        body.faces[0].index_count = 6;
+        manager
+            .commit_solid(CommitKernelRequest {
+                transaction_id: plan.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![body.clone()],
+                    errors: vec![],
+                },
+            })
+            .unwrap();
+        let mut cam = CamDocumentDto::default();
+        cam.tools = vec![CamToolDto {
+            id: 1,
+            number: Some(1),
+            name: "EM4".into(),
+            kind: CamToolKind::FlatEndMill,
+            diameter: 4.0,
+            flute_length: 12.0,
+            overall_length: 35.0,
+            center_cutting: true,
+            flute_count: 3,
+            point_angle_degrees: None,
+            corner_radius: None,
+            corner_chamfer: None,
+            cutting: CuttingParametersDto::default(),
+            cutting_presets: vec![],
+            default_step_down: None,
+            default_step_over: None,
+        }];
+        cam.setups = vec![CamSetupDto {
+            id: 1,
+            name: "Adaptive setup".into(),
+            wcs: WorkCoordinateSystemDto::default(),
+            wcs_origin: WcsOriginSpecDto::Explicit,
+            work_offset: WorkOffset::G54,
+            work_offset_count: 1,
+            stock_spec: nbcad_cam::CamStockSpecDto::LegacyBox,
+            resolved_stock: CamResolvedStockDto::Box,
+            stock: StockBoxDto {
+                min: CamPoint3Dto::new(0.0, 0.0, -2.0),
+                max: CamPoint3Dto::new(10.0, 8.0, 0.0),
+            },
+            stock_model_box: None,
+            body_ids: vec![body_id],
+            machine: None,
+            legacy_clearance_z: None,
+            legacy_retract_z: None,
+            operations: vec![CamOperationDto::Adaptive3d {
+                id: 1,
+                name: "Adaptive".into(),
+                enabled: true,
+                tool_id: 1,
+                top_z: 0.0,
+                bottom_z: -1.0,
+                clearance_z: 5.0,
+                retract_z: 3.0,
+                feed_height_z: 1.0,
+                cutting: CuttingParametersDto::default(),
+                geometry: None,
+                parameters: nbcad_cam::CamAdaptiveParametersDto {
+                    optimal_load: 1.0,
+                    maximum_stepdown: 1.0,
+                    minimum_cutting_radius: 0.8,
+                    radial_stock_to_leave: 0.1,
+                    axial_stock_to_leave: 0.1,
+                    tolerance: 0.3,
+                    ramp_angle_degrees: 3.0,
+                    maximum_ramp_stepdown: 0.5,
+                    ramp_feed: 100.0,
+                    linking_feed: 600.0,
+                    stay_down_distance: 8.0,
+                    machine_cavities: true,
+                },
+            }],
+        }];
+        cam.active_setup_id = Some(1);
+        cam.next_setup_id = 2;
+        cam.next_tool_id = 2;
+        cam.next_operation_id = 2;
+        cam.height_expressions = vec![CamOperationHeightExpressionsDto {
+            operation_id: 1,
+            top: CamHeightExpressionDto {
+                reference: CamHeightReferenceDto::ModelTop,
+                offset: -0.25,
+            },
+            bottom: Some(CamHeightExpressionDto {
+                reference: CamHeightReferenceDto::Origin,
+                offset: -1.0,
+            }),
+            feed: CamHeightExpressionDto {
+                reference: CamHeightReferenceDto::StockTop,
+                offset: 1.0,
+            },
+            retract: CamHeightExpressionDto {
+                reference: CamHeightReferenceDto::StockTop,
+                offset: 3.0,
+            },
+            clearance: CamHeightExpressionDto {
+                reference: CamHeightReferenceDto::StockTop,
+                offset: 5.0,
+            },
+        }];
+        manager.set_cam_document(cam).unwrap();
+        manager.cam_regenerate_operation(1).unwrap();
+        assert_eq!(
+            manager.cam_toolpath_statuses().unwrap()[0].state,
+            CamToolpathStateDto::Current
+        );
+        let snapshot = |m: &SketchManager| match &m.cam.setups[0].operations[0] {
+            CamOperationDto::Adaptive3d {
+                geometry: Some(g), ..
+            } => g.targets[0].clone(),
+            _ => panic!("snapshot missing"),
+        };
+        let resolved_top = |m: &SketchManager| match m.cam.setups[0].operations[0] {
+            CamOperationDto::Adaptive3d { top_z, .. } => top_z,
+            _ => unreachable!(),
+        };
+        assert_eq!(resolved_top(&manager), -0.25);
+        assert_eq!(
+            snapshot(&manager).positions,
+            body.positions
+                .iter()
+                .map(|&v| f64::from(v))
+                .collect::<Vec<_>>()
+        );
+        let project = manager.export_project_model().unwrap();
+        let mut loaded = SketchManager::new();
+        let replay = loaded.prepare_load_project(project).unwrap();
+        loaded
+            .commit_solid(CommitKernelRequest {
+                transaction_id: replay.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![body.clone()],
+                    errors: vec![],
+                },
+            })
+            .unwrap();
+        assert_eq!(snapshot(&manager), snapshot(&loaded));
+        assert_eq!(resolved_top(&loaded), -0.25);
+        assert_eq!(
+            loaded.cam_toolpath_statuses().unwrap()[0].state,
+            CamToolpathStateDto::Current
+        );
+
+        // Commit a changed tessellation under the same stable body id. The
+        // saved snapshot must stay stale until explicit transactional capture.
+        for point in body.positions.chunks_exact_mut(3) {
+            point[0] += 1.0;
+            point[2] += 0.5;
+        }
+        let plan = loaded.prepare_recompute().unwrap();
+        loaded
+            .commit_solid(CommitKernelRequest {
+                transaction_id: plan.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![body.clone()],
+                    errors: vec![],
+                },
+            })
+            .unwrap();
+        assert_eq!(
+            loaded.cam_toolpath_statuses().unwrap()[0].state,
+            CamToolpathStateDto::Stale
+        );
+        assert_ne!(snapshot(&loaded).positions[0], f64::from(body.positions[0]));
+        loaded.cam_regenerate_setup(1).unwrap();
+        assert_eq!(snapshot(&loaded).positions[0], f64::from(body.positions[0]));
+        assert_eq!(
+            resolved_top(&loaded),
+            0.25,
+            "Top must follow the current CAD height, including an air offset above stock"
+        );
+        assert_eq!(
+            loaded.cam_toolpath_statuses().unwrap()[0].state,
+            CamToolpathStateDto::Current
+        );
+
+        let prior = loaded.cam_document();
+        // Entire stock protected: no successful cut, so neither a new
+        // snapshot nor a new generation signature may be committed.
+        body.positions = vec![0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 8.0, 0.0, 0.0, 8.0, 0.0];
+        let plan = loaded.prepare_recompute().unwrap();
+        loaded
+            .commit_solid(CommitKernelRequest {
+                transaction_id: plan.transaction_id,
+                scene: KernelSceneDto {
+                    bodies: vec![body],
+                    errors: vec![],
+                },
+            })
+            .unwrap();
+        assert!(loaded
+            .cam_regenerate_operation(1)
+            .unwrap_err()
+            .to_string()
+            .contains("no accessible"));
+        assert_eq!(loaded.cam_document(), prior);
+        assert_eq!(
+            loaded.cam_toolpath_statuses().unwrap()[0].state,
+            CamToolpathStateDto::Stale
+        );
+    }
+
+    /// Recursively remove every object entry named `key`, simulating a project
+    /// written before that field existed.
+    fn strip_json_key(value: &mut serde_json::Value, key: &str) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove(key);
+                for child in map.values_mut() {
+                    strip_json_key(child, key);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for child in items {
+                    strip_json_key(child, key);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // A project saved before the per-operation feed plane existed must still
+    // open: the legacy default (0.0) migrates into the valid band instead of
+    // failing the whole load.
+    #[test]
+    fn legacy_cam_document_without_feed_height_opens_clean() {
+        let cam = CamDocumentDto {
+            load_warnings: Vec::new(),
+            toolpath_generations: Vec::new(),
+            height_expressions: Vec::new(),
+            linking: Vec::new(),
+            setups: vec![CamSetupDto {
+                id: 3,
+                name: "Top setup".to_string(),
+                wcs: WorkCoordinateSystemDto::default(),
+                wcs_origin: WcsOriginSpecDto::Explicit,
+                work_offset: WorkOffset::G54,
+                work_offset_count: 1,
+                stock_spec: nbcad_cam::CamStockSpecDto::LegacyBox,
+                resolved_stock: nbcad_cam::CamResolvedStockDto::Box,
+                stock: StockBoxDto {
+                    min: CamPoint3Dto::new(0.0, 0.0, 0.0),
+                    max: CamPoint3Dto::new(30.0, 20.0, 14.0),
+                },
+                stock_model_box: None,
+                body_ids: vec![],
+                machine: None,
+                legacy_clearance_z: None,
+                legacy_retract_z: None,
+                operations: vec![CamOperationDto::Face {
+                    id: 7,
+                    name: "Face stock".to_string(),
+                    enabled: true,
+                    tool_id: 5,
+                    bounds: CamRect2Dto {
+                        min: CamPoint2Dto::new(0.0, 0.0),
+                        max: CamPoint2Dto::new(30.0, 20.0),
+                    },
+                    top_z: 14.0,
+                    target_z: 13.0,
+                    step_over: 3.0,
+                    step_down: 1.0,
+                    safe_distance: 5.0,
+                    direction: nbcad_cam::FaceDirection::BothWays,
+                    clearance_z: 20.0,
+                    retract_z: 17.0,
+                    feed_height_z: 15.0,
+                    cutting: CuttingParametersDto {
+                        spindle_rpm: 12_000,
+                        feed_xy: 800.0,
+                        feed_z: 200.0,
+                        coolant: CoolantMode::Flood,
+                    },
+                }],
+            }],
+            active_setup_id: Some(3),
+            tools: vec![CamToolDto {
+                id: 5,
+                number: Some(1),
+                name: "6 mm flat end mill".to_string(),
+                kind: CamToolKind::FlatEndMill,
+                diameter: 6.0,
+                flute_length: 20.0,
+                overall_length: 50.0,
+                center_cutting: true,
+                flute_count: 4,
+                point_angle_degrees: None,
+                corner_radius: None,
+                corner_chamfer: None,
+                cutting: CuttingParametersDto::default(),
+                cutting_presets: vec![],
+                default_step_down: None,
+                default_step_over: None,
+            }],
+            units: CamUnits::Millimeters,
+            post_defaults: CamPostConfigDto::default(),
+            next_setup_id: 4,
+            next_operation_id: 8,
+            next_tool_id: 6,
+        };
+        let mut manager = SketchManager::new();
+        manager.set_cam_document(cam).unwrap();
+
+        let json = manager.export_project_model().unwrap();
+        let mut legacy: serde_json::Value = serde_json::from_str(&json).unwrap();
+        strip_json_key(&mut legacy, "feed_height_z");
+        let legacy_json = serde_json::to_string(&legacy).unwrap();
+
+        let mut loaded = SketchManager::new();
+        let replay = loaded.prepare_load_project(legacy_json).unwrap();
+        assert!(replay.jobs.is_empty());
+        loaded
+            .commit_solid(CommitKernelRequest {
+                transaction_id: replay.transaction_id,
+                scene: KernelSceneDto::default(),
+            })
+            .unwrap();
+
+        let reopened = loaded.cam_document();
+        assert!(reopened.load_warnings.is_empty());
+        let CamOperationDto::Face {
+            enabled,
+            feed_height_z,
+            ..
+        } = &reopened.setups[0].operations[0]
+        else {
+            panic!("expected the face operation to survive the legacy load");
+        };
+        assert!(enabled);
+        // Legacy default 0.0 is below the cut top, so the migration clamps it
+        // onto the top of the cut.
+        assert_eq!(*feed_height_z, 14.0);
+        let program = loaded.cam_plan(3).unwrap();
+        assert_eq!(program.stats.operation_count, 1);
     }
 
     #[test]

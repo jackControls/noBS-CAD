@@ -32,7 +32,7 @@ const server=await createServer({configFile:false,optimizeDeps:{noDiscovery:true
 let browser;
 try {
  await server.listen();
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {})});
  const page=await browser.newPage();
  await page.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const result=await page.evaluate(async()=>{
@@ -184,7 +184,8 @@ try {
   // Derived from the product configuration: new enabled commands automatically
   // enter this check, rather than requiring a copied inventory or count update.
   let commands=0;const actions=new Set();
-  for(const tab of [config.SOLID_TAB,config.SKETCH_TAB,config.DRAWING_TAB,config.ASSEMBLY_TAB]) {
+  const ribbonTabs=[config.SOLID_TAB,config.SKETCH_TAB,config.DRAWING_TAB,config.ASSEMBLY_TAB,config.CAM_TAB,config.CAM_SIMULATE_TAB,config.CAM_OUTPUT_TAB];
+  for(const tab of ribbonTabs) {
    for(const panel of tab.panels) {
     const group=interfaceGroups.find(g=>g.id===`${tab.id}/${panel.id}`);
     check(group&&JSON.stringify(group.operations)===JSON.stringify(panel.operations),'Renderer and API grouping drifted');
@@ -197,7 +198,7 @@ try {
   check(presentation.snapshot().operation==='add line','Operation feedback must remain readable until the next operation');
   check(!document.querySelector('[data-mcp-presentation]')&&feedback.getAnimations().length===0,'Feedback must not create flashing overlays or per-operation animations');
   feedback.remove();
-  for(const tab of [config.SOLID_TAB,config.SKETCH_TAB,config.DRAWING_TAB,config.ASSEMBLY_TAB]){
+  for(const tab of ribbonTabs){
    const walk=(entries)=>{for(const entry of entries){if(entry.type==='separator')continue;
     if(entry.enabled===true&&!entry.children){check(Boolean(entry.action),`Enabled UI command has no dispatch action: ${tab.id}/${entry.id}`);commands++;actions.add(entry.action);}
     if(entry.children)walk(entry.children);

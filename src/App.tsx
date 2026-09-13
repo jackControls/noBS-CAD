@@ -31,6 +31,8 @@ import { DrawingBrowser } from './components/drawing/DrawingBrowser';
 import { DrawingWorkspace } from './components/drawing/DrawingWorkspace';
 import { AssemblyBrowser } from './components/assembly/AssemblyBrowser';
 import { JointDialog } from './components/assembly/JointDialog';
+import { CamSetupsPanel } from './components/cam/CamBrowser';
+import { CamWorkspace } from './components/cam/CamWorkspace';
 import { ProjectTabBar } from './components/TopBar';
 import { AppearanceDialog } from './components/AppearanceDialog';
 import { SketchPalette } from './components/SketchPalette';
@@ -83,6 +85,7 @@ export default function App() {
   const mode = useAppStore((s) => s.mode);
   const activeTab = useAppStore((s) => s.activeTab);
   const drawingWorkspace = activeTab === 'drawing';
+  const camWorkspace = activeTab === 'cam';
   const solidSidebarMode = useAppStore((s) => s.solidSidebarMode);
   const resolvedTheme = useAppStore((s) => s.resolvedTheme);
   const themePreference = useAppStore((s) => s.themePreference);
@@ -406,6 +409,13 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         <div className="contents" data-mcp-surface="browser">{drawingWorkspace ? (
           <DrawingBrowser />
+        ) : camWorkspace ? (
+          <div className="flex w-60 shrink-0 flex-col border-r border-edge bg-panel">
+            <div className="min-h-0 flex-1">
+              <BrowserTree embedded />
+            </div>
+            <CamSetupsPanel />
+          </div>
         ) : solidSidebarMode === 'assembly' ? (
           <AssemblyBrowser />
         ) : (
@@ -415,6 +425,8 @@ export default function App() {
           <main className="relative min-h-0 min-w-0 flex-1">
             {drawingWorkspace ? (
               <div className="contents" data-mcp-surface="drawing"><DrawingWorkspace /></div>
+            ) : camWorkspace ? (
+              <div className="contents" data-mcp-surface="cam"><CamWorkspace /></div>
             ) : (
               <>
                 <div className="contents" data-mcp-surface="viewport"><Viewport key={resolvedTheme} /></div>
@@ -428,7 +440,7 @@ export default function App() {
         </div>
         <ScriptPanel />
       </div>
-      {!drawingWorkspace && <div className="contents" data-mcp-surface="feature-history"><Timeline /></div>}
+      {!drawingWorkspace && !camWorkspace && <div className="contents" data-mcp-surface="feature-history"><Timeline /></div>}
       <ConstraintDialogHost />
       <SketchPlaneOriginDialog />
       <ExtrudeDialog />

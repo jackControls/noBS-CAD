@@ -18,6 +18,8 @@ mod constraint;
 mod drawing;
 pub mod drawing_commands;
 pub mod drawing_topology;
+mod edge_selection;
+mod cam_chamfer;
 mod dto;
 mod entity;
 mod expr;
@@ -69,6 +71,8 @@ pub use expr::{
 };
 pub use geometry::Vec2;
 pub use manager::SketchManager;
+pub use edge_selection::{EdgeChainRequest, ChainMode, ChainSource};
+pub use cam_chamfer::{CamChamferGeometryRequest, CamChamferGeometry};
 pub use nbcad_assembly::{
     approximate_pair_result, broad_phase_interference_pairs, contact_violation_score,
     ApplyJointMotionsRequestDto, AssemblyDiagnosticDto, AssemblyDiagnosticKindDto,
@@ -90,6 +94,21 @@ pub use nbcad_assembly::{
     SetOccurrencePoseRequestDto, SweptCollisionEventDto, SweptCollisionReportDto,
     SweptCollisionRequestDto, UpdateComponentRequestDto, UpdateJointRequestDto,
     UpdateOccurrenceRequestDto,
+};
+pub use nbcad_cam::{
+    BoxAnchor, CamArcPlane, CamCommandDto, CamDocumentDto, CamGcodeDialectDto,
+    CamGcodeSimulationRequestDto, CamOperationDto, CamPostConfigDto, CamPostRequestDto,
+    CamPostResultDto, CamProgramDto, CamProgramStatsDto, CamResolvedStockDto, CamSetupDto,
+    CamSimulationCollisionDto, CamSimulationMeshDto, CamSimulationRequestDto,
+    CamSimulationResultDto, CamSimulationSourceDto, CamSimulationStepDto, CamSimulationStepKind,
+    CamStockFace, CamStockMeshDto, CamStockOffsetsDto, CamStockPlacementDto, CamStockShape,
+    CamStockSpecDto, CamToolDto, CamToolKind, CamUnits, ContourCompensation, CoolantMode,
+    CuttingParametersDto, MotionKind, NbPostAnalysisDto, NbPostAnalysisRequestDto,
+    NbPostCompatibilityLevel, NbPostSourceKind, Point2Dto as CamPoint2Dto,
+    Point3Dto as CamPoint3Dto, PostDialect, PostEventDto, PostEventStreamDto,
+    Rect2Dto as CamRect2Dto, Siemens828dAtcStyle, Siemens828dPostConfigDto,
+    Siemens828dToolChangePositioning, SpindleDirection, StockBoxDto, WcsOriginSpecDto,
+    WorkCoordinateSystemDto, WorkOffset,
 };
 pub use params::{ParamId, ParamKind, ParamTable, Parameter};
 pub use plane::{FaceId, OriginPlane, PlaneBasis, PlaneError, PlaneRef};

@@ -16,6 +16,17 @@ import type {
   ArcCenterRequest,
   BreakRequest,
   BodyAppearance,
+  CamDocumentDto,
+  CamGcodeSimulationRequestDto,
+  CamPostRequestDto,
+  CamPostResultDto,
+  CamProgramDto,
+  CamSimulationRequestDto,
+  CamSimulationResultDto,
+  CamBufferedFrameDto,
+  CamToolpathStatusDto,
+  NbPostAnalysisDto,
+  NbPostAnalysisRequestDto,
   BodyFeatureDefinitionDto,
   BodyFeatureRequestDto,
   FaceSketchOrigin,
@@ -67,6 +78,7 @@ import type {
   DrawingDocumentDto,
   DrawingProjectionDto,
   DrawingProjectionRequest,
+  PostEventStreamDto,
   EditDimensionRequest,
   EndSketchResult,
   ExtrudeDefinitionDto,
@@ -184,6 +196,24 @@ export interface Engine {
   sweptCollisionCheck(request: SweptCollisionRequestDto): Promise<SweptCollisionReportDto>;
   setGroundedBody(bodyId: number | null): Promise<AssemblyDocumentDto>;
   drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto>;
+  geometryEdgeChain(request: import('./types').GeometryEdgeChainRequest): Promise<import('./types').GeometryEdgeChain>;
+  camChamferGeometry(request: import('./types').CamChamferGeometryRequest): Promise<import('./types').CamChamferGeometry>;
+  camCutterMesh(geometry: import('./types').CamCutterGeometryDto): Promise<import('./types').CamCutterMeshDto>;
+  camDocument(): Promise<CamDocumentDto>;
+  setCamDocument(document: CamDocumentDto): Promise<CamDocumentDto>;
+  camToolpathStatuses(): Promise<CamToolpathStatusDto[]>;
+  camRegenerateOperation(operationId: number): Promise<CamDocumentDto>;
+  camRegenerateSetup(setupId: number): Promise<CamDocumentDto>;
+  camPlan(setupId: number, throughOperationId?: number): Promise<CamProgramDto>;
+  camPost(request: CamPostRequestDto): Promise<CamPostResultDto>;
+  camAnalyzeNbPost(request: NbPostAnalysisRequestDto): Promise<NbPostAnalysisDto>;
+  camSimulate(request: CamSimulationRequestDto): Promise<CamSimulationResultDto>;
+  camPlaybackOpen?(request: CamSimulationRequestDto, startTime: number): Promise<number>;
+  camPlaybackSample?(sessionId: number, time: number): Promise<CamBufferedFrameDto>;
+  camPlaybackPresent?(sessionId: number, frameId: number): Promise<void>;
+  camPlaybackClose?(sessionId: number): Promise<void>;
+  camSimulateGcode(request: CamGcodeSimulationRequestDto): Promise<CamSimulationResultDto>;
+  camPostEvents(setupId: number): Promise<PostEventStreamDto>;
   setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]>;
   extrudeDefinitions(): Promise<ExtrudeDefinitionDto[]>;
   revolveDefinitions(): Promise<RevolveDefinitionDto[]>;

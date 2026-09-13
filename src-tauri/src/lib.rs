@@ -7,6 +7,9 @@
 //! path the WASM host uses, so native and browser behavior are identical.
 //! All modeling logic lives in the engine crates, never here.
 
+mod cam_library;
+mod cam_posts;
+mod cam_playback;
 mod native_menu;
 pub mod native_viewport;
 mod recipe_links;
@@ -18,13 +21,21 @@ mod state;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Mutex,
+};
 
 use native_viewport::{
-    NativePick, NativePickPurpose, NativeViewport, NativeViewportMetrics, ViewportCamera,
-    ViewportLayout, ViewportModel, ViewportPresentation, ViewportPreview,
+    NativePick, NativePickPurpose, NativeViewport, NativeViewportMetrics, ViewportCamStock,
+    ViewportCamera, ViewportLayout, ViewportModel, ViewportPresentation, ViewportPreview,
+};
+use nbcad_cam::{
+    simulate_setup_with_cancellation, CamSimulationCancellation, CamSimulationRequestDto,
+    CamSimulationResultDto,
 };
 use nbcad_core::DocumentDto;
+use nbcad_sketch::{err_json, ok_json};
 use serde::Serialize;
 use six_dof_mouse::SixDofMouseState;
 use state::{AppState, BOOTSTRAP_SESSION_ID};
@@ -57,6 +68,38 @@ struct SystemMemoryStatus {
 struct NativeQuitState {
     unsaved: AtomicBool,
     approved: AtomicBool,
+}
+
+#[derive(Default)]
+struct CamSimulationService {
+    generation: AtomicU64,
+    current: Mutex<Option<(u64, CamSimulationCancellation)>>,
+}
+
+impl CamSimulationService {
+    fn begin(&self) -> (u64, CamSimulationCancellation) {
+        let request_id = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let cancellation = CamSimulationCancellation::default();
+        let mut current = self
+            .current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((_, previous)) = current.replace((request_id, cancellation.clone())) {
+            previous.cancel();
+        }
+        (request_id, cancellation)
+    }
+
+    fn with_current<T>(&self, request_id: u64, action: impl FnOnce() -> T) -> Option<T> {
+        let current = self
+            .current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        current
+            .as_ref()
+            .is_some_and(|(current_id, _)| *current_id == request_id)
+            .then(action)
+    }
 }
 
 #[tauri::command]
@@ -151,7 +194,7 @@ async fn native_viewport_sync_model(
 }
 
 #[tauri::command]
-fn native_viewport_set_camera(
+async fn native_viewport_set_camera(
     viewport: tauri::State<'_, NativeViewport>,
     camera: ViewportCamera,
 ) -> Result<(), String> {
@@ -159,7 +202,7 @@ fn native_viewport_set_camera(
 }
 
 #[tauri::command]
-fn native_viewport_set_preview(
+async fn native_viewport_set_preview(
     viewport: tauri::State<'_, NativeViewport>,
     preview: ViewportPreview,
 ) -> Result<(), String> {
@@ -167,7 +210,7 @@ fn native_viewport_set_preview(
 }
 
 #[tauri::command]
-fn native_viewport_set_presentation(
+async fn native_viewport_set_presentation(
     viewport: tauri::State<'_, NativeViewport>,
     presentation: ViewportPresentation,
 ) -> Result<(), String> {
@@ -191,6 +234,115 @@ async fn native_viewport_pick(
 #[tauri::command]
 fn native_viewport_metrics(viewport: tauri::State<'_, NativeViewport>) -> NativeViewportMetrics {
     viewport.metrics()
+}
+
+fn retained_cam_stock(result: &CamSimulationResultDto) -> Option<ViewportCamStock> {
+    let mesh = result.stock_mesh.as_ref()?;
+    if mesh.positions.is_empty() || !mesh.positions.len().is_multiple_of(3) {
+        return None;
+    }
+    let wcs = result.wcs;
+    let mut positions = Vec::with_capacity(mesh.positions.len());
+    for point in mesh.positions.chunks_exact(3) {
+        let x = point[0] as f64;
+        let y = point[1] as f64;
+        let z = point[2] as f64;
+        positions.extend([
+            (wcs.origin.x + x * wcs.x_axis[0] + y * wcs.y_axis[0] + z * wcs.z_axis[0]) as f32,
+            (wcs.origin.y + x * wcs.x_axis[1] + y * wcs.y_axis[1] + z * wcs.z_axis[1]) as f32,
+            (wcs.origin.z + x * wcs.x_axis[2] + y * wcs.y_axis[2] + z * wcs.z_axis[2]) as f32,
+        ]);
+    }
+    let mut normals = Vec::new();
+    if mesh.normals.len() == mesh.positions.len() {
+        normals.reserve(mesh.normals.len());
+        for normal in mesh.normals.chunks_exact(3) {
+            let x = normal[0] as f64;
+            let y = normal[1] as f64;
+            let z = normal[2] as f64;
+            let model = [
+                x * wcs.x_axis[0] + y * wcs.y_axis[0] + z * wcs.z_axis[0],
+                x * wcs.x_axis[1] + y * wcs.y_axis[1] + z * wcs.z_axis[1],
+                x * wcs.x_axis[2] + y * wcs.y_axis[2] + z * wcs.z_axis[2],
+            ];
+            let length = model.iter().map(|value| value * value).sum::<f64>().sqrt();
+            if length <= f64::EPSILON {
+                normals.extend([0.0, 0.0, 1.0]);
+            } else {
+                normals.extend(model.map(|value| (value / length) as f32));
+            }
+        }
+    }
+    Some(ViewportCamStock {
+        positions: std::sync::Arc::new(positions),
+        normals: std::sync::Arc::new(normals),
+    })
+}
+
+/// Desktop fast path: clone CAM intent under the engine lock, then perform all
+/// voxel/cutter work on a blocking Rust worker. Only metadata returns through
+/// JSON; the large remaining-stock mesh goes straight into retained Bevy GPU
+/// geometry. A newer call cooperatively cancels this one.
+#[tauri::command]
+async fn engine_cam_simulate(
+    state: tauri::State<'_, AppState>,
+    viewport: tauri::State<'_, NativeViewport>,
+    service: tauri::State<'_, CamSimulationService>,
+    playback: tauri::State<'_, cam_playback::CamPlaybackService>,
+    payload: String,
+) -> Result<String, String> {
+    let request = match serde_json::from_str::<CamSimulationRequestDto>(&payload) {
+        Ok(request) => request,
+        Err(error) => return Ok(err_json(format!("invalid CAM simulation request: {error}"))),
+    };
+    let (session_id, document, safety_warning) = match state.cam_snapshot(request.setup_id) {
+        Ok(snapshot) => snapshot,
+        Err(error) => return Ok(err_json(error)),
+    };
+    let (request_id, cancellation) = service.begin();
+    playback.clear();
+    // Keep the retained surface until its replacement is ready. Presentation
+    // freshness gates hide it while changing scope; hover must not clear it.
+    let worker_cancellation = cancellation.clone();
+    let worker = tauri::async_runtime::spawn_blocking(move || {
+        simulate_setup_with_cancellation(&document, &request, Some(&worker_cancellation))
+    })
+    .await;
+    let mut result = match worker {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => return Ok(err_json(error.to_string())),
+        Err(error) => return Ok(err_json(format!("CAM simulation worker failed: {error}"))),
+    };
+    if let Some(warning) = safety_warning {
+        result.warnings.insert(0, warning);
+    }
+    if state.active_project_session_id() != session_id {
+        return Ok(err_json(
+            "CAM simulation project changed before the result was ready",
+        ));
+    }
+    let retained = retained_cam_stock(&result);
+    let published = service.with_current(request_id, || {
+        retained
+            .map(|stock| viewport.set_cam_stock(Some(stock)).is_ok())
+            .unwrap_or(false)
+    });
+    let Some(published) = published else {
+        return Ok(err_json("CAM simulation superseded by a newer request"));
+    };
+    if published {
+        result.stock_mesh = None;
+        result.native_stock_present = true;
+        if let Some(comparison) = &mut result.comparison {
+            // Verification remains authoritative in the counts/volumes and
+            // issue list. The normal stage view intentionally shows only
+            // remaining stock, so these hidden evidence meshes must not pay a
+            // second large JSON transfer.
+            comparison.excess_mesh = None;
+            comparison.gouge_mesh = None;
+        }
+    }
+    Ok(ok_json(result))
 }
 
 macro_rules! engine_command {
@@ -434,6 +586,24 @@ fn engine_assembly_swept_collision_check(
 ) -> String {
     state.assembly_swept_collision_check(payload)
 }
+engine_command!(engine_geometry_edge_chain, "geometry_edge_chain", read);
+engine_command!(engine_cam_chamfer_geometry, "cam_chamfer_geometry", read);
+engine_command!(engine_cam_cutter_mesh, "cam_cutter_mesh", read);
+engine_command!(engine_cam_document, "cam_document", no_payload);
+engine_command!(engine_cam_set_document, "cam_set_document");
+engine_command!(
+    engine_cam_toolpath_statuses,
+    "cam_toolpath_statuses",
+    no_payload,
+    read
+);
+engine_command!(engine_cam_regenerate_operation, "cam_regenerate_operation");
+engine_command!(engine_cam_regenerate_setup, "cam_regenerate_setup");
+engine_command!(engine_cam_plan, "cam_plan");
+engine_command!(engine_cam_post, "cam_post");
+engine_command!(engine_cam_analyze_nbpost, "cam_analyze_nbpost");
+engine_command!(engine_cam_simulate_gcode, "cam_simulate_gcode");
+engine_command!(engine_cam_post_events, "cam_post_events");
 engine_command!(engine_set_body_appearance, "set_body_appearance");
 
 #[tauri::command]
@@ -885,6 +1055,106 @@ fn engine_export_3mf(state: tauri::State<'_, AppState>, payload: &str) -> Result
 
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
+fn cam_library_config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_config_dir()
+        .map_err(|error| format!("Could not resolve the per-user config directory: {error}"))
+}
+
+#[tauri::command]
+async fn cam_posts_list(app: tauri::AppHandle) -> Result<cam_posts::Catalog, String> {
+    let config = cam_library_config_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || cam_posts::list(&config)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn cam_posts_import(app: tauri::AppHandle, source: String) -> Result<cam_posts::Catalog, String> {
+    let config = cam_library_config_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || cam_posts::import(&config, Path::new(&source))).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn cam_posts_save_profile(app: tauri::AppHandle, file_name: String, machine: nbcad_cam::CamMachineAssignmentDto) -> Result<cam_posts::Catalog, String> {
+    let config = cam_library_config_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || cam_posts::save_profile(&config, &file_name, machine)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn cam_posts_open_folder(app: tauri::AppHandle) -> Result<(), String> {
+    let config = cam_library_config_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = cam_posts::directory(&config)?;
+        #[cfg(target_os = "macos")]
+        let mut command = std::process::Command::new("open");
+        #[cfg(target_os = "windows")]
+        let mut command = std::process::Command::new("explorer");
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(path).spawn().map_err(|e| format!("Could not open post folder: {e}"))?;
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn cam_library_load(app: tauri::AppHandle) -> Result<cam_library::Snapshot, String> {
+    let config = cam_library_config_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || cam_library::load(&config))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn cam_library_save(
+    app: tauri::AppHandle,
+    json: String,
+    expected_path: String,
+    expected_revision: String,
+) -> Result<cam_library::Snapshot, String> {
+    let config = cam_library_config_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        cam_library::save(&config, &json, &expected_path, &expected_revision)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn cam_library_location(app: tauri::AppHandle) -> Result<cam_library::Location, String> {
+    let config = cam_library_config_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || cam_library::get_location(&config))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn cam_library_inspect_location(
+    app: tauri::AppHandle,
+    directory: Option<String>,
+) -> Result<cam_library::Location, String> {
+    let config = cam_library_config_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        cam_library::inspect_location(&config, directory.as_deref().map(Path::new))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn cam_library_set_location(
+    app: tauri::AppHandle,
+    directory: Option<String>,
+    action: cam_library::LocationAction,
+) -> Result<cam_library::Location, String> {
+    let config = cam_library_config_dir(&app)?;
+    let location = tauri::async_runtime::spawn_blocking(move || {
+        cam_library::set_location(&config, directory.as_deref().map(Path::new), action)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let _ = app.emit("cam-library-location-changed", &location);
+    Ok(location)
+}
+
 #[tauri::command]
 fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
     let metadata = fs::metadata(&path).map_err(|error| format!("could not read file: {error}"))?;
@@ -935,6 +1205,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
         .manage(AppState::new())
+        .manage(CamSimulationService::default())
+        .manage(cam_playback::CamPlaybackService::default())
         .manage(NativeQuitState::default())
         .manage(scripts::NativeScriptState::default())
         .manage(recipe_links::RecipeLinkState::default())
@@ -1014,6 +1286,15 @@ pub fn run() {
             native_menu::native_file_menu_set_state,
             read_binary_file,
             write_binary_file_atomic,
+            cam_library_load,
+            cam_library_save,
+            cam_library_location,
+            cam_library_inspect_location,
+            cam_library_set_location,
+            cam_posts_list,
+            cam_posts_import,
+            cam_posts_save_profile,
+            cam_posts_open_folder,
             session_bridge::mcp_session_bridge_reserve,
             session_bridge::mcp_session_bridge_write,
             session_bridge::mcp_session_bridge_control,
@@ -1090,6 +1371,24 @@ pub fn run() {
             engine_assembly_swept_collision_check,
             engine_drawing_projection,
             engine_drawing_export,
+            engine_cam_document,
+            engine_geometry_edge_chain,
+            engine_cam_chamfer_geometry,
+            engine_cam_cutter_mesh,
+            engine_cam_set_document,
+            engine_cam_toolpath_statuses,
+            engine_cam_regenerate_operation,
+            engine_cam_regenerate_setup,
+            engine_cam_plan,
+            engine_cam_post,
+            engine_cam_analyze_nbpost,
+            engine_cam_simulate,
+            cam_playback::engine_cam_playback_open,
+            cam_playback::engine_cam_playback_sample,
+            cam_playback::engine_cam_playback_present,
+            cam_playback::engine_cam_playback_close,
+            engine_cam_simulate_gcode,
+            engine_cam_post_events,
             engine_set_body_appearance,
             engine_extrude_definitions,
             engine_revolve_definitions,

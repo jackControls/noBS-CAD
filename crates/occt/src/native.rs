@@ -116,6 +116,10 @@ mod ffi {
         /// Per face: valid, axis origin xyz, axis direction xyz,
         /// reference direction xyz, radius (11 f64 values).
         face_cylinder_data: Vec<f64>,
+        /// Per face: valid, cone axis xyz, semi-angle in radians.
+        face_cone_data: Vec<f64>,
+        face_edge_offsets: Vec<u32>,
+        face_edge_indices: Vec<u32>,
         /// Prefix offsets into `edge_points`, measured in 3D points.
         edge_point_offsets: Vec<u32>,
         /// Flat xyz edge polyline coordinates.
@@ -1415,6 +1419,12 @@ fn from_ffi_mesh(raw: ffi::FfiMesh) -> Result<KernelBodyDto, OcctError> {
         || raw.face_plane_data.len() != raw.face_first_indices.len() * 13
         || raw.face_signature_data.len() != raw.face_first_indices.len() * 8
         || raw.face_cylinder_data.len() != raw.face_first_indices.len() * 11
+        || raw.face_cone_data.len() != raw.face_first_indices.len() * 5
+        || raw.face_edge_offsets.len() != raw.face_first_indices.len() + 1
+        || raw.face_edge_offsets.first() != Some(&0)
+        || raw.face_edge_offsets.windows(2).any(|w| w[0] > w[1])
+        || raw.face_edge_offsets.last().copied().unwrap_or(0) as usize != raw.face_edge_indices.len()
+        || raw.face_edge_indices.iter().any(|i| *i as usize + 1 >= raw.edge_point_offsets.len())
     {
         return Err(OcctError(
             "OCCT bridge returned malformed face metadata".to_string(),
@@ -1429,6 +1439,7 @@ fn from_ffi_mesh(raw: ffi::FfiMesh) -> Result<KernelBodyDto, OcctError> {
             let data = &raw.face_plane_data[index * 13..(index + 1) * 13];
             let signature = &raw.face_signature_data[index * 8..(index + 1) * 8];
             let cylinder = &raw.face_cylinder_data[index * 11..(index + 1) * 11];
+            let cone = &raw.face_cone_data[index * 5..(index + 1) * 5];
             let point = |offset: usize| [data[offset], data[offset + 1], data[offset + 2]];
             let signature_point = |offset: usize| Point3Dto {
                 x: signature[offset],
@@ -1446,6 +1457,11 @@ fn from_ffi_mesh(raw: ffi::FfiMesh) -> Result<KernelBodyDto, OcctError> {
                 first_index: *first_index,
                 index_count: *index_count,
                 plane,
+                edge_keys: raw.face_edge_indices[raw.face_edge_offsets[index] as usize..raw.face_edge_offsets[index + 1] as usize]
+                    .iter().map(|index| format!("edge:{index}")).collect(),
+                cone: (cone[0] != 0.0).then(|| nbcad_solid::ConicalSurfaceDto {
+                    axis: Point3Dto { x: cone[1], y: cone[2], z: cone[3] }, semi_angle: cone[4],
+                }),
                 signature: (signature[0] != 0.0).then(|| nbcad_solid::PlanarFaceSignatureDto {
                     centroid: signature_point(1),
                     normal: Point3Dto::from(plane.expect("signature requires plane").normal),
@@ -2251,6 +2267,68 @@ mod tests {
         });
         kernel.recompute(&plan).unwrap();
         assert!(kernel.projection_cache.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn chamfer_face_boundaries_and_cones_survive_native_transport() {
+        let mut kernel = OcctKernel::new().unwrap();
+        let base = RecomputePlanDto {transaction_id:1,errors:Vec::new(),jobs:vec![box_job(1,1)]};
+        let scene = kernel.recompute(&base).unwrap();
+        let upper = scene.bodies[0].edges.iter()
+            .filter(|e|e.points.iter().all(|p|(p.z-10.).abs()<1e-7))
+            .map(|e|e.key.clone()).collect::<Vec<_>>();
+        assert_eq!(upper.len(),4);
+        let mut jobs=base.jobs;
+        jobs.push(KernelJobDto::Chamfer(KernelChamferJobDto {
+            feature_id:FeatureId(2),target_body_id:BodyId(1),edge_keys:upper,distance:0.5,tangent_chain:false,
+        }));
+        jobs.push(KernelJobDto::Hole(KernelHoleJobDto {
+            feature_id:FeatureId(3),target_body_id:BodyId(1),center:Point3Dto{x:0.,y:0.,z:10.},
+            direction:Point3Dto{x:0.,y:0.,z:-1.},diameter:4.,extent:HoleExtent::Distance{depth:5.},
+            style:HoleStyle::Simple,counterbore_diameter:0.,counterbore_depth:0.,
+            countersink_diameter:5.,countersink_angle_deg:90.,bottom_style:HoleBottomStyle::Flat,
+            drill_point_angle_deg:118.,thread:None,
+        }));
+        let scene=kernel.recompute(&RecomputePlanDto{transaction_id:2,errors:Vec::new(),jobs:jobs.clone()}).unwrap();
+        let rim=scene.bodies[0].edges.iter().find(|e|e.circle.is_some_and(|c|c.closed)
+            && e.points.iter().all(|p|(p.z-10.).abs()<1e-7)).unwrap().key.clone();
+        jobs.push(KernelJobDto::Chamfer(KernelChamferJobDto {
+            feature_id:FeatureId(4),target_body_id:BodyId(1),edge_keys:vec![rim],distance:0.5,tangent_chain:false,
+        }));
+        let scene=kernel.recompute(&RecomputePlanDto{transaction_id:3,errors:Vec::new(),jobs}).unwrap();
+        assert!(scene.errors.is_empty(),"{:?}",scene.errors);
+        let body=&scene.bodies[0];
+        assert!(body.faces.iter().all(|f|!f.edge_keys.is_empty()
+            && f.edge_keys.iter().all(|k|body.edges.iter().any(|e|&e.key==k))));
+        let top=body.faces.iter().find(|f|f.plane.is_some_and(|p|p.normal[2]>0.999 && (p.origin[2]-10.).abs()<1e-7)).unwrap();
+        assert_eq!(top.edge_keys.len(),5,"four outer edges plus one hole rim");
+        assert_eq!(body.faces.iter().filter(|f|f.plane.is_some_and(|p|
+            (p.normal[2].abs()-std::f64::consts::FRAC_1_SQRT_2).abs()<1e-7)).count(),4);
+        let cones=body.faces.iter().filter_map(|f|f.cone).collect::<Vec<_>>();
+        let cone=cones.iter().find(|c|(c.semi_angle.abs()-std::f64::consts::FRAC_PI_4).abs()<1e-7)
+            .unwrap_or_else(||panic!("missing 45-degree countersink in {cones:?}"));
+        assert!((cone.axis.z.abs()-1.).abs()<1e-7);
+        assert!((cone.semi_angle.abs()-std::f64::consts::FRAC_PI_4).abs()<1e-7);
+    }
+
+    #[test]
+    fn countersink_overlap_keeps_the_requested_angle_and_opening_size() {
+        let mut kernel=OcctKernel::new().unwrap();
+        let scene=kernel.recompute(&RecomputePlanDto {transaction_id:1,errors:Vec::new(),jobs:vec![
+            box_job(1,1),KernelJobDto::Hole(KernelHoleJobDto {
+                feature_id:FeatureId(2),target_body_id:BodyId(1),center:Point3Dto{x:0.,y:0.,z:10.},
+                direction:Point3Dto{x:0.,y:0.,z:-1.},diameter:4.,extent:HoleExtent::Distance{depth:5.},
+                style:HoleStyle::Countersink,counterbore_diameter:0.,counterbore_depth:0.,
+                countersink_diameter:5.,countersink_angle_deg:90.,bottom_style:HoleBottomStyle::Flat,
+                drill_point_angle_deg:118.,thread:None,
+            }),
+        ]}).unwrap();
+        assert!(scene.errors.is_empty(),"{:?}",scene.errors);
+        let body=&scene.bodies[0];
+        let cone=body.faces.iter().find_map(|f|f.cone).unwrap();
+        assert!((cone.semi_angle.abs()-std::f64::consts::FRAC_PI_4).abs()<1e-7);
+        let upper=body.edges.iter().filter_map(|e|e.circle).find(|c|(c.center.z-10.).abs()<1e-7).unwrap();
+        assert!((upper.radius-2.5).abs()<1e-7);
     }
 
     #[test]

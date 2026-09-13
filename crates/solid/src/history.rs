@@ -1771,6 +1771,8 @@ impl SolidDocument {
                     plane: face.plane,
                     signature: face.signature,
                     cylinder: face.cylinder,
+                    edge_keys: face.edge_keys.clone(),
+                    cone: face.cone,
                 })
                 .collect();
             let edges = raw
@@ -5138,6 +5140,8 @@ mod tests {
                     edge_count: 3,
                 }),
                 cylinder: None,
+                edge_keys: Vec::new(),
+                cone: None,
             }],
             edges: vec![],
         }

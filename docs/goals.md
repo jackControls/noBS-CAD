@@ -27,8 +27,9 @@ These broaden the original noBS CAD goal; they do not replace it.
   Bundled recipes and offline engineering guidance provide the foundation for
   more feature lessons and, eventually, conversational design wizards.
 - **CAM:** a careful path toward functional, modern **3-axis** CAM, developed
-  with machining feedback. Toolpath generation is an aspiration, not a current
-  product capability.
+  with machining feedback. An early toolpath, stock simulation and machine-aware
+  post foundation exists; it is not production-safe CAM. See the
+  [implementation and safety limits](cam/README.md).
 - **Simulation / analysis:** extend the existing fit and motion tools in stages;
   strength analysis requires a separately validated solver stack.
 

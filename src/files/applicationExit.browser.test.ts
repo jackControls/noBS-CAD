@@ -86,6 +86,7 @@ export async function checkApplicationExitEdits() {
     if (command === 'engine_project_export_model') return ok(JSON.stringify({ document: useAppStore.getState().document }));
     if (command === 'engine_active_sketch') return ok(null);
     if (command === 'engine_assembly_document') return ok(initial.assemblyDocument);
+    if (command === 'engine_cam_document') return ok(initial.camDocument);
     if (command === 'engine_assembly_solution') return ok(initial.assemblySolution);
     if (command === 'mcp_session_bridge_control') {
       if (args.response) { acknowledgments++; return; }

@@ -1990,6 +1990,188 @@
           ]
         }
       ]
+    },
+    {
+      "id": "cam",
+      "labelKey": "ribbon.tabs.cam",
+      "enabled": true,
+      "panels": [
+        {
+          "id": "workspace",
+          "labelKey": "ribbon.panels.workspace",
+          "buttons": [
+            {
+              "id": "returnModel",
+              "labelKey": "ribbon.cam.model",
+              "icon": "camModel",
+              "enabled": true,
+              "action": "modelWorkspace"
+            }
+          ],
+          "operations": []
+        },
+        {
+          "id": "setup",
+          "labelKey": "ribbon.panels.setup",
+          "buttons": [
+            {
+              "id": "newSetup",
+              "labelKey": "ribbon.cam.newSetup",
+              "icon": "camNewSetup",
+              "enabled": true,
+              "action": "camNewSetup"
+            },
+            {
+              "id": "toolLibrary",
+              "labelKey": "ribbon.cam.toolLibrary",
+              "icon": "camToolLibrary",
+              "enabled": true,
+              "action": "camToolLibrary"
+            }
+          ],
+          "operations": [
+            "cam_get_document",
+            "cam_set_document"
+          ]
+        },
+        {
+          "id": "toolpaths",
+          "labelKey": "ribbon.panels.toolpaths",
+          "buttons": [
+            {
+              "id": "camFace",
+              "labelKey": "ribbon.cam.face",
+              "icon": "camFace",
+              "enabled": true,
+              "action": "camAddOperation",
+              "payload": "face"
+            },
+            {
+              "id": "camAdaptive",
+              "labelKey": "ribbon.cam.adaptive",
+              "icon": "camAdaptive",
+              "enabled": true,
+              "action": "camAddOperation",
+              "payload": "adaptive3d"
+            },
+            {
+              "id": "camContour",
+              "labelKey": "ribbon.cam.contour",
+              "icon": "camContour",
+              "enabled": true,
+              "action": "camAddOperation",
+              "payload": "contour2d"
+            },
+            {
+              "id": "camPocket",
+              "labelKey": "ribbon.cam.pocket",
+              "icon": "camPocket",
+              "enabled": true,
+              "action": "camAddOperation",
+              "payload": "pocket2d"
+            },
+            {
+              "id": "camChamfer",
+              "labelKey": "ribbon.cam.chamfer",
+              "icon": "camChamfer",
+              "enabled": true,
+              "action": "camAddOperation",
+              "payload": "chamfer2d"
+            },
+            {
+              "id": "camDrill",
+              "labelKey": "ribbon.cam.drill",
+              "icon": "camDrill",
+              "enabled": true,
+              "action": "camAddOperation",
+              "payload": "drill"
+            },
+            {
+              "id": "camThread",
+              "labelKey": "ribbon.cam.thread",
+              "icon": "camThread",
+              "enabled": true,
+              "action": "camAddOperation",
+              "payload": "thread"
+            }
+          ],
+          "operations": [
+            "cam_toolpath_statuses",
+            "cam_regenerate_operation",
+            "cam_regenerate_setup",
+            "cam_plan_setup"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cam-simulate",
+      "labelKey": "ribbon.cam.simulateTab",
+      "enabled": true,
+      "panels": [
+        {
+          "id": "simulation",
+          "labelKey": "ribbon.cam.simulateTab",
+          "buttons": [
+            {
+              "id": "camSim",
+              "labelKey": "ribbon.cam.simulate",
+              "icon": "camSimulate",
+              "enabled": true,
+              "action": "camSimulate"
+            },
+            {
+              "id": "ncSim",
+              "labelKey": "ribbon.cam.simulateNc",
+              "icon": "camNcSimulate",
+              "enabled": true,
+              "action": "camSimulateNc"
+            }
+          ],
+          "operations": [
+            "cam_simulate_setup"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cam-output",
+      "labelKey": "ribbon.cam.outputTab",
+      "enabled": true,
+      "panels": [
+        {
+          "id": "output",
+          "labelKey": "ribbon.panels.output",
+          "buttons": [
+            {
+              "id": "postNc",
+              "labelKey": "ribbon.cam.post",
+              "icon": "camPostNc",
+              "enabled": true,
+              "action": "camPost"
+            }
+          ],
+          "operations": [
+            "cam_post_setup"
+          ]
+        },
+        {
+          "id": "advanced",
+          "labelKey": "ribbon.cam.advanced",
+          "buttons": [],
+          "menu": [
+            {
+              "type": "item",
+              "id": "postEvents",
+              "labelKey": "ribbon.cam.events",
+              "icon": "camPostEvents",
+              "enabled": true,
+              "action": "camExportEvents"
+            }
+          ],
+          "operations": []
+        }
+      ]
     }
   ],
   "groups": [

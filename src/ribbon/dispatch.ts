@@ -35,7 +35,13 @@ import {
   leaveDrawingWorkspace,
 } from '../drawing/document';
 import { exportActiveDrawingDxf, printActiveDrawing } from '../drawing/export';
-import type { DrawingViewKind } from '../engine/types';
+import type { CamOperationDto, DrawingViewKind } from '../engine/types';
+import {
+  enterCamWorkspace,
+  leaveCamWorkspace,
+} from '../cam/document';
+import { exportPostEvents } from '../cam/export';
+import { requestCamSimulation } from '../cam/simulationUi';
 
 function runDrawingAction(action: () => Promise<unknown>): void {
   void action().catch((error) => {
@@ -156,11 +162,14 @@ export function dispatchRibbonAction(action?: RibbonAction, payload?: string): v
       state.setSolidSidebarMode('assembly');
       break;
     }
-    case 'modelWorkspace':
-      useAppStore.getState().setJointDialogOpen(false);
-      useAppStore.getState().setSolidSidebarMode('model');
-      leaveDrawingWorkspace();
+    case 'modelWorkspace': {
+      const state = useAppStore.getState();
+      state.setJointDialogOpen(false);
+      state.setSolidSidebarMode('model');
+      if (state.activeTab === 'cam') leaveCamWorkspace();
+      else leaveDrawingWorkspace();
       break;
+    }
     case 'joint':
       useAppStore.getState().setActiveTab('solid');
       useAppStore.getState().setSolidSidebarMode('assembly');
@@ -207,6 +216,41 @@ export function dispatchRibbonAction(action?: RibbonAction, payload?: string): v
       break;
     case 'drawingPrint':
       printActiveDrawing();
+      break;
+    case 'camWorkspace':
+      runDrawingAction(enterCamWorkspace);
+      break;
+    case 'camNewSetup':
+      useAppStore.getState().setCamDialog({ type: 'setup' });
+      break;
+    case 'camToolLibrary':
+      useAppStore.getState().setCamDialog({ type: 'tool', toolId: null });
+      break;
+    case 'camAddOperation': {
+      const kind: CamOperationDto['kind'] =
+        payload === 'adaptive3d' || payload === 'contour2d' || payload === 'pocket2d' || payload === 'chamfer2d' || payload === 'drill' || payload === 'thread'
+          ? payload
+          : 'face';
+      useAppStore.getState().setCamDialog({ type: 'operation', kind });
+      break;
+    }
+    case 'camSimulate':
+    case 'camSimulateNc': {
+      const state = useAppStore.getState();
+      const setupId = state.camDocument.active_setup_id;
+      if (setupId == null) return;
+      if (action === 'camSimulate' && !state.camDocument.setups.find((setup) => setup.id === setupId)?.operations.some((operation) => operation.enabled)) {
+        state.setConstraintDialog({ titleKey: 'file.errorTitle', message: 'Add an enabled toolpath before starting CAM simulation. The setup view already shows its incoming stock.' });
+        return;
+      }
+      requestCamSimulation(action === 'camSimulate' ? 'cam' : 'nc', setupId, state.selectedCamOperationId);
+      break;
+    }
+    case 'camPost':
+      useAppStore.getState().setCamDialog({ type: 'post' });
+      break;
+    case 'camExportEvents':
+      runDrawingAction(exportPostEvents);
       break;
   }
 }

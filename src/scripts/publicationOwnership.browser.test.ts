@@ -57,6 +57,7 @@ export async function checkPublicationOwnership() {
         if (command === 'engine_datum_plane_definitions' || command === 'engine_body_appearances') return ok([]);
         if (command === 'engine_drawing_document') return ok(initial.drawingDocument);
         if (command === 'engine_assembly_document') return ok(initial.assemblyDocument);
+        if (command === 'engine_cam_document') return ok(initial.camDocument);
         if (command === 'engine_assembly_solution') return ok(initial.assemblySolution);
         if (command === 'engine_project_visibility') { await hold('visibility-read'); return ok(nativeVisibility); }
         if (command === 'engine_project_set_visibility') {

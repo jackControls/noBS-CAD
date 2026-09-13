@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use nbcad_cam::CamDocumentDto;
 use nbcad_core::{BodyAppearance, DocumentDto};
 use nbcad_occt::{
     exact_interference_report, exact_pair_result, DrawingProjectionRequest, OcctKernel,
@@ -187,6 +188,25 @@ impl AppState {
             .active()
             .manager
             .document_dto()
+    }
+
+    /// Clone only the small CAM intent document while holding the engine lock;
+    /// expensive voxel work runs later on a background worker without blocking
+    /// modeling commands, saves, or viewport synchronization.
+    pub fn cam_snapshot(
+        &self,
+        setup_id: u64,
+    ) -> Result<(String, CamDocumentDto, Option<String>), String> {
+        let workspace = self.inner.lock().expect("engine lock poisoned");
+        let manager = &workspace.active().manager;
+        let safety_warning = manager
+            .cam_toolpath_safety_warning(setup_id)
+            .map_err(|error| error.to_string())?;
+        Ok((
+            workspace.active_session_id.clone(),
+            manager.cam_document(),
+            safety_warning,
+        ))
     }
 
     /// One lock acquisition gives the native viewport a coherent model

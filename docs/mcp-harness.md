@@ -98,6 +98,10 @@ prevent calls to undisclosed tools. Results can contain `_disclosure` hints;
 `notifications/tools/list_changed` without requiring a later client ping.
 Logs use stderr so stdout stays valid stdio JSON-RPC.
 
+The `cam` focus pack exposes CAM document inspection, editing, generation,
+posting and remaining-stock simulation. These operations use the same native
+CAM engine and freshness checks as the Manufacture workspace.
+
 ## Repeatable construction and presentation
 
 The readable `.nbcad.jsonc` sources under [examples/scripts](../examples/scripts)
