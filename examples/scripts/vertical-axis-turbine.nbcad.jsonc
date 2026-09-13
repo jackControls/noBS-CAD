@@ -96152,6 +96152,12 @@
       "note": "Two projected views locate the 2.2 mm shaft bore and 12 mm hub. Read the tooth dimensions and captive M2 nut notes; the printed fit still needs measurement."
     },
     {
+      "chapter": "Specify the purchased shaft",
+      "duration_ms": 6000,
+      "id": "shaft_drawing_introduction",
+      "note": "The straight 8 x 300 mm shaft is purchased stock. This sheet records its diameter, length and collar requirements; check bearing fits against the delivered parts."
+    },
+    {
       "call": {
         "arguments": {
           "format": "a3",
@@ -96628,6 +96634,12 @@
         "operation": "drawing_export"
       },
       "id": "shaft_dxf"
+    },
+    {
+      "chapter": "Read the assembly and parts list",
+      "duration_ms": 6000,
+      "id": "assembly_drawing_introduction",
+      "note": "The assembly views locate the rotor and generator. The following bill of materials lists printed parts and purchased hardware, with procurement and fit notes."
     },
     {
       "call": {

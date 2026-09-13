@@ -893,6 +893,13 @@ fn main() {
         ("pinion",6.,vec![2.2,12.],"PRINT 1 / teeth down. Module1 /18 teeth /20 degree pressure angle /3 mm face. Preload captive M2 nut before meshing; nominal 2 mm motor shaft. Check measured shaft engagement, clamp slip and backlash before applying electrical load."),
         ("shaft",D.shaft_length,vec![8.],"PURCHASE / straight 8 x300 mm shaft, uncut. Deburr without shortening the bearing seats. Purchased 8 x16 x8 collars use M4x4 set screws. Verify shaft and bearing fits and inspect the exposed top before use."),
     ] {
+        if name == "shaft" {
+            a.steps.push(json!({
+                "id":"shaft_drawing_introduction","chapter":"Specify the purchased shaft",
+                "note":"The straight 8 x 300 mm shaft is purchased stock. This sheet records its diameter, length and collar requirements; check bearing fits against the delivered parts.",
+                "duration_ms":6000
+            }));
+        }
         a.part_drawing(name,height,&diameters,note);
         if name == "pinion" {
             a.steps.push(json!({
@@ -902,6 +909,11 @@ fn main() {
             }));
         }
     }
+    a.steps.push(json!({
+        "id":"assembly_drawing_introduction","chapter":"Read the assembly and parts list",
+        "note":"The assembly views locate the rotor and generator. The following bill of materials lists printed parts and purchased hardware, with procurement and fit notes.",
+        "duration_ms":6000
+    }));
     a.assembly_drawing();
     a.steps
         .push(json!({"view":"isometric","fit":true,"duration_ms":600}));
