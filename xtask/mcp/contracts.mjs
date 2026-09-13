@@ -337,6 +337,17 @@ try {
  });
  console.log('PASS production project-open/export recovery: '+JSON.stringify(recovery));
  await recoveryPage.close();
+ const openFramingPage=await browser.newPage();
+ const openFramingErrors=[];
+ openFramingPage.on('pageerror',error=>openFramingErrors.push(error.message));
+ await openFramingPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const openFraming=await openFramingPage.evaluate(async()=>{
+  const {checkOpenedProjectFraming}=await import('/src/files/openProjectFraming.browser.test.tsx');
+  return checkOpenedProjectFraming();
+ });
+ assert.deepEqual(openFramingErrors,[],'Open framing must not leave asynchronous errors');
+ console.log('PASS production Open framing: '+JSON.stringify(openFraming));
+ await openFramingPage.close();
  const stepPage=await browser.newPage();
  await stepPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const step=await stepPage.evaluate(async()=>{

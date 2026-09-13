@@ -37,6 +37,7 @@ import { runExport } from './exportFlow';
 import { projectTransitions } from './projectTransitions';
 import type { EngineOperationOwner } from '../engine/activity';
 import { captureProjectOwner } from './projectOwnership';
+import { requestOpenedProjectFraming, type OpenedProjectOwner } from './openProjectFraming';
 
 const PROJECT_TYPE: SaveType = {
   description: 'noBS CAD Project',
@@ -287,6 +288,7 @@ export async function openProject(options?: { filePath: string; discardChanges?:
   const releaseTransition = projectTransitions.begin();
   let changed = false;
   let published = false;
+  let openedOwner: OpenedProjectOwner;
   try {
     await releaseTransition.waitForSnapshots();
     const engine = await getEngine();
@@ -328,10 +330,12 @@ export async function openProject(options?: { filePath: string; discardChanges?:
     published = true;
     await recordActiveProjectOpen(modelJson, reusableTarget);
     if (!hasUnsavedProjects()) clearProjectRecovery();
-    return true;
+    openedOwner = useAppStore.getState();
   } finally {
     releaseTransition(changed, published);
   }
+  requestOpenedProjectFraming(openedOwner);
+  return true;
 }
 
 export async function exportStep(selectedOnly: boolean): Promise<boolean> {
