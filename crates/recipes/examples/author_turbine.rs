@@ -775,6 +775,13 @@ fn main() {
         turbine_hardware::rz(10.),
     );
     a.hardware_definitions();
+    // Hardware ends with a small set-screw close-up. Establish the complete
+    // assembly framing before the longer grounding, joint and installation phase.
+    a.steps.push(json!({"id":"assembly_overview_fit",
+        "view":"isometric","fit":true,"duration_ms":650}));
+    a.steps.push(json!({"id":"assembly_introduction","chapter":"Assemble the supported drive",
+        "note":"Ground the base, constrain the bearing-supported rotor and generator, then install the screws and captive nuts. The two shaft joints are linked by the 72:18 gear relation.",
+        "duration_ms":6000}));
     a.call("joint_geometry", "solid/check", "solid_scene", json!({}));
     a.call(
         "ground_base",

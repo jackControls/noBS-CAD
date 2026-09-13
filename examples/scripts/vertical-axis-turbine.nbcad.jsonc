@@ -55026,6 +55026,18 @@
       "view": "isometric"
     },
     {
+      "duration_ms": 650,
+      "fit": true,
+      "id": "assembly_overview_fit",
+      "view": "isometric"
+    },
+    {
+      "chapter": "Assemble the supported drive",
+      "duration_ms": 6000,
+      "id": "assembly_introduction",
+      "note": "Ground the base, constrain the bearing-supported rotor and generator, then install the screws and captive nuts. The two shaft joints are linked by the 72:18 gear relation."
+    },
+    {
       "call": {
         "arguments": {},
         "group": "solid/check",
