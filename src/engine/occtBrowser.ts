@@ -1575,7 +1575,8 @@ function applyHole(oc: Oc, target: TopoDS_Shape, job: KernelHoleJobDto): TopoDS_
         Math.tan(job.countersink_angle_deg * Math.PI / 360);
       const secondary = new oc.BRepPrimAPI_MakeCone_3(
         axis,
-        largeRadius,
+        // Extend the flank above the support plane without changing its angle.
+        largeRadius + overlap * Math.tan(job.countersink_angle_deg * Math.PI / 360),
         smallRadius,
         sinkDepth + overlap,
       );
@@ -2299,6 +2300,18 @@ function faceCylinder(
   }
 }
 
+function faceCone(oc: Oc, face: TopoDS_Face): KernelFaceDto['cone'] {
+  const surface = new oc.BRepAdaptor_Surface_2(face, true);
+  try {
+    if (surface.GetType() !== oc.GeomAbs_SurfaceType.GeomAbs_Cone) return null;
+    const cone = surface.Cone();
+    const axes = cone.Position();
+    const axis = axes.Direction();
+    try { return { axis: readPoint(axis), semi_angle: cone.SemiAngle() }; }
+    finally { axis.delete(); axes.delete(); cone.delete(); }
+  } finally { surface.delete(); }
+}
+
 function planarFaceSignature(
   oc: Oc,
   face: TopoDS_Face,
@@ -2347,6 +2360,8 @@ function meshShape(oc: Oc, bodyId: number, shape: TopoDS_Shape): KernelBodyDto {
   const indices: number[] = [];
   const faces: KernelFaceDto[] = [];
   const edges: KernelEdgeDto[] = [];
+  const edgeMap = new oc.TopTools_IndexedMapOfShape_1();
+  oc.TopExp.MapShapes_1(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE as never, edgeMap);
 
   const faceMap = new oc.TopTools_IndexedMapOfShape_1();
   oc.TopExp.MapShapes_1(
@@ -2395,6 +2410,19 @@ function meshShape(oc: Oc, bodyId: number, shape: TopoDS_Shape): KernelBodyDto {
     handle.delete();
     location.delete();
     const plane = facePlane(oc, face);
+    const boundary = new oc.TopTools_IndexedMapOfShape_1();
+    const edgeKeys: string[] = [];
+    try {
+      oc.TopExp.MapShapes_1(face, oc.TopAbs_ShapeEnum.TopAbs_EDGE as never, boundary);
+      for (let i = 1; i <= boundary.Size(); i++) {
+        const edge = boundary.FindKey(i);
+        try {
+          const index = edgeMap.FindIndex(edge);
+          if (index <= 0) throw new Error('Face boundary is absent from body topology.');
+          edgeKeys.push(`edge:${index - 1}`);
+        } finally { edge.delete(); }
+      }
+    } finally { boundary.delete(); }
     faces.push({
       key: `face:${faceIndex - 1}`,
       first_index: firstIndex,
@@ -2402,17 +2430,13 @@ function meshShape(oc: Oc, bodyId: number, shape: TopoDS_Shape): KernelBodyDto {
       plane,
       signature: planarFaceSignature(oc, face, plane),
       cylinder: faceCylinder(oc, face),
+      edge_keys: edgeKeys,
+      cone: faceCone(oc, face),
     });
     face.delete();
   }
   faceMap.delete();
 
-  const edgeMap = new oc.TopTools_IndexedMapOfShape_1();
-  oc.TopExp.MapShapes_1(
-    shape,
-    oc.TopAbs_ShapeEnum.TopAbs_EDGE as never,
-    edgeMap,
-  );
   const edgeFaces = new oc.TopTools_IndexedDataMapOfShapeListOfShape_1();
   oc.TopExp.MapShapesAndUniqueAncestors(
     shape,
@@ -2451,6 +2475,18 @@ function meshShape(oc: Oc, bodyId: number, shape: TopoDS_Shape): KernelBodyDto {
     }
     const curve = new oc.BRepAdaptor_Curve_2(edge);
     const points: Point3Dto[] = [];
+    let circle: KernelEdgeDto['circle'] = null;
+    if (curve.GetType() === oc.GeomAbs_CurveType.GeomAbs_Circle) {
+      const curveCircle = curve.Circle();
+      const axes = curveCircle.Position();
+      const center = axes.Location(), normal = axes.Direction(), reference = axes.XDirection();
+      try {
+        circle = { center: readPoint(center), normal: readPoint(normal), reference: readPoint(reference),
+          radius: curveCircle.Radius(), closed: Math.abs(Math.abs(curve.LastParameter() - curve.FirstParameter()) - 2 * Math.PI) <= 1e-7 };
+      } finally {
+        reference.delete(); normal.delete(); center.delete(); axes.delete(); curveCircle.delete();
+      }
+    }
     if (curve.GetType() === oc.GeomAbs_CurveType.GeomAbs_Line) {
       for (const parameter of [curve.FirstParameter(), curve.LastParameter()]) {
         const p = curve.Value(parameter);
@@ -2458,7 +2494,7 @@ function meshShape(oc: Oc, bodyId: number, shape: TopoDS_Shape): KernelBodyDto {
         p.delete();
       }
     } else {
-      const discretization = new oc.GCPnts_UniformDeflection_2(curve, 0.05, true);
+      const discretization = new oc.GCPnts_UniformDeflection_2(curve, 0.01, true);
       try {
         if (discretization.IsDone() && discretization.NbPoints() >= 2) {
           for (let pointIndex = 1; pointIndex <= discretization.NbPoints(); pointIndex += 1) {
@@ -2479,7 +2515,7 @@ function meshShape(oc: Oc, bodyId: number, shape: TopoDS_Shape): KernelBodyDto {
         discretization.delete();
       }
     }
-    edges.push({ key: `edge:${edgeIndex - 1}`, points, refinable });
+    edges.push({ key: `edge:${edgeIndex - 1}`, points, refinable, circle });
     curve.delete();
     edge.delete();
   }

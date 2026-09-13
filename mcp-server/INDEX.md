@@ -8,8 +8,8 @@
 | [src/main.rs](src/main.rs) | Tool registry, RPC, goldens |
 | [src/disclosure.rs](src/disclosure.rs) | Soft focus packs + tags |
 | [src/session.rs](src/session.rs) | UUID snapshot dirs + heartbeat list metadata |
-| [src/ffi.rs](src/ffi.rs) | OCCT FFI glue |
-| [build.rs](build.rs) | Link / OCCT discovery |
+| [../crates/occt/src/native.rs](../crates/occt/src/native.rs) | Shared native OCCT FFI glue |
+| [../crates/occt/build.rs](../crates/occt/build.rs) | Shared OCCT discovery and linking |
 
 Upstream product docs: [../docs/mcp-harness.md](../docs/mcp-harness.md), [../docs/agentic/STEERABLE_MCP.md](../docs/agentic/STEERABLE_MCP.md).
 

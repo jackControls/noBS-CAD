@@ -71,6 +71,8 @@ fn planar_body(body_id: BodyId, key: &str, z: f64) -> KernelBodyDto {
                 edge_count: 3,
             }),
             cylinder: None,
+            edge_keys: Vec::new(),
+            cone: None,
         }],
         edges: Vec::new(),
     }

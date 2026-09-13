@@ -19,6 +19,14 @@ import {
 } from '../../modeling/viewportPickFeedback';
 import { revolveProfileAcceptsAxis } from '../../lib/revolveAxis';
 import { presentation as playbackPresentation } from '../../operationPlayback';
+import {
+  simulationPlaybackPose,
+  simulationPlaybackPathId,
+  selectedOperationToolPose,
+} from '../../cam/overlay';
+import { setupPointToModel } from '../../cam/geometry';
+import { camWorkpiecePresentation } from '../../cam/view';
+import { cutterGeometry } from '../../cam/cutter';
 
 export interface NativeCameraState {
   position: [number, number, number];
@@ -153,6 +161,9 @@ interface NativePresentation {
   selectedSurfacePoint: Point3Dto | null;
   hoveredSurfacePoint: Point3Dto | null;
   hiddenBodyIds: number[];
+  /** Part bodies ghosted to a see-through wireframe shell when the operator
+   *  explicitly requests a target reference over CAM remaining stock. */
+  ghostedBodyIds: number[];
   hiddenDatumPlaneIds: number[];
   hiddenSketchNames: string[];
   profilePickerActive: boolean;
@@ -161,6 +172,21 @@ interface NativePresentation {
   hoveredProfile: ProfileRefDto | null;
   bodyPoses: import('../../engine/types').BodyPoseDto[];
   instanceBodyPoses: import('../../engine/types').InstanceBodyPoseDto[];
+  /** Rust-owned remaining stock is already resident in Bevy. */
+  camStockVisible: boolean;
+  /** Lightweight semantic cutter primitive. Bevy retains its meshes and only
+   *  changes transforms while playback advances. */
+  camTool: {
+    tip: [number, number, number];
+    axis: [number, number, number];
+    geometry: import('../../engine/types').CamCutterGeometryDto;
+  } | null;
+  /** Same clock/physical tip as the cutter; the timed path is uploaded once. */
+  camPathProgress: {
+    pathId: number;
+    timeSeconds: number;
+    position: [number, number, number];
+  } | null;
 }
 
 export type NativeViewportLinePattern = 'solid' | 'dotted';
@@ -171,6 +197,12 @@ export interface NativeViewportLineLayer {
   /** Presentation meaning, kept semantic so Bevy can preserve screen-space spacing. */
   pattern: NativeViewportLinePattern;
   segments: number[];
+  /** Optional CAM timeline: one start/end time pair per retained segment. */
+  playback?: {
+    pathId: number;
+    completedColor: [number, number, number, number];
+    segmentTimes: number[];
+  };
 }
 
 export interface NativeViewportPointLayer {
@@ -186,6 +218,13 @@ export interface NativeViewportTriangleLayer {
   color: [number, number, number, number];
   /** World-space triangle vertices, packed as x, y, z. */
   positions: number[];
+  /** Optional world-space vertex normals, packed one-for-one with positions.
+   *  Surface-producing systems can provide smooth/feature-aware normals;
+   *  legacy command overlays continue to receive flat normals natively. */
+  normals?: number[];
+  /** Physical CAM stock is opaque and studio-lit. Command/profile fills keep
+   *  the historical unlit translucent overlay presentation. */
+  material?: 'overlay' | 'machined_stock';
   /** Render after model depth so an internal selected profile remains visible. */
   xray: boolean;
 }
@@ -830,6 +869,45 @@ export function collectNativeViewportPresentation(): NativePresentation {
     solved.instance_body_poses,
     movePreview,
   );
+  const camView = camWorkpiecePresentation({ ...state, camDialogOpen: state.camDialog !== null });
+  const ghostedBodyIds = camView.ghostedBodyIds;
+  const hiddenBodyIds = [...new Set([
+    ...hiddenReferences(browser, state.hidden, 'body'),
+    ...camView.hiddenBodyIds,
+  ])];
+
+  const camPlayback = (() => {
+    if (state.activeTab !== 'cam' || state.camDialog !== null) return null;
+    const timeline = state.camSimulationTimeline;
+    const playback = state.camSimulationPlayback;
+    const setup = state.camDocument.setups.find((setup) => setup.id === state.camDocument.active_setup_id);
+    if (!setup || !timeline || !playback || timeline.setup_id !== setup.id
+      || (timeline.source === 'cam_toolpath' && timeline.through_operation_id !== state.selectedCamOperationId)) return null;
+    const timeSeconds = Math.max(0, Math.min(timeline.estimated_seconds, playback.time_seconds));
+    const pose = simulationPlaybackPose(timeline, timeSeconds);
+    return { timeline, timeSeconds, pose };
+  })();
+  const camTool: NativePresentation['camTool'] = (() => {
+    if (state.activeTab !== 'cam' || state.camDialog !== null) return null;
+    if (!camPlayback && !state.camToolpathsVisible) return null;
+    const setup = state.camDocument.setups.find((setup) => setup.id === state.camDocument.active_setup_id);
+    if (!setup) return null;
+    const pose = camPlayback ? camPlayback.pose
+      : selectedOperationToolPose(state.camProgram, setup, state.selectedCamOperationId);
+    if (!pose || pose.toolId === null) return null;
+    const tool = state.camDocument.tools.find((candidate) => candidate.id === pose.toolId);
+    if (!tool) return null;
+    const wcs = camPlayback?.timeline.wcs ?? setup.wcs;
+    const tip = setupPointToModel(pose.position, wcs);
+    return {
+      tip: [tip.x, tip.y, tip.z],
+      axis: wcs.z_axis,
+      geometry: cutterGeometry(tool),
+    };
+  })();
+  const camPathPoint = camPlayback?.pose
+    ? setupPointToModel(camPlayback.pose.position, camPlayback.timeline.wcs) : null;
+
   return {
     mode:
       state.mode === 'pickPlane' ||
@@ -876,7 +954,8 @@ export function collectNativeViewportPresentation(): NativePresentation {
       : null,
     selectedSurfacePoint: pickerFeedback.selectedSurfacePoint,
     hoveredSurfacePoint: pickerFeedback.hoveredSurfacePoint,
-    hiddenBodyIds: hiddenReferences(browser, state.hidden, 'body'),
+    hiddenBodyIds,
+    ghostedBodyIds,
     hiddenDatumPlaneIds: hiddenReferences(
       browser,
       state.hidden,
@@ -905,6 +984,14 @@ export function collectNativeViewportPresentation(): NativePresentation {
     hoveredProfile: pickerFeedback.hoveredProfile,
     bodyPoses,
     instanceBodyPoses,
+    camStockVisible: camView.stockVisible
+      && state.camSimulation?.native_stock_present === true,
+    camTool,
+    camPathProgress: state.camToolpathsVisible && camPlayback && camPathPoint ? {
+      pathId: simulationPlaybackPathId(camPlayback.timeline),
+      timeSeconds: camPlayback.timeSeconds,
+      position: [camPathPoint.x, camPathPoint.y, camPathPoint.z],
+    } : null,
   };
 }
 
@@ -1689,6 +1776,12 @@ function previewKey(preview: NativeViewportTransient): string {
     addNumber(layer.width);
     addString(layer.pattern);
     layer.segments.forEach(addNumber);
+    addNumber(layer.playback ? 1 : 0);
+    if (layer.playback) {
+      addNumber(layer.playback.pathId);
+      layer.playback.completedColor.forEach(addNumber);
+      layer.playback.segmentTimes.forEach(addNumber);
+    }
   }
   for (const layer of preview.points) {
     layer.color.forEach(addNumber);
@@ -1698,6 +1791,8 @@ function previewKey(preview: NativeViewportTransient): string {
   for (const layer of preview.triangles) {
     layer.color.forEach(addNumber);
     layer.positions.forEach(addNumber);
+    layer.normals?.forEach(addNumber);
+    addString(layer.material ?? 'overlay');
     addNumber(layer.xray ? 1 : 0);
   }
   for (const arrow of preview.arrows) {

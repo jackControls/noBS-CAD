@@ -21,6 +21,17 @@ import type {
   ArcCenterRequest,
   BreakRequest,
   BodyAppearance,
+  CamDocumentDto,
+  CamGcodeSimulationRequestDto,
+  CamPostRequestDto,
+  CamPostResultDto,
+  CamProgramDto,
+  CamSimulationRequestDto,
+  CamSimulationResultDto,
+  CamBufferedFrameDto,
+  CamToolpathStatusDto,
+  NbPostAnalysisDto,
+  NbPostAnalysisRequestDto,
   BodyFeatureDefinitionDto,
   BodyFeatureRequestDto,
   ChamferRequest,
@@ -69,6 +80,7 @@ import type {
   DrawingDocumentDto,
   DrawingProjectionDto,
   DrawingProjectionRequest,
+  PostEventStreamDto,
   FaceSketchOrigin,
   EditDimensionRequest,
   EndSketchResult,
@@ -356,6 +368,78 @@ export class TauriEngine implements Engine {
 
   async drawingProjection(request: DrawingProjectionRequest): Promise<DrawingProjectionDto> {
     return this.call('engine_drawing_projection', request);
+  }
+
+  async geometryEdgeChain(request: import('./types').GeometryEdgeChainRequest): Promise<import('./types').GeometryEdgeChain> {
+    return this.call('engine_geometry_edge_chain', request);
+  }
+
+  async camChamferGeometry(request: import('./types').CamChamferGeometryRequest): Promise<import('./types').CamChamferGeometry> {
+    return this.call('engine_cam_chamfer_geometry', request);
+  }
+
+  async camDocument(): Promise<CamDocumentDto> {
+    return this.call('engine_cam_document');
+  }
+
+  async camCutterMesh(geometry: import('./types').CamCutterGeometryDto): Promise<import('./types').CamCutterMeshDto> {
+    return this.call('engine_cam_cutter_mesh', geometry);
+  }
+
+  async setCamDocument(document: CamDocumentDto): Promise<CamDocumentDto> {
+    return this.call('engine_cam_set_document', document);
+  }
+
+  async camToolpathStatuses(): Promise<CamToolpathStatusDto[]> {
+    return this.call('engine_cam_toolpath_statuses');
+  }
+
+  async camRegenerateOperation(operationId: number): Promise<CamDocumentDto> {
+    return this.call('engine_cam_regenerate_operation', operationId);
+  }
+
+  async camRegenerateSetup(setupId: number): Promise<CamDocumentDto> {
+    return this.call('engine_cam_regenerate_setup', setupId);
+  }
+
+  async camPlan(setupId: number, throughOperationId?: number): Promise<CamProgramDto> {
+    return this.call('engine_cam_plan', throughOperationId == null ? setupId
+      : { setup_id: setupId, through_operation_id: throughOperationId });
+  }
+
+  async camPost(request: CamPostRequestDto): Promise<CamPostResultDto> {
+    return this.call('engine_cam_post', request);
+  }
+
+  async camAnalyzeNbPost(request: NbPostAnalysisRequestDto): Promise<NbPostAnalysisDto> {
+    return this.call('engine_cam_analyze_nbpost', request);
+  }
+
+  async camSimulate(request: CamSimulationRequestDto): Promise<CamSimulationResultDto> {
+    return this.call('engine_cam_simulate', request);
+  }
+
+  camPlaybackOpen(request: CamSimulationRequestDto, startTime: number): Promise<number> {
+    return invoke('engine_cam_playback_open', { input: { request, start_time: startTime } });
+  }
+  camPlaybackSample(sessionId: number, time: number): Promise<CamBufferedFrameDto> {
+    return invoke('engine_cam_playback_sample', { input: { session_id: sessionId, time } });
+  }
+  camPlaybackPresent(sessionId: number, frameId: number): Promise<void> {
+    return invoke('engine_cam_playback_present', { input: { session_id: sessionId, frame_id: frameId } });
+  }
+  camPlaybackClose(sessionId: number): Promise<void> {
+    return invoke('engine_cam_playback_close', { sessionId });
+  }
+
+  async camSimulateGcode(
+    request: CamGcodeSimulationRequestDto,
+  ): Promise<CamSimulationResultDto> {
+    return this.call('engine_cam_simulate_gcode', request);
+  }
+
+  async camPostEvents(setupId: number): Promise<PostEventStreamDto> {
+    return this.call('engine_cam_post_events', setupId);
   }
 
   async setBodyAppearance(appearance: BodyAppearance): Promise<BodyAppearance[]> {

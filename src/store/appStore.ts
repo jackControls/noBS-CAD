@@ -12,12 +12,20 @@ import { create } from 'zustand';
 import { presentation } from '../operationPlayback';
 import { projectTransitions } from '../files/projectTransitions';
 import { synchronizeSnapshotVisibility } from '../sessionSnapshot';
+import { camOperationPlacement, type CamOperationPlacement } from '../cam/editing';
+import { writeCamDocument } from '../cam/documentMutation';
 import type {
   AssemblyDocumentDto,
   AssemblySolutionDto,
   AssemblyTransformDto,
   BodyPoseDto,
   BodyAppearance,
+  CamContourCompensation,
+  CamDocumentDto,
+  CamDrillCycle,
+  CamOperationDto,
+  CamProgramDto,
+  CamSimulationResultDto,
   ComponentDefinitionDto,
   ComponentOccurrenceDto,
   CreateJointRequestDto,
@@ -53,6 +61,7 @@ import type {
 import { getEngine, type Engine } from '../engine';
 import {
   DEFAULT_BODY_COLOR,
+  DEFAULT_CAM_POST_CONFIG,
   DEFAULT_MATERIAL_NAME,
 } from '../engine/types';
 import {
@@ -235,6 +244,153 @@ function jointConnectorIsLive(
   }
   const face = body.faces.find((candidate) => candidate.id === connector.face_id);
   return Boolean((face?.plane || face?.cylinder) && face.key === connector.face_key);
+}
+
+/** Manufacturing editor dialogs: manual setup creation, per-operation
+ *  programming, tool-library editing, and post-at-export. The `*Edit`
+ *  variants float the configuration of an existing setup/operation in a
+ *  dialog (opened by double-clicking browser rows); there is no sidebar. */
+export type CamDialogState =
+  | { type: 'setup'; editId?: number }
+  | { type: 'operation'; kind: CamOperationDto['kind']; editId?: number; insertion?: CamOperationPlacement }
+  | {
+      type: 'tool';
+      toolId: number | null;
+      /** When set, the library runs as a picker for the operation dialog
+       *  underneath: compatible tools highlight, and confirming one hands
+       *  it back instead of opening the editor. */
+      pickFor?: { kind: CamOperationDto['kind']; cycle?: CamDrillCycle };
+    }
+  | { type: 'post' };
+
+/** One point offered for picking in the CAM viewport: a point the operator
+ *  already drew (sketch point) or a derived geometry handle (box lattice
+ *  point). `payload` is an opaque token handed back to the requester. */
+export interface CamPointPickCandidate {
+  /** Model coordinates, mm. */
+  point: Point3Dto;
+  label: string;
+  payload?: unknown;
+}
+
+/** Active viewport point-picking session; null when none is running. */
+export interface CamPointPickSession {
+  prompt: string;
+  candidates: CamPointPickCandidate[];
+  /** Key (see `camPickCandidateKey`) of the candidate under the pointer;
+   *  the overlay renders it emphasized. */
+  hoverKey: string | null;
+}
+
+/** One hole chosen for drilling/thread milling: a cylindrical solid face
+ *  whose axis is parallel to setup Z (fixed-axis constraint enforced at
+ *  pick time). The axis is still recorded in setup coordinates so a future
+ *  indexed/5-axis tool orientation can consume it without changing the
+ *  picking pipeline. */
+export interface CamHolePickHole {
+  /** Stable identity: `${bodyId}:${faceId}`. */
+  key: string;
+  bodyId: number;
+  faceId: number;
+  /** Cylinder radius, mm — the label reads the drilled diameter from it. */
+  radius: number;
+  /** Marker anchor, model coordinates: on the axis at the stock top plane. */
+  modelPoint: Point3Dto;
+  /** Hole center in setup coordinates (operation input). */
+  point: { x: number; y: number };
+  /** Hole axis direction in setup coordinates (unit length); reserved for
+   *  future multi-axis orientation, ±setup Z today. */
+  axis: [number, number, number];
+  /** Cylindrical face's own top/bottom in setup Z: the hole machines across
+   *  exactly this span, so stepped bosses and deep faces need no manual
+   *  top/bottom entry. */
+  topZ: number;
+  bottomZ: number;
+}
+
+/** Active viewport hole-picking session owned by a drill/thread operation
+ *  dialog; null when none is running. */
+export interface CamHolePickSession {
+  holes: CamHolePickHole[];
+  hoverKey: string | null;
+}
+
+/** One closed sketch loop offered for picking in the CAM viewport (2D
+ *  contour/pocket/chamfer geometry). Points are model coordinates (mm). */
+export interface CamLoopPickLoop {
+  /** Stable identity: `${sketch}:${entityIds.join(',')}` — matches the key
+   *  the operation dialog derives from its chained loop list. */
+  key: string;
+  label: string;
+  /** Closed outline in model coordinates, no duplicated closing point. */
+  modelPoints: Point3Dto[];
+}
+
+/** Active viewport loop-picking session owned by a path-geometry operation
+ *  dialog; null when none is running. Single-select: clicking a loop makes
+ *  it the operation's path. */
+export interface CamLoopPickSession {
+  loops: CamLoopPickLoop[];
+  selectedKey: string | null;
+  hoverKey: string | null;
+}
+
+/** One sketch curve entity offered for chain picking (2D contour): a line,
+ *  arc, circle, or spline tessellated in model coordinates. */
+export interface CamChainPickEntity {
+  /** Stable identity: `sketch:${sketch}:${entityId}` or `edge:${bodyId}:${edgeKey}`. */
+  key: string;
+  /** What was picked: a sketch curve entity or a solid-model B-rep edge. */
+  source: 'sketch' | 'model';
+  kind: 'line' | 'arc' | 'circle' | 'spline';
+  closed?: boolean;
+  /** Prefer a usable horizontal rim over a coincident bevel seam when
+   * automatic CAM loop picking hits their shared vertex. */
+  planarInSetup?: boolean;
+  /** Tessellated outline in model coordinates (mm); circles are closed rings
+   *  without a duplicated closing point. */
+  modelPoints: Point3Dto[];
+}
+
+/** Active viewport chain picking for contour/chamfer. Automatic face loops
+ *  and manual edges share the Rust connectivity resolver; null when inactive. */
+export interface CamChainPickSession {
+  entities: CamChainPickEntity[];
+  /** Identity/context persists through hover updates, changes on model/source rebuild. */
+  context?: { source: 'model' | 'sketch'; bodyIds: number[]; normal: [number, number, number] };
+  mode?: 'closed' | 'manual';
+  /** Present for multi-boundary operations. selectedKeys is the active
+   * chain's key array; all other chains stay selected in the viewport. */
+  chains?: CamChainSelection[];
+  activeChainIndex?: number;
+  hoverKeys?: string[];
+  pickError?: string | null;
+  busy?: boolean;
+  direction?: { start: [number, number, number]; end: [number, number, number] } | null;
+  /** Click order — the first pick anchors the chain's travel direction. */
+  selectedKeys: string[];
+  hoverKey: string | null;
+}
+
+export interface CamChainSelection {
+  keys: string[];
+  reversed: boolean;
+  mode: 'closed' | 'manual';
+  wallSide?: CamContourCompensation;
+}
+
+function emptyCamDocument(): CamDocumentDto {
+  return {
+    setups: [],
+    active_setup_id: null,
+    tools: [],
+    toolpath_generations: [],
+    units: 'millimeters',
+    post_defaults: { ...DEFAULT_CAM_POST_CONFIG },
+    next_setup_id: 1,
+    next_operation_id: 1,
+    next_tool_id: 1,
+  };
 }
 
 function appearanceFor(
@@ -612,6 +768,15 @@ const INITIAL_THEME_PREFERENCE = readThemePreference();
 const INITIAL_RESOLVED_THEME = resolveTheme(INITIAL_THEME_PREFERENCE);
 const INITIAL_SIX_DOF_SPEED = readSixDofSpeed();
 
+/** Presentation state for either CAM-predicted or G-code-honest playback.
+ *  The authoritative timeline and stock remain Rust simulator results; this
+ *  only carries the user's clock controls. */
+export interface CamSimulationPlaybackState {
+  playing: boolean;
+  time_seconds: number;
+  speed: number;
+}
+
 export interface AppState {
   mode: AppMode;
   /** Active ribbon tab id ('solid', 'sketch', ...). */
@@ -728,6 +893,39 @@ export interface AppState {
   drawingPendingViewKind: DrawingViewKind | null;
   drawingSheetSetupOpen: boolean;
   drawingProfileExportOpen: boolean;
+  /** Persistent 3-axis setups, tools, and operation intent. */
+  camDocument: CamDocumentDto;
+  selectedCamSetupId: number | null;
+  selectedCamOperationId: number | null;
+  /** Open manufacturing editor dialog; null when none is open. */
+  camDialog: CamDialogState | null;
+  /** Dialog suspended underneath `camDialog` while the tool library is
+   *  stacked on top as a tool picker; restored when the picker closes. */
+  camDialogBelow: CamDialogState | null;
+  /** Tool id the picker dialog confirmed; the operation dialog underneath
+   *  consumes it and clears it back to null. */
+  camToolPick: number | null;
+  /** Active viewport point-picking session for CAM inputs; null when idle. */
+  camPointPick: CamPointPickSession | null;
+  /** Active viewport hole-face picking session (drill/thread dialogs). */
+  camHolePick: CamHolePickSession | null;
+  /** Active viewport sketch-loop picking session (contour/pocket/chamfer
+   *  dialogs with sketch geometry source). */
+  camLoopPick: CamLoopPickSession | null;
+  /** Active viewport edge-chain picking session (contour dialogs with sketch
+   *  geometry source: edges are toggled one by one, open chains allowed). */
+  camChainPick: CamChainPickSession | null;
+  /** Latest planned toolpath for the active setup; shared-viewport overlay input. */
+  camProgram: CamProgramDto | null;
+  /** Latest volumetric stock simulation; shared-viewport overlay input. */
+  camSimulation: CamSimulationResultDto | null;
+  /** Complete physical timeline retained while `camSimulation` may hold a
+   *  stock frame truncated to the playback clock. */
+  camSimulationTimeline: CamSimulationResultDto | null;
+  camSimulationPlayback: CamSimulationPlaybackState | null;
+  /** Display preferences only; changing these must not invalidate CAM caches. */
+  camWorkpieceView: 'model' | 'stock' | 'compare';
+  camToolpathsVisible: boolean;
   selectedFace: number | null;
   /** Stable Face IDs selected with Shift/Ctrl/Cmd. */
   selectedFaces: number[];
@@ -859,6 +1057,36 @@ export interface AppState {
   setDrawingPendingViewKind: (kind: DrawingViewKind | null) => void;
   setDrawingSheetSetupOpen: (open: boolean) => void;
   setDrawingProfileExportOpen: (open: boolean) => void;
+  setCamDocument: (cam: CamDocumentDto) => Promise<void>;
+  setSelectedCamSetupId: (setupId: number | null) => void;
+  setSelectedCamOperationId: (operationId: number | null) => void;
+  setCamDialog: (dialog: CamDialogState | null) => void;
+  /** Stack a dialog on top of the current one (tool library opened as a
+   *  picker from inside an operation dialog). */
+  pushCamDialog: (dialog: CamDialogState) => void;
+  /** Close the top dialog and restore the one suspended underneath. */
+  popCamDialog: () => void;
+  setCamToolPick: (toolId: number | null) => void;
+  setCamPointPick: (session: CamPointPickSession | null) => void;
+  setCamPointPickHover: (hoverKey: string | null) => void;
+  setCamHolePick: (session: CamHolePickSession | null) => void;
+  /** Toggle one hole in the active session (click behavior). */
+  toggleCamHolePickHole: (hole: CamHolePickHole) => void;
+  setCamHolePickHover: (hoverKey: string | null) => void;
+  setCamLoopPick: (session: CamLoopPickSession | null) => void;
+  /** Make one loop the session's selection (click behavior). */
+  selectCamLoopPickLoop: (key: string) => void;
+  setCamLoopPickHover: (hoverKey: string | null) => void;
+  setCamChainPick: (session: CamChainPickSession | null) => void;
+  /** Toggle one entity in the chain (click behavior). */
+  toggleCamChainPickEntity: (key: string) => void;
+  setCamChainPickHover: (hoverKey: string | null) => void;
+  setCamProgram: (program: CamProgramDto | null) => void;
+  setCamSimulation: (simulation: CamSimulationResultDto | null) => void;
+  setCamSimulationTimeline: (simulation: CamSimulationResultDto | null) => void;
+  setCamSimulationPlayback: (playback: CamSimulationPlaybackState | null) => void;
+  setCamWorkpieceView: (view: 'model' | 'stock' | 'compare') => void;
+  setCamToolpathsVisible: (visible: boolean) => void;
   loadProjectState: (
     update: SolidUpdateDto,
     finishedSketches: SketchDto[],
@@ -869,6 +1097,7 @@ export interface AppState {
     assemblyDocument?: AssemblyDocumentDto,
     projectVisibility?: ProjectVisibilityDto,
     assemblySolution?: AssemblySolutionDto,
+    camDocument?: CamDocumentDto,
   ) => void;
   markClean: (fileName?: string | null) => void;
   markDirty: () => void;
@@ -1053,6 +1282,22 @@ function resetDocumentUiState(): Partial<AppState> {
     drawingPendingViewKind: null,
     drawingSheetSetupOpen: false,
     drawingProfileExportOpen: false,
+    camDocument: emptyCamDocument(),
+    selectedCamSetupId: null,
+    selectedCamOperationId: null,
+    camDialog: null,
+    camDialogBelow: null,
+    camToolPick: null,
+    camPointPick: null,
+    camHolePick: null,
+    camLoopPick: null,
+    camChainPick: null,
+    camProgram: null,
+    camSimulation: null,
+    camSimulationTimeline: null,
+    camSimulationPlayback: null,
+    camWorkpieceView: 'stock',
+    camToolpathsVisible: true,
     selectedFace: null,
     selectedFaces: [],
     hoveredFace: null,
@@ -1171,6 +1416,22 @@ export const useAppStore = create<AppState>()((set) => ({
   drawingPendingViewKind: null,
   drawingSheetSetupOpen: false,
   drawingProfileExportOpen: false,
+  camDocument: emptyCamDocument(),
+  selectedCamSetupId: null,
+  selectedCamOperationId: null,
+  camDialog: null,
+  camDialogBelow: null,
+  camToolPick: null,
+  camPointPick: null,
+  camHolePick: null,
+  camLoopPick: null,
+  camChainPick: null,
+  camProgram: null,
+  camSimulation: null,
+  camSimulationTimeline: null,
+  camSimulationPlayback: null,
+  camWorkpieceView: 'stock',
+  camToolpathsVisible: true,
   selectedFace: null,
   selectedFaces: [],
   hoveredFace: null,
@@ -1232,7 +1493,17 @@ export const useAppStore = create<AppState>()((set) => ({
   loadDocument: async () => {
     const engine = await getEngine();
     const doc = await engine.getDocument();
-    const [finishedSketches, solidScene, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility] = await Promise.all([
+    const [
+      finishedSketches,
+      solidScene,
+      datumPlanes,
+      bodyAppearances,
+      drawingDocument,
+      assemblyDocument,
+      assemblySolution,
+      projectVisibility,
+      camDocument,
+    ] = await Promise.all([
       engine.finishedSketches(),
       engine.solidScene(),
       engine.datumPlaneDefinitions(),
@@ -1241,6 +1512,7 @@ export const useAppStore = create<AppState>()((set) => ({
       engine.assemblyDocument(),
       engine.assemblySolution(),
       engine.projectVisibility(),
+      engine.camDocument(),
     ]);
     set({
       document: doc,
@@ -1249,11 +1521,12 @@ export const useAppStore = create<AppState>()((set) => ({
       solidScene,
       datumPlanes: stageDatumPlanes(doc, datumPlanes),
       bodyAppearances: scrubAppearances(bodyAppearances, solidScene.bodies),
-      drawingDocument,
+      drawingDocument: normalizeDrawingDocument(drawingDocument),
       assemblyDocument,
       assemblySolution,
       hidden: hiddenFromPersistedVisibility(doc, projectVisibility),
       projectVisibility,
+      camDocument,
       dirty: false,
     });
     presentation.documentChanged();
@@ -1269,6 +1542,12 @@ export const useAppStore = create<AppState>()((set) => ({
       if (!ownsDocument()) return;
       set({drawingDocument,dirty:true,activeTab:'drawing',drawingTool:null,drawingPendingViewKind:null,
         selectedDrawingViewId:null,selectedDrawingAnnotationId:null,drawingSheetSetupOpen:drawingDocument.sheets.length===0});
+      return;
+    }
+    if (opName?.startsWith('cam_') && !replacingDocument) {
+      const camDocument = await engine.camDocument();
+      if (!ownsDocument()) return;
+      set({camDocument, dirty: true});
       return;
     }
     // Assembly-only inbox ops: targeted refresh — keep dirty:true so MCP live
@@ -1301,7 +1580,7 @@ export const useAppStore = create<AppState>()((set) => ({
       return;
     }
     const doc = await engine.getDocument();
-    const [finishedSketches, solidScene, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility, activeSketch] = await Promise.all([
+    const [finishedSketches, solidScene, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility, activeSketch, camDocument] = await Promise.all([
       engine.finishedSketches(),
       engine.solidScene(),
       engine.datumPlaneDefinitions(),
@@ -1311,12 +1590,13 @@ export const useAppStore = create<AppState>()((set) => ({
       engine.assemblySolution(),
       engine.projectVisibility(),
       engine.activeSketch(),
+      engine.camDocument(),
     ]);
     if (!ownsDocument()) return;
     if (replacingDocument) {
       useAppStore.getState().loadProjectState({document: doc, scene: solidScene}, finishedSketches, datumPlanes,
         useAppStore.getState().projectFileName, bodyAppearances, drawingDocument, assemblyDocument,
-        projectVisibility, assemblySolution);
+        projectVisibility, assemblySolution, camDocument);
       set({engineKind: engine.kind, dirty: true});
       return;
     }
@@ -1339,6 +1619,7 @@ export const useAppStore = create<AppState>()((set) => ({
       activeSketch,
       hidden: hiddenFromPersistedVisibility(doc, refreshedVisibility),
       projectVisibility: refreshedVisibility,
+      camDocument,
       dirty: true,
     });
     if (opName?.startsWith('sketch_')) {
@@ -2139,6 +2420,114 @@ export const useAppStore = create<AppState>()((set) => ({
 
   setDrawingProfileExportOpen: (drawingProfileExportOpen) => set({ drawingProfileExportOpen }),
 
+  setCamDocument: writeCamDocument,
+
+  setSelectedCamSetupId: (selectedCamSetupId) => set({ selectedCamSetupId }),
+
+  setSelectedCamOperationId: (selectedCamOperationId) => set({ selectedCamOperationId }),
+
+  setCamDialog: (camDialog) => set((state) => ({
+    camDialog: camDialog?.type === 'operation' && camDialog.editId == null
+      ? { ...camDialog, insertion: camDialog.insertion ?? camOperationPlacement(state.camDocument, state.selectedCamOperationId) }
+      : camDialog,
+    camDialogBelow: null,
+    camToolPick: null,
+  })),
+
+  pushCamDialog: (dialog) =>
+    set((state) => ({ camDialogBelow: state.camDialog, camDialog: dialog })),
+
+  popCamDialog: () =>
+    set((state) => ({ camDialog: state.camDialogBelow, camDialogBelow: null })),
+
+  setCamToolPick: (camToolPick) => set({ camToolPick }),
+
+  setCamPointPick: (camPointPick) => set({ camPointPick }),
+
+  setCamPointPickHover: (hoverKey) =>
+    set((state) =>
+      state.camPointPick && state.camPointPick.hoverKey !== hoverKey
+        ? { camPointPick: { ...state.camPointPick, hoverKey } }
+        : {},
+    ),
+
+  setCamHolePick: (camHolePick) => set({ camHolePick }),
+
+  toggleCamHolePickHole: (hole) =>
+    set((state) => {
+      if (!state.camHolePick) return {};
+      const exists = state.camHolePick.holes.some((entry) => entry.key === hole.key);
+      return {
+        camHolePick: {
+          ...state.camHolePick,
+          holes: exists
+            ? state.camHolePick.holes.filter((entry) => entry.key !== hole.key)
+            : [...state.camHolePick.holes, hole],
+        },
+      };
+    }),
+
+  setCamHolePickHover: (hoverKey) =>
+    set((state) =>
+      state.camHolePick && state.camHolePick.hoverKey !== hoverKey
+        ? { camHolePick: { ...state.camHolePick, hoverKey } }
+        : {},
+    ),
+
+  setCamLoopPick: (camLoopPick) => set({ camLoopPick }),
+
+  selectCamLoopPickLoop: (key) =>
+    set((state) =>
+      state.camLoopPick && state.camLoopPick.loops.some((loop) => loop.key === key)
+        ? { camLoopPick: { ...state.camLoopPick, selectedKey: key } }
+        : {},
+    ),
+
+  setCamLoopPickHover: (hoverKey) =>
+    set((state) =>
+      state.camLoopPick && state.camLoopPick.hoverKey !== hoverKey
+        ? { camLoopPick: { ...state.camLoopPick, hoverKey } }
+        : {},
+    ),
+
+  setCamChainPick: (camChainPick) => set({ camChainPick }),
+
+  toggleCamChainPickEntity: (key) =>
+    set((state) => {
+      const session = state.camChainPick;
+      if (!session || !session.entities.some((entity) => entity.key === key)) return {};
+      const selected = session.selectedKeys.includes(key);
+      if (session.chains?.some((chain, i) => i !== (session.activeChainIndex ?? 0) && chain.keys.includes(key))) return {};
+      const keys = selected ? session.selectedKeys.filter((entry) => entry !== key) : [...session.selectedKeys, key];
+      return {
+        camChainPick: {
+          ...session,
+          pickError: null,
+          busy: false,
+          selectedKeys: keys,
+          chains: session.chains?.map((chain, i) => i === (session.activeChainIndex ?? 0) ? { ...chain, keys } : chain),
+        },
+      };
+    }),
+
+  setCamChainPickHover: (hoverKey) =>
+    set((state) =>
+      state.camChainPick && state.camChainPick.hoverKey !== hoverKey
+        ? { camChainPick: { ...state.camChainPick, hoverKey } }
+        : {},
+    ),
+
+  setCamProgram: (camProgram) => set({ camProgram }),
+
+  setCamSimulation: (camSimulation) => set({ camSimulation }),
+
+  setCamSimulationTimeline: (camSimulationTimeline) => set({ camSimulationTimeline }),
+
+  setCamSimulationPlayback: (camSimulationPlayback) => set({ camSimulationPlayback }),
+
+  setCamWorkpieceView: (camWorkpieceView) => set({ camWorkpieceView }),
+  setCamToolpathsVisible: (camToolpathsVisible) => set({ camToolpathsVisible }),
+
   loadProjectState: (
     update,
     finishedSketches,
@@ -2149,6 +2538,7 @@ export const useAppStore = create<AppState>()((set) => ({
     assemblyDocument = emptyAssemblyDocument(),
     projectVisibility = emptyProjectVisibility(),
     assemblySolution = emptyAssemblySolution(),
+    camDocument = emptyCamDocument(),
   ) => {
     set({
       ...resetDocumentUiState(),
@@ -2162,6 +2552,7 @@ export const useAppStore = create<AppState>()((set) => ({
       assemblySolution,
       hidden: hiddenFromPersistedVisibility(update.document, projectVisibility),
       projectVisibility,
+      camDocument,
       dirty: false,
       projectFileName: fileName,
     });

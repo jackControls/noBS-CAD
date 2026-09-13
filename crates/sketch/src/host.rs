@@ -74,6 +74,17 @@ fn require_project_snapshot(
     Ok(current)
 }
 
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum CamPlanPayload {
+    Setup(u64),
+    Through {
+        setup_id: u64,
+        #[serde(default)]
+        through_operation_id: Option<u64>,
+    },
+}
+
 /// Dispatch one engine call. Unknown methods and malformed payloads yield
 /// an error envelope, never a panic.
 pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> String {
@@ -282,6 +293,45 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         }),
         "assembly_set_grounded_body" => {
             with_payload(payload, |body_id| manager.set_grounded_body(body_id))
+        }
+        "geometry_edge_chain" => {
+            with_payload(payload, |request| manager.geometry_edge_chain(request))
+        }
+        "cam_chamfer_geometry" => {
+            with_payload(payload, |request| manager.cam_chamfer_geometry(request))
+        }
+        "cam_document" => ok_json(manager.cam_document()),
+        "cam_cutter_mesh" => with_payload(payload, |geometry: nbcad_cam::CamCutterGeometryDto| {
+            nbcad_cam::cutter_mesh(geometry).map_err(crate::SessionError::Solid)
+        }),
+        "cam_set_document" => with_payload(payload, |cam| manager.set_cam_document(cam)),
+        "cam_toolpath_statuses" => to_json(manager.cam_toolpath_statuses()),
+        "cam_regenerate_operation" => with_payload(payload, |operation_id: u64| {
+            manager.cam_regenerate_operation(operation_id)
+        }),
+        "cam_regenerate_setup" => with_payload(payload, |setup_id: u64| {
+            manager.cam_regenerate_setup(setup_id)
+        }),
+        "cam_plan" => with_payload(payload, |request: CamPlanPayload| match request {
+            CamPlanPayload::Setup(setup_id) => manager.cam_plan(setup_id),
+            CamPlanPayload::Through {
+                setup_id,
+                through_operation_id,
+            } => match through_operation_id {
+                Some(operation_id) => manager.cam_plan_through(setup_id, operation_id),
+                None => manager.cam_plan(setup_id),
+            },
+        }),
+        "cam_post" => with_payload(payload, |request| manager.cam_post(request)),
+        "cam_analyze_nbpost" => {
+            with_payload(payload, |request| manager.cam_analyze_nbpost(request))
+        }
+        "cam_simulate" => with_payload(payload, |request| manager.cam_simulate(request)),
+        "cam_simulate_gcode" => {
+            with_payload(payload, |request| manager.cam_simulate_gcode(request))
+        }
+        "cam_post_events" => {
+            with_payload(payload, |setup_id: u64| manager.cam_post_events(setup_id))
         }
         "set_body_appearance" => with_payload(payload, |appearance: nbcad_core::BodyAppearance| {
             manager.set_body_appearance(appearance)

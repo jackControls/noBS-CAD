@@ -1039,6 +1039,9 @@ export interface KernelFaceDto {
   signature?: PlanarFaceSignatureDto | null;
   /** Exact OCCT cylinder metadata when this is an analytic cylindrical face. */
   cylinder?: CylindricalSurfaceDto | null;
+  /** Exact B-rep edge membership, including inner wires. */
+  edge_keys?: string[];
+  cone?: { axis: Point3Dto; semi_angle: number } | null;
 }
 
 export interface PlanarFaceSignatureDto {
@@ -2248,6 +2251,916 @@ export interface DrawingProjectionDto {
   section: DrawingPolylineDto[];
   /** min x, min y, max x, max y in model millimetres. */
   bounds: [number, number, number, number];
+}
+
+// --- 3-axis CAM contract -------------------------------------------------
+
+export interface CamPoint2Dto {
+  x: number;
+  y: number;
+}
+
+export interface CamRect2Dto {
+  min: CamPoint2Dto;
+  max: CamPoint2Dto;
+}
+
+export interface CamStockBoxDto {
+  min: Point3Dto;
+  max: Point3Dto;
+}
+
+export interface CamWorkCoordinateSystemDto {
+  /** WCS origin in model coordinates, in model millimetres. */
+  origin: Point3Dto;
+  x_axis: [number, number, number];
+  y_axis: [number, number, number];
+  z_axis: [number, number, number];
+}
+
+export type CamWorkOffset = 'g54' | 'g55' | 'g56' | 'g57' | 'g58' | 'g59';
+export type CamPostDialect = 'grbl' | 'linux_cnc' | 'fanuc' | 'siemens828d' | 'haas' | 'mitsubishi' | 'mazak' | 'syntec' | 'okuma' | 'heidenhain' | 'hermle_heidenhain';
+export type CamToolKind =
+  | 'flat_end_mill'
+  | 'ball_end_mill'
+  | 'bull_nose_end_mill'
+  | 'face_mill'
+  | 'drill'
+  | 'chamfer_mill'
+  | 'tap'
+  | 'reamer'
+  | 'boring_bar'
+  | 'thread_mill'
+  /** Lathe tooling, reserved for the turning workspace; no milling
+   *  operation accepts it. */
+  | 'turning_general';
+/** Hole-machining cycle family of a drill operation. Tapping longhand is
+ *  allowed only under an explicit floating-holder contract. */
+export type CamDrillCycle =
+  | 'drill'
+  | 'chip_breaking'
+  | 'deep_hole'
+  | 'tapping_right'
+  | 'tapping_left'
+  | 'reaming'
+  | 'boring';
+export type CamCoolantMode = 'off' | 'mist' | 'flood';
+export type CamSpindleDirection = 'off' | 'clockwise' | 'counterclockwise';
+export type CamContourCompensation = 'on' | 'inside' | 'outside' | 'left' | 'right';
+/** Who turns the contour into the tool-center path. In control is the
+ *  default: the program carries the part contour and the CNC offsets the
+ *  tool by its own diameter register (G41/G42). In software offsets the
+ *  path here and posts plain tool-center coordinates. */
+export type CamCompensationMode = 'in_control' | 'in_software';
+/** Thread groove hand: a right-hand groove descends in the clockwise
+ *  direction viewed along Z- (a nut turned clockwise advances away). */
+export type CamThreadHand = 'right' | 'left';
+/** Orbital direction of a thread mill pass. Climb orbits clockwise with a
+ *  clockwise spindle; conventional reverses the orbit. */
+export type CamMillingDirection = 'climb' | 'conventional';
+/** Row-to-row cutting direction of a facing operation. */
+export type CamFaceDirection = 'both_ways' | 'climb' | 'conventional';
+/** Shared geometry query; usable without a CAM document. */
+export interface GeometryEdgeChainRequest {
+  source: 'model' | 'sketch';
+  body_ids: number[];
+  normal: [number, number, number] | null;
+  keys: string[];
+  mode: 'manual' | 'closed';
+  reversed?: boolean;
+}
+export interface GeometryEdgeChain {
+  keys: string[];
+  points: [number, number, number][];
+  closed: boolean;
+}
+
+export interface CamChamferGeometryRequest {
+  setup_id: number;
+  chain_ref: CamChainRefDto;
+}
+export interface CamChamferGeometry {
+  path: CamPoint2Dto[];
+  closed: boolean;
+  top_z: number;
+  width: number;
+  wall_side: CamContourCompensation;
+  selected_z: number;
+  corner_transitions: boolean;
+}
+
+/** Where a viewport-picked edge/curve chain lives. */
+export type CamChainSource = 'model' | 'sketch';
+/** Provenance of a picked profile chain: lets an edit session re-select the
+ *  same geometry instead of dropping to raw coordinates. The planner only
+ *  ever reads the baked point list. */
+export interface CamChainRefDto {
+  source: CamChainSource;
+  /** Stable selected entity keys; the first anchors orientation. Rust resolves connectivity. */
+  keys: string[];
+  /** True when the stored path walks the chain opposite to entity order. */
+  reversed: boolean;
+}
+
+/** A viewport-picked cylindrical hole: center in setup XY plus the face's
+ *  own top/bottom in setup Z, so every hole machines across its real span.
+ *  `axis` must be unit and parallel to setup Z (fixed-axis planning);
+ *  `face_key` re-seeds the pick session when the operation is re-edited. */
+export interface CamHoleDto {
+  point: CamPoint2Dto;
+  top_z: number;
+  bottom_z: number;
+  axis: [number, number, number];
+  face_key?: string | null;
+}
+/** Operator-facing units. Persisted geometry and planned motion stay mm. */
+export type CamUnits = 'millimeters' | 'inches';
+export type CamBoxAnchor = 'min' | 'center' | 'max';
+
+/** How the operator picked the WCS origin; the resolved frame is in `wcs`. */
+export type CamWcsOriginSpec =
+  | { mode: 'explicit' }
+  | { mode: 'stock_box_point'; x: CamBoxAnchor; y: CamBoxAnchor; z: CamBoxAnchor }
+  | { mode: 'model_box_point'; x: CamBoxAnchor; y: CamBoxAnchor; z: CamBoxAnchor }
+  | { mode: 'sketch_point'; sketch: string; entity_id: number };
+
+/** Stock geometry family chosen for a setup. */
+export type CamStockShape = 'box' | 'cylinder' | 'hex' | 'model_body';
+
+/** A bounding-box face of the model, used to park the model against one
+ *  stock face instead of centering it. */
+export type CamStockFace = 'x_min' | 'x_max' | 'y_min' | 'y_max' | 'z_min' | 'z_max';
+
+/** How a fixed-size stock holds the model. */
+export interface CamStockPlacementDto {
+  center: boolean;
+  face: CamStockFace | null;
+  offset: number;
+}
+
+/** Per-face allowances when stock grows out of the model bounding box.
+ *  Cylinder/hex shapes consume x_min..y_max as the radial allowance and
+ *  z_min/z_max as the axial allowances. */
+export interface CamStockOffsetsDto {
+  x_min: number;
+  x_max: number;
+  y_min: number;
+  y_max: number;
+  z_min: number;
+  z_max: number;
+}
+
+/** How the operator defines the stock. The host resolves it to concrete
+ *  geometry; the resolved envelope and shape persist on the setup. */
+export type CamStockSpecDto =
+  | {
+      mode: 'fixed';
+      shape: CamStockShape;
+      /** Box: full XYZ size. Cylinder: X = diameter, Z = height. Hex: X =
+       *  across-flats, Z = height. */
+      size: Point3Dto;
+      placement: CamStockPlacementDto;
+    }
+  | { mode: 'from_model'; shape: CamStockShape; offsets: CamStockOffsetsDto }
+  | { mode: 'rest_from_setup'; setup_id: number }
+  | { mode: 'model_body'; body_id: number }
+  /** Legacy documents predate the spec; their resolved box is authoritative. */
+  | { mode: 'legacy_box' };
+
+/** Resolved stock geometry in setup coordinates. The Z extent always comes
+ *  from the setup's `stock` envelope. */
+export type CamResolvedStockDto =
+  | { shape: 'box' }
+  | { shape: 'cylinder'; center: CamPoint2Dto; radius: number }
+  | { shape: 'hex'; center: CamPoint2Dto; across_flats: number }
+  | { shape: 'rest'; source_setup_id: number }
+  | { shape: 'model_body'; body_id: number };
+
+export type Siemens828dAtcStyle = 'double_arm' | 'umbrella' | 'carousel_chain' | 'other';
+export type Siemens828dToolChangePositioning =
+  | 'supa_z'
+  | 'controller_managed'
+  | 'supa_z_then_xy';
+
+export interface Siemens828dPostConfigDto {
+  /** Informational only; does not select machine motion. */
+  atc_style: Siemens828dAtcStyle;
+  tool_change_positioning: Siemens828dToolChangePositioning;
+  /** Machine-coordinate Z used by G0 SUPA Z... D0. */
+  supa_retract_z: number;
+  station_x: number | null;
+  station_y: number | null;
+  tool_length_offset: number;
+  optional_stop_on_tool_change: boolean;
+  /** May move the magazine; safe-off unless explicitly verified. */
+  preload_next_tool: boolean;
+  /** Private bare subprogram identifier before explicit M5; requires machine schema 2. */
+  spindle_stop_subprogram?: string | null;
+}
+
+export interface CamPostConfigDto {
+  dialect: CamPostDialect;
+  program_number: number | null;
+  sequence_numbers: boolean;
+  siemens_828d: Siemens828dPostConfigDto | null;
+  tool_call_mode?: 'automatic' | 'number' | 'name';
+  /** Machine coordinates in canonical mm; null is unknown, not zero. */
+  machine_retract_z?: number | null;
+}
+
+/** Neutral post configuration for fresh documents and export-dialog prefill. */
+export const DEFAULT_CAM_POST_CONFIG: CamPostConfigDto = {
+  dialect: 'grbl',
+  program_number: null,
+  sequence_numbers: false,
+  siemens_828d: null,
+};
+
+export interface CamToolDto {
+  /** Internal identity; operations reference tools by id, never by number/name. */
+  id: number;
+  /** Machine-facing tool number. Null is allowed: number-based posts
+   *  (Fanuc/GRBL/LinuxCNC style) fail closed without one. Siemens native
+   *  instead uses the setup's explicit controller tool-call mapping. */
+  number: number | null;
+  /** Operator-facing description, not an implicit controller identifier. */
+  name: string;
+  kind: CamToolKind;
+  diameter: number;
+  flute_length: number;
+  overall_length: number;
+  center_cutting: boolean;
+  flute_count: number;
+  /** Included drill/chamfer point angle; legacy drills fall back to 118°. */
+  point_angle_degrees: number | null;
+  /** Corner (nose) radius for flat/bull-nose/face mills; null means a sharp
+   *  corner. Drives the effective cutting diameter in the speeds & feeds
+   *  calculator (critical on high-feed tooling). */
+  corner_radius: number | null;
+  /** Explicit corner bevel on a flat end/face mill, exclusive of radius. */
+  corner_chamfer?: { width: number; angle_degrees: number } | null;
+  /** Library cutting defaults copied into new operations at creation. */
+  cutting: CamCuttingParametersDto;
+  /** Additional named cutting-data profiles (e.g. per material); `cutting`
+   *  above is the default profile. Operation creation can pick any profile
+   *  and copies its values. */
+  cutting_presets: CamCuttingPresetDto[];
+  /** Planner-step defaults copied into new operations when the operator has
+   *  not typed a step-down / step-over. Null leaves operation defaults. */
+  default_step_down?: number | null;
+  default_step_over?: number | null;
+}
+
+/** A named cutting-data profile on a library tool. */
+export interface CamCuttingPresetDto {
+  name: string;
+  cutting: CamCuttingParametersDto;
+}
+
+export type CamCutterGeometryDto = Pick<CamToolDto,
+  'kind' | 'diameter' | 'flute_length' | 'overall_length' | 'point_angle_degrees' | 'corner_radius' | 'corner_chamfer'>;
+export interface CamCutterMeshDto {
+  cutter: { positions: number[]; normals: number[] };
+  shank: { positions: number[]; normals: number[] };
+}
+
+export interface CamCuttingParametersDto {
+  spindle_rpm: number;
+  feed_xy: number;
+  feed_z: number;
+  coolant: CamCoolantMode;
+}
+
+interface CamOperationBase {
+  id: number;
+  name: string;
+  enabled: boolean;
+  tool_id: number;
+  /** Safe travel plane above the stock (setup Z, mm). */
+  clearance_z: number;
+  /** Approach / peck-return plane, between the cut top and clearance. */
+  retract_z: number;
+  /** Feed-engagement plane between the cut top and retract: rapids stop
+   *  here, everything below runs at feed rate. Omitted = cut top level. */
+  feed_height_z?: number;
+  cutting: CamCuttingParametersDto;
+}
+
+export interface CamAdaptiveParametersDto {
+  optimal_load: number;
+  maximum_stepdown: number;
+  minimum_cutting_radius: number;
+  radial_stock_to_leave: number;
+  axial_stock_to_leave: number;
+  /** Conservative target-envelope XY cell width, not a finishing tolerance. */
+  tolerance: number;
+  ramp_angle_degrees: number;
+  maximum_ramp_stepdown: number;
+  ramp_feed: number;
+  linking_feed: number;
+  stay_down_distance: number;
+  machine_cavities: boolean;
+}
+
+export interface CamAdaptiveGeometryDto {
+  /** Rust host captures current model-space meshes on regeneration. */
+  targets: CamStockMeshDto[];
+  stock: CamStockMeshDto | null;
+}
+
+export interface CamChamferChainDto {
+  path: CamPoint2Dto[];
+  closed: boolean;
+  chain_ref?: CamChainRefDto | null;
+  modeled_chamfer?: { additional_width: number } | null;
+  top_z: number;
+  chamfer_width: number;
+  wall_side: CamContourCompensation;
+}
+
+export type CamOperationDto =
+  | (CamOperationBase & {
+      kind: 'adaptive3d';
+      top_z: number;
+      bottom_z: number;
+      feed_height_z: number;
+      parameters: CamAdaptiveParametersDto;
+      geometry?: CamAdaptiveGeometryDto | null;
+    })
+  | (CamOperationBase & {
+      kind: 'face';
+      bounds: CamRect2Dto;
+      top_z: number;
+      target_z: number;
+      step_over: number;
+      step_down: number;
+      /** Horizontal clearance the facing plunge keeps from the stock
+       *  boundary (model mm), so entry never becomes plunge-milling. */
+      safe_distance: number;
+      /** Row direction; omitted = zigzag both ways. */
+      direction?: CamFaceDirection;
+    })
+  | (CamOperationBase & {
+      kind: 'contour2d';
+      path: CamPoint2Dto[];
+      /** False for an open edge chain: the planner never closes it, and
+       *  compensation reads left/right of travel. Omitted = closed (the
+       *  pre-open-chain document behavior). */
+      closed?: boolean;
+      top_z: number;
+      bottom_z: number;
+      step_down: number;
+      compensation: CamContourCompensation;
+      /** Who applies the radius offset; omitted = in control. */
+      compensation_mode?: CamCompensationMode;
+      /** Straight tangent lead-in/out lengths (mm). Kept short of the tool
+       *  radius is legal; with machine-side compensation the control owns
+       *  its activation travel. Omitted = planner default. */
+      lead_in?: number;
+      lead_out?: number;
+      /** Optional horizontal arc radius (mm) rounding each straight lead
+       *  into a tangential meet with the profile; null = straight leads. */
+      lead_arc_radius?: number | null;
+      /** Climb/conventional travel; the planner re-winds the stored path
+       *  around its start when the winding does not match. Omitted = climb. */
+      direction?: CamMillingDirection;
+      /** Radial roughing passes stepping toward the wall; omitted = 1
+       *  (straight to the finish offset). */
+      roughing_passes?: number;
+      /** Radial step between roughing passes; required with > 1 passes. */
+      roughing_step_over?: number | null;
+      /** Separate finishing pass at the final offset. */
+      finishing_pass?: boolean;
+      /** Radial stock (mm) roughing leaves for the finishing pass. */
+      finish_allowance?: number;
+      /** Finish pass feed (mm/min); null = the XY feed. */
+      finish_feed?: number | null;
+      /** Repeat the final profile lap once (closed loops only). */
+      spring_pass?: boolean;
+      /** Viewport-picked chain provenance for edit re-selection. */
+      chain_ref?: CamChainRefDto | null;
+    })
+  | (CamOperationBase & {
+      kind: 'drill';
+      points: CamPoint2Dto[];
+      /** Viewport-picked holes carrying their own top/bottom (setup Z).
+       *  Both lists may mix; each entry machines across its own span. */
+      holes?: CamHoleDto[];
+      top_z: number;
+      bottom_z: number;
+      /** Hole-machining cycle family; defaults to plain 'drill'. */
+      cycle: CamDrillCycle;
+      peck_depth: number | null;
+      /** Chip-breaking partial retract (mm); < peck_depth. */
+      peck_retract: number | null;
+      /** Tapping pitch (mm/rev); tap feed = pitch x rpm. */
+      thread_pitch: number | null;
+      /** Explicitly confirms a suitable floating holder for longhand
+       *  feed/reverse tapping. False is fail-closed, not rigid tapping. */
+      floating_tap_holder?: boolean;
+      /** Reaming/boring feed-out (mm/min); defaults to the plunge feed. */
+      feed_out: number | null;
+      dwell_seconds: number;
+      /** Drill/chip-breaking/deep-hole only: drive the tip past the bottom
+       *  plane by the point length plus `breakthrough_depth` so the full
+       *  diameter clears the hole bottom. */
+      drill_tip_through?: boolean;
+      /** Extra travel (mm) past the bottom plane when tip-through is on. */
+      breakthrough_depth?: number;
+    })
+  | (CamOperationBase & {
+      kind: 'pocket2d';
+      outline: CamPoint2Dto[];
+      /** Viewport-picked boundary provenance for regeneration. */
+      chain_ref?: CamChainRefDto | null;
+      top_z: number;
+      bottom_z: number;
+      step_down: number;
+      step_over: number;
+      /** Wall finish pass direction; the zigzag clearing always alternates.
+       *  Omitted = climb. */
+      direction?: CamMillingDirection;
+    })
+  | (CamOperationBase & {
+      kind: 'chamfer2d';
+      /** Independent boundaries after the first (legacy) chain. */
+      additional_chains?: CamChamferChainDto[];
+      path: CamPoint2Dto[];
+      /** Legacy files default to a closed profile. */
+      closed?: boolean;
+      /** Geometry-derived chamfer; width is the resolved size plus this allowance. */
+      modeled_chamfer?: { additional_width: number } | null;
+      /** Viewport-picked sketch-loop provenance for regeneration. */
+      chain_ref?: CamChainRefDto | null;
+      /** Z of the sharp top edge being chamfered. */
+      top_z: number;
+      chamfer_width: number;
+      tip_offset: number;
+      /** Which side of the path the material wall is on (never 'on'). */
+      wall_side: CamContourCompensation;
+      /** Climb/conventional travel along the profile; omitted = climb. */
+      direction?: CamMillingDirection;
+    })
+  | (CamOperationBase & {
+      kind: 'thread';
+      /** Hole centers the threads are milled into, in setup XY. */
+      points: CamPoint2Dto[];
+      /** Viewport-picked holes carrying their own top/bottom (setup Z);
+       *  each entry threads across its own span. */
+      holes?: CamHoleDto[];
+      top_z: number;
+      bottom_z: number;
+      /** Pitch (mm/rev), resolved by the host from the chosen designation
+       *  and stored explicitly; the planner never derives it. */
+      pitch: number;
+      /** Groove-root diameter the tool teeth reach (internal major). */
+      major_diameter: number;
+      /** Pre-machined hole diameter (internal minor). */
+      minor_diameter: number;
+      hand: CamThreadHand;
+      direction: CamMillingDirection;
+      /** Orbital passes, smallest radius first, finishing pass last. */
+      radial_passes: number;
+      /** Radial depth per pass; only with multiple passes. */
+      step_over: number | null;
+    });
+
+export interface CamSetupDto {
+  /** Project snapshot; absent/null is generic programming, not a machine. */
+  machine?: CamMachineAssignmentDto | null;
+  id: number;
+  name: string;
+  wcs: CamWorkCoordinateSystemDto;
+  /** WCS origin provenance for re-resolution; planners use `wcs`. */
+  wcs_origin: CamWcsOriginSpec;
+  /** First work offset this setup posts with. */
+  work_offset: CamWorkOffset;
+  /** Consecutive offsets the program repeats with (1 = single part). */
+  work_offset_count: number;
+  /** Operator's stock definition, kept for re-editing. */
+  stock_spec: CamStockSpecDto;
+  /** Resolved stock shape consumed by planner/simulator/viewport. */
+  resolved_stock: CamResolvedStockDto;
+  stock: CamStockBoxDto;
+  /** Operator-entered model-space stock box kept for re-editing. */
+  stock_model_box: CamStockBoxDto | null;
+  body_ids: number[];
+  operations: CamOperationDto[];
+}
+
+/** Resource topology is declarative. Rotary/channel execution and physical
+ * machine collision checking are not supported by the current fixed-Z engine. */
+export interface CamMachineProfileDto {
+  schema_version: 1 | 2;
+  id: string;
+  revision: number;
+  name: string;
+  process: 'milling' | 'turning' | 'mill_turn';
+  axes: {
+    id: string;
+    kind: 'linear' | 'rotary';
+    parent_axis_id: string | null;
+    direction: Point3Dto;
+    origin: Point3Dto;
+    /** Linear mm / rotary degrees. Null means unknown, not verified. */
+    limits: [number, number] | null;
+  }[];
+  spindles: { id: string; role: 'tool' | 'workpiece'; parent_axis_id: string | null }[];
+  channels: { id: string; axis_ids: string[]; spindle_ids: string[] }[];
+  controller: {
+    family: 'siemens' | 'fanuc' | 'haas' | 'mitsubishi' | 'mazak' | 'syntec' | 'okuma' | 'heidenhain' | 'linux_cnc' | 'grbl' | 'mach' | 'other';
+    language: 'siemens_native' | 'siemens_iso' | 'fanuc_style' | 'okuma_osp' | 'heidenhain_conversational' | 'linux_cnc' | 'grbl' | 'other';
+    model: string;
+    software_version: string | null;
+  };
+  post: CamPostConfigDto;
+}
+
+export interface CamMachineAssignmentDto {
+  profile: CamMachineProfileDto;
+  /** Legacy metadata only; executable identities now come from project tools. */
+  tool_calls?: CamMachineToolBindingDto[];
+  mode: 'fixed3_axis' | 'indexed' | 'simultaneous' | 'turning' | 'mill_turn';
+  channel_id: string;
+  tool_spindle_id: string | null;
+  workpiece_spindle_id: string | null;
+  workpiece_mount_axis_id?: string | null;
+}
+
+export type CamMachineToolCallDto = { kind: 'name'; name: string } | { kind: 'number'; number: number };
+export interface CamMachineToolBindingDto { tool_id: number; call: CamMachineToolCallDto }
+
+/** Dependency signature captured after a toolpath plans successfully. Motion
+ * remains derived; this record only proves which CAD/CAM inputs were used. */
+export interface CamToolpathGenerationDto {
+  operation_id: number;
+  planner_revision: number;
+  model_fingerprint: string;
+  setup_fingerprint: string;
+  operation_fingerprint: string;
+  tool_fingerprint: string;
+  upstream_fingerprint: string;
+  order_dependencies?: {
+    rules_revision: number;
+    stock_height_fingerprint: string;
+    predrill_fingerprint: string;
+  } | null;
+}
+
+export type CamToolpathStateDto = 'current' | 'never_generated' | 'stale' | 'invalid';
+
+export interface CamToolpathStatusDto {
+  setup_id: number;
+  operation_id: number;
+  state: CamToolpathStateDto;
+  reasons?: string[];
+}
+
+export type CamHeightReferenceDto =
+  | 'model_top'
+  | 'model_bottom'
+  | 'stock_top'
+  | 'stock_bottom'
+  | 'origin'
+  | 'hole_top'
+  | 'hole_bottom'
+  | 'bottom'
+  | 'top'
+  | 'feed'
+  | 'retract'
+  | 'selection';
+
+export interface CamHeightExpressionDto {
+  reference: CamHeightReferenceDto;
+  /** Signed canonical-millimetre offset from the reference. */
+  offset: number;
+}
+
+export interface CamOperationHeightExpressionsDto {
+  operation_id: number;
+  clearance: CamHeightExpressionDto;
+  retract: CamHeightExpressionDto;
+  feed: CamHeightExpressionDto;
+  top: CamHeightExpressionDto;
+  bottom?: CamHeightExpressionDto | null;
+}
+
+export interface CamLeadDto {
+  enabled: boolean;
+  horizontal_radius: number;
+  sweep_degrees: number;
+  linear_distance: number;
+  perpendicular: boolean;
+  vertical_radius: number;
+}
+export interface CamLinkingDto {
+  operation_id: number;
+  high_feed_mode: 'preserve' | 'axial_radial' | 'axial' | 'radial' | 'single_axis' | 'always';
+  high_feed: number;
+  allow_rapid_retract: boolean;
+  keep_tool_down: boolean;
+  maximum_stay_down: number;
+  minimum_clearance: number;
+  stay_down_level: number;
+  lift_height: number;
+  retraction_policy: 'full' | 'minimum' | 'shortest';
+  safe_distance: number;
+  extend_before_retract: boolean;
+  transition: 'no_contact' | 'straight' | 'shortest' | 'smooth';
+  lead_in: CamLeadDto;
+  lead_out: CamLeadDto;
+  same_as_lead_in: boolean;
+  lead_in_feed: number;
+  lead_out_feed: number;
+  no_engagement_feed: number;
+  ramp_enabled: boolean;
+  ramp_type: 'predrill' | 'plunge' | 'helix';
+  ramp_angle: number;
+  ramp_stepdown: number;
+  ramp_clearance: number;
+  ramp_taper_angle: number;
+  helix_diameter: number;
+  minimum_helix_diameter: number;
+  ramp_feed: number;
+  predrill_positions: Array<{ x: number; y: number }>;
+  entry_positions: Array<{ x: number; y: number }>;
+  exit_positions: Array<{ x: number; y: number }>;
+}
+
+export interface CamDocumentDto {
+  setups: CamSetupDto[];
+  active_setup_id: number | null;
+  tools: CamToolDto[];
+  /** Omitted by older projects and when no operation has been regenerated. */
+  toolpath_generations?: CamToolpathGenerationDto[];
+  /** Persisted associative height intent; absent means legacy/manual Z. */
+  height_expressions?: CamOperationHeightExpressionsDto[];
+  linking?: CamLinkingDto[];
+  /** Non-fatal issues found at load time. A project file always opens:
+   *  operations that fail validation are parked (disabled) with a warning
+   *  here until the operator fixes and re-saves them; fixed entries clear on
+   *  the next validated write. */
+  load_warnings?: CamLoadWarningDto[];
+  units: CamUnits;
+  /** Legacy preference; bound setups use their machine profile snapshot. */
+  post_defaults: CamPostConfigDto;
+  next_setup_id: number;
+  next_operation_id: number;
+  next_tool_id: number;
+}
+
+/** A non-fatal CAM document issue found at load time. Both ids null means a
+ *  document/tool-level issue. */
+export interface CamLoadWarningDto {
+  setup_id?: number | null;
+  operation_id?: number | null;
+  message: string;
+}
+
+export type CamArcPlane = 'xy' | 'xz' | 'yz';
+
+export type CamCommandDto =
+  | { kind: 'program_start'; name: string; work_offset: CamWorkOffset }
+  | { kind: 'work_offset'; offset: CamWorkOffset }
+  | { kind: 'section_start'; operation_id: number; name: string; tool_id: number }
+  | { kind: 'tool_change'; tool_id: number; tool_number: number | null; tool_name: string }
+  | { kind: 'spindle'; direction: CamSpindleDirection; rpm: number }
+  | { kind: 'coolant'; mode: CamCoolantMode }
+  /** Establishes a workpiece tool-tip pose without implying travel through
+   *  excluded machine-coordinate or tool-change motion. */
+  | { kind: 'set_position'; to: Point3Dto }
+  | { kind: 'rapid'; to: Point3Dto }
+  | { kind: 'linear'; to: Point3Dto; feed: number }
+  | {
+      kind: 'circular';
+      clockwise: boolean;
+      plane: CamArcPlane;
+      center: Point3Dto;
+      to: Point3Dto;
+      feed: number;
+    }
+  | { kind: 'dwell'; seconds: number }
+  /** Activates machine-side cutter radius compensation on the linear move
+   *  that follows (the lead-in); `left` true posts G41, false posts G42. */
+  | { kind: 'cutter_compensation_on'; left: boolean }
+  /** Cancels machine-side cutter radius compensation on the linear move
+   *  that follows (the lead-out); posts G40. */
+  | { kind: 'cutter_compensation_off' }
+  | { kind: 'section_end' }
+  | { kind: 'program_end' };
+
+export interface CamProgramStatsDto {
+  rapid_distance: number;
+  cutting_distance: number;
+  estimated_seconds: number;
+  operation_count: number;
+}
+
+/** Motion totals of one operation within a single work-offset copy of the
+ *  program; the manufacturing status readout shows these. */
+export interface CamOperationStatsDto {
+  operation_id: number;
+  rapid_distance: number;
+  cutting_distance: number;
+  estimated_seconds: number;
+}
+
+export interface CamProgramDto {
+  setup_id: number;
+  name: string;
+  commands: CamCommandDto[];
+  stats: CamProgramStatsDto;
+  /** Per-operation motion totals (first work-offset copy). */
+  per_operation: CamOperationStatsDto[];
+  /** Work offsets the program repeats with, in posted order. */
+  work_offsets: CamWorkOffset[];
+  warnings: string[];
+}
+
+export interface CamPostRequestDto {
+  setup_id: number;
+  /** Output override; defaults to the setup machine's post and must match its controller/machine settings. */
+  post?: CamPostConfigDto | null;
+  program_name?: string | null;
+}
+
+export interface CamPostResultDto {
+  program: CamProgramDto;
+  dialect: CamPostDialect;
+  extension: string;
+  nc: string;
+  warnings: string[];
+}
+
+export interface NbPostAnalysisRequestDto {
+  file_name: string;
+  source: string;
+}
+
+export type NbPostSourceKind = 'callback_javascript' | 'unknown_javascript';
+export type NbPostCompatibilityLevel = 'analysis_only' | 'not_recognized';
+
+export interface NbPostAnalysisDto {
+  format: 'nbpost';
+  version: number;
+  file_name: string;
+  source_bytes: number;
+  source_kind: NbPostSourceKind;
+  compatibility: NbPostCompatibilityLevel;
+  runnable: boolean;
+  callbacks: string[];
+  callbacks_outside_v1_target: string[];
+  missing_required_callbacks: string[];
+  rights_notice_detected: boolean;
+  warnings: string[];
+}
+
+/** Closed triangle mesh of a modeled body used as stock, model coords (mm). */
+export interface CamStockMeshDto {
+  positions: number[];
+  indices: number[];
+}
+
+export interface CamSimulationTargetDto {
+  /** Opaque identity used to reuse prepared target verification during playback. */
+  cache_key?: string | null;
+  /** Closed intended-part meshes in model coordinates (mm), treated as a union. */
+  meshes: CamStockMeshDto[];
+  /** Requested radial comparison tolerance in millimetres. */
+  tolerance_mm: number;
+}
+
+export interface CamSimulationRequestDto {
+  setup_id: number;
+  voxel_size?: number | null;
+  max_voxels?: number | null;
+  /** Required when the setup's stock is a modeled body. */
+  stock_mesh?: CamStockMeshDto | null;
+  /** Intended finished part used for excess-stock and gouge verification. */
+  target?: CamSimulationTargetDto | null;
+  /** Simulate only through this operation (inclusive, in setup order): the
+   *  remaining-stock view of a selected operation must not show material that
+   *  later operations have not removed yet. Omitted simulates everything. */
+  through_operation_id?: number | null;
+  /** Execute only the first N physical motion/dwell steps. The complete
+   *  timeline remains a separate result while playback requests stock at
+   *  deterministic block boundaries. */
+  completed_steps?: number | null;
+  /** Prepared physical CAM timeline time, including the current partial move. */
+  playback_time_seconds?: number | null;
+}
+
+/** Desktop frames carry only metadata; their geometry remains in Rust. */
+export interface CamBufferedFrameDto {
+  frame_id: number;
+  compute_ms: number;
+  mesh_bytes: number;
+  simulation: CamSimulationResultDto;
+}
+
+export type CamSimulationSourceDto = 'cam_toolpath' | 'g_code';
+export type CamSimulationStepKind = 'position' | 'rapid' | 'linear' | 'circular' | 'dwell';
+
+export interface CamSimulationStepDto {
+  command_index: number;
+  /** NC sequence number when present, otherwise its physical source line. */
+  source_line: number | null;
+  kind: CamSimulationStepKind;
+  tool_id: number | null;
+  from: Point3Dto | null;
+  to: Point3Dto | null;
+  center: Point3Dto | null;
+  clockwise: boolean | null;
+  plane: CamArcPlane | null;
+  duration_seconds: number;
+  cumulative_seconds: number;
+  removed_voxels: number;
+  gouged_voxels: number;
+}
+
+export type CamSimulationCollisionKindDto = 'rapid_stock_contact' | 'target_gouge';
+
+export interface CamSimulationCollisionDto {
+  kind: CamSimulationCollisionKindDto;
+  command_index: number;
+  position: Point3Dto;
+  message: string;
+}
+
+export interface CamSimulationMeshDto {
+  /** Triangle soup in setup coordinates, packed x/y/z. */
+  positions: number[];
+  /** Optional per-vertex normals, packed one-for-one with positions. */
+  normals?: number[];
+  triangle_count: number;
+}
+
+export interface CamSimulationComparisonDto {
+  requested_tolerance_mm: number;
+  effective_tolerance_mm: number;
+  target_voxels: number;
+  excess_voxels: number;
+  gouged_voxels: number;
+  initial_shortfall_voxels: number;
+  target_volume_mm3: number;
+  excess_volume_mm3: number;
+  gouged_volume_mm3: number;
+  initial_shortfall_volume_mm3: number;
+  excess_mesh: CamSimulationMeshDto | null;
+  gouge_mesh: CamSimulationMeshDto | null;
+}
+
+export interface CamSimulationResultDto {
+  setup_id: number;
+  source: CamSimulationSourceDto;
+  wcs: CamWorkCoordinateSystemDto;
+  grid_origin: Point3Dto;
+  cell_size: [number, number, number];
+  dimensions: [number, number, number];
+  initial_voxels: number;
+  remaining_voxels: number;
+  removed_voxels: number;
+  remaining_volume_mm3: number;
+  removed_volume_mm3: number;
+  estimated_seconds: number;
+  steps: CamSimulationStepDto[];
+  collisions: CamSimulationCollisionDto[];
+  stock_mesh: CamSimulationMeshDto | null;
+  /** Desktop host retained the stock mesh directly in native Bevy. */
+  native_stock_present: boolean;
+  comparison: CamSimulationComparisonDto | null;
+  /** Echo of the request's truncation target — the host uses it to keep a
+   *  stale result from painting over a freshly changed operation selection. */
+  through_operation_id: number | null;
+  /** Present for a playback stock frame and equal to the number of steps
+   *  actually executed. Absent for a complete timeline. */
+  completed_steps: number | null;
+  warnings: string[];
+}
+
+export type CamGcodeDialectDto = 'auto' | 'iso' | 'fanuc' | 'haas' | 'siemens828d';
+
+/** Workpiece-only controller-code input. Machine kinematics and PLC behavior
+ *  intentionally remain outside this simulator boundary. */
+export interface CamGcodeSimulationRequestDto {
+  setup_id: number;
+  source: string;
+  file_name?: string | null;
+  dialect?: CamGcodeDialectDto;
+  voxel_size?: number | null;
+  max_voxels?: number | null;
+  stock_mesh?: CamStockMeshDto | null;
+  target?: CamSimulationTargetDto | null;
+  completed_steps?: number | null;
+}
+
+export interface PostEventStreamDto {
+  format: 'nbcad-post-events';
+  version: number;
+  units: 'millimeters';
+  program_name: string;
+  tools: CamToolDto[];
+  events: Array<Record<string, unknown> & { callback: string }>;
 }
 
 export interface StepThreadMetadataDto {

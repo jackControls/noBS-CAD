@@ -5243,6 +5243,8 @@ mod tests {
                         }),
                         signature: None,
                         cylinder: None,
+                        edge_keys: Vec::new(),
+                        cone: None,
                     }],
                     edges: Vec::new(),
                 })
@@ -5477,6 +5479,8 @@ mod tests {
                         }),
                         signature: None,
                         cylinder: None,
+                        edge_keys: Vec::new(),
+                        cone: None,
                     }],
                     edges: Vec::new(),
                 })

@@ -53,6 +53,7 @@ export async function checkHistoryMetadata() {
     }
     if (command === 'engine_finished_sketches' || command === 'engine_datum_plane_definitions') return ok([]);
     if (command === 'engine_assembly_document') return ok(initial.assemblyDocument);
+    if (command === 'engine_cam_document') return ok(initial.camDocument);
     if (command === 'engine_assembly_solution') return ok(initial.assemblySolution);
     throw new Error(`Unexpected history metadata command: ${command}`);
   }};

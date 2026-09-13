@@ -43,6 +43,9 @@ struct LabCamera(ViewportCamera);
 #[derive(Resource, Clone, Copy)]
 struct LabPalette(super::ViewportPalette);
 
+#[derive(Resource)]
+struct CamLabMesh(nbcad_cam::CamSimulationMeshDto);
+
 pub fn run(output: PathBuf) {
     let palette = ui::light_reference_palette();
     let mut app = App::new();
@@ -72,9 +75,16 @@ pub fn run(output: PathBuf) {
                 synchronous_pipeline_compilation: true,
                 ..default()
             }),
-    )
-    .add_systems(Startup, (ui::load_system_font, setup_lab).chain())
-    .add_systems(Update, update_lab_orientation);
+    );
+    if let Some(path) = std::env::var_os("NBCAD_CAM_LAB_MESH") {
+        let mesh = serde_json::from_slice(&std::fs::read(path).expect("read CAM capture mesh"))
+            .expect("parse CAM capture mesh");
+        app.insert_resource(CamLabMesh(mesh))
+            .add_systems(Startup, setup_cam_lab);
+    } else {
+        app.add_systems(Startup, (ui::load_system_font, setup_lab).chain())
+            .add_systems(Update, update_lab_orientation);
+    }
 
     app.finish();
     app.cleanup();
@@ -100,6 +110,111 @@ pub fn run(output: PathBuf) {
         }
     }
     panic!("Bevy UI lab screenshot did not complete");
+}
+
+/// Uses the production stock material, lights and AA, not browser screenshot
+/// rendering. The mesh is produced by the opt-in CAM kernel capture test.
+fn setup_cam_lab(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    source: Res<CamLabMesh>,
+) {
+    let mut target = Image::new_uninit(
+        Extent3d {
+            width: 1440,
+            height: 900,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    target.texture_descriptor.usage |= TextureUsages::RENDER_ATTACHMENT;
+    let target = images.add(target);
+    commands.insert_resource(LabTarget(target.clone()));
+    let positions: Vec<[f32; 3]> = source
+        .0
+        .positions
+        .chunks_exact(3)
+        .map(|p| [p[0], p[1], p[2]])
+        .collect();
+    let min = positions.iter().fold(Vec3::splat(f32::INFINITY), |a, p| {
+        a.min(Vec3::from_array(*p))
+    });
+    let max = positions
+        .iter()
+        .fold(Vec3::splat(f32::NEG_INFINITY), |a, p| {
+            a.max(Vec3::from_array(*p))
+        });
+    let closeup = std::env::var_os("NBCAD_CAM_LAB_CLOSEUP").is_some();
+    let center = if closeup {
+        Vec3::new(22.0, 25.0, -5.0)
+    } else {
+        (min + max) * 0.5
+    };
+    let extent = if closeup {
+        18.0
+    } else {
+        (max - min).max_element()
+    };
+    let direction = if closeup {
+        Vec3::new(0.15, -0.3, 1.3)
+    } else {
+        Vec3::new(0.15, -0.8, 1.15)
+    };
+    let eye = center + direction.normalize() * extent * 2.8;
+    let view = ViewportCamera {
+        position: eye.to_array(),
+        target: center.to_array(),
+        up: Vec3::Z.to_array(),
+        vertical_fov_degrees: 24.0,
+        ..default()
+    };
+    commands.spawn((
+        Camera3d::default(),
+        RenderTarget::Image(target.into()),
+        super::platform::VIEWPORT_MSAA,
+        Projection::Perspective(PerspectiveProjection {
+            fov: view.vertical_fov_degrees.to_radians(),
+            ..default()
+        }),
+        Transform::from_translation(eye).looking_at(center, Vec3::Z),
+    ));
+    commands.insert_resource(GlobalAmbientLight {
+        brightness: 500.0,
+        ..default()
+    });
+    let (key, fill) = super::platform::cam_light_transforms(view);
+    for (transform, illuminance) in [(key, 2600.0), (fill, 750.0)] {
+        commands.spawn((
+            DirectionalLight {
+                illuminance,
+                shadow_maps_enabled: false,
+                ..default()
+            },
+            transform,
+        ));
+    }
+    let mut mesh = Mesh::new(
+        bevy::mesh::PrimitiveTopology::TriangleList,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_NORMAL,
+        source
+            .0
+            .normals
+            .chunks_exact(3)
+            .map(|p| [p[0], p[1], p[2]])
+            .collect::<Vec<_>>(),
+    );
+    commands.spawn((
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(materials.add(super::platform::cam_stock_material())),
+    ));
 }
 
 fn update_and_wait(sub_apps: &mut SubApps) {

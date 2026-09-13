@@ -279,6 +279,62 @@ impl WasmEngine {
         host::handle(&mut self.manager, "assembly_set_grounded_body", payload)
     }
 
+    pub fn geometry_edge_chain(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "geometry_edge_chain", payload)
+    }
+
+    pub fn cam_chamfer_geometry(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_chamfer_geometry", payload)
+    }
+
+    pub fn cam_cutter_mesh(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_cutter_mesh", payload)
+    }
+
+    pub fn cam_document(&mut self) -> String {
+        host::handle(&mut self.manager, "cam_document", "")
+    }
+
+    pub fn cam_set_document(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_set_document", payload)
+    }
+
+    pub fn cam_toolpath_statuses(&mut self) -> String {
+        host::handle(&mut self.manager, "cam_toolpath_statuses", "")
+    }
+
+    pub fn cam_regenerate_operation(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_regenerate_operation", payload)
+    }
+
+    pub fn cam_regenerate_setup(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_regenerate_setup", payload)
+    }
+
+    pub fn cam_plan(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_plan", payload)
+    }
+
+    pub fn cam_post(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_post", payload)
+    }
+
+    pub fn cam_analyze_nbpost(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_analyze_nbpost", payload)
+    }
+
+    pub fn cam_simulate(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_simulate", payload)
+    }
+
+    pub fn cam_simulate_gcode(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_simulate_gcode", payload)
+    }
+
+    pub fn cam_post_events(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "cam_post_events", payload)
+    }
+
     pub fn set_body_appearance(&mut self, payload: &str) -> String {
         host::handle(&mut self.manager, "set_body_appearance", payload)
     }

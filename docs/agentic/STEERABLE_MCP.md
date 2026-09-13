@@ -21,7 +21,7 @@ Prefer `cad_list_all_tools` for planners over leaving the main session in `full_
 
 ## Focus packs
 
-`document | sketch | solid | modify | body_ops | datums | history | inspect | print`
+`document | sketch | solid | modify | body_ops | datums | history | inspect | print | cam`
 
 Keep `disclosure::tags_for_tool` aligned when adding dialogs or export tools.
 

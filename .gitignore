@@ -65,3 +65,37 @@ docs/SKETCH_CAD_BRANCH_REVIEW.md
 docs/qa/
 docs/reference/
 scripts/probe-*.mjs
+
+# Local reference material (screenshots etc.), never committed.
+reference/
+
+# User-owned post sources and machine customizations belong in OS user storage.
+*.cps
+*.nbpost
+/cam-posts/
+/private-posts/
+
+# Local test applications, jobs and NC output (portable fixtures live with tests)
+*.app/
+*.dmg
+/*.nbcad
+/*.nc
+/*.mpf
+/.worktrees/
+
+# Internal review, handoff, feedback and design-evidence files are not public docs
+docs/**/*HANDOFF*.md
+docs/**/*REVIEW*.md
+docs/**/*FEEDBACK*.md
+docs/**/*DRAFT*.md
+docs/**/*DEBUG_*.md
+docs/**/*BENCHMARK*.md
+docs/**/*handoff*.md
+docs/**/*review*.md
+docs/**/*feedback*.md
+docs/**/*draft*.md
+docs/icon-drafts/
+docs/cam/history/
+docs/community/DISCUSSIONS_WELCOME.md
+references/
+docs/references/

@@ -8,6 +8,7 @@ import type {BodyAppearance, BodyDto, DocumentDto, ProjectVisibilityDto} from '.
 export async function checkInboxHistoryMetadata() {
   const check = (condition: unknown, message: string) => { if (!condition) throw new Error(message); };
   const initial = useAppStore.getState();
+  let camDocument = {...initial.camDocument, next_operation_id: 17};
   const appearances: BodyAppearance[] = [1, 2].map(body_id => ({body_id,
     color: {r: 200, g: 40, b: 40, a: 255}, material_name: `Material ${body_id}`,
     filament_type: 'PETG', brand: 'Generic', color_name: 'Red', filament_id: null,
@@ -44,6 +45,7 @@ export async function checkInboxHistoryMetadata() {
     if (command === 'engine_solid_scene') return ok(scene());
     if (command === 'engine_drawing_document') return ok(initial.drawingDocument);
     if (command === 'engine_assembly_document') return ok(initial.assemblyDocument);
+    if (command === 'engine_cam_document') return ok(camDocument);
     if (command === 'engine_assembly_solution') return ok(initial.assemblySolution);
     if (command === 'engine_body_appearances') {
       metadataReads++;
@@ -94,7 +96,22 @@ export async function checkInboxHistoryMetadata() {
     await applyInboxNow();
     check(metadataReads === reads, 'Ordinary solid inbox operations must retain their fast path');
     check(presentation.documentVersion() === version, 'History navigation preserves the current document owner');
-    return {rollbackForwardMaterials: true, recreatedHiddenNodes: true, eyeChangeDuringHydration: true, ordinaryFastPath: true};
+    check(useAppStore.getState().camDocument.next_operation_id === 17,
+      'History refresh must retain the native machining document');
+    camDocument = {...camDocument, next_operation_id: 23};
+    await useAppStore.getState().refreshAfterInboxApply('cam_set_document', version);
+    check(useAppStore.getState().camDocument.next_operation_id === 23 && useAppStore.getState().dirty,
+      'CAM inbox edits must refresh the machining document without clearing dirty state');
+    check(metadataReads === reads, 'CAM-only edits must not reload unrelated model geometry');
+    camDocument = {...camDocument, next_operation_id: 41};
+    await useAppStore.getState().refreshAfterInboxApply('cam_set_document', version - 1);
+    check(useAppStore.getState().camDocument.next_operation_id === 23,
+      'A retired document owner must not publish CAM data');
+    await useAppStore.getState().refreshAfterInboxApply('cad_load_project', version, true);
+    check(useAppStore.getState().camDocument.next_operation_id === 41,
+      'A whole-project replacement must publish its own machining document');
+    return {rollbackForwardMaterials: true, recreatedHiddenNodes: true, eyeChangeDuringHydration: true,
+      ordinaryFastPath: true, camRefreshOwnership: true, replacedCamDocument: true};
   } finally {
     const restore = projectTransitions.begin();
     useAppStore.setState(initial); presentation.documentChanged(); restore(true, true);

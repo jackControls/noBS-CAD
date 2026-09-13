@@ -10,6 +10,7 @@
   print-fit coupons.
 - [Assemblies](ASSEMBLIES.md) — reusable parts, joints, motion and interference.
 - [Drawings](2D_DRAWINGS.md) — sheets, dimensions and export coverage.
+- [CAM](cam/README.md) — toolpaths, stock simulation, posts and safety limits.
 - [Flagship designs and validation](flagship-examples.md) — bench, vise and turbine.
 - [Engineering knowledge](../knowledge/index.md) — materials, gears, bearings,
   workholding and printing guidance, also available offline through MCP.
@@ -36,6 +37,7 @@
 <details>
 <summary>Specialist implementation references</summary>
 
+- [CAM foundation](CAM.md) and [High Speed Roughing](CAM_ADAPTIVE.md).
 - [OCCT packaging](OCCT_PACKAGING.md), [Windows packaging](WINDOWS_PACKAGING.md) and
   [Ubuntu packaging](LINUX_PACKAGING.md).
 - [Windows native viewport debugging](WINDOWS_NATIVE_VIEWPORT_DEBUGGING.md).

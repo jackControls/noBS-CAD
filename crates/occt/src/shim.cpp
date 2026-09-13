@@ -1919,7 +1919,10 @@ void Kernel::apply_job(const FfiJob& job) {
       if (!std::isfinite(sink_depth) || sink_depth <= 0.0) {
         throw std::runtime_error("countersink dimensions are invalid");
       }
-      BRepPrimAPI_MakeCone countersink(axis, large_radius, small_radius,
+      // The boolean cutter starts one overlap above the support plane.
+      // Extend the cone along its flank, not just its height: changing only
+      // height alters both the requested angle and the support-face diameter.
+      BRepPrimAPI_MakeCone countersink(axis, large_radius + overlap * std::tan(half_angle), small_radius,
                                        sink_depth + overlap);
       BRepAlgoAPI_Fuse fuse(cutter, countersink.Shape(),
                             Message_ProgressRange());
@@ -2857,6 +2860,9 @@ static FfiMesh mesh_shape(std::uint64_t body_id,
   output.topology_signature = topology_signature(shape);
   TopTools_IndexedMapOfShape face_map;
   TopExp::MapShapes(shape, TopAbs_FACE, face_map);
+  TopTools_IndexedMapOfShape edge_map;
+  TopExp::MapShapes(shape, TopAbs_EDGE, edge_map);
+  output.face_edge_offsets.push_back(0);
   for (int face_index = 1; face_index <= face_map.Extent(); ++face_index) {
     const TopoDS_Face face = TopoDS::Face(face_map.FindKey(face_index));
     TopLoc_Location location;
@@ -2925,11 +2931,28 @@ static FfiMesh mesh_shape(std::uint64_t body_id,
     append_plane(output.face_plane_data, face);
     append_face_signature(output.face_signature_data, face);
     append_cylinder(output.face_cylinder_data, face);
+    BRepAdaptor_Surface surface(face, true);
+    if (surface.GetType() == GeomAbs_Cone) {
+      const gp_Cone cone = surface.Cone();
+      output.face_cone_data.push_back(1.0);
+      output.face_cone_data.push_back(cone.Axis().Direction().X());
+      output.face_cone_data.push_back(cone.Axis().Direction().Y());
+      output.face_cone_data.push_back(cone.Axis().Direction().Z());
+      output.face_cone_data.push_back(cone.SemiAngle());
+    } else {
+      for (int i = 0; i < 5; ++i) output.face_cone_data.push_back(0.0);
+    }
+    TopTools_IndexedMapOfShape boundary;
+    TopExp::MapShapes(face, TopAbs_EDGE, boundary);
+    for (int i = 1; i <= boundary.Extent(); ++i) {
+      const int index = edge_map.FindIndex(boundary.FindKey(i));
+      if (index <= 0) throw std::runtime_error("face boundary edge is absent from body topology");
+      output.face_edge_indices.push_back(static_cast<std::uint32_t>(index - 1));
+    }
+    output.face_edge_offsets.push_back(static_cast<std::uint32_t>(output.face_edge_indices.size()));
   }
 
   output.edge_point_offsets.push_back(0);
-  TopTools_IndexedMapOfShape edge_map;
-  TopExp::MapShapes(shape, TopAbs_EDGE, edge_map);
   TopTools_IndexedDataMapOfShapeListOfShape edge_faces;
   TopExp::MapShapesAndUniqueAncestors(shape, TopAbs_EDGE, TopAbs_FACE,
                                       edge_faces, false);

@@ -52,6 +52,7 @@ export async function checkProjectLoadRecovery() {
       if (command === 'engine_body_appearances') return ok([]);
       if (command === 'engine_drawing_document') return ok(oldState.drawingDocument);
       if (command === 'engine_assembly_document') return ok(oldState.assemblyDocument);
+      if (command === 'engine_cam_document') return ok(oldState.camDocument);
       if (command === 'engine_assembly_solution') return ok(oldState.assemblySolution);
       if (command === 'engine_project_visibility') return ok(oldState.projectVisibility);
       if (command === 'engine_project_session_bind') return ok(null);

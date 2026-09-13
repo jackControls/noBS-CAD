@@ -73,6 +73,7 @@ export async function checkProjectSaveOwnership() {
     if (['engine_finished_sketches', 'engine_datum_plane_definitions', 'engine_body_appearances'].includes(command)) return ok([]);
     if (command === 'engine_drawing_document') return ok(initial.drawingDocument);
     if (command === 'engine_assembly_document') return ok(initial.assemblyDocument);
+    if (command === 'engine_cam_document') return ok(initial.camDocument);
     if (command === 'engine_assembly_solution') return ok(initial.assemblySolution);
     if (command === 'engine_project_visibility') return ok(initial.projectVisibility);
     if (command === 'plugin:dialog|save') { pickerReady(); return pickedPath; }

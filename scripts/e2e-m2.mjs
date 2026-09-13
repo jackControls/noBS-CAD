@@ -574,7 +574,7 @@ try {
       nbcadBytes[1] === 0x4b &&
       manifest.format === 'nbcad-project' &&
       manifest.container_version === 1 &&
-      model.schema_version === 3 &&
+      model.schema_version === 7 &&
       manifest.model_schema_version === model.schema_version,
   );
   check(
