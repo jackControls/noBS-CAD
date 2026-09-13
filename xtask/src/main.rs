@@ -68,7 +68,7 @@ Commands:
   package       Build the host desktop package using the existing platform bundler.
                 Use --help for prerequisites and optional Windows target selection.
   run-script    Run a .nbcad.jsonc file or --recipe ID using the Rust MCP client. Use --server PATH,
-                plus --server-arg --mcp for packaged CAD. Repeat --server-arg for literal arguments.
+                plus --server-arg --headless for packaged workers without a window. Repeat --server-arg for literal arguments.
                 --init-timeout-seconds N bounds startup only (default: 30); modeling waits remain unbounded.
                 --session UUID --new --present to replay in an existing window.
                 --repeat 2 verifies independent headless runs are deterministic.
@@ -77,9 +77,10 @@ Commands:
                 Accepts the same server arguments and initialization timeout; use cad-call --help.
   verify-package-mcp
                 Verify a packaged executable over stdio without launching a GUI:
-                --server PATH --server-arg --mcp [--out REPORT.json]
+                --server PATH --server-arg --headless [--out REPORT.json]
                 Repeat --server-arg for additional executable arguments.
                 --timeout-seconds N bounds each request (default: 120).
+                --desktop also checks default stdio in one owned GUI, save, disconnect and guarded exit.
   test-mcp      Run contracts (default), live, controls, playback, scripts-workspace, exit, bench, garden-bench, or drawing. Additional
                 arguments pass directly to the selected MCP test/demo driver.
                 Example: cargo xtask test-mcp live --server PATH --desktop PATH

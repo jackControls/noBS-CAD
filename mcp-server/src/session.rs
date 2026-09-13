@@ -597,6 +597,7 @@ struct ActiveWindowLease {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProcessLease {
     process_instance_id: String,
+    pid: Option<u32>,
     updated_ms: u64,
     windows: BTreeMap<String, ActiveWindowLease>,
     /// Old `_ui/process.json` files did not include a window inventory. Keep
@@ -611,6 +612,18 @@ struct ProcessRegistry {
     /// whose last process has exited and removed its lease.
     present: bool,
     leases: BTreeMap<String, ProcessLease>,
+}
+
+impl ProcessRegistry {
+    fn insert(&mut self, lease: ProcessLease) {
+        let replace = self
+            .leases
+            .get(&lease.process_instance_id)
+            .is_none_or(|existing| existing.updated_ms < lease.updated_ms);
+        if replace {
+            self.leases.insert(lease.process_instance_id.clone(), lease);
+        }
+    }
 }
 
 fn parse_process_lease(parsed: &Value, accepts_unlisted_windows: bool) -> Option<ProcessLease> {
@@ -645,6 +658,10 @@ fn parse_process_lease(parsed: &Value, accepts_unlisted_windows: bool) -> Option
     }
     Some(ProcessLease {
         process_instance_id,
+        pid: parsed
+            .get("pid")
+            .and_then(Value::as_u64)
+            .and_then(|pid| u32::try_from(pid).ok()),
         updated_ms,
         windows,
         accepts_unlisted_windows,
@@ -655,6 +672,55 @@ fn read_process_lease(path: &Path, accepts_unlisted_windows: bool) -> Option<Pro
     let body = fs::read_to_string(path).ok()?;
     let parsed: Value = serde_json::from_str(&body).ok()?;
     parse_process_lease(&parsed, accepts_unlisted_windows)
+}
+
+/// The stdio worker embedded in a desktop may default only to that process's
+/// authoritative active document. Never choose the newest/global window.
+pub(super) fn desktop_default_session(process_id: u32) -> Result<String, String> {
+    let (process, window, active) = desktop_default_from_registry(process_id, &process_registry())?;
+    require_valid_session_id(&active.active_session_id)?;
+    require_open_session(&active.active_session_id)?;
+    let heartbeat = heartbeat_meta(&active.active_session_id);
+    let identity = session_identity(&active.active_session_id);
+    if heartbeat["stale"] != false
+        || heartbeat["interface_version"] != 1
+        || heartbeat_process_instance_id(&active.active_session_id).as_deref()
+            != Some(process.as_str())
+        || identity.window_id.as_deref() != Some(window.as_str())
+        || identity.document_id.as_deref() != Some(active.active_document_id.as_str())
+        || !session_path(&active.active_session_id, "model.json")?.is_file()
+    {
+        return Err(desktop_not_ready());
+    }
+    Ok(active.active_session_id)
+}
+
+fn desktop_not_ready() -> String {
+    json!({"code":"desktop_not_ready","writeback":false,
+        "hint":"This desktop has not published one unambiguous active document. Retry after startup, or select a document explicitly with cad_attach."}).to_string()
+}
+
+fn desktop_default_from_registry(
+    process_id: u32,
+    registry: &ProcessRegistry,
+) -> Result<(String, String, ActiveWindowLease), String> {
+    let own: Vec<_> = registry
+        .leases
+        .values()
+        .filter(|lease| lease.pid == Some(process_id))
+        .collect();
+    let [lease] = own.as_slice() else {
+        return Err(desktop_not_ready());
+    };
+    if lease.windows.len() != 1 {
+        return Err(desktop_not_ready());
+    }
+    let (window, active) = lease.windows.iter().next().unwrap();
+    Ok((
+        lease.process_instance_id.clone(),
+        window.clone(),
+        active.clone(),
+    ))
 }
 
 fn process_registry() -> ProcessRegistry {
@@ -676,16 +742,7 @@ fn process_registry() -> ProcessRegistry {
                 continue;
             }
             if let Some(lease) = read_process_lease(&entry.path(), false) {
-                let replace = registry
-                    .leases
-                    .get(&lease.process_instance_id)
-                    .map(|existing| existing.updated_ms < lease.updated_ms)
-                    .unwrap_or(true);
-                if replace {
-                    registry
-                        .leases
-                        .insert(lease.process_instance_id.clone(), lease);
-                }
+                registry.insert(lease);
             }
         }
     }
@@ -693,16 +750,7 @@ fn process_registry() -> ProcessRegistry {
     // Read the old singleton only as a migration fallback. Its timestamp must
     // be fresh, so a pre-registry crash cannot keep sessions live forever.
     if let Some(lease) = read_process_lease(&legacy_path, true) {
-        let replace = registry
-            .leases
-            .get(&lease.process_instance_id)
-            .map(|existing| existing.updated_ms < lease.updated_ms)
-            .unwrap_or(true);
-        if replace {
-            registry
-                .leases
-                .insert(lease.process_instance_id.clone(), lease);
-        }
+        registry.insert(lease);
     }
     registry
 }
@@ -1985,6 +2033,56 @@ pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_default_requires_its_own_fresh_unambiguous_active_lease() {
+        let select = |publications: &[Value]| {
+            let mut registry = ProcessRegistry::default();
+            for publication in publications {
+                if let Some(lease) = parse_process_lease(publication, false) {
+                    registry.insert(lease);
+                }
+            }
+            desktop_default_from_registry(42, &registry)
+        };
+        let own = json!({"pid":42,"process_instance_id":"own","updated_ms":now_ms(),
+            "windows":[{"window_id":"main","active_document_id":"document-a","active_session_id":"session-a"}]});
+        let foreign = json!({"pid":43,"process_instance_id":"other","updated_ms":now_ms(),
+            "windows":[{"window_id":"main","active_document_id":"document-b","active_session_id":"session-b"}]});
+        let selected = select(&[foreign.clone(), own.clone()]).unwrap();
+        assert_eq!(selected.0, "own");
+        assert_eq!(selected.2.active_session_id, "session-a");
+        assert!(select(&[foreign]).is_err());
+        assert_eq!(
+            select(&[own.clone(), own.clone()]).unwrap(),
+            selected,
+            "atomic temp and destination are one process publication"
+        );
+        let mut newer = own.clone();
+        newer["updated_ms"] = json!(own["updated_ms"].as_u64().unwrap() + 1);
+        newer["windows"][0]["active_session_id"] = json!("new-session");
+        for publications in [vec![own.clone(), newer.clone()], vec![newer, own.clone()]] {
+            assert_eq!(
+                select(&publications).unwrap().2.active_session_id,
+                "new-session"
+            );
+        }
+        let mut distinct = own.clone();
+        distinct["process_instance_id"] = json!("another-instance");
+        assert!(select(&[own.clone(), distinct]).is_err());
+        for replacement in [
+            json!([]),
+            json!([{"window_id":"main","active_document_id":"a","active_session_id":"a"},
+                {"window_id":"second","active_document_id":"b","active_session_id":"b"}]),
+        ] {
+            let mut invalid = own.clone();
+            invalid["windows"] = replacement;
+            assert!(select(&[invalid]).is_err());
+        }
+        let mut stale = own;
+        stale["updated_ms"] = json!(now_ms().saturating_sub(PROCESS_LEASE_STALE_MS + 1));
+        assert!(select(&[stale]).is_err());
+    }
 
     #[test]
     fn test_session_ids_are_unique_in_a_burst() {

@@ -322,7 +322,7 @@ jobs:
           if (@($executable).Count -ne 1) { throw "Expected one packaged executable" }
           $uriKey = 'HKEY_CURRENT_USER\Software\Classes\nbcad\shell\open\command'
           $uriBefore = [Microsoft.Win32.Registry]::GetValue($uriKey, '', $null)
-          cargo xtask verify-package-mcp --server $executable.FullName --server-arg --mcp --out "$env:RUNNER_TEMP\nbcad-viewport-diagnostics\${{ matrix.architecture }}\mcp.json"
+          cargo xtask verify-package-mcp --server $executable.FullName --server-arg --headless --out "$env:RUNNER_TEMP\nbcad-viewport-diagnostics\${{ matrix.architecture }}\mcp.json"
           if ($LASTEXITCODE -ne 0) { throw "Packaged MCP verification failed" }
           if ([Microsoft.Win32.Registry]::GetValue($uriKey, '', $null) -cne $uriBefore) {
             throw "Headless MCP changed the desktop URI handler"
@@ -334,6 +334,8 @@ jobs:
           $verifyRoot = Join-Path $env:RUNNER_TEMP "nbcad-mcp-package-${{ matrix.architecture }}"
           $executable = Get-ChildItem -LiteralPath $verifyRoot -Filter 'noBS-CAD.exe' -File -Recurse
           if (@($executable).Count -ne 1) { throw "Expected one extracted packaged executable" }
+          cargo xtask verify-package-mcp --server $executable.FullName --server-arg --headless --desktop --out "$env:RUNNER_TEMP\nbcad-viewport-diagnostics\${{ matrix.architecture }}\desktop-stdio.json"
+          if ($LASTEXITCODE -ne 0) { throw "Default desktop stdio verification failed" }
           & .\scripts\verify-windows-viewport.ps1 `
             -PackageDirectory $executable.DirectoryName `
             -DiagnosticsDirectory "$env:RUNNER_TEMP\nbcad-viewport-diagnostics\${{ matrix.architecture }}"
@@ -484,11 +486,11 @@ jobs:
           mkdir -p "$mcp_root"
           dpkg-deb -x "$deb" "$mcp_root"
           env -u DISPLAY -u WAYLAND_DISPLAY cargo xtask verify-package-mcp \
-            --server "$mcp_root/usr/bin/nbcad" --server-arg --mcp \
+            --server "$mcp_root/usr/bin/nbcad" --server-arg --headless \
             --out "$RUNNER_TEMP/nbcad-linux-viewport-diagnostics/mcp-deb.json"
           chmod +x "$appimage"
           env -u DISPLAY -u WAYLAND_DISPLAY cargo xtask verify-package-mcp \
-            --server "$appimage" --server-arg --appimage-extract-and-run --server-arg --mcp \
+            --server "$appimage" --server-arg --appimage-extract-and-run --server-arg --headless \
             --out "$RUNNER_TEMP/nbcad-linux-viewport-diagnostics/mcp-appimage.json"
 
       - name: Verify packaged native viewport on X11 and XWayland
@@ -514,6 +516,14 @@ jobs:
             "$deb" \
             xwayland \
             "$RUNNER_TEMP/nbcad-linux-viewport-diagnostics/xwayland"
+          vulkan_icd="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name 'lvp_icd*.json' -print -quit)"
+          test -n "$vulkan_icd"
+          xvfb-run -a -s "-screen 0 1440x900x24" dbus-run-session -- \
+            env WGPU_BACKEND=vulkan VK_ICD_FILENAMES="$vulkan_icd" \
+            LIBGL_ALWAYS_SOFTWARE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 \
+            cargo xtask verify-package-mcp \
+              --server "$RUNNER_TEMP/nbcad-mcp-deb/usr/bin/nbcad" --server-arg --headless --desktop \
+              --out "$RUNNER_TEMP/nbcad-linux-viewport-diagnostics/desktop-stdio.json"
 
       - name: Upload Linux viewport diagnostics
         if: always()
@@ -766,7 +776,7 @@ jobs:
           stage_moved=true
           cargo xtask verify-package-mcp \
             --server "$mount/noBS CAD.app/Contents/MacOS/nbcad" \
-            --server-arg --mcp --out "$RUNNER_TEMP/nbcad-mcp-macos.json"
+            --server-arg --headless --desktop --out "$RUNNER_TEMP/nbcad-mcp-macos.json"
 
       - name: Upload macOS MCP verification
         if: always()

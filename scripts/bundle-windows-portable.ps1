@@ -142,9 +142,9 @@ noBS CAD $version — Windows $($targetInfo.Architecture) portable build
 
 Run noBS-CAD.exe directly; no installation is required.
 
-For a local stdio MCP agent, use this executable as the command with args ["--mcp"].
-That mode starts the same Rust MCP server without opening a CAD window. Keep the
-DLLs beside the executable; no separate server build or OCCT SDK is required.
+Local stdio MCP is always available. A normal launch opens the CAD window. For
+an agent worker without an extra window, use args ["--headless"]. Keep the DLLs
+beside the executable; no separate server build or OCCT SDK is required.
 
 System requirements:
 - Windows 10 version 1803 or newer, or Windows 11

@@ -109,7 +109,7 @@ export. Drawing sheets export to **DXF** and print/PDF.
 
 ## Work with an agent
 
-The installed application includes a local MCP server. Bring your preferred
+Local stdio MCP is always available in the installed application. Bring your preferred
 MCP-compatible agent and model to build a part, edit an existing feature, inspect
 an assembly or replay a demonstration. CAD keeps the same editable project
 whether you use the tools yourself or ask an agent to use them.

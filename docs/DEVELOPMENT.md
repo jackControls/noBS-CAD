@@ -120,14 +120,28 @@ memory and request deadlines. The **Desktop packages** workflow also checks the
 final packages' launch and MCP behavior; a successful compilation alone does
 not establish that a distributable package works.
 
+`cargo xtask verify-package-mcp --server CAD_EXECUTABLE --server-arg --headless`
+checks the shipped runtime without a display or developer SDK. Add `--desktop`
+in a graphical session to also verify default stdio, automatic binding to one
+owned window, a constrained sketch, Save, unsaved edits surviving stdin disconnect,
+stdout EOF while the window remains alive, and
+guarded exit through an exact-session headless worker. The report retains the
+saved fixture's path. A second empty window verifies that closing through its
+own stdio flushes the acknowledgement before exit. Windows run sequentially;
+this check never attaches to another running CAD process.
+Windows and Linux use a fresh browser profile for each window, preserving the
+developer's recovery and settings. macOS currently runs this check only on a
+disposable GitHub-hosted runner because WKWebView's default data store is shared.
+
 ## Replay a recipe
 
 With this checkout and Rust installed, the replay CLI can use the packaged CAD
-application. This path needs no OCCT SDK. Pass the application's MCP argument
-separately from its absolute executable path:
+application. This path needs no OCCT SDK. Use `--headless` for the worker process
+so automated runs do not open extra windows. Pass it separately from the absolute
+executable path:
 
 ```sh
-cargo xtask run-script --recipe fillet-basics --server /absolute/path/to/nbcad --server-arg --mcp --repeat 2 --out replay-proof
+cargo xtask run-script --recipe fillet-basics --server /absolute/path/to/nbcad --server-arg --headless --repeat 2 --out replay-proof
 ```
 
 On Windows, use the full path to `noBS-CAD.exe`; on macOS use
@@ -138,7 +152,7 @@ packaged paths. A standalone `nbcad-mcp` server needs no `--server-arg`.
 For an AppImage without FUSE, pass each argument explicitly:
 
 ```sh
-cargo xtask run-script --recipe fillet-basics --server /absolute/path/to/noBS.CAD_0.1.0_amd64.AppImage --server-arg --appimage-extract-and-run --server-arg --mcp
+cargo xtask run-script --recipe fillet-basics --server /absolute/path/to/noBS.CAD_0.1.0_amd64.AppImage --server-arg --appimage-extract-and-run --server-arg --headless
 ```
 
 `--repeat 2` compares independent headless runs. To watch in an existing CAD
@@ -157,8 +171,9 @@ for the complete command options.
 <details>
 <summary>For developers who need a separate server binary</summary>
 
-The application already includes MCP through `--mcp`. A separate source build is
-useful when changing the server without rebuilding the desktop:
+The application always includes local stdio MCP; `--headless` only suppresses its
+window. A separate source build is useful when changing the server without
+rebuilding the desktop:
 
 ```sh
 cargo build --release --locked --manifest-path mcp-server/Cargo.toml
@@ -166,7 +181,7 @@ cargo build --release --locked --manifest-path mcp-server/Cargo.toml
 
 This produces `mcp-server/target/release/nbcad-mcp` (`nbcad-mcp.exe` on Windows),
 unless `CARGO_TARGET_DIR` overrides the output directory. This executable starts
-directly in stdio server mode, so do not pass `--mcp`.
+headlessly with stdio available and needs no launch arguments.
 
 It requires the same native OCCT runtime as its SDK. On Windows, the matching
 SDK's `bin` directory must be in the server process's `PATH`; `OCCT_ROOT` alone
