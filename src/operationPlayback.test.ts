@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PresentationController, SerialPlayback, presentation } from './operationPlayback';
 import { PresentationControls, PresentationReopen } from './components/PresentationControls';
+import { I18nProvider } from './i18n';
 
 function check(condition: boolean, message: string): void {
   if (!condition) throw new Error(message);
@@ -116,8 +117,12 @@ check(!visibility.status().visible && visibility.canApply(), 'Completed playback
 visibility.control({ command: 'configure', mode: 'present' });
 check(visibility.status().visible && !visibility.status().finished, 'A newly started run reveals its controls again');
 
-const renderControls = () => renderToStaticMarkup(createElement(PresentationControls));
-const renderReopen = () => renderToStaticMarkup(createElement(PresentationReopen));
+const renderControls = () => renderToStaticMarkup(
+  createElement(I18nProvider, { locale: 'en' }, createElement(PresentationControls)),
+);
+const renderReopen = () => renderToStaticMarkup(
+  createElement(I18nProvider, { locale: 'en' }, createElement(PresentationReopen)),
+);
 check(renderControls() === '' && renderReopen() === '', 'No playback chrome appears before a run exists');
 presentation.control({command: 'configure', mode: 'fast', step_index: 0, step_count: 692});
 let progressEmissions = 0;
