@@ -2,7 +2,7 @@
 
 The images and loops come from actual native noBS CAD renders. Compact GIFs live
 in this directory so the README previews work on GitHub; the longer MP4s are
-assets of the matching [preview](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12.2).
+assets of the matching [preview](https://github.com/jackControls/noBS-CAD/releases/tag/v0.2.0).
 No model geometry or camera frames were generated outside CAD.
 
 The three hero PNGs are consistent 800 × 520 pixel crops of the native viewport:
