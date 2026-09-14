@@ -45,6 +45,33 @@ async function clickRibbonMenuItem(panelName, groupId, itemId) {
   await menu.locator(`[data-ribbon-menu-id="${itemId}"]`).click();
 }
 
+/**
+ * The pane owns a ResizeObserver-driven fit: a viewport change, or the
+ * scrollbar appearing/disappearing inside it, re-runs the fit a frame later.
+ * Reading a pane-dependent baseline while that is still settling produces a
+ * value that no later "Fit sheet" can reproduce, so wait until both the pane
+ * box and the applied zoom have stopped changing across two frames.
+ */
+async function settleDrawingPane() {
+  await page.waitForFunction(() => new Promise((resolve) => {
+    const read = () => {
+      const pane = document.querySelector('[data-drawing-zoom]');
+      const sheet = document.querySelector('[data-testid="drawing-sheet"]');
+      if (!pane || !sheet) return null;
+      const bounds = pane.getBoundingClientRect();
+      const paper = sheet.getBoundingClientRect();
+      return [
+        Math.round(bounds.width), Math.round(bounds.height),
+        pane.clientWidth, pane.clientHeight, pane.scrollWidth, pane.scrollHeight,
+        pane.getAttribute('data-drawing-zoom'), Math.round(paper.width), Math.round(paper.height),
+      ].join('|');
+    };
+    const first = read();
+    if (first === null) return resolve(false);
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve(read() === first)));
+  }));
+}
+
 async function assertDrawingSheetFits() {
   await page.waitForFunction(() => {
     const pane = document.querySelector('[data-drawing-zoom]');
@@ -348,6 +375,7 @@ try {
 
   const drawingScroll = page.locator('[data-drawing-zoom]');
   await assertDrawingSheetFits();
+  await settleDrawingPane();
   const initialDrawingZoom = Number(await drawingScroll.getAttribute('data-drawing-zoom'));
   await drawingScroll.hover();
   await drawingScroll.dispatchEvent('wheel', {
@@ -375,6 +403,7 @@ try {
   );
   await page.getByRole('button', {name: 'Fit sheet', exact: true}).click();
   await assertDrawingSheetFits();
+  await settleDrawingPane();
   assert.ok(Math.abs(Number(await drawingScroll.getAttribute('data-drawing-zoom')) - initialDrawingZoom) < 0.01,
     'Fit sheet restores the pane-dependent starting view');
 
