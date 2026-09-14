@@ -1,7 +1,7 @@
 {
   "name": "nbcad",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local-first, open-source mechanical CAD",
   "license": "LGPL-2.1-or-later",
   "repository": {

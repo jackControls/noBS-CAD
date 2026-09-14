@@ -1,6 +1,6 @@
 [package]
 name = "nbcad-script"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "LGPL-2.1-or-later"
 description = "Declarative CAD command replay shared by MCP and repository examples"

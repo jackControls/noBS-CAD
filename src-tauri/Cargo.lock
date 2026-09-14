@@ -3926,7 +3926,7 @@ dependencies = [
 
 [[package]]
 name = "nbcad"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bevy",
  "bevy_ecs",
@@ -3969,7 +3969,7 @@ dependencies = [
 
 [[package]]
 name = "nbcad-assembly"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nbcad-core",
  "nbcad-solid",
@@ -3978,7 +3978,7 @@ dependencies = [
 
 [[package]]
 name = "nbcad-cam"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nbcad-core",
  "serde",
@@ -3987,14 +3987,14 @@ dependencies = [
 
 [[package]]
 name = "nbcad-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "nbcad-export"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nbcad-core",
  "nbcad-solid",
@@ -4005,7 +4005,7 @@ dependencies = [
 
 [[package]]
 name = "nbcad-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "nbcad-core",
@@ -4023,7 +4023,7 @@ dependencies = [
 
 [[package]]
 name = "nbcad-mcp-mutate"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nbcad-export",
  "serde_json",
@@ -4031,7 +4031,7 @@ dependencies = [
 
 [[package]]
 name = "nbcad-occt"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cxx",
  "cxx-build",
@@ -4046,7 +4046,7 @@ dependencies = [
 
 [[package]]
 name = "nbcad-recipes"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nbcad-script",
  "serde_json",
@@ -4054,14 +4054,14 @@ dependencies = [
 
 [[package]]
 name = "nbcad-script"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "nbcad-sketch"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nbcad-assembly",
  "nbcad-cam",
@@ -4073,7 +4073,7 @@ dependencies = [
 
 [[package]]
 name = "nbcad-solid"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nbcad-core",
  "serde",
