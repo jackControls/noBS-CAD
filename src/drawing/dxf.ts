@@ -9,6 +9,7 @@ import type {
   ProfileCurveDto,
   ProfileLoopDto,
 } from '../engine/types';
+import { translate } from '../i18n';
 import type { UnitSystem } from '../types/document';
 import {
   angularDimensionGeometry,
@@ -116,9 +117,9 @@ export function buildManufacturingProfileDxf(
   profileIndex: number,
 ): string {
   const outer = catalog.profiles.find((profile) => profile.index === profileIndex);
-  if (!outer) throw new Error(`Profile ${profileIndex + 1} no longer exists in ${catalog.sketch_name}.`);
+  if (!outer) throw new Error(translate('drawing.errors.errorProfileMissing').replace('{index}', String(profileIndex + 1)).replace('{sketch}', catalog.sketch_name));
   if (outer.nesting_depth % 2 !== 0) {
-    throw new Error('A manufacturing profile must be an outer material region, not a hole boundary.');
+    throw new Error(translate('drawing.errors.errorManufacturingProfileOuter'));
   }
   const holes = catalog.profiles.filter((profile) => profile.parent_index === outer.index);
   const loops = [outer, ...holes];
