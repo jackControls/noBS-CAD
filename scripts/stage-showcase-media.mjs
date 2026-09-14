@@ -94,27 +94,40 @@ async function download(asset, destination, fetcher) {
   }
 }
 
+// Resolve the pinned release and prove the manifest and media it advertises are
+// public, without downloading media bodies. Shared by staging and `--verify`.
+async function resolveRelease(inputs, fetcher) {
+  const tag = inputs[0].release;
+  const release = await readJson(`${api}/releases/tags/${tag}`, fetcher);
+  requireThat(release.tag_name === tag && release.draft === false, 'Showcase release is not public');
+  const manifestUrl = `https://github.com/${repository}/releases/download/${tag}/release-manifest.json`;
+  requireThat(release.assets?.filter(a => a.name === 'release-manifest.json' && a.browser_download_url === manifestUrl).length === 1, 'Missing public release manifest');
+  const manifest = await readJson(manifestUrl, fetcher);
+  const commit = await readJson(`${api}/commits/${tag}`, fetcher);
+  return { release, manifest, assets: mediaAssets(manifest, inputs, release, commit) };
+}
+
+// Proves the pinned showcase release could be staged: the release is published,
+// the manifest matches the tag and every advertised media asset is present.
+export async function verifyMedia({ html, fetcher = fetch }) {
+  const { assets } = await resolveRelease(mediaInputs(html), fetcher);
+  return assets;
+}
+
 export async function stageMedia({ html, site, fetcher = fetch }) {
   const inputs = mediaInputs(html);
-  const tag = inputs[0].release;
   // Reserve the destination first: stale files must never pass as this build.
   const destination = path.join(site, 'media');
   await mkdir(destination);
   let staging;
   try {
-    const release = await readJson(`${api}/releases/tags/${tag}`, fetcher);
-    requireThat(release.tag_name === tag && release.draft === false, 'Showcase release is not public');
-    const manifestUrl = `https://github.com/${repository}/releases/download/${tag}/release-manifest.json`;
-    requireThat(release.assets?.filter(a => a.name === 'release-manifest.json' && a.browser_download_url === manifestUrl).length === 1, 'Missing public release manifest');
-    const manifest = await readJson(manifestUrl, fetcher);
-    const commit = await readJson(`${api}/commits/${tag}`, fetcher);
-    const assets = mediaAssets(manifest, inputs, release, commit);
+    const { release, manifest, assets } = await resolveRelease(inputs, fetcher);
     staging = await mkdtemp(path.join(site, '.media-stage-'));
     for (const asset of assets) await download(asset, path.join(staging, asset.name), fetcher);
     // A release can be edited while its files download. Reject a moved tag or
     // replaced media/manifest instead of publishing a mixed release snapshot.
-    const latestRelease = await readJson(`${api}/releases/tags/${tag}`, fetcher);
-    const latestCommit = await readJson(`${api}/commits/${tag}`, fetcher);
+    const latestRelease = await readJson(`${api}/releases/tags/${inputs[0].release}`, fetcher);
+    const latestCommit = await readJson(`${api}/commits/${inputs[0].release}`, fetcher);
     mediaAssets(manifest, inputs, latestRelease, latestCommit);
     const identity = value => JSON.stringify({
       id: value.id,
@@ -139,6 +152,14 @@ export async function stageMedia({ html, site, fetcher = fetch }) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const assets = await stageMedia({ html: await readFile(path.join(root, 'knowledge/showcase.html'), 'utf8'), site: path.join(root, '_site') });
-  console.log(`Staged ${assets.length} verified showcase MP4s from ${assets[0].release}.`);
+  const html = await readFile(path.join(root, 'knowledge/showcase.html'), 'utf8');
+  if (process.argv.includes('--verify')) {
+    // Pull requests use this mode: a showcase pinned to a draft or unpublished
+    // release would fail the Pages deploy on main, so reject it before merge.
+    const assets = await verifyMedia({ html });
+    console.log(`Verified ${assets.length} public showcase MP4s on ${assets[0].release}.`);
+  } else {
+    const assets = await stageMedia({ html, site: path.join(root, '_site') });
+    console.log(`Staged ${assets.length} verified showcase MP4s from ${assets[0].release}.`);
+  }
 }
