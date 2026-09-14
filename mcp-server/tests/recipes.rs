@@ -118,9 +118,8 @@ impl Client {
             input,
             replies,
             id: 0,
-            // A recipe call includes the complete native construction and
-            // drawing package. Keep the vise's existing bounded allowance
-            // when sharing this client with the turbine acceptance tests.
+            // Ordinary operations retain their existing bounded allowance.
+            // Complete flagship recipes receive a per-request budget below.
             timeout: Duration::from_secs(600),
             stage: "initialize MCP".into(),
         };
@@ -135,11 +134,14 @@ impl Client {
         client
     }
     fn rpc(&mut self, method: &str, params: Value) -> Value {
+        self.rpc_with_timeout(method, params, self.timeout)
+    }
+    fn rpc_with_timeout(&mut self, method: &str, params: Value, timeout: Duration) -> Value {
         self.id += 1;
         let started = Instant::now();
-        let deadline = started + self.timeout;
+        let deadline = started + timeout;
         let request = request_summary(method, &params);
-        self.record_request(&request, "pending", started, None);
+        self.record_request(&request, "pending", started, timeout, None);
         writeln!(
             self.input,
             "{}",
@@ -160,6 +162,7 @@ impl Client {
                         "completed"
                     },
                     started,
+                    timeout,
                     error.as_deref(),
                 );
                 if started.elapsed() >= Duration::from_secs(1) {
@@ -178,9 +181,9 @@ impl Client {
                 reply["result"].clone()
             }
             Err(error) => {
-                self.record_request(&request, "failed", started, Some(&error));
+                self.record_request(&request, "failed", started, timeout, Some(&error));
                 panic!("MCP stage '{}' did not finish request {} (child {}, elapsed {:.2}s, limit {}s): {request}: {error}",
-                    self.stage, self.id, self.child.id(), started.elapsed().as_secs_f64(), self.timeout.as_secs());
+                    self.stage, self.id, self.child.id(), started.elapsed().as_secs_f64(), timeout.as_secs());
             }
         }
     }
@@ -188,7 +191,14 @@ impl Client {
         self.stage = stage.into();
         eprintln!("MCP child {}: {}", self.child.id(), self.stage);
     }
-    fn record_request(&self, request: &str, status: &str, started: Instant, error: Option<&str>) {
+    fn record_request(
+        &self,
+        request: &str,
+        status: &str,
+        started: Instant,
+        timeout: Duration,
+        error: Option<&str>,
+    ) {
         let Some(directory) =
             std::env::var_os("NBCAD_RECIPE_ARTIFACT_DIR").filter(|value| !value.is_empty())
         else {
@@ -202,7 +212,7 @@ impl Client {
                     "test":std::thread::current().name(), "child_pid":self.child.id(),
                     "stage":self.stage, "request_id":self.id, "request":request,
                     "status":status, "elapsed_ms":started.elapsed().as_millis(),
-                    "deadline_seconds":self.timeout.as_secs(), "error":error,
+                    "deadline_seconds":timeout.as_secs(), "error":error,
                 }))
                 .unwrap(),
             )
@@ -212,9 +222,13 @@ impl Client {
         }
     }
     fn call(&mut self, operation: &str, arguments: Value) -> Value {
-        let reply = self.rpc(
+        self.call_with_timeout(operation, arguments, self.timeout)
+    }
+    fn call_with_timeout(&mut self, operation: &str, arguments: Value, timeout: Duration) -> Value {
+        let reply = self.rpc_with_timeout(
             "tools/call",
             json!({"name":operation,"arguments":arguments}),
+            timeout,
         );
         if reply["isError"] == true && operation == "cad_interface" {
             eprintln!("Recipe failed: {}", reply["content"]);
@@ -262,18 +276,20 @@ impl Client {
         serde_json::from_str(text).unwrap()
     }
     fn recipe(&mut self, id: &str) -> Value {
-        self.call(
+        self.call_with_timeout(
             "cad_interface",
             json!({"action":"script","recipe":id,"mode":"fast","validate":true}),
+            recipe_timeout(id, self.timeout),
         )
     }
     fn compiled_recipe_source(&mut self, id: &str) -> Value {
         // Compare the binary's catalog replay with an independent replay of
         // this test build's exact source, even when using a copied MCP binary.
-        self.call(
+        self.call_with_timeout(
             "cad_interface",
             json!({"action":"script",
             "source":nbcad_recipes::find(id).unwrap().source,"mode":"fast","validate":true}),
+            recipe_timeout(id, self.timeout),
         )
     }
     fn restore(model: &Value) -> Self {
@@ -284,6 +300,17 @@ impl Client {
             json!({"model_json":model.as_str().map(str::to_owned).unwrap_or_else(||serde_json::to_string(model).unwrap())}),
         );
         client
+    }
+}
+
+fn recipe_timeout(id: &str, operation_timeout: Duration) -> Duration {
+    // These calls build thousands of steps plus the complete drawing package.
+    // The vise's first Windows CI replay took 594s and its independent replay
+    // exceeded 600s. Match the turbine's existing 900s construction allowance
+    // without extending later edits, interference queries or model reloads.
+    match id {
+        "d-screw-vise" | "vertical-axis-turbine" => operation_timeout.max(Duration::from_secs(900)),
+        _ => operation_timeout,
     }
 }
 
@@ -352,6 +379,19 @@ fn request_summary(method: &str, params: &Value) -> String {
         .chars()
         .take(2048)
         .collect()
+}
+
+#[test]
+fn flagship_recipe_deadlines_do_not_change_ordinary_operation_budgets() {
+    let ordinary = Duration::from_secs(600);
+    for id in ["d-screw-vise", "vertical-axis-turbine"] {
+        assert_eq!(recipe_timeout(id, ordinary), Duration::from_secs(900));
+        let longer = Duration::from_secs(1200);
+        assert_eq!(recipe_timeout(id, longer), longer);
+    }
+    for id in ["d-screw-vise-fit", "turbine-fit-coupons", "garden-bench"] {
+        assert_eq!(recipe_timeout(id, ordinary), ordinary);
+    }
 }
 
 #[test]
