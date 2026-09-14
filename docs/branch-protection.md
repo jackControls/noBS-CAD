@@ -29,6 +29,9 @@ requires repository administration; collaborator push access is insufficient.
   tests do not establish that a packaged viewport starts correctly.
 - **pages-knowledge** validates and publishes the active knowledge site. It is
   scoped to knowledge changes and is not a CAD runtime gate.
+- **Version guard** checks `VERSION` against every carrier and unit-tests those
+  carriers on every pull request and main push. It installs no dependencies, so
+  it is the cheapest always-reporting gate available.
 
 Local checks:
 
@@ -37,6 +40,8 @@ npm ci --ignore-scripts
 npm run test:frontend
 npm run build:desktop
 npm run check:knowledge
+npm run version:check
+npm run test:version
 cargo test --locked --workspace
 cargo fmt --all -- --check
 cargo fmt --manifest-path mcp-server/Cargo.toml -- --check

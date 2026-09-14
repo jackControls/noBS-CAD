@@ -1,6 +1,6 @@
 [package]
 name = "nbcad-cam"
-version = "0.2.0"
+version.workspace = true
 edition = "2021"
 description = "Host-neutral 3-axis CAM job model, toolpath planner, and post boundary for noBS CAD"
 license = "LGPL-2.0-or-later"
