@@ -1,17 +1,18 @@
 import type { CamMachineAssignmentDto, CamMachineToolBindingDto, CamPostConfigDto, CamPostDialect } from '../engine/types';
+import { translate } from '../i18n';
 
-export const MACHINE_PRESETS: { dialect: CamPostDialect; label: string }[] = [
-  { dialect: 'siemens828d', label: 'Siemens 828D · native · 3-axis' },
-  { dialect: 'fanuc', label: 'Generic FANUC-style · 3-axis' },
-  { dialect: 'haas', label: 'Haas NGC · 3-axis' },
-  { dialect: 'mitsubishi', label: 'Mitsubishi M80/M800 · 3-axis' },
-  { dialect: 'mazak', label: 'Mazak EIA milling · 3-axis' },
-  { dialect: 'syntec', label: 'Syntec milling · 3-axis' },
-  { dialect: 'okuma', label: 'Okuma OSP milling · 3-axis' },
-  { dialect: 'heidenhain', label: 'Heidenhain TNC · 3-axis' },
-  { dialect: 'hermle_heidenhain', label: 'Hermle / Heidenhain · fixed 3-axis' },
-  { dialect: 'linux_cnc', label: 'LinuxCNC · 3-axis' },
-  { dialect: 'grbl', label: 'GRBL · 3-axis' },
+export const MACHINE_PRESETS: { dialect: CamPostDialect; /** Stable stored profile name. */ label: string; /** Localized dropdown label. */ labelKey: string }[] = [
+  { dialect: 'siemens828d', label: 'Siemens 828D · native · 3-axis', labelKey: 'cam.machine.presetSiemens828d' },
+  { dialect: 'fanuc', label: 'Generic FANUC-style · 3-axis', labelKey: 'cam.machine.presetFanuc' },
+  { dialect: 'haas', label: 'Haas NGC · 3-axis', labelKey: 'cam.machine.presetHaas' },
+  { dialect: 'mitsubishi', label: 'Mitsubishi M80/M800 · 3-axis', labelKey: 'cam.machine.presetMitsubishi' },
+  { dialect: 'mazak', label: 'Mazak EIA milling · 3-axis', labelKey: 'cam.machine.presetMazak' },
+  { dialect: 'syntec', label: 'Syntec milling · 3-axis', labelKey: 'cam.machine.presetSyntec' },
+  { dialect: 'okuma', label: 'Okuma OSP milling · 3-axis', labelKey: 'cam.machine.presetOkuma' },
+  { dialect: 'heidenhain', label: 'Heidenhain TNC · 3-axis', labelKey: 'cam.machine.presetHeidenhain' },
+  { dialect: 'hermle_heidenhain', label: 'Hermle / Heidenhain · fixed 3-axis', labelKey: 'cam.machine.presetHermleHeidenhain' },
+  { dialect: 'linux_cnc', label: 'LinuxCNC · 3-axis', labelKey: 'cam.machine.presetLinuxCnc' },
+  { dialect: 'grbl', label: 'GRBL · 3-axis', labelKey: 'cam.machine.presetGrbl' },
 ];
 
 /** Starter data, never inferred from a controller brand or a magazine style.
@@ -63,7 +64,7 @@ export function reviseMachine(
   toolCalls: CamMachineToolBindingDto[] = machine.tool_calls ?? [],
 ): CamMachineAssignmentDto {
   const trimmed = name.trim();
-  if (!trimmed) throw new Error('Give this machine a shop name.');
+  if (!trimmed) throw new Error(translate('cam.errors.errorMachineShopName'));
   const result = structuredClone(machine);
   if (post.siemens_828d?.spindle_stop_subprogram) result.profile.schema_version = 2;
   if (trimmed !== result.profile.name || JSON.stringify(post) !== JSON.stringify(result.profile.post)
@@ -140,11 +141,11 @@ export function saveDefaultMachine(machine: CamMachineAssignmentDto | null): voi
  * machine settings. Numerical checks use the actual generated blocks in Rust. */
 export function compensationGuidance(dialect: CamPostConfigDto['dialect']): string {
   switch (dialect) {
-    case 'siemens828d': return 'Native Siemens: G1 engagement/cancellation with XY travel, NORM approach and explicit G451 intersection corners (outside turns up to 90°). Rounded leads are optional. Verify the machine-data corner-switch limit; Z-only startup and G450 transitions are not supported.';
-    case 'fanuc': case 'haas': case 'mitsubishi': case 'mazak': case 'syntec': return 'Fixed-axis ISO milling: G1 XY compensation entry/exit at least the project tool radius, explicit G43 H from the tool number and machine-coordinate G53 retracts. No probing, rotary or builder macros.';
-    case 'okuma': return 'OSP milling: G15 H1–H6 work offsets, G56 H tool length and G16 H0 machine-coordinate retracts. Compensation uses G1 XY entry/exit at least the tool radius. NC replay is not supported for OSP.';
-    case 'heidenhain': case 'hermle_heidenhain': return 'Fixed-axis TNC: TOOL CALL, preset rows 1–6 (cycle 247), L/CC/C and M91 retracts. Compensation entry/exit at least the tool radius. No rotary or builder macros; conversational NC replay is not supported.';
-    case 'linux_cnc': return 'LinuxCNC: G1 XY entry at least the project tool radius; cancellation exit longer than the diameter.';
-    case 'grbl': return 'GRBL requires in-computer cutter compensation; G41/G42 output is blocked.';
+    case 'siemens828d': return translate('cam.machine.guidanceSiemens');
+    case 'fanuc': case 'haas': case 'mitsubishi': case 'mazak': case 'syntec': return translate('cam.machine.guidanceIso');
+    case 'okuma': return translate('cam.machine.guidanceOkuma');
+    case 'heidenhain': case 'hermle_heidenhain': return translate('cam.machine.guidanceHeidenhain');
+    case 'linux_cnc': return translate('cam.machine.guidanceLinuxCnc');
+    case 'grbl': return translate('cam.machine.guidanceGrbl');
   }
 }

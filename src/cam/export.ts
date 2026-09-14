@@ -1,6 +1,7 @@
 import { getEngine } from '../engine';
 import type { CamPostConfigDto, CamPostResultDto } from '../engine/types';
 import { chooseSaveTarget, writeSaveTarget, type SaveType } from '../files/fileIO';
+import { translate } from '../i18n';
 import { useAppStore } from '../store/appStore';
 
 function safeFileStem(value: string): string {
@@ -18,9 +19,9 @@ export async function prepareActiveCamProgram(
 ): Promise<{ result: CamPostResultDto; save: () => Promise<boolean> }> {
   const state = useAppStore.getState();
   const setupId = state.camDocument.active_setup_id;
-  if (setupId === null) throw new Error('Create a CAM setup before posting NC code.');
+  if (setupId === null) throw new Error(translate('cam.errors.errorCreateSetupBeforePost'));
   const setup = state.camDocument.setups.find((candidate) => candidate.id === setupId);
-  if (!setup) throw new Error('The active CAM setup no longer exists.');
+  if (!setup) throw new Error(translate('cam.errors.errorActiveSetupMissing'));
 
   const result = await (await getEngine()).camPost({
     setup_id: setupId,
@@ -31,7 +32,7 @@ export async function prepareActiveCamProgram(
     const now = useAppStore.getState();
     if (now.camDocument !== state.camDocument || now.solidScene !== state.solidScene
       || now.document !== state.document) {
-      throw new Error('The project or machine settings changed. Review and verify NC output again before saving.');
+      throw new Error(translate('cam.errors.errorProjectChangedVerifyNc'));
     }
   };
   ensureCurrent();
@@ -61,9 +62,9 @@ export async function prepareActiveCamProgram(
 export async function exportPostEvents(): Promise<boolean> {
   const state = useAppStore.getState();
   const setupId = state.camDocument.active_setup_id;
-  if (setupId === null) throw new Error('Create a CAM setup before exporting post events.');
+  if (setupId === null) throw new Error(translate('cam.errors.errorCreateSetupBeforePostEvents'));
   const setup = state.camDocument.setups.find((candidate) => candidate.id === setupId);
-  if (!setup) throw new Error('The active CAM setup no longer exists.');
+  if (!setup) throw new Error(translate('cam.errors.errorActiveSetupMissing'));
   const events = await (await getEngine()).camPostEvents(setupId);
   const target = await chooseSaveTarget(
     `${safeFileStem(state.document?.name ?? 'Untitled')}-${safeFileStem(setup.name)}-post-events.json`,

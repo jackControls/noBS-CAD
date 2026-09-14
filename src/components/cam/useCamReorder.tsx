@@ -5,6 +5,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
+import { translate } from '../../i18n';
 
 type Drag = {
   scope: number | null;
@@ -79,12 +80,12 @@ export function useCamReorder(commit: (scope: number | null, ids: number[]) => P
       }, 0);
       if (cancelled || value.ids.every((value, index) => value === ids[index])) {
         setDrag(null);
-        setMessage(cancelled ? 'Reorder cancelled.' : '');
+        setMessage(cancelled ? translate('cam.browser.reorderCancelled') : '');
         return;
       }
       pending.current = true;
       void commit(scope, value.ids)
-        .then(() => setMessage(`${label} reordered. Only paths marked out of date need regeneration.`))
+        .then(() => setMessage(translate('cam.browser.reordered').replace('{label}', label)))
         .catch((error) => setMessage(error instanceof Error ? error.message : String(error)))
         .finally(() => {
           pending.current = false;
@@ -178,7 +179,7 @@ export function useCamReorder(commit: (scope: number | null, ids: number[]) => P
       ordered.splice(to, 0, id);
       pending.current = true;
       void commit(scope, ordered)
-        .then(() => setMessage('CAM order updated. Only paths marked out of date need regeneration.'))
+        .then(() => setMessage(translate('cam.browser.orderUpdated')))
         .catch((e) => setMessage(e instanceof Error ? e.message : String(e)))
         .finally(() => {
           pending.current = false;

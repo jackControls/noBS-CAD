@@ -44,6 +44,7 @@ import type {
   CamToolKind,
 } from '../../engine/types';
 import { useAppStore } from '../../store/appStore';
+import { useTranslation } from '../../i18n';
 import { runCamAction } from './CamBrowser';
 import {
   CAM_DIALOG_INPUT,
@@ -56,29 +57,29 @@ import {
 type CamToolPickKind = CamOperationDto['kind'];
 
 const KIND_LABELS: Record<CamToolKind, string> = {
-  flat_end_mill: 'Flat end mill',
-  ball_end_mill: 'Ball end mill',
-  bull_nose_end_mill: 'Bull nose end mill',
-  face_mill: 'Face / shell mill',
-  drill: 'Drill',
-  chamfer_mill: 'Chamfer mill',
-  tap: 'Tap',
-  reamer: 'Reamer',
-  boring_bar: 'Boring bar',
-  thread_mill: 'Thread mill',
-  turning_general: 'General turning',
+  flat_end_mill: 'cam.tool.kindFlatEndMill',
+  ball_end_mill: 'cam.tool.kindBallEndMill',
+  bull_nose_end_mill: 'cam.tool.kindBullNoseEndMill',
+  face_mill: 'cam.tool.kindFaceShellMill',
+  drill: 'cam.tool.kindDrill',
+  chamfer_mill: 'cam.tool.kindChamferMill',
+  tap: 'cam.tool.kindTap',
+  reamer: 'cam.tool.kindReamer',
+  boring_bar: 'cam.tool.kindBoringBar',
+  thread_mill: 'cam.tool.kindThreadMill',
+  turning_general: 'cam.tool.kindGeneralTurning',
 };
 
 /** New-tool picker page: kinds grouped the way machinists shop for them.
  *  Turning lands with its own workspace; the tile stays visible as a
  *  promise, disabled. */
-const KIND_GROUPS: Array<{ label: string; kinds: CamToolKind[]; planned?: boolean }> = [
+const KIND_GROUPS: Array<{ labelKey: string; kinds: CamToolKind[]; planned?: boolean }> = [
   {
-    label: 'Milling',
+    labelKey: 'cam.tool.groupMilling',
     kinds: ['flat_end_mill', 'ball_end_mill', 'bull_nose_end_mill', 'face_mill', 'chamfer_mill', 'thread_mill'],
   },
-  { label: 'Hole making', kinds: ['drill', 'tap', 'reamer', 'boring_bar'] },
-  { label: 'Turning (planned)', kinds: ['turning_general'], planned: true },
+  { labelKey: 'cam.tool.groupHoleMaking', kinds: ['drill', 'tap', 'reamer', 'boring_bar'] },
+  { labelKey: 'cam.tool.groupTurningPlanned', kinds: ['turning_general'], planned: true },
 ];
 
 /** Kinds whose shank feeds axially into a hole; the center-cutting flag does
@@ -107,6 +108,7 @@ export function CamToolDialog({
    *  tool hands its id back through `camToolPick` instead of editing it. */
   pickFor?: { kind: CamToolPickKind; cycle?: CamDrillCycle } | null;
 }) {
+  const { t } = useTranslation();
   const cam = useAppStore((state) => state.camDocument);
   // In picker mode closing cancels the pick and returns to the dialog below.
   const close = () =>
@@ -138,7 +140,7 @@ export function CamToolDialog({
         [
           tool.name,
           tool.number != null ? `t${tool.number}` : '',
-          KIND_LABELS[tool.kind],
+          t(KIND_LABELS[tool.kind]),
         ].some((field) => field.toLowerCase().includes(needle)),
       )
     : tools;
@@ -200,7 +202,7 @@ export function CamToolDialog({
 
   const saveTool = async (draft: CamToolDraft, existingId: number | null) => {
     if (scope === 'central') {
-      if (!central) throw new Error('The central library is unavailable. Check its folder in Storage settings.');
+      if (!central) throw new Error(t('cam.tool.errorCentralUnavailable'));
       if (existingId !== null) {
         await updateCentralLibraryTool(existingId, (tool) => Object.assign(tool, draft), central);
       } else {
@@ -250,7 +252,7 @@ export function CamToolDialog({
         {centralTwin === null ? (
           <button
             type="button"
-            title="Copy this project tool into the central library"
+            title={t('cam.tool.copyToCentralHint')}
             onClick={() =>
               runCamAction(async () => {
                 await publishCamToolToCentral(selected.id);
@@ -259,13 +261,13 @@ export function CamToolDialog({
             }
             className="flex h-7 items-center rounded border border-edge px-2 text-[10px] font-semibold text-mute hover:border-accent/40 hover:text-accent"
           >
-            Add to central library
+            {t('cam.tool.addToCentral')}
           </button>
         ) : twinDiffers ? (
           <>
             <button
               type="button"
-              title="Overwrite the central copy with this project's edits"
+              title={t('cam.tool.overwriteCentralHint')}
               onClick={() =>
                 runCamAction(async () => {
                   await publishCamToolToCentral(selected.id);
@@ -274,11 +276,11 @@ export function CamToolDialog({
               }
               className="flex h-7 items-center rounded border border-edge px-2 text-[10px] font-semibold text-mute hover:border-accent/40 hover:text-accent"
             >
-              Update central copy
+              {t('cam.tool.updateCentral')}
             </button>
             <button
               type="button"
-              title="Discard this project's edits and reload the central copy"
+              title={t('cam.tool.resetCentralHint')}
               onClick={() =>
                 runCamAction(async () => {
                   await importCamToolFromCentral(selected.id);
@@ -289,11 +291,11 @@ export function CamToolDialog({
               }
               className="flex h-7 items-center rounded border border-edge px-2 text-[10px] font-semibold text-mute hover:border-warn/40 hover:text-warn"
             >
-              Reset to central copy
+              {t('cam.tool.resetCentral')}
             </button>
           </>
         ) : (
-          <span className="px-1 text-[9px] italic text-mute/60">In sync with the central copy</span>
+          <span className="px-1 text-[9px] italic text-mute/60">{t('cam.tool.inSyncCentral')}</span>
         )}
       </div>
     ) : null;
@@ -314,16 +316,16 @@ export function CamToolDialog({
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
           <CamToolIcon id="camToolLibrary" size={18} />
           <span className="text-xs font-semibold text-ink">
-            {pickFor ? 'Select a tool' : 'Tool Library'}
+            {pickFor ? t('cam.tool.selectTool') : t('cam.tool.libraryTitle')}
           </span>
           {centralOn && <button type="button" className="text-[10px] text-mute underline hover:text-ink"
-            onClick={() => useAppStore.getState().setSettingsOpen(true)}>Storage settings…</button>}
+            onClick={() => useAppStore.getState().setSettingsOpen(true)}>{t('cam.tool.storageSettings')}</button>}
           {centralOn && (
             <div className="ml-1 flex items-center gap-0.5 rounded border border-edge bg-header/40 p-0.5">
               {(
                 [
-                  ['central', 'Central library'],
-                  ['project', 'This project'],
+                  ['central', t('cam.tool.scopeCentral')],
+                  ['project', t('cam.tool.scopeProject')],
                 ] as const
               ).map(([value, label]) => (
                 <button
@@ -343,7 +345,7 @@ export function CamToolDialog({
             </div>
           )}
           <span className="flex-1 text-right text-[10px] text-mute">
-            {tools.length} tools · units {lu}
+            {t('cam.tool.toolCountUnits').replace('{count}', String(tools.length)).replace('{unit}', lu)}
           </span>
           <button
             type="button"
@@ -358,14 +360,14 @@ export function CamToolDialog({
             {!pickFor && scope === 'project' && centralOn && importable.length > 0 && (
               <div className="flex h-9 shrink-0 items-center gap-2 border-b border-edge px-3">
                 <span className="text-[9px] font-semibold uppercase tracking-widest text-mute/60">
-                  Import
+                  {t('cam.tool.importSection')}
                 </span>
                 <select
                   value={importId}
                   onChange={(event) => setImportId(event.target.value)}
                   className="h-6 min-w-0 flex-1 rounded border border-edge bg-header/60 px-1.5 text-[10px] text-ink"
                 >
-                  <option value="">From the central library…</option>
+                  <option value="">{t('cam.tool.fromCentralLibrary')}</option>
                   {importable.map((tool) => (
                     <option key={tool.id} value={tool.id}>
                       {tool.number != null ? `T${tool.number} · ` : ''}
@@ -384,7 +386,7 @@ export function CamToolDialog({
                   }
                   className="h-6 rounded border border-accent/50 bg-accent/15 px-2 text-[10px] font-semibold text-accent hover:bg-accent/25 disabled:opacity-40"
                 >
-                  Add to project
+                  {t('cam.tool.addToProject')}
                 </button>
               </div>
             )}
@@ -393,7 +395,7 @@ export function CamToolDialog({
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Filter by name, number, or type…"
+                placeholder={t('cam.tool.filterPlaceholder')}
                 className="h-6 min-w-0 flex-1 rounded border border-edge bg-header/60 px-1.5 text-[10px] text-ink outline-none placeholder:text-mute/50 focus:border-accent/50"
               />
               {needle && (
@@ -407,14 +409,14 @@ export function CamToolDialog({
                 <thead className="sticky top-0 bg-panel">
                   <tr className="border-b border-edge text-left text-[9px] uppercase tracking-wider text-mute">
                     <th className="px-3 py-1.5 font-semibold">#</th>
-                    <th className="px-2 py-1.5 font-semibold">Name</th>
-                    <th className="px-2 py-1.5 font-semibold">Type</th>
+                    <th className="px-2 py-1.5 font-semibold">{t('cam.tool.name')}</th>
+                    <th className="px-2 py-1.5 font-semibold">{t('cam.tool.colType')}</th>
                     <th className="px-2 py-1.5 font-semibold">Ø</th>
-                    <th className="px-2 py-1.5 font-semibold">Corner R</th>
-                    <th className="px-2 py-1.5 font-semibold">Flute len</th>
-                    <th className="px-2 py-1.5 font-semibold">Overall</th>
-                    <th className="px-2 py-1.5 font-semibold">Flutes</th>
-                    <th className="px-2 py-1.5 font-semibold">Profiles</th>
+                    <th className="px-2 py-1.5 font-semibold">{t('cam.tool.colCornerR')}</th>
+                    <th className="px-2 py-1.5 font-semibold">{t('cam.tool.colFluteLen')}</th>
+                    <th className="px-2 py-1.5 font-semibold">{t('cam.tool.colOverall')}</th>
+                    <th className="px-2 py-1.5 font-semibold">{t('cam.tool.colFlutes')}</th>
+                    <th className="px-2 py-1.5 font-semibold">{t('cam.tool.colProfiles')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -436,9 +438,9 @@ export function CamToolDialog({
                         }}
                         title={
                           pickFor && !usable
-                            ? 'Not usable for this operation'
+                            ? t('cam.tool.notUsable')
                             : pickFor
-                              ? 'Double-click to select'
+                              ? t('cam.tool.doubleClickSelect')
                               : undefined
                         }
                         className={`border-b border-edge/50 ${
@@ -453,7 +455,7 @@ export function CamToolDialog({
                           {tool.number != null ? `T${tool.number}` : '—'}
                         </td>
                         <td className="max-w-0 truncate px-2 py-1.5">{tool.name}</td>
-                        <td className="px-2 py-1.5">{KIND_LABELS[tool.kind]}</td>
+                        <td className="px-2 py-1.5">{t(KIND_LABELS[tool.kind])}</td>
                         <td className="px-2 py-1.5 font-mono">
                           {displayLength(tool.diameter, units).toFixed(2)}
                         </td>
@@ -475,18 +477,18 @@ export function CamToolDialog({
                     <tr>
                       <td colSpan={9} className="px-4 py-8 text-center text-[11px] italic text-mute/70">
                         {needle
-                          ? `No tools match “${query.trim()}”.`
+                          ? t('cam.tool.noMatch').replace('{query}', query.trim())
                           : pickFor
                             ? centralOn
-                              ? 'Nothing usable for this operation here — check the other library scope.'
-                              : 'Nothing usable for this operation — create a compatible tool first.'
+                              ? t('cam.tool.nothingUsableOtherScope')
+                              : t('cam.tool.nothingUsableCreate')
                             : scope === 'central'
                               ? central === null
-                                ? 'Loading the central library…'
-                                : 'Central library is empty — tools added here are importable from every project.'
+                                ? t('cam.tool.loadingCentral')
+                                : t('cam.tool.centralEmpty')
                               : centralOn
-                                ? 'No tools in this project — import from the central library, or create a new one.'
-                                : 'Empty library — add tools before programming operations.'}
+                                ? t('cam.tool.projectEmptyWithCentral')
+                                : t('cam.tool.emptyLibrary')}
                       </td>
                     </tr>
                   )}
@@ -498,14 +500,14 @@ export function CamToolDialog({
                 <span className="min-w-0 flex-1 truncate text-[10px] text-mute">
                   {pickSelected
                     ? `${pickSelected.number != null ? `T${pickSelected.number} · ` : ''}${pickSelected.name}`
-                    : 'Pick a compatible tool — double-click selects directly.'}
+                    : t('cam.tool.pickCompatibleHint')}
                 </span>
                 <button
                   type="button"
                   onClick={close}
                   className="h-6 rounded border border-edge px-2 text-[10px] text-mute hover:text-ink"
                 >
-                  Cancel
+                  {t('cam.tool.cancel')}
                 </button>
                 <button
                   type="button"
@@ -513,7 +515,7 @@ export function CamToolDialog({
                   onClick={() => pickSelected && void confirmPick(pickSelected)}
                   className="h-6 rounded border border-accent/50 bg-accent/15 px-2 text-[10px] font-semibold text-accent hover:bg-accent/25 disabled:opacity-40"
                 >
-                  Select tool
+                  {t('cam.tool.selectToolAction')}
                 </button>
               </div>
             ) : (
@@ -522,35 +524,35 @@ export function CamToolDialog({
                 type="button"
                 title={
                   scope === 'project'
-                    ? 'Create a tool in this project (also registered in the central library)'
-                    : 'Create a tool in the central library'
+                    ? t('cam.tool.createProjectHint')
+                    : t('cam.tool.createCentralHint')
                 }
                 onClick={() => startNew(null)}
                 className="flex h-6 items-center gap-1 rounded border border-accent/50 bg-accent/15 px-2 text-[10px] font-semibold text-accent hover:bg-accent/25"
               >
-                <Plus size={12} /> New tool
+                <Plus size={12} /> {t('cam.tool.newTool')}
               </button>
               {selected && (
                 <>
                   <button
                     type="button"
-                    title="Duplicate the selected tool into a new draft"
+                    title={t('cam.tool.duplicateHint')}
                     onClick={() => startNew(selected)}
                     className="flex h-6 items-center gap-1 rounded border border-edge px-2 text-[10px] text-mute hover:text-ink"
                   >
-                    <Copy size={11} /> Duplicate
+                    <Copy size={11} /> {t('cam.tool.duplicate')}
                   </button>
                   <button
                     type="button"
                     title={
                       scope === 'central'
-                        ? 'Delete from the central library (project snapshots are unaffected)'
-                        : 'Delete from this project (blocked while operations use it)'
+                        ? t('cam.tool.deleteCentralHint')
+                        : t('cam.tool.deleteProjectHint')
                     }
                     onClick={() => removeTool(selected)}
                     className="flex h-6 items-center gap-1 rounded border border-edge px-2 text-[10px] text-mute hover:text-warn"
                   >
-                    <Trash2 size={11} /> Delete
+                    <Trash2 size={11} /> {t('cam.tool.delete')}
                   </button>
                 </>
               )}
@@ -572,7 +574,7 @@ export function CamToolDialog({
               />
             ) : (
               <p className="p-4 text-[10px] italic text-mute/70">
-                Select a tool to edit it, or add a new one.
+                {t('cam.tool.selectToEdit')}
               </p>
             )}
           </div>
@@ -625,6 +627,7 @@ function ToolEditor({
   /** Optional project↔central sync buttons rendered in the footer. */
   syncActions?: ReactNode;
 }) {
+  const { t } = useTranslation();
   const cam = useAppStore((state) => state.camDocument);
   const units = cam.units;
   const lu = lengthUnitLabel(units);
@@ -716,8 +719,8 @@ function ToolEditor({
       plungeDriver: holemaking ? 'fpr' : 'plunge',
     });
     const first = source
-      ? fromCutting('Default preset', source.cutting)
-      : fromCutting('Default preset', { spindle_rpm: 0, feed_xy: 0, feed_z: 0, coolant: 'flood' });
+      ? fromCutting(t('cam.tool.defaultPreset'), source.cutting)
+      : fromCutting(t('cam.tool.defaultPreset'), { spindle_rpm: 0, feed_xy: 0, feed_z: 0, coolant: 'flood' });
     if (!source) {
       first.rpm = '';
       first.feedXy = '';
@@ -870,46 +873,46 @@ function ToolEditor({
   const resolveRpm = (profile: ProfileDraft): number => {
     if (profile.speedDriver === 'vc' && profile.surfaceSpeed.trim()) {
       const de = effectiveDiameterMm();
-      if (de === null) throw new Error('Diameter is required to resolve surface speed.');
+      if (de === null) throw new Error(t('cam.tool.errorDiameterRequired'));
       return rpmFromCuttingSpeed(
-        commitCuttingSpeed(parseDraft(profile.surfaceSpeed, 'Surface speed'), units),
+        commitCuttingSpeed(parseDraft(profile.surfaceSpeed, t('cam.tool.paramSurfaceSpeed')), units),
         de,
       );
     }
-    return Math.round(parseDraft(profile.rpm, `${profile.name || 'Default preset'} spindle speed`));
+    return Math.round(parseDraft(profile.rpm, t('cam.tool.paramSpindleSpeed').replace('{profile}', profile.name || t('cam.tool.defaultPreset'))));
   };
 
   const cuttingOf = (profile: ProfileDraft): CamCuttingParametersDto => {
     const rpm = resolveRpm(profile);
     const plungeMm =
       profile.plungeDriver === 'fpr' && profile.plungePerRev.trim()
-        ? commitLength(parseDraft(profile.plungePerRev, 'Feed per revolution'), units) * rpm
-        : commitFeed(parseDraft(profile.feedZ, `${profile.name || 'Default preset'} plunge feed`), units);
+        ? commitLength(parseDraft(profile.plungePerRev, t('cam.tool.paramFeedPerRevolution')), units) * rpm
+        : commitFeed(parseDraft(profile.feedZ, t('cam.tool.paramPlungeFeed').replace('{profile}', profile.name || t('cam.tool.defaultPreset'))), units);
     // Holemaking has no transverse feed: the drilling feed serves both axes
     // so downstream consumers (drill feed-out, boring) read a real value.
     const feedMm = holemaking
       ? plungeMm
       : profile.feedDriver === 'fz' && profile.feedPerTooth.trim()
-        ? commitLength(parseDraft(profile.feedPerTooth, 'Feed per tooth'), units) * rpm * (flutes ?? 1)
-        : commitFeed(parseDraft(profile.feedXy, `${profile.name || 'Default preset'} cutting feed`), units);
+        ? commitLength(parseDraft(profile.feedPerTooth, t('cam.tool.paramFeedPerTooth')), units) * rpm * (flutes ?? 1)
+        : commitFeed(parseDraft(profile.feedXy, t('cam.tool.paramCuttingFeed').replace('{profile}', profile.name || t('cam.tool.defaultPreset'))), units);
     return { spindle_rpm: rpm, feed_xy: feedMm, feed_z: plungeMm, coolant: profile.coolant };
   };
 
   /** Parse the identity/geometry tabs so a bad field blocks submit early. */
   const checkGeometry = () => {
-    if (number.trim()) parseDraft(number, 'Tool number');
-    parseDraft(diameter, 'Diameter');
+    if (number.trim()) parseDraft(number, t('cam.tool.toolNumber'));
+    parseDraft(diameter, t('cam.tool.diameter'));
     if (CORNER_RADIUS_KINDS.includes(kind) && cornerShape === 'radius') {
-      if (parseDraft(cornerRadius, 'Corner radius') <= 0) throw new Error('Corner radius must be positive.');
+      if (parseDraft(cornerRadius, t('cam.tool.cornerRadiusLabel')) <= 0) throw new Error(t('cam.tool.errorCornerRadiusPositive'));
     }
     if (CORNER_RADIUS_KINDS.includes(kind) && cornerShape === 'chamfer') {
-      parseDraft(cornerChamferWidth, 'Corner chamfer width');
-      parseDraft(cornerChamferAngle, 'Corner chamfer angle');
+      parseDraft(cornerChamferWidth, t('cam.tool.cornerChamferWidth'));
+      parseDraft(cornerChamferAngle, t('cam.tool.paramCornerChamferAngle'));
     }
-    parseDraft(fluteLength, 'Flute length');
-    parseDraft(overallLength, 'Overall length');
-    parseDraft(fluteCount, 'Flute count');
-    if (kind === 'chamfer_mill' || kind === 'drill') parseDraft(pointAngle, 'Point angle');
+    parseDraft(fluteLength, t('cam.tool.fluteLength'));
+    parseDraft(overallLength, t('cam.tool.overallLength'));
+    parseDraft(fluteCount, t('cam.tool.fluteCount'));
+    if (kind === 'chamfer_mill' || kind === 'drill') parseDraft(pointAngle, t('cam.tool.paramPointAngle'));
   };
 
   const submit = (event: FormEvent) => {
@@ -918,55 +921,55 @@ function ToolEditor({
     try {
       checkGeometry();
       const toolNumber = number.trim()
-        ? Math.round(parseDraft(number, 'Tool number'))
+        ? Math.round(parseDraft(number, t('cam.tool.toolNumber')))
         : null;
       if (toolNumber !== null && toolNumber <= 0) {
-        throw new Error('Tool number must be positive when assigned.');
+        throw new Error(t('cam.tool.errorToolNumberPositive'));
       }
       const presetNames = profiles.slice(1).map((profile) => profile.name.trim());
       if (presetNames.some((presetName) => !presetName)) {
-        throw new Error('Cutting-data profiles must have names.');
+        throw new Error(t('cam.tool.errorProfileNamesRequired'));
       }
       if (new Set(presetNames).size !== presetNames.length) {
-        throw new Error('Cutting-data profile names must be unique.');
+        throw new Error(t('cam.tool.errorProfileNamesUnique'));
       }
       // Optional planner-step defaults: positive, and a step-over past the
       // diameter can never clear the web between passes.
       const stepDownDefault = defaultStepDown.trim()
-        ? commitLength(parseDraft(defaultStepDown, 'Default step-down'), units)
+        ? commitLength(parseDraft(defaultStepDown, t('cam.tool.paramDefaultStepDown')), units)
         : null;
       const stepOverDefault = defaultStepOver.trim()
-        ? commitLength(parseDraft(defaultStepOver, 'Default step-over'), units)
+        ? commitLength(parseDraft(defaultStepOver, t('cam.tool.paramDefaultStepOver')), units)
         : null;
       if (stepDownDefault !== null && stepDownDefault <= 0) {
-        throw new Error('Default step-down must be positive.');
+        throw new Error(t('cam.tool.errorStepDownPositive'));
       }
       if (stepOverDefault !== null && stepOverDefault <= 0) {
-        throw new Error('Default step-over must be positive.');
+        throw new Error(t('cam.tool.errorStepOverPositive'));
       }
-      const diameterMmForSteps = commitLength(parseDraft(diameter, 'Diameter'), units);
+      const diameterMmForSteps = commitLength(parseDraft(diameter, t('cam.tool.diameter')), units);
       if (stepOverDefault !== null && stepOverDefault > diameterMmForSteps + 1e-9) {
-        throw new Error('Default step-over must not exceed the tool diameter.');
+        throw new Error(t('cam.tool.errorStepOverExceedsDiameter'));
       }
       const draft: CamToolDraft = {
         number: toolNumber,
-        name: name.trim() || `${KIND_LABELS[kind]}${toolNumber !== null ? ` T${toolNumber}` : ''}`,
+        name: name.trim() || `${t(KIND_LABELS[kind])}${toolNumber !== null ? ` T${toolNumber}` : ''}`,
         kind,
-        diameter: commitLength(parseDraft(diameter, 'Diameter'), units),
+        diameter: commitLength(parseDraft(diameter, t('cam.tool.diameter')), units),
         corner_radius:
           CORNER_RADIUS_KINDS.includes(kind) && cornerShape === 'radius'
-            ? commitLength(parseDraft(cornerRadius, 'Corner radius'), units)
+            ? commitLength(parseDraft(cornerRadius, t('cam.tool.cornerRadiusLabel')), units)
             : null,
         corner_chamfer: CORNER_RADIUS_KINDS.includes(kind) && cornerShape === 'chamfer'
-          ? { width: commitLength(parseDraft(cornerChamferWidth, 'Corner chamfer width'), units),
-              angle_degrees: parseDraft(cornerChamferAngle, 'Corner chamfer angle') }
+          ? { width: commitLength(parseDraft(cornerChamferWidth, t('cam.tool.cornerChamferWidth')), units),
+              angle_degrees: parseDraft(cornerChamferAngle, t('cam.tool.paramCornerChamferAngle')) }
           : null,
-        flute_length: commitLength(parseDraft(fluteLength, 'Flute length'), units),
-        overall_length: commitLength(parseDraft(overallLength, 'Overall length'), units),
+        flute_length: commitLength(parseDraft(fluteLength, t('cam.tool.fluteLength')), units),
+        overall_length: commitLength(parseDraft(overallLength, t('cam.tool.overallLength')), units),
         center_cutting: HOLE_TOOL_KINDS.includes(kind) ? false : centerCutting,
-        flute_count: Math.round(parseDraft(fluteCount, 'Flute count')),
+        flute_count: Math.round(parseDraft(fluteCount, t('cam.tool.fluteCount'))),
         point_angle_degrees:
-          kind === 'chamfer_mill' || kind === 'drill' ? parseDraft(pointAngle, 'Point angle') : null,
+          kind === 'chamfer_mill' || kind === 'drill' ? parseDraft(pointAngle, t('cam.tool.paramPointAngle')) : null,
         default_step_down: stepDownDefault,
         default_step_over: stepOverDefault,
         cutting: cuttingOf(profiles[0]),
@@ -990,13 +993,13 @@ function ToolEditor({
     return (
       <div className="flex min-h-full flex-col">
         <div className="flex h-9 shrink-0 items-center border-b border-edge px-3 text-[11px] font-semibold text-ink">
-          New library tool · pick a type
+          {t('cam.tool.newToolPickType')}
         </div>
         <div className="min-h-0 flex-1 space-y-3 p-3">
           {KIND_GROUPS.map((group) => (
-            <div key={group.label}>
+            <div key={group.labelKey}>
               <div className="mb-1.5 text-[9px] font-semibold uppercase tracking-widest text-mute/60">
-                {group.label}
+                {t(group.labelKey)}
               </div>
               <div className="grid grid-cols-2 gap-1.5">
                 {group.kinds.map((candidate) => (
@@ -1004,7 +1007,7 @@ function ToolEditor({
                     key={candidate}
                     type="button"
                     disabled={group.planned}
-                    title={group.planned ? 'Turning support lands with its own workspace' : undefined}
+                    title={group.planned ? t('cam.tool.turningPlannedHint') : undefined}
                     onClick={() => {
                       selectKind(candidate);
                       if (HOLE_TOOL_KINDS.includes(candidate)) setCenterCutting(false);
@@ -1016,16 +1019,14 @@ function ToolEditor({
                         : 'border-edge bg-header/50 text-mute hover:border-accent/40 hover:text-ink'
                     }`}
                   >
-                    {KIND_LABELS[candidate]}
+                    {t(KIND_LABELS[candidate])}
                   </button>
                 ))}
               </div>
             </div>
           ))}
           <p className="text-[9px] leading-relaxed text-mute">
-            The kind decides which operations can pick this tool. Everything
-            else — geometry, cutting data — is edited on the tabs, in any
-            order, now or later.
+            {t('cam.tool.kindExplainer')}
           </p>
         </div>
       </div>
@@ -1039,15 +1040,15 @@ function ToolEditor({
     <form onSubmit={submit} className="flex min-h-full flex-col">
       <div className="flex h-9 shrink-0 items-center border-b border-edge px-3 text-[11px] font-semibold text-ink">
         {existing
-          ? `Edit ${existing.number != null ? `T${existing.number} ` : ''}${existing.name}`
-          : 'New library tool'}
+          ? t('cam.tool.editTitle').replace('{name}', `${existing.number != null ? `T${existing.number} ` : ''}${existing.name}`)
+          : t('cam.tool.newLibraryTool')}
       </div>
       <div className="flex shrink-0 items-center gap-1 border-b border-edge px-2 py-1">
         {(
           [
-            ['general', 'General'],
-            ['cutter', 'Cutter'],
-            ['cutting', 'Cutting data'],
+            ['general', t('cam.tool.tabGeneral')],
+            ['cutter', t('cam.tool.tabCutter')],
+            ['cutting', t('cam.tool.tabCuttingData')],
           ] as [EditorTab, string][]
         ).map(([value, label]) => (
           <button
@@ -1069,25 +1070,25 @@ function ToolEditor({
 
         {tab === 'general' && (
           <>
-            <DialogSection title="TOOL">
+            <DialogSection title={t('cam.tool.sectionTool')}>
               {!existing && (
                 <div className="mb-2 flex items-center gap-2 text-[10px] text-mute">
                   <span className="rounded border border-accent/40 bg-accent/10 px-2 py-0.5 font-semibold text-accent">
-                    {KIND_LABELS[kind]}
+                    {t(KIND_LABELS[kind])}
                   </span>
                   <button
                     type="button"
                     onClick={() => setPicking(true)}
                     className="text-mute underline decoration-dotted hover:text-ink"
                   >
-                    Change type
+                    {t('cam.tool.changeType')}
                   </button>
                 </div>
               )}
               <div className="grid grid-cols-2 gap-2">
                 {existing && (
                   <label className="block">
-                    <span className={CAM_DIALOG_LABEL}>Kind</span>
+                    <span className={CAM_DIALOG_LABEL}>{t('cam.tool.kind')}</span>
                     <select
                       value={kind}
                       onChange={(event) => selectKind(event.target.value as CamToolKind)}
@@ -1097,65 +1098,62 @@ function ToolEditor({
                         .filter((candidate) => candidate !== 'turning_general')
                         .map((candidate) => (
                           <option key={candidate} value={candidate}>
-                            {KIND_LABELS[candidate]}
+                            {t(KIND_LABELS[candidate])}
                           </option>
                         ))}
                     </select>
                   </label>
                 )}
-                <DraftNumber label="Tool number (optional)" value={number} onChange={setNumber} integer />
+                <DraftNumber label={t('cam.tool.toolNumberOptional')} value={number} onChange={setNumber} integer />
               </div>
               <label className="block">
-                <span className={CAM_DIALOG_LABEL}>Name</span>
+                <span className={CAM_DIALOG_LABEL}>{t('cam.tool.name')}</span>
                 <input
                   value={name}
                   onChange={(event) => setName(event.target.value)}
-                  placeholder={KIND_LABELS[kind]}
+                  placeholder={t(KIND_LABELS[kind])}
                   className={CAM_DIALOG_INPUT}
                 />
               </label>
               <p className="text-[9px] leading-relaxed text-mute">
-                Posts use the project-library number, or this exact name on
-                name-capable controls. Names are not rewritten; numbers and names
-                must match the machine's tool table. Operations reference the tool by
-                its internal id, so renumbering or renaming never breaks them.
+                {t('cam.tool.nameHelp')}
               </p>
             </DialogSection>
           </>
         )}
 
         {tab === 'cutter' && (
-          <DialogSection title={`GEOMETRY (${lu})`}>
+          <DialogSection title={t('cam.tool.sectionGeometry').replace('{unit}', lu)}>
             <div className="grid grid-cols-2 gap-2">
-              <DraftNumber label="Diameter" value={diameter} onChange={(value) => { setDiameter(value); }} unit={lu} />
+              <DraftNumber label={t('cam.tool.diameter')} value={diameter} onChange={(value) => { setDiameter(value); }} unit={lu} />
               {(kind === 'flat_end_mill' || kind === 'face_mill') && (
                 <label className="block">
-                  <span className={CAM_DIALOG_LABEL}>Corner shape</span>
-                  <select aria-label="Corner shape" className={CAM_DIALOG_INPUT} value={cornerShape}
+                  <span className={CAM_DIALOG_LABEL}>{t('cam.tool.cornerShape')}</span>
+                  <select aria-label={t('cam.tool.cornerShape')} className={CAM_DIALOG_INPUT} value={cornerShape}
                     onChange={event => setCornerShape(event.target.value as typeof cornerShape)}>
-                    <option value="sharp">Sharp</option>
-                    <option value="radius">Radius</option>
-                    <option value="chamfer">Chamfer</option>
+                    <option value="sharp">{t('cam.tool.cornerSharp')}</option>
+                    <option value="radius">{t('cam.tool.cornerRadius')}</option>
+                    <option value="chamfer">{t('cam.tool.cornerChamfer')}</option>
                   </select>
                 </label>
               )}
               {CORNER_RADIUS_KINDS.includes(kind) && cornerShape === 'radius' && (
                 <DraftNumber
-                  label="Corner radius"
+                  label={t('cam.tool.cornerRadiusLabel')}
                   value={cornerRadius}
                   onChange={(value) => { setCornerRadius(value); }}
                   unit={lu}
                 />
               )}
               {CORNER_RADIUS_KINDS.includes(kind) && cornerShape === 'chamfer' && (<>
-                <DraftNumber label="Corner chamfer width" value={cornerChamferWidth} onChange={setCornerChamferWidth} unit={lu} />
-                <DraftNumber label="Corner chamfer angle (from axis)" value={cornerChamferAngle} onChange={setCornerChamferAngle} unit="deg" />
+                <DraftNumber label={t('cam.tool.cornerChamferWidth')} value={cornerChamferWidth} onChange={setCornerChamferWidth} unit={lu} />
+                <DraftNumber label={t('cam.tool.cornerChamferAngle')} value={cornerChamferAngle} onChange={setCornerChamferAngle} unit="deg" />
               </>)}
-              <DraftNumber label="Flute count" value={fluteCount} onChange={setFluteCount} integer />
-              <DraftNumber label="Flute length" value={fluteLength} onChange={setFluteLength} unit={lu} />
-              <DraftNumber label="Overall length" value={overallLength} onChange={setOverallLength} unit={lu} />
+              <DraftNumber label={t('cam.tool.fluteCount')} value={fluteCount} onChange={setFluteCount} integer />
+              <DraftNumber label={t('cam.tool.fluteLength')} value={fluteLength} onChange={setFluteLength} unit={lu} />
+              <DraftNumber label={t('cam.tool.overallLength')} value={overallLength} onChange={setOverallLength} unit={lu} />
               {(kind === 'chamfer_mill' || kind === 'drill') && (
-                <DraftNumber label="Point angle (included)" value={pointAngle} onChange={setPointAngle} unit="deg" />
+                <DraftNumber label={t('cam.tool.pointAngle')} value={pointAngle} onChange={setPointAngle} unit="deg" />
               )}
             </div>
             {(cornerRadiusMm !== null || CORNER_RADIUS_KINDS.includes(kind)) && (
@@ -1164,7 +1162,7 @@ function ToolEditor({
                 onClick={refreshAfterGeometry}
                 className="mt-1 text-[9px] text-mute underline decoration-dotted hover:text-ink"
               >
-                Refresh the cutting-data links after geometry edits
+                {t('cam.tool.refreshLinks')}
               </button>
             )}
             {!HOLE_TOOL_KINDS.includes(kind) && kind !== 'drill' && (
@@ -1174,7 +1172,7 @@ function ToolEditor({
                   checked={centerCutting}
                   onChange={(event) => setCenterCutting(event.target.checked)}
                 />
-                Center-cutting (plunge capable)
+                {t('cam.tool.centerCutting')}
               </label>
             )}
           </DialogSection>
@@ -1182,7 +1180,7 @@ function ToolEditor({
 
         {tab === 'cutting' && (
           <>
-          <DialogSection title={`CUTTING DATA (${fu})`}>
+          <DialogSection title={t('cam.tool.sectionCuttingData').replace('{unit}', fu)}>
             <div className="flex flex-wrap items-center gap-1">
               {profiles.map((candidate, index) => (
                 <button
@@ -1195,16 +1193,16 @@ function ToolEditor({
                       : 'border-edge bg-header/50 text-mute hover:text-ink'
                   }`}
                 >
-                  {index === 0 ? 'Default preset' : candidate.name || '(unnamed)'}
+                  {index === 0 ? t('cam.tool.defaultPreset') : candidate.name || t('cam.tool.unnamed')}
                 </button>
               ))}
               <button
                 type="button"
-                title="Add a cutting-data profile"
+                title={t('cam.tool.addProfileHint')}
                 onClick={() =>
                   setProfiles((current) => [
                     ...current,
-                    { ...current[0], name: `Profile ${current.length}` },
+                    { ...current[0], name: t('cam.tool.profileName').replace('{number}', String(current.length)) },
                   ])
                 }
                 className="flex h-6 items-center rounded border border-edge px-1.5 text-mute hover:text-ink"
@@ -1214,7 +1212,7 @@ function ToolEditor({
               {activeProfile > 0 && (
                 <button
                   type="button"
-                  title="Delete this profile"
+                  title={t('cam.tool.deleteProfileHint')}
                   onClick={() => {
                     setProfiles((current) => current.filter((_, index) => index !== activeProfile));
                     setActiveProfile(0);
@@ -1227,25 +1225,25 @@ function ToolEditor({
             </div>
             {activeProfile > 0 && (
               <label className="block">
-                <span className={CAM_DIALOG_LABEL}>Profile name</span>
+                <span className={CAM_DIALOG_LABEL}>{t('cam.tool.profileNameLabel')}</span>
                 <input
                   value={profile.name}
                   onChange={(event) => patchProfile(activeProfile, { name: event.target.value })}
-                  placeholder="e.g. Aluminum 6061"
+                  placeholder={t('cam.tool.profileNamePlaceholder')}
                   className={CAM_DIALOG_INPUT}
                 />
               </label>
             )}
             <div className="grid grid-cols-2 gap-2">
               <DraftNumber
-                label="Spindle"
+                label={t('cam.tool.spindle')}
                 value={profile.rpm}
                 onChange={commitRpm}
                 unit="rpm"
                 integer
               />
               <DraftNumber
-                label={`Surface speed · ƒx${profile.speedDriver === 'vc' ? ' (drives)' : ''}`}
+                label={`${t('cam.tool.surfaceSpeed')}${profile.speedDriver === 'vc' ? t('cam.tool.drivesSuffix') : ''}`}
                 value={profile.surfaceSpeed}
                 onChange={commitSurfaceSpeed}
                 unit={cuttingSpeedUnitLabel(units)}
@@ -1253,13 +1251,13 @@ function ToolEditor({
               {!holemaking && (
                 <>
                   <DraftNumber
-                    label="Cutting feed"
+                    label={t('cam.tool.cuttingFeed')}
                     value={profile.feedXy}
                     onChange={commitFeedXy}
                     unit={fu}
                   />
                   <DraftNumber
-                    label={`Feed per tooth · ƒx${profile.feedDriver === 'fz' ? ' (drives)' : ''}`}
+                    label={`${t('cam.tool.feedPerTooth')}${profile.feedDriver === 'fz' ? t('cam.tool.drivesSuffix') : ''}`}
                     value={profile.feedPerTooth}
                     onChange={commitFeedPerTooth}
                     unit={`${chipLoadUnitLabel(units)}/tooth`}
@@ -1267,7 +1265,7 @@ function ToolEditor({
                 </>
               )}
               <DraftNumber
-                label={holemaking ? 'Drilling feed' : 'Plunge feed'}
+                label={holemaking ? t('cam.tool.drillingFeed') : t('cam.tool.plungeFeed')}
                 value={profile.feedZ}
                 onChange={commitFeedZ}
                 unit={fu}
@@ -1275,15 +1273,15 @@ function ToolEditor({
               <DraftNumber
                 label={
                   holemaking
-                    ? `Feed per revolution · ƒx${profile.plungeDriver === 'fpr' ? ' (drives)' : ''}`
-                    : `Plunge per rev · ƒx${profile.plungeDriver === 'fpr' ? ' (drives)' : ''}`
+                    ? `${t('cam.tool.feedPerRevolution')}${profile.plungeDriver === 'fpr' ? t('cam.tool.drivesSuffix') : ''}`
+                    : `${t('cam.tool.plungePerRev')}${profile.plungeDriver === 'fpr' ? t('cam.tool.drivesSuffix') : ''}`
                 }
                 value={profile.plungePerRev}
                 onChange={commitPlungePerRev}
                 unit={`${chipLoadUnitLabel(units)}/rev`}
               />
               <label className="block">
-                <span className={CAM_DIALOG_LABEL}>Coolant</span>
+                <span className={CAM_DIALOG_LABEL}>{t('cam.tool.coolant')}</span>
                 <select
                   value={profile.coolant}
                   onChange={(event) =>
@@ -1291,16 +1289,16 @@ function ToolEditor({
                   }
                   className={CAM_DIALOG_INPUT}
                 >
-                  <option value="off">Off</option>
-                  <option value="mist">Mist</option>
-                  <option value="flood">Flood</option>
+                  <option value="off">{t('cam.tool.coolantOff')}</option>
+                  <option value="mist">{t('cam.tool.coolantMist')}</option>
+                  <option value="flood">{t('cam.tool.coolantFlood')}</option>
                 </select>
               </label>
             </div>
             <div className="rounded border border-edge/70 bg-header/40 p-2 text-[9px] leading-relaxed text-mute">
               <div className="mb-1 flex items-center justify-between gap-2">
                 <span className="font-semibold uppercase tracking-widest text-mute/60">
-                  Effective Ø
+                  {t('cam.tool.effectiveDiameter')}
                 </span>
                 <span className="font-mono text-ink">
                   {effectiveDiameter !== null ? `${displayLength(effectiveDiameter, units).toFixed(3)} ${lu}` : '—'}
@@ -1309,7 +1307,7 @@ function ToolEditor({
               {cornerRadiusMm !== null && (
                 <div className="mb-1">
                   <DraftNumber
-                    label="At depth of cut ap"
+                    label={t('cam.tool.atDepthOfCut')}
                     value={chipAp}
                     onChange={(value) => { setChipAp(value); }}
                     unit={lu}
@@ -1318,32 +1316,30 @@ function ToolEditor({
                 </div>
               )}
               {cornerRadiusMm !== null
-                ? 'Engaged shallower than the corner radius, the contact point rides the radius: De = D − 2R + 2√(2R·ap − ap²). This is what moves surface speed vs rpm on high-feed tooling. Leave ap empty for full-radius engagement (De = D).'
-                : 'Each ƒx pair is two-way: edit either side and the other follows; the side you touched last wins at save time.'}
+                ? t('cam.tool.effectiveDiameterHelp')
+                : t('cam.tool.fxPairHelp')}
             </div>
             <p className="text-[9px] leading-relaxed text-mute">
-              The picked profile is copied into operations that choose this tool.
-              Editing the library later never rewrites existing operations.
+              {t('cam.tool.profileCopyHelp')}
             </p>
           </DialogSection>
-          <DialogSection title="STEP DEFAULTS">
+          <DialogSection title={t('cam.tool.sectionStepDefaults')}>
             <div className="grid grid-cols-2 gap-2">
               <DraftNumber
-                label="Default step-down (empty = none)"
+                label={t('cam.tool.defaultStepDown')}
                 value={defaultStepDown}
                 onChange={setDefaultStepDown}
                 unit={lu}
               />
               <DraftNumber
-                label="Default step-over (empty = none)"
+                label={t('cam.tool.defaultStepOver')}
                 value={defaultStepOver}
                 onChange={setDefaultStepOver}
                 unit={lu}
               />
             </div>
             <p className="text-[9px] leading-relaxed text-mute">
-              New operations that pick this tool seed their stepdown / stepover from these
-              values until the operator types one. A step-over past the diameter is rejected.
+              {t('cam.tool.stepDefaultsHelp')}
             </p>
           </DialogSection>
           </>
@@ -1355,7 +1351,7 @@ function ToolEditor({
           type="submit"
           className="h-7 rounded border border-accent/50 bg-accent/15 px-3 text-[10px] font-semibold text-accent hover:bg-accent/25"
         >
-          {existing ? 'Save tool' : 'Add to library'}
+          {existing ? t('cam.tool.saveTool') : t('cam.tool.addToLibrary')}
         </button>
       </footer>
     </form>

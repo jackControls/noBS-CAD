@@ -11,6 +11,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useTranslation } from '../../i18n';
 import {
   camOperationLabel,
   deleteCamOperation,
@@ -44,6 +45,7 @@ const CAM_SETUPS_HEIGHT_KEY = 'cam-setups-panel-height';
  *  manufacturing tab this is the primary tree, so it opens tall and the top
  *  edge drags to resize (height persists per machine). */
 export function CamSetupsPanel() {
+  const { t } = useTranslation();
   const cam = useAppStore((state) => state.camDocument);
   const solidScene = useAppStore((state) => state.solidScene);
   const selectedOperationId = useAppStore((state) => state.selectedCamOperationId);
@@ -118,8 +120,8 @@ export function CamSetupsPanel() {
         state: 'never_generated',
         reasons: [
           statusError
-            ? `Toolpath safety check failed: ${statusError}`
-            : 'Toolpath has not been regenerated and checked for this project version.',
+            ? t('cam.browser.toolpathSafetyFailed').replace('{error}', statusError)
+            : t('cam.browser.toolpathNotRegenerated'),
         ],
       }
     );
@@ -127,10 +129,10 @@ export function CamSetupsPanel() {
 
   const requestSetupRegeneration = async (setupId: number): Promise<void> => {
     const setup = cam.setups.find((candidate) => candidate.id === setupId);
-    if (!setup) throw new Error('CAM setup does not exist.');
+    if (!setup) throw new Error(t('cam.browser.errorSetupMissing'));
     const enabledOperations = setup.operations.filter((operation) => operation.enabled);
     if (enabledOperations.length === 0) {
-      throw new Error('This setup has no enabled toolpaths to regenerate.');
+      throw new Error(t('cam.browser.errorNoEnabledToolpaths'));
     }
     // Re-read at click time. The confirmation must never rely on a status
     // snapshot that could predate the last model or setup edit.
@@ -210,26 +212,26 @@ export function CamSetupsPanel() {
       <div
         role="separator"
         aria-orientation="horizontal"
-        title="Drag to resize the setups panel"
+        title={t('cam.browser.resizePanelTitle')}
         onPointerDown={startDrag}
         className="absolute -top-1 left-0 right-0 z-10 h-2 cursor-row-resize"
       />
       <header className="flex h-8 shrink-0 items-center justify-between border-b border-edge px-2">
         <span className="flex items-center gap-1.5 text-[10px] font-semibold tracking-widest text-mute">
           <CamToolIcon id="camSetup" size={15} />
-          SETUPS
+          {t('cam.browser.sectionSetups')}
           {statusBusy && (
             <RefreshCw
               size={10}
               className="animate-spin text-accent"
-              aria-label="Checking toolpath safety"
+              aria-label={t('cam.browser.checkingToolpathSafety')}
             />
           )}
         </span>
         <button
           type="button"
-          aria-label="New setup"
-          title="New setup (manual WCS/stock configuration)"
+          aria-label={t('cam.browser.newSetup')}
+          title={t('cam.browser.newSetupTitle')}
           onClick={() => openDialog({ type: 'setup' })}
           className="flex h-7 w-7 items-center justify-center rounded text-mute hover:bg-edge hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         >
@@ -242,7 +244,7 @@ export function CamSetupsPanel() {
         {statusError && (
           <div className="mx-2 mb-1 flex items-start gap-1 rounded border border-red-500/50 bg-red-950/35 p-1.5 text-[10px] leading-relaxed text-red-200">
             <AlertTriangle size={10} className="mt-0.5 shrink-0" />
-            <span>Toolpath safety check failed: {statusError}</span>
+            <span>{t('cam.browser.toolpathSafetyFailed').replace('{error}', statusError)}</span>
           </div>
         )}
         {documentWarnings.length > 0 && (
@@ -270,7 +272,7 @@ export function CamSetupsPanel() {
                 data-cam-sort-scope="setups" data-cam-sort-id={setup.id}
                 onKeyDown={(event)=>reorder.keyboard(event,null,setup.id,cam.setups.map((s)=>s.id))}
                 style={{cursor:reorder.drag?'grabbing':'grab',opacity:reorder.drag?.scope===null&&reorder.drag.id===setup.id?0.4:1}}
-                onPointerDown={(event) => { if (!(event.target as HTMLElement).closest('[title="Delete setup and its operations"]')) reorder.start(event, null, setup.id, cam.setups.map((s) => s.id), setup.name); }}
+                onPointerDown={(event) => { if (!(event.target as HTMLElement).closest('[data-cam-delete-setup]')) reorder.start(event, null, setup.id, cam.setups.map((s) => s.id), setup.name); }}
                 className={`flex h-7 items-center gap-1.5 px-2 ${setupSelected ? 'bg-accent/25' : active ? 'bg-accent/5' : ''}`}
                 onDoubleClick={() => {
                   runCamAction(() => setActiveCamSetup(setup.id));
@@ -286,7 +288,7 @@ export function CamSetupsPanel() {
                     target: { kind: 'setup', setupId: setup.id },
                   });
                 }}
-                title="Drag to reorder setups (or Option + Up/Down). Double-click to edit, right-click for more"
+                title={t('cam.browser.dragReorderSetups')}
               >
                 <button
                   type="button"
@@ -309,7 +311,7 @@ export function CamSetupsPanel() {
                   )}
                   {stalePathCount > 0 && (
                     <span
-                      title={`${stalePathCount} enabled toolpath${stalePathCount === 1 ? ' needs' : 's need'} attention before NC posting; invalid tools/settings must be corrected before regeneration`}
+                      title={t(stalePathCount === 1 ? 'cam.browser.staleToolpathOne' : 'cam.browser.staleToolpathMany').replace('{count}', String(stalePathCount))}
                       className="flex shrink-0 items-center gap-0.5 font-mono text-[9px] text-red-400"
                     >
                       <AlertTriangle size={11} />
@@ -322,7 +324,8 @@ export function CamSetupsPanel() {
                 </button>
                 <button
                   type="button"
-                  title="Delete setup and its operations"
+                  data-cam-delete-setup
+                  title={t('cam.browser.deleteSetupTitle')}
                   onClick={() => runCamAction(() => deleteCamSetup(setup.id))}
                   className="rounded p-0.5 text-mute/50 hover:text-warn"
                 >
@@ -350,7 +353,7 @@ export function CamSetupsPanel() {
                         target: { kind: 'stock', setupId: setup.id },
                       });
                     }}
-                    title="Stock, WCS, and work offsets — double-click to edit, right-click for more"
+                    title={t('cam.browser.stockWcsTitle')}
                     className={`flex h-7 w-full items-center gap-2 pl-8 pr-2 text-left text-[11px] ${
                       selectedOperationId === null && selectedSetupId === setup.id && selectedStockRow === setup.id
                         ? 'bg-accent/20 text-ink'
@@ -358,7 +361,7 @@ export function CamSetupsPanel() {
                     }`}
                   >
                     <CamToolIcon id="camSetup" size={15} />
-                    <span>Stock &amp; WCS</span>
+                    <span>{t('cam.browser.stockWcs')}</span>
                   </button>
                   {reorder.order(setup.id, setup.operations.map((operation) => operation.id)).map((id) => setup.operations.find((operation) => operation.id === id)!).filter(Boolean).map((operation) => {
                     const generationStatus = toolpathStatus(operation);
@@ -398,9 +401,9 @@ export function CamSetupsPanel() {
                       title={
                         generationWarning
                           ? generationStatus?.state === 'invalid'
-                            ? `Invalid toolpath: ${generationWarning} Correct the tool or operation, then regenerate.`
-                            : `${generationWarning} Right-click to regenerate.`
-                          : 'Drag to reorder within this setup (or Option + Up/Down). Double-click to edit, right-click for more'
+                            ? t('cam.browser.invalidToolpath').replace('{warning}', generationWarning)
+                            : t('cam.browser.rightClickRegenerate').replace('{warning}', generationWarning)
+                          : t('cam.browser.dragReorderOperations')
                       }
                       className={`flex h-7 w-full items-center gap-2 pl-8 pr-2 text-left text-[11px] ${
                         selectedOperationId === operation.id
@@ -416,7 +419,7 @@ export function CamSetupsPanel() {
                         {operation.name}
                         {!operation.enabled && (
                           <span className="ml-1 text-[8px] uppercase tracking-wider text-warn/80">
-                            suppressed
+                            {t('cam.browser.suppressed')}
                           </span>
                         )}
                       </span>
@@ -430,7 +433,7 @@ export function CamSetupsPanel() {
                       )}
                       {generationWarning && (
                         <span title={generationWarning} className="flex shrink-0 items-center gap-1 text-red-400">
-                          {generationStatus?.state === 'invalid' ? <><Ban size={11} /><span className="text-[9px]">Invalid</span></> : <AlertTriangle size={11} />}
+                          {generationStatus?.state === 'invalid' ? <><Ban size={11} /><span className="text-[9px]">{t('cam.browser.invalid')}</span></> : <AlertTriangle size={11} />}
                         </span>
                       )}
                       <span className="text-[8px] uppercase opacity-60">
@@ -441,7 +444,7 @@ export function CamSetupsPanel() {
                   })}
                   {setup.operations.length === 0 && (
                     <div className="px-8 py-2 text-[10px] italic text-mute/70">
-                      No operations — program one from the ribbon.
+                      {t('cam.browser.noOperations')}
                     </div>
                   )}
                 </div>
@@ -451,7 +454,7 @@ export function CamSetupsPanel() {
         })}
         {cam.setups.length === 0 && (
           <div className="px-4 py-4 text-center text-[11px] text-mute">
-            Create a setup to begin. You choose the WCS, stock, and every operation yourself.
+            {t('cam.browser.noSetups')}
           </div>
         )}
       </div>
@@ -495,14 +498,14 @@ export function CamSetupsPanel() {
                         selectOperation(operation.id);
                         requestCamSimulation('cam', setup.id, operation.id);
                       });
-                    }}><CamToolIcon id="camSimulate" size={15} /> Simulate toolpath</button>
+                    }}><CamToolIcon id="camSimulate" size={15} /> {t('cam.browser.simulateToolpath')}</button>
                   <button
                     type="button"
                     disabled={!operation.enabled}
                     title={
                       operation.enabled
-                        ? 'Recompute this toolpath from the current CAD, setup, operation, and tool'
-                        : 'Resume this operation before regenerating it'
+                        ? t('cam.browser.regenerateToolpathTitle')
+                        : t('cam.browser.resumeBeforeRegenerate')
                     }
                     className={`${itemClass} disabled:cursor-not-allowed disabled:opacity-40`}
                     onClick={() => {
@@ -510,7 +513,7 @@ export function CamSetupsPanel() {
                       runCamAction(() => regenerateCamOperation(operation.id));
                     }}
                   >
-                    <RefreshCw size={12} /> Regenerate toolpath
+                    <RefreshCw size={12} /> {t('cam.browser.regenerateToolpath')}
                   </button>
                   <div className="my-1 border-t border-edge/60" />
                   <button
@@ -526,7 +529,7 @@ export function CamSetupsPanel() {
                     }}
                   >
                     {operation.enabled ? <Ban size={12} /> : <Play size={12} />}
-                    {operation.enabled ? 'Suppress (skip in post)' : 'Resume'}
+                    {operation.enabled ? t('cam.browser.suppressSkip') : t('cam.browser.resume')}
                   </button>
                   <button
                     type="button"
@@ -536,13 +539,13 @@ export function CamSetupsPanel() {
                       openDialog({ type: 'operation', kind: operation.kind, editId: operation.id });
                     }}
                   >
-                    <Pencil size={12} /> Edit…
+                    <Pencil size={12} /> {t('cam.browser.edit')}
                   </button>
                   <button type="button" className={itemClass} onClick={() => {
                     close();
                     setSelectedStockRow(null);
                     runCamAction(() => duplicateCamOperation(operation.id));
-                  }}><Copy size={14} /> Duplicate toolpath</button>
+                  }}><Copy size={14} /> {t('cam.browser.duplicateToolpath')}</button>
                   <div className="my-1 border-t border-edge/60" />
                   <button
                     type="button"
@@ -552,7 +555,7 @@ export function CamSetupsPanel() {
                       runCamAction(() => deleteCamOperation(operation.id));
                     }}
                   >
-                    <Trash2 size={12} /> Delete
+                    <Trash2 size={12} /> {t('cam.browser.delete')}
                   </button>
                 </>
               )}
@@ -561,7 +564,7 @@ export function CamSetupsPanel() {
                   <button type="button" className={itemClass} onClick={() => {
                     close();
                     openDialog({ type: 'setup' });
-                  }}><Plus size={16} /> New setup</button>
+                  }}><Plus size={16} /> {t('cam.browser.newSetup')}</button>
                   <div className="my-1 border-t border-edge/60" />
                   <button type="button" className={`${itemClass} disabled:opacity-40`}
                     disabled={!cam.setups.find((setup) => setup.id === target.setupId)?.operations.some((operation) => operation.enabled)}
@@ -571,7 +574,7 @@ export function CamSetupsPanel() {
                         await setActiveCamSetup(target.setupId);
                         requestCamSimulation('cam', target.setupId, null);
                       });
-                    }}><CamToolIcon id="camSimulate" size={15} /> Simulate whole setup</button>
+                    }}><CamToolIcon id="camSimulate" size={15} /> {t('cam.browser.simulateWholeSetup')}</button>
                   <button
                     type="button"
                     className={itemClass}
@@ -580,7 +583,7 @@ export function CamSetupsPanel() {
                       runCamAction(() => requestSetupRegeneration(target.setupId));
                     }}
                   >
-                    <RefreshCw size={12} /> Regenerate all toolpaths
+                    <RefreshCw size={12} /> {t('cam.browser.regenerateAllToolpaths')}
                   </button>
                   <div className="my-1 border-t border-edge/60" />
                   <button
@@ -591,13 +594,13 @@ export function CamSetupsPanel() {
                       openDialog({ type: 'setup', editId: target.setupId });
                     }}
                   >
-                    <Pencil size={12} /> Edit…
+                    <Pencil size={12} /> {t('cam.browser.edit')}
                   </button>
                   <button type="button" className={itemClass} onClick={() => {
                     close();
                     setSelectedStockRow(null);
                     runCamAction(() => duplicateCamSetup(target.setupId));
-                  }}><Copy size={14} /> Duplicate setup</button>
+                  }}><Copy size={14} /> {t('cam.browser.duplicateSetup')}</button>
                   <div className="my-1 border-t border-edge/60" />
                   <button
                     type="button"
@@ -607,7 +610,7 @@ export function CamSetupsPanel() {
                       runCamAction(() => deleteCamSetup(target.setupId));
                     }}
                   >
-                    <Trash2 size={12} /> Delete setup
+                    <Trash2 size={12} /> {t('cam.browser.deleteSetup')}
                   </button>
                 </>
               )}
@@ -620,7 +623,7 @@ export function CamSetupsPanel() {
                     openDialog({ type: 'setup', editId: target.setupId });
                   }}
                 >
-                  <Pencil size={12} /> Edit stock &amp; WCS…
+                  <Pencil size={12} /> {t('cam.browser.editStockWcs')}
                 </button>
               )}
             </div>
@@ -646,18 +649,17 @@ export function CamSetupsPanel() {
               id="cam-regenerate-title"
               className="border-b border-edge px-4 py-3 text-sm font-semibold text-ink"
             >
-              Regenerate all toolpaths?
+              {t('cam.browser.regenerateConfirmTitle')}
             </div>
             <div className="space-y-2 px-4 py-4 text-xs leading-relaxed text-ink/90">
               <p>
-                {regenerateConfirm.currentCount} of {regenerateConfirm.totalCount} enabled
-                toolpaths in “{regenerateConfirm.setupName}”{' '}
-                {regenerateConfirm.currentCount === 1 ? 'is' : 'are'} already current and do not
-                need regeneration.
+                {t(regenerateConfirm.currentCount === 1 ? 'cam.browser.regenerateConfirmOne' : 'cam.browser.regenerateConfirmMany')
+                  .replace('{current}', String(regenerateConfirm.currentCount))
+                  .replace('{total}', String(regenerateConfirm.totalCount))
+                  .replace('{name}', regenerateConfirm.setupName)}
               </p>
               <p className="text-mute">
-                Continuing will recompute every enabled path. Geometry stored as manual coordinates
-                remains manual; inspect the result after a CAD change.
+                {t('cam.browser.regenerateConfirmBody')}
               </p>
             </div>
             <div className="flex justify-end gap-2 border-t border-edge px-4 py-3">
@@ -667,7 +669,7 @@ export function CamSetupsPanel() {
                 onClick={() => setRegenerateConfirm(null)}
                 className="h-8 rounded border border-edge px-4 text-xs text-ink hover:bg-edge disabled:opacity-40"
               >
-                Cancel
+                {t('cam.browser.cancel')}
               </button>
               <button
                 type="button"
@@ -687,7 +689,7 @@ export function CamSetupsPanel() {
                 className="flex h-8 items-center gap-2 rounded bg-accent px-4 text-xs font-semibold text-white hover:brightness-110 disabled:opacity-40"
               >
                 <RefreshCw size={12} className={regenerateBusy ? 'animate-spin' : ''} />
-                Regenerate all
+                {t('cam.browser.regenerateAll')}
               </button>
             </div>
           </div>
@@ -695,13 +697,13 @@ export function CamSetupsPanel() {
       )}
       <button
         type="button"
-        title="Central library by default; switch to this project's snapshots inside"
+        title={t('cam.browser.toolLibraryTitle')}
         onClick={() => openDialog({ type: 'tool', toolId: null })}
         className="flex h-9 shrink-0 items-center gap-2 border-t border-edge px-3 text-[12px] text-mute hover:bg-edge/40 hover:text-ink"
       >
         <CamToolIcon id="camToolLibrary" size={18} />
-        <span className="flex-1 text-left">Tool Library…</span>
-        <span className="font-mono text-[9px] text-mute/60">{cam.tools.length} in project</span>
+        <span className="flex-1 text-left">{t('cam.browser.toolLibrary')}</span>
+        <span className="font-mono text-[9px] text-mute/60">{t('cam.browser.inProject').replace('{count}', String(cam.tools.length))}</span>
       </button>
     </section>
   );

@@ -78,7 +78,7 @@ export function CamWorkspace() {
   const verificationScopeName = simulation?.through_operation_id == null
     ? null
     : findCamOperation(cam, simulation.through_operation_id)?.name
-      ?? `Operation ${simulation.through_operation_id}`;
+      ?? t('cam.workspace.operationFallback').replace('{id}', String(simulation.through_operation_id));
   const units = cam.units;
   const [planError, setPlanError] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
@@ -195,7 +195,7 @@ export function CamWorkspace() {
     }
     let cancelled = false;
     setBusy(true);
-    const finish = beginCamActivity('Preparing CAM moves…');
+    const finish = beginCamActivity(t('cam.workspace.preparingCamMoves'));
     if (planRequest.current?.document !== cam || planRequest.current.setupId !== setup.id
       || planRequest.current.generation !== generation) {
       planRequest.current = { document: cam, setupId: setup.id, generation,
@@ -247,7 +247,7 @@ export function CamWorkspace() {
     }
     let cancelled = false;
     setSimulationBusy(true);
-    const finish = beginCamActivity(playbackOpen ? 'Preparing simulation…' : 'Loading remaining stock…');
+    const finish = beginCamActivity(t(playbackOpen ? 'cam.workspace.preparingSimulation' : 'cam.workspace.loadingRemainingStock'));
     const voxelSize = simulationVoxelSize(simulationDetail, setup);
     const maxVoxels = simulationVoxelBudget(simulationDetail);
     void getEngine()
@@ -571,7 +571,7 @@ export function CamWorkspace() {
       buffering={simulationFrameBusy}
       onToggle={togglePlayback}
       startTime={playbackRange.start}
-      scopeName={operation?.name ?? setup?.name ?? 'Setup'}
+      scopeName={operation?.name ?? setup?.name ?? t('cam.workspace.setupFallback')}
       onReset={() => seekPlayback(playbackRange.start)}
       onStep={(direction) => seekPlayback(adjacentCamMove(simulationTimeline, simulationPlayback.time_seconds, direction, playbackRange.start, playbackRange.end))}
       onClose={closeSimulation}
@@ -583,8 +583,8 @@ export function CamWorkspace() {
     <div data-testid="cam-simulation-preparing" data-native-viewport-overlay
       className={inSimulationRibbon ? 'flex h-[62px] items-center justify-between gap-4 text-[11px] text-mute'
         : 'absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-4 rounded-lg border border-edge bg-header/95 px-3 py-2 text-[11px] text-mute shadow-xl'}>
-      <span>{simulationError ? 'Simulation could not be prepared' : 'Preparing simulation…'}</span>
-      <button type="button" aria-label="Close simulation" title="Return to remaining stock" onClick={closeSimulation} className="drawing-mini-button"><X size={14} /></button>
+      <span>{simulationError ? t('cam.workspace.simulationCouldNotPrepare') : t('cam.workspace.preparingSimulation')}</span>
+      <button type="button" aria-label={t('cam.workspace.closeSimulation')} title={t('cam.workspace.returnToRemainingStock')} onClick={closeSimulation} className="drawing-mini-button"><X size={14} /></button>
     </div>
   ) : null;
 
@@ -602,23 +602,23 @@ export function CamWorkspace() {
                   {setup.work_offset_count > 1 && ` → ${WORK_OFFSETS[WORK_OFFSETS.indexOf(setup.work_offset) + setup.work_offset_count - 1]}`}
                 </span>
                 <span>·</span>
-                <span className="truncate" title="CAM prediction: tools, stock and model. No whole-machine kinematic verification.">
-                  {setup.machine?.profile.name ?? 'Generic 3-axis'}
+                <span className="truncate" title={t('cam.workspace.predictionTitle')}>
+                  {setup.machine?.profile.name ?? t('cam.workspace.generic3Axis')}
                 </span>
                 {program && <ProgramStats program={program} units={units} />}
               </>
             ) : (
               <span className="text-mute">
-                No setup yet — model shown as designed. Create a setup from the ribbon to program toolpaths.
+                {t('cam.workspace.noSetupHint')}
               </span>
             )}
           </div>
           <div className="relative flex shrink-0 items-center gap-1.5">
-            <div role="group" aria-label="CAM workpiece view" className="flex h-7 overflow-hidden rounded border border-edge bg-panel" data-testid="cam-workpiece-view">
+            <div role="group" aria-label={t('cam.workspace.workpieceView')} className="flex h-7 overflow-hidden rounded border border-edge bg-panel" data-testid="cam-workpiece-view">
               {([
-                ['model', 'Model', 'Show the original CAD model without simulated stock'],
-                ['stock', 'Stock', 'Show remaining stock through the selected operation; setup selection shows incoming stock'],
-                ['compare', 'Compare', 'Show remaining stock with the target model as a faint X-ray reference'],
+                ['model', t('cam.workspace.viewModel'), t('cam.workspace.viewModelTitle')],
+                ['stock', t('cam.workspace.viewStock'), t('cam.workspace.viewStockTitle')],
+                ['compare', t('cam.workspace.viewCompare'), t('cam.workspace.viewCompareTitle')],
               ] as const).map(([mode, label, title]) => (
                 <button key={mode} type="button" aria-pressed={workpieceView === mode} title={title}
                   data-testid={`cam-view-${mode}`} onClick={() => useAppStore.getState().setCamWorkpieceView(mode)}
@@ -627,34 +627,34 @@ export function CamWorkspace() {
                 </button>
               ))}
             </div>
-            <button type="button" aria-pressed={toolpathsVisible} aria-label="Show toolpaths"
-              title="Show toolpath lines and the parked cutter. The moving cutter remains visible during playback."
+            <button type="button" aria-pressed={toolpathsVisible} aria-label={t('cam.workspace.showToolpaths')}
+              title={t('cam.workspace.showToolpathsTitle')}
               data-testid="cam-toolpaths-toggle" onClick={() => useAppStore.getState().setCamToolpathsVisible(!toolpathsVisible)}
               className={`flex h-7 items-center gap-1 rounded border border-edge px-2 text-[10px] ${toolpathsVisible ? 'bg-accent/10 text-accent' : 'text-mute hover:text-ink'}`}>
-              <Route size={12} /> Paths
+              <Route size={12} /> {t('cam.workspace.paths')}
             </button>
             <button
               type="button"
-              title="Switch document units — stored geometry stays canonical; display and posted output follow this choice"
+              title={t('cam.workspace.unitsToggleTitle')}
               onClick={() => runCamAction(() => setCamUnits(units === 'millimeters' ? 'inches' : 'millimeters'))}
               className="flex h-7 items-center rounded border border-edge bg-panel px-2.5 text-[10px] font-semibold text-mute hover:border-accent/40 hover:text-accent"
               data-testid="cam-units-toggle"
             >
-              {units === 'millimeters' ? 'mm' : 'inch'}
+              {units === 'millimeters' ? 'mm' : t('cam.workspace.unitInch')}
             </button>
             {simulation && simulationResolution && (
               <span
                 data-testid="cam-simulation-resolution"
-                title={`3D stock preview grid: ${simulation.dimensions.join(' × ')} cells. Displayed edges and remaining-stock measurements can vary by about one ${simulationResolution} cell.`}
+                title={t('cam.workspace.gridTitle').replace('{dims}', simulation.dimensions.join(' × ')).replace('{resolution}', simulationResolution)}
                 className="rounded border border-edge bg-panel px-2 py-1 font-mono text-[9px] text-mute"
               >
-                Grid {simulationResolution}
+                {t('cam.workspace.gridLabel').replace('{resolution}', simulationResolution)}
               </span>
             )}
             <button
               type="button"
               disabled={!setup}
-              title="Refresh CAM preview"
+              title={t('cam.workspace.refreshPreview')}
               onClick={() => setGeneration((value) => value + 1)}
               className="drawing-mini-button disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -672,7 +672,7 @@ export function CamWorkspace() {
           {!inSimulationRibbon && preparationStatus}
           {pick && (
             <div className="pointer-events-none absolute left-1/2 top-3 z-10 max-w-[80%] -translate-x-1/2 rounded border border-accent/50 bg-header/90 px-3 py-1.5 text-center text-[11px] text-accent shadow-xl backdrop-blur-sm">
-              {pick.prompt} · click a highlighted point · Esc to cancel
+              {pick.prompt} · {t('cam.workspace.pickHint')}
             </div>
           )}
           {!inSimulationRibbon && playbackControls}
@@ -692,8 +692,8 @@ export function CamWorkspace() {
               className="pointer-events-none absolute bottom-3 right-3 z-10 rounded border border-edge bg-header/85 px-2.5 py-1 font-mono text-[10px] text-mute shadow backdrop-blur-sm"
             >
               {operation
-                ? `${operation.name} | Machining time: ${formatMachiningTime(program.per_operation.find((entry) => entry.operation_id === operation.id)?.estimated_seconds)}`
-                : `${program.name} | Total machining time: ${formatMachiningTime(program.stats.estimated_seconds)}`}
+                ? t('cam.workspace.machiningTime').replace('{name}', operation.name).replace('{time}', formatMachiningTime(program.per_operation.find((entry) => entry.operation_id === operation.id)?.estimated_seconds))
+                : t('cam.workspace.totalMachiningTime').replace('{name}', program.name).replace('{time}', formatMachiningTime(program.stats.estimated_seconds))}
             </div>
           )}
           {(planError
@@ -712,15 +712,15 @@ export function CamWorkspace() {
                       (candidate) => candidate.command_index === collision.command_index,
                     );
                     const location = step?.source_line != null
-                      ? `Block ${step.source_line}`
-                      : `Move ${collision.command_index + 1}`;
+                      ? t('cam.workspace.block').replace('{number}', String(step.source_line))
+                      : t('cam.workspace.move').replace('{number}', String(collision.command_index + 1));
                     return (
                       <button
                         type="button"
                         key={`${collision.kind}-${collision.command_index}-${collision.message}`}
                         disabled={!step}
                         onClick={() => step && seekPlayback(step.cumulative_seconds)}
-                        title={step ? `Jump to ${location}` : undefined}
+                        title={step ? t('cam.workspace.jumpTo').replace('{location}', location) : undefined}
                         className={`block text-left font-semibold hover:underline disabled:no-underline ${
                           collision.kind === 'target_gouge' ? 'text-[#ff75a8]' : 'text-[#e8c589]'
                         }`}
@@ -744,15 +744,15 @@ export function CamWorkspace() {
         </div>
         <div data-ribbon-panel="display" className="flex shrink-0 flex-col border-r border-edge px-3">
           <div className="flex h-[62px] flex-col items-center justify-center gap-1">
-            <select aria-label="3D simulation detail" disabled={!setup || simulationBusy}
+            <select aria-label={t('cam.workspace.simulationDetailAria')} disabled={!setup || simulationBusy}
               value={simulationDetail} onChange={(event) => setSimulationDetail(event.target.value as SimulationDetail)}
-              title="Model-relative volumetric detail. Independent of camera zoom; actual grid size is shown above the viewport."
+              title={t('cam.workspace.simulationDetailTitle')}
               className="h-6 w-full rounded border border-edge bg-panel px-2 text-[9px] font-semibold text-mute outline-none disabled:opacity-40">
-              <option value="auto">Detail · Auto</option><option value="fine">Detail · Fine</option>
-              <option value="balanced">Detail · Balanced</option><option value="fast">Detail · Fast</option>
+              <option value="auto">{t('cam.workspace.detailAuto')}</option><option value="fine">{t('cam.workspace.detailFine')}</option>
+              <option value="balanced">{t('cam.workspace.detailBalanced')}</option><option value="fast">{t('cam.workspace.detailFast')}</option>
             </select>
             <div className="flex items-center gap-1">
-              <button ref={settingsButtonRef} type="button" title="Simulation settings" aria-label="Simulation settings"
+              <button ref={settingsButtonRef} type="button" title={t('cam.workspace.simulationSettings')} aria-label={t('cam.workspace.simulationSettings')}
                 aria-expanded={settingsOpen} aria-controls={settingsOpen ? 'cam-simulation-settings' : undefined}
                 onClick={() => {
                   const bounds = settingsButtonRef.current?.getBoundingClientRect();
@@ -765,15 +765,15 @@ export function CamWorkspace() {
         </div>
       </>, ribbonHost)}
       {settingsOpen && createPortal(
-        <div id="cam-simulation-settings" ref={settingsPopoverRef} role="dialog" aria-label="Simulation settings" data-native-viewport-overlay
+        <div id="cam-simulation-settings" ref={settingsPopoverRef} role="dialog" aria-label={t('cam.workspace.simulationSettings')} data-native-viewport-overlay
           style={settingsPosition} className="fixed z-[100] w-72 rounded-lg border border-edge bg-panel p-3 shadow-xl">
-          <div className="mb-2 flex items-center justify-between text-[11px] font-semibold text-ink">Simulation settings
-            <button type="button" aria-label="Close simulation settings" onClick={() => setSettingsOpen(false)}><X size={13} /></button>
+          <div className="mb-2 flex items-center justify-between text-[11px] font-semibold text-ink">{t('cam.workspace.simulationSettings')}
+            <button type="button" aria-label={t('cam.workspace.closeSimulationSettings')} onClick={() => setSettingsOpen(false)}><X size={13} /></button>
           </div>
           <label className="flex h-7 items-center gap-1 rounded border border-edge bg-panel px-2 text-[9px] text-mute"
-            title="Requested radial comparison tolerance. The verifier shows a larger effective value when the grid cannot resolve this request.">
-            Compare ±
-            <input aria-label="Part comparison tolerance" type="number" min={0} step={units === 'millimeters' ? 0.01 : 0.001}
+            title={t('cam.workspace.toleranceTitle')}>
+            {t('cam.workspace.compare')}
+            <input aria-label={t('cam.workspace.partComparisonTolerance')} type="number" min={0} step={units === 'millimeters' ? 0.01 : 0.001}
               value={Number(displayLength(comparisonToleranceMm, units).toFixed(units === 'millimeters' ? 3 : 4))}
               onChange={(event) => {
                 const value = Number(event.target.value);
@@ -781,7 +781,7 @@ export function CamWorkspace() {
               }} className="w-14 bg-transparent text-right font-mono text-ink outline-none" />
             {lengthUnitLabel(units)}
           </label>
-          <p className="mt-2 text-[10px] leading-relaxed text-mute">Detail changes the physical grid. Cutter-profile reconstruction smooths the display; verification retains the stated grid accuracy. Unchanged operation stock is cached.</p>
+          <p className="mt-2 text-[10px] leading-relaxed text-mute">{t('cam.workspace.detailHelp')}</p>
         </div>, document.body)}
       {/* No right sidebar in the manufacturing workspace: setup and
           operation configuration live in double-click dialogs. */}
@@ -868,20 +868,21 @@ function SimulationVerificationPanel({
   scopeName: string | null;
   displaySimplified: boolean;
 }) {
+  const { t } = useTranslation();
   const comparison = simulation.comparison;
   if (!comparison) return null;
   const inProgress = simulation.completed_steps !== null;
   const hasTargetLoss = comparison.gouged_voxels > 0 || comparison.initial_shortfall_voxels > 0;
   const hasExcess = comparison.excess_voxels > 0;
   const status = inProgress
-    ? 'In progress'
+    ? t('cam.workspace.statusInProgress')
     : hasTargetLoss
-      ? 'Review overcut'
+      ? t('cam.workspace.statusReviewOvercut')
       : hasExcess
         ? scopeName
-          ? 'Stock remains at stage'
-          : 'Stock remains'
-        : 'Within tolerance';
+          ? t('cam.workspace.statusStockRemainsAtStage')
+          : t('cam.workspace.statusStockRemains')
+        : t('cam.workspace.statusWithinTolerance');
   const statusClass = inProgress
     ? 'border-accent/45 bg-accent/10 text-accent'
     : hasTargetLoss
@@ -895,27 +896,27 @@ function SimulationVerificationPanel({
       className="pointer-events-none absolute left-3 top-3 z-10 min-w-64 max-w-72 rounded border border-edge bg-header/90 p-2.5 text-[10px] text-mute shadow-lg backdrop-blur-sm"
     >
       <div className="mb-2 flex items-center justify-between gap-3">
-        <span className="font-semibold uppercase tracking-wide text-ink">Part verification</span>
+        <span className="font-semibold uppercase tracking-wide text-ink">{t('cam.workspace.partVerification')}</span>
         <span className={`rounded border px-1.5 py-0.5 text-[9px] font-semibold ${statusClass}`}>
           {status}
         </span>
       </div>
       {scopeName && (
         <div className="mb-2 rounded border border-accent/25 bg-accent/8 px-1.5 py-1 text-[9px] text-ink">
-          Scope: through “{scopeName}” · compared with the finished part
+          {t('cam.workspace.scopeThrough').replace('{name}', scopeName)}
         </div>
       )}
       {displaySimplified && (
         <div className="mb-2 text-[9px] font-semibold text-[#f2bb68]">
-          Remaining-stock surface simplified · verification remains full-detail
+          {t('cam.workspace.simplified')}
         </div>
       )}
       <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-[9px]">
-        <span className="text-[#f2bb68]">Extra stock</span>
+        <span className="text-[#f2bb68]">{t('cam.workspace.extraStock')}</span>
         <span className="text-right text-ink">{formatSimulationVolume(comparison.excess_volume_mm3, units)}</span>
-        <span className="text-[#ff75a8]">Overcut</span>
+        <span className="text-[#ff75a8]">{t('cam.workspace.overcut')}</span>
         <span className="text-right text-ink">{formatSimulationVolume(comparison.gouged_volume_mm3, units)}</span>
-        <span>Effective band</span>
+        <span>{t('cam.workspace.effectiveBand')}</span>
         <span className="text-right text-ink">
           ±{displayLength(comparison.effective_tolerance_mm, units).toFixed(units === 'millimeters' ? 3 : 4)} {lengthUnitLabel(units)}
         </span>
@@ -951,6 +952,7 @@ function SimulationPlaybackControls({
   onStep: (direction: -1 | 1) => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const pose = simulationPlaybackPose(timeline, playback.time_seconds);
   const total = Math.max(0, timeline.estimated_seconds);
   return (
@@ -958,43 +960,43 @@ function SimulationPlaybackControls({
       data-testid="cam-simulation-playback"
       data-native-viewport-overlay={inRibbon ? undefined : true}
       data-placement={inRibbon ? 'ribbon' : 'viewport'}
-      aria-label={`Simulation — ${scopeName}`}
+      aria-label={t('cam.workspace.playbackAria').replace('{name}', scopeName)}
       className={inRibbon ? 'flex h-[62px] min-w-0 flex-col justify-center gap-1'
         : 'absolute bottom-3 left-1/2 z-30 flex w-[min(720px,calc(100%-32px))] -translate-x-1/2 flex-col gap-1 rounded-lg border border-edge bg-header/95 px-3 py-2 shadow-xl backdrop-blur-sm'}
     >
       <div className="flex h-6 min-w-0 items-center gap-2">
       <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-accent">
-        {timeline.source === 'g_code' ? 'NC program' : 'CAM prediction'}
+        {timeline.source === 'g_code' ? t('cam.workspace.ncProgram') : t('cam.workspace.camPrediction')}
       </span>
       <span title={scopeName} className="min-w-0 flex-1 truncate text-[10px] text-mute">{scopeName}</span>
       {pose?.sourceLine !== null && pose?.sourceLine !== undefined && (
-        <span className="shrink-0 rounded border border-edge px-1.5 py-0.5 font-mono text-[9px] text-mute">Block {pose.sourceLine}</span>
+        <span className="shrink-0 rounded border border-edge px-1.5 py-0.5 font-mono text-[9px] text-mute">{t('cam.workspace.block').replace('{number}', String(pose.sourceLine))}</span>
       )}
-      <span title={buffering ? 'Buffering stock snapshots — orbit remains available' : 'Prepared stock snapshots ready'}
+      <span title={buffering ? t('cam.workspace.buffering') : t('cam.workspace.snapshotsReady')}
         className={`h-2 w-2 shrink-0 rounded-full ${buffering ? 'animate-pulse bg-warn' : 'bg-[#4fd17b]'}`} />
-      <button type="button" title="Close simulation — return to remaining stock" aria-label="Close simulation" onClick={onClose} className="drawing-mini-button"><X size={14} /></button>
+      <button type="button" title={t('cam.workspace.closeSimulationReturn')} aria-label={t('cam.workspace.closeSimulation')} onClick={onClose} className="drawing-mini-button"><X size={14} /></button>
       </div>
       <div className="flex min-w-0 items-center gap-1.5">
       <button
         type="button"
         onClick={onReset}
-        title="Return to the beginning"
+        title={t('cam.workspace.returnToBeginning')}
         className="drawing-mini-button"
       >
         <RotateCcw size={13} />
       </button>
-      <button type="button" title="Previous move" aria-label="Previous move" onClick={() => onStep(-1)} className="drawing-mini-button"><SkipBack size={13} /></button>
+      <button type="button" title={t('cam.workspace.previousMove')} aria-label={t('cam.workspace.previousMove')} onClick={() => onStep(-1)} className="drawing-mini-button"><SkipBack size={13} /></button>
       <button
         type="button"
         onClick={onToggle}
-        title={playback.playing ? 'Pause simulation' : 'Play simulation'}
+        title={playback.playing ? t('cam.workspace.pauseSimulation') : t('cam.workspace.playSimulation')}
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-accent/50 bg-accent/15 text-accent hover:bg-accent/25"
       >
         {playback.playing ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" />}
       </button>
-      <button type="button" title="Next move" aria-label="Next move" onClick={() => onStep(1)} className="drawing-mini-button"><SkipForward size={13} /></button>
+      <button type="button" title={t('cam.workspace.nextMove')} aria-label={t('cam.workspace.nextMove')} onClick={() => onStep(1)} className="drawing-mini-button"><SkipForward size={13} /></button>
       <input
-        aria-label="Simulation time"
+        aria-label={t('cam.workspace.simulationTime')}
         type="range"
         min={startTime}
         max={Math.max(total, startTime + 0.001)}
@@ -1007,7 +1009,7 @@ function SimulationPlaybackControls({
         {formatPlaybackTime(playback.time_seconds - startTime)} / {formatPlaybackTime(total - startTime)}
       </span>
       <select
-        aria-label="Playback speed"
+        aria-label={t('cam.workspace.playbackSpeed')}
         value={playback.speed}
         onChange={(event) => onSpeed(Number(event.target.value))}
         className="h-7 shrink-0 rounded border border-edge bg-panel px-1.5 text-[9px] font-semibold text-mute outline-none"
