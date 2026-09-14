@@ -3,17 +3,15 @@
 Free, open-source parametric CAD for mechanical parts, assemblies and drawings.
 Design locally, keep editable files, and work by hand or with your own MCP agent.
 
-**Pre-alpha · Planned showcase preview 2026-09-12.2**
-· [Build and checks](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12.2)
+**Pre-alpha · Release 0.2.0**
+· [Release notes and checks](https://github.com/jackControls/noBS-CAD/releases/tag/v0.2.0)
 · [Installation help](docs/INSTALL.md)
 
-> **Publication pending.** The showcase update below is under review. Its package, video and editable-model downloads are not yet public; the recipe-link installation also requires this update. The [older public preview](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12) is available now and does not include the latest changes.
-
-**Download:** [Windows x64](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS-CAD-0.1.0-windows-x64.zip)
-· [Windows ARM64](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS-CAD-0.1.0-windows-arm64.zip)
-· [macOS Apple silicon](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS.CAD_0.1.0_aarch64.dmg)
-· [Ubuntu 26.04 DEB](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS.CAD_0.1.0_amd64.deb)
-· [AppImage](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/noBS.CAD_0.1.0_amd64.AppImage)
+**Download:** [Windows x64](https://github.com/jackControls/noBS-CAD/releases/download/v0.2.0/noBS-CAD-0.2.0-windows-x64.zip)
+· [Windows ARM64](https://github.com/jackControls/noBS-CAD/releases/download/v0.2.0/noBS-CAD-0.2.0-windows-arm64.zip)
+· [macOS Apple silicon](https://github.com/jackControls/noBS-CAD/releases/download/v0.2.0/noBS.CAD_0.2.0_aarch64.dmg)
+· [Ubuntu 26.04 DEB](https://github.com/jackControls/noBS-CAD/releases/download/v0.2.0/noBS.CAD_0.2.0_amd64.deb)
+· [AppImage](https://github.com/jackControls/noBS-CAD/releases/download/v0.2.0/noBS.CAD_0.2.0_amd64.AppImage)
 
 No CAD account, subscription or cloud service is required. Keep backups of important projects while the application is pre-alpha.
 
@@ -34,11 +32,11 @@ shaped arms and assembly joints stay editable.
 
 [Enlarge image](docs/assets/showcase/bench.png)
 · **[Watch in player](https://jackcontrols.github.io/noBS-CAD/showcase.html#garden-bench)**
-· [Download MP4](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/bench-build-full.mp4)
+· [Download MP4](https://github.com/jackControls/noBS-CAD/releases/download/v0.2.0/bench-build-full.mp4)
 
 [Open editable recipe in CAD](https://jackcontrols.github.io/noBS-CAD/open.html#garden-bench)
 · [Recipe source](examples/scripts/garden-bench.nbcad.jsonc)
-· [Download editable model (.nbcad)](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/bench.nbcad)
+· [Download editable model (.nbcad)](https://github.com/jackControls/noBS-CAD/releases/download/v0.2.0/bench.nbcad)
 
 <!-- Print photo: add docs/assets/showcase/bench-printed.jpg when supplied. -->
 
@@ -53,11 +51,11 @@ carriage drawing. 100 mm jaws, 90 mm travel; six printed parts plus standard har
 
 [Enlarge image](docs/assets/showcase/vise.png)
 · **[Watch in player](https://jackcontrols.github.io/noBS-CAD/showcase.html#d-screw-vise)**
-· [Download MP4](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/vise-build-full.mp4)
+· [Download MP4](https://github.com/jackControls/noBS-CAD/releases/download/v0.2.0/vise-build-full.mp4)
 
 [Open editable recipe in CAD](https://jackcontrols.github.io/noBS-CAD/open.html#d-screw-vise)
 · [Recipe source](examples/scripts/d-screw-vise.nbcad.jsonc)
-· [Download editable model (.nbcad)](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/vise.nbcad)
+· [Download editable model (.nbcad)](https://github.com/jackControls/noBS-CAD/releases/download/v0.2.0/vise.nbcad)
 
 <!-- Print photo: add docs/assets/showcase/vise-printed.jpg when supplied. -->
 
@@ -72,11 +70,11 @@ Two staggered Savonius stages sit on a bearing-supported shaft.
 
 [Enlarge image](docs/assets/showcase/turbine.png)
 · **[Watch in player](https://jackcontrols.github.io/noBS-CAD/showcase.html#vertical-axis-turbine)**
-· [Download MP4](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/turbine-build-full.mp4)
+· [Download MP4](https://github.com/jackControls/noBS-CAD/releases/download/v0.2.0/turbine-build-full.mp4)
 
 [Open editable recipe in CAD](https://jackcontrols.github.io/noBS-CAD/open.html#vertical-axis-turbine)
 · [Recipe source](examples/scripts/vertical-axis-turbine.nbcad.jsonc)
-· [Download editable model (.nbcad)](https://github.com/jackControls/noBS-CAD/releases/download/preview-2026-09-12.2/turbine.nbcad)
+· [Download editable model (.nbcad)](https://github.com/jackControls/noBS-CAD/releases/download/v0.2.0/turbine.nbcad)
 
 <!-- Print photo: add docs/assets/showcase/turbine-printed.jpg when supplied. -->
 

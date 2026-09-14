@@ -13,7 +13,7 @@ decisions, material implications and calculation assumptions are retained in
 [the engineering brief](flagship-engineering.md). The individual design pages
 below describe the later implementations and source-specific evidence.
 
-For immediate inspection, the [showcase preview](https://github.com/jackControls/noBS-CAD/releases/tag/preview-2026-09-12.2)
+For immediate inspection, the [showcase preview](https://github.com/jackControls/noBS-CAD/releases/tag/v0.2.0)
 includes editable `bench.nbcad`, `vise.nbcad` and `turbine.nbcad` projects. Use
 **File → Open** in CAD. To watch construction or open a recipe for replay, use
 the [README showcase](../README.md#made-in-nobs-cad).
