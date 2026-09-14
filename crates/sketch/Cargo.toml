@@ -1,6 +1,6 @@
 [package]
 name = "nbcad-sketch"
-version = "0.2.0"
+version.workspace = true
 edition = "2021"
 description = "noBS CAD 2D sketch model: entities, constraints, solver API (pure Rust, no OCCT)"
 license = "LGPL-2.1-or-later"

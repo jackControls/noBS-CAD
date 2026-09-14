@@ -27,6 +27,8 @@
 ## Contribute and develop
 
 - [Developer setup](DEVELOPMENT.md) — the canonical build, native SDK and test guide.
+- [Versioning and releases](RELEASING.md) — the one `VERSION` source, the guard
+  that keeps every carrier honest, and how a release is tagged and published.
 - [Contributing](../CONTRIBUTING.md) and [edge-case hunt](EDGE_CASE_HUNT.md) — focused
   improvements and useful bug reproductions.
 - [Project direction](goals.md) — reliability, performance and ease of use.

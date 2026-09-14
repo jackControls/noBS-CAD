@@ -97,7 +97,11 @@ cargo test --locked --workspace
 npm run test:frontend
 npm run build:desktop
 npm run check:knowledge
+npm run version:check
 ```
+
+Version carriers are covered by `npm run test:version`; see
+[Versioning and releases](RELEASING.md) before changing `VERSION`.
 
 For native geometry and MCP changes, with the matching OCCT SDK available:
 

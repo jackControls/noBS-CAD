@@ -1,6 +1,6 @@
 [package]
 name = "nbcad-core"
-version = "0.2.0"
+version.workspace = true
 edition = "2021"
 description = "noBS CAD document model, stable topology ids, browser tree, and feature history"
 license = "LGPL-2.1-or-later"
