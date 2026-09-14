@@ -39,7 +39,12 @@ interface I18nContextValue {
 
 const I18nContext = createContext<I18nContextValue>({
   locale: 'en',
-  t: (key) => key,
+  /**
+   * Without a provider (unit tests render components directly) resolve against
+   * the default `en` dictionary rather than echoing the key, so such renders
+   * keep producing the same English markup as before localization.
+   */
+  t: (key) => translate(key),
 });
 
 function lookup(dict: unknown, key: string): string | undefined {
