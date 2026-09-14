@@ -118,10 +118,10 @@ visibility.control({ command: 'configure', mode: 'present' });
 check(visibility.status().visible && !visibility.status().finished, 'A newly started run reveals its controls again');
 
 const renderControls = () => renderToStaticMarkup(
-  createElement(I18nProvider, { locale: 'en' }, createElement(PresentationControls)),
+  createElement(I18nProvider, { locale: 'en', children: createElement(PresentationControls) }),
 );
 const renderReopen = () => renderToStaticMarkup(
-  createElement(I18nProvider, { locale: 'en' }, createElement(PresentationReopen)),
+  createElement(I18nProvider, { locale: 'en', children: createElement(PresentationReopen) }),
 );
 check(renderControls() === '' && renderReopen() === '', 'No playback chrome appears before a run exists');
 presentation.control({command: 'configure', mode: 'fast', step_index: 0, step_count: 692});
