@@ -1,4 +1,5 @@
 import { isTauriRuntime } from '../engine';
+import { translate } from '../i18n';
 import type { SixDofMotion } from '../components/viewport/cameraApi';
 import {
   openThreeDConnexionBridge,
@@ -278,7 +279,7 @@ export function createSixDofMouseController(
       await withTimeout(
         device.open(),
         HID_OPEN_TIMEOUT_MS,
-        'Opening the selected 3D mouse timed out.',
+        translate('input.errorDeviceOpenTimeout'),
       );
     }
     if (disposed || attempt !== connectionAttempt) {
@@ -308,7 +309,7 @@ export function createSixDofMouseController(
     webDevice = device;
     onStatus({
       state: 'connected',
-      message: device.productName || '3D mouse connected',
+      message: device.productName || translate('input.sixDofConnected'),
     });
     return true;
   };
@@ -348,7 +349,7 @@ export function createSixDofMouseController(
       if (!disposed) {
         onStatus({
           state: 'disconnected',
-          message: '3D mouse disconnected. Wake it or click to reconnect.',
+          message: translate('input.errorDeviceDisconnectedWake'),
         });
       }
     });
@@ -379,7 +380,7 @@ export function createSixDofMouseController(
           accumulator.stop();
           onStatus({
             state: 'error',
-            message: `3D mouse input stopped: ${event.payload}`,
+            message: translate('input.errorInputStopped').replace('{reason}', String(event.payload)),
           });
         }),
       );
@@ -387,7 +388,7 @@ export function createSixDofMouseController(
       const device = await invoke<{ product_name: string }>('six_dof_mouse_connect');
       onStatus({
         state: 'connected',
-        message: device.product_name || '3D mouse connected',
+        message: device.product_name || translate('input.sixDofConnected'),
       });
     } catch (error) {
       listeners.forEach((unlisten) => unlisten());
@@ -441,7 +442,7 @@ export function createSixDofMouseController(
     await detachWebDevice(true);
     onStatus({
       state: 'connected',
-      message: '3D mouse connected through the installed driver.',
+      message: translate('input.sixDofConnectedDriver'),
     });
     // Paint the green connected indicator before allowing any driver callback
     // to mutate the camera. A displaced cap during the handshake stays inert.
@@ -469,11 +470,11 @@ export function createSixDofMouseController(
       if (!supported) {
         onStatus({
           state: 'unsupported',
-          message: 'This browser cannot connect to a 3D mouse.',
+          message: translate('input.errorBrowserUnsupported'),
         });
         return;
       }
-      onStatus({ state: 'connecting', message: 'Connecting 3D mouse…' });
+      onStatus({ state: 'connecting', message: translate('input.sixDofConnecting') });
       try {
         if (isTauriRuntime()) {
           // A deliberate Connect click on Windows opts into 3DxWare's local
@@ -489,7 +490,7 @@ export function createSixDofMouseController(
             await detachNative();
             onStatus({
               state: 'disconnected',
-              message: 'Click to connect the 3D mouse through 3DxWare.',
+              message: translate('input.sixDofClickConnectDriver'),
             });
             return;
           }
@@ -534,21 +535,21 @@ export function createSixDofMouseController(
           onStatus({
             state: 'disconnected',
             message:
-              'Connect a compatible 3D mouse. The browser driver bridge loads only after you click.',
+              translate('input.sixDofConnectHint'),
           });
           return;
         }
         if (!hid) {
           throw (
             driverError ??
-            new Error('The installed 3D mouse driver browser service is unavailable.')
+            new Error(translate('input.errorInstalledDriverServiceUnavailable'))
           );
         }
         if (driverError && requestPermission && permitted.length === 0) {
           onStatus({
             state: 'disconnected',
             message:
-              'The installed driver service is unavailable. Click again to choose a raw 3D mouse.',
+              translate('input.errorInstalledDriverUnavailableRetry'),
           });
           return;
         }
@@ -566,7 +567,7 @@ export function createSixDofMouseController(
                     })),
                   }),
                   DEVICE_PICKER_TIMEOUT_MS,
-                  'The device picker timed out. Click the 3D mouse button to try again.',
+                  translate('input.errorDevicePickerTimeout'),
                 )
               ).filter(isSixDofDevice);
         if (disposed || attempt !== connectionAttempt) return;
@@ -574,8 +575,8 @@ export function createSixDofMouseController(
           onStatus({
             state: 'disconnected',
             message: driverError
-              ? 'The 3D mouse driver service is unavailable. Click to choose a raw device.'
-              : 'No multi-axis 3D mouse selected. Click to choose one.',
+              ? translate('input.errorDriverServiceUnavailableRaw')
+              : translate('input.errorNoDeviceSelected'),
           });
           return;
         }
@@ -584,7 +585,7 @@ export function createSixDofMouseController(
         } catch (error) {
           if (driverError) {
             throw new Error(
-              'The desktop driver owns this device, but its browser service is unavailable. Start 3DxNLServer (or repair 3DxWare), then retry.',
+              translate('input.errorDesktopDriverOwnsDevice'),
             );
           }
           throw error;
@@ -604,7 +605,7 @@ export function createSixDofMouseController(
       detachDriver();
       await detachWebDevice(true);
       await detachNative();
-      onStatus({ state: 'disconnected', message: '3D mouse disconnected.' });
+      onStatus({ state: 'disconnected', message: translate('input.sixDofDisconnected') });
     },
     async dispose() {
       disposed = true;

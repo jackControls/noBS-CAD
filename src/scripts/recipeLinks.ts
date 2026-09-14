@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { isTauriRuntime } from '../engine';
 import { currentUnsavedPrompt } from '../files/unsavedChanges';
+import { translate } from '../i18n';
 import { ensureScriptExamples, errorMessage, showScriptExample, showScripts, useScriptWorkspace } from './workspace';
 
 const pending: string[] = [];
@@ -24,7 +25,7 @@ async function drain(): Promise<void> {
       if (current.loading || current.running || currentUnsavedPrompt()) return;
       pending.shift();
       const example = examples.find(example => example.id === recipe);
-      if (!example) throw new Error(`This application does not include recipe '${recipe}'. Update noBS CAD and try again.`);
+      if (!example) throw new Error(translate('scripts.errors.errorRecipeNotIncludedUpdate').replace('{recipe}', recipe));
       // Source view performs only metadata validation. Even the isolated short
       // lesson preview waits until the user explicitly selects Overview.
       await showScriptExample(example, 'source');
@@ -35,14 +36,14 @@ async function drain(): Promise<void> {
 }
 
 export async function queueRecipeOpen(recipe: string): Promise<{status: 'queued'; recipe: string}> {
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(recipe) || recipe.length > 80) throw new Error('Expected a built-in recipe ID');
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(recipe) || recipe.length > 80) throw new Error(translate('scripts.errors.errorExpectedRecipeId'));
   // A newer installed launcher may find an older running window. Validate the
   // receiving application's catalog before acknowledging delivery, so missing
   // recipes can fall back to the new application instead of being dropped.
   const examples = await ensureScriptExamples();
-  if (!examples.some(example => example.id === recipe)) throw new Error(`This application does not include recipe '${recipe}'.`);
+  if (!examples.some(example => example.id === recipe)) throw new Error(translate('scripts.errors.errorRecipeNotIncluded').replace('{recipe}', recipe));
   if (!pending.includes(recipe)) {
-    if (pending.length >= 16) throw new Error('Finish opening pending recipes before opening another link');
+    if (pending.length >= 16) throw new Error(translate('scripts.errors.errorPendingRecipeLinks'));
     pending.push(recipe);
   }
   if (!watching) {

@@ -14,6 +14,7 @@ import { EngineError, ProjectLoadError, unwrapEnvelope, type Engine } from './in
 import { restoreLoadedDatumHistoryFrames } from './historyFrames';
 import { BrowserOcctKernel } from './occtBrowser';
 import { drawingInstanceScene, projectSceneForDrawing } from '../drawing/projection';
+import { translate } from '../i18n';
 
 /** wasm-pack typings lag until `npm run build:wasm`; keep additive methods typed here. */
 type WasmEngineMethods = WasmEngineInner & {
@@ -530,7 +531,7 @@ export class WasmEngine implements Engine {
     let scene = await this.solidScene();
     if (request.scope === 'assembly') {
       scene = drawingInstanceScene(scene, await this.assemblySolution(), await this.assemblyDocument(), request.occurrence_ids ?? []);
-      if (scene.bodies.length === 0) throw new Error('The selected assembly drawing contains no visible body occurrences.');
+      if (scene.bodies.length === 0) throw new Error(translate('engine.errorAssemblyDrawingNoOccurrences'));
     }
     return projectSceneForDrawing(scene, request);
   }
@@ -946,7 +947,7 @@ export class WasmEngine implements Engine {
     // checking ownership, no await may separate the snapshot check and export.
     if (this.activeContext !== owner || (request.expected_model_json !== undefined
       && unwrapEnvelope<string>(owner.inner.project_export_model()) !== request.expected_model_json)) {
-      throw new Error('The document changed while preparing export. Start the export again.');
+      throw new Error(translate('engine.errorDocumentChangedDuringExport'));
     }
     return kernel.exportStep(request);
   }

@@ -4,6 +4,8 @@
  * respects free-orbit: the camera is never locked, including inside an
  * active sketch.
  */
+import { translate } from '../../i18n';
+
 export interface CameraSnapshot {
   position: [number, number, number];
   target: [number, number, number];
@@ -128,10 +130,10 @@ export function easeInOutCubic(t: number): number {
  * shared camera controller; the same poses feed the browser and Bevy viewport. */
 export function orbitCameraSnapshot(from: CameraSnapshot, degrees: number, progress: number): CameraSnapshot {
   if (!Number.isFinite(degrees) || Math.abs(degrees) > 360
-    || !Number.isFinite(progress) || progress < 0 || progress > 1) throw new Error('Invalid camera orbit');
+    || !Number.isFinite(progress) || progress < 0 || progress > 1) throw new Error(translate('view.errorInvalidCameraOrbit'));
   const length = Math.hypot(...from.up);
   if (!Number.isFinite(length) || length < 1e-12
-    || ![...from.position, ...from.target].every(Number.isFinite)) throw new Error('Invalid camera pose');
+    || ![...from.position, ...from.target].every(Number.isFinite)) throw new Error(translate('view.errorInvalidCameraPose'));
   const [ux, uy, uz] = from.up.map(value => value / length);
   const [x, y, z] = from.position.map((value, index) => value - from.target[index]);
   const angle = degrees * progress * Math.PI / 180;

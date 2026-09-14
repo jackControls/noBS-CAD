@@ -1,5 +1,6 @@
 import type { CameraFocus, CameraSnapshot, ViewportCameraApi } from './components/viewport/cameraApi';
 import { presentation } from './operationPlayback';
+import { translate } from './i18n';
 
 export interface ViewRequest extends CameraFocus {
   view: string;
@@ -42,21 +43,21 @@ export async function applyView(
 ): Promise<CameraSnapshot> {
   const direction = request.view === 'isometric' ? 'isometric'
     : Object.prototype.hasOwnProperty.call(directions, request.view) ? directions[request.view] : undefined;
-  if (request.view !== 'current' && !direction) throw new Error('Unknown view');
-  if (typeof request.fit !== 'boolean') throw new Error('View fit must be a boolean');
-  if (!Number.isSafeInteger(request.expires_ms) || request.expires_ms < 0) throw new Error('Invalid view expiry');
+  if (request.view !== 'current' && !direction) throw new Error(translate('view.errorUnknownView'));
+  if (typeof request.fit !== 'boolean') throw new Error(translate('view.errorViewFitBoolean'));
+  if (!Number.isSafeInteger(request.expires_ms) || request.expires_ms < 0) throw new Error(translate('view.errorViewExpiry'));
   const duration = request.duration_ms ?? 300;
-  if (!Number.isSafeInteger(duration) || duration < 0 || duration > 10_000) throw new Error('Invalid view duration');
+  if (!Number.isSafeInteger(duration) || duration < 0 || duration > 10_000) throw new Error(translate('view.errorViewDuration'));
   if (request.orbit_degrees !== undefined && (!Number.isFinite(request.orbit_degrees)
     || Math.abs(request.orbit_degrees) > 360 || request.view !== 'current')) {
-    throw new Error('Invalid view orbit: use current view and a finite angle from -360 to 360 degrees');
+    throw new Error(translate('view.errorViewOrbit'));
   }
-  if (request.target !== undefined && request.target !== 'active_sketch') throw new Error('Unknown view target');
+  if (request.target !== undefined && request.target !== 'active_sketch') throw new Error(translate('view.errorUnknownViewTarget'));
   for (const id of [request.body_id, request.component_id]) {
-    if (id !== undefined && (!Number.isSafeInteger(id) || id < 0)) throw new Error('Invalid view geometry ID');
+    if (id !== undefined && (!Number.isSafeInteger(id) || id < 0)) throw new Error(translate('view.errorViewGeometryId'));
   }
   const targets = [request.target, request.body_id, request.component_id].filter(value => value !== undefined).length;
-  if (targets > 1) throw new Error('Choose one view target');
+  if (targets > 1) throw new Error(translate('view.errorChooseOneViewTarget'));
   const now = control.now ?? Date.now;
   const schedule = control.schedule ?? ((expired, delay) => {
     const timer = setTimeout(expired, delay);
@@ -66,20 +67,20 @@ export async function applyView(
   function assertCurrent() {
     const state = control.state();
     if (state.document !== owner.document || state.activeProjectTabId !== owner.activeProjectTabId
-      || state.solidBusy || state.projectBusy) throw new Error('Document changed or is transitioning');
-    if (now() >= request.expires_ms) throw new Error('View request expired');
+      || state.solidBusy || state.projectBusy) throw new Error(translate('view.errorDocumentChanged'));
+    if (now() >= request.expires_ms) throw new Error(translate('view.errorViewRequestExpired'));
     if (request.target === 'active_sketch' && (!sketch || state.activeSketch !== sketch || state.mode !== 'sketch')) {
-      throw new Error('No unchanged active sketch to frame');
+      throw new Error(translate('view.errorNoUnchangedActiveSketch'));
     }
   }
   assertCurrent();
   if (control.state().activeTab === 'drawing') {
-    if (control.state().mode !== 'solid') throw new Error('Drawing workspace has an active sketch');
+    if (control.state().mode !== 'solid') throw new Error(translate('view.errorDrawingWorkspaceActiveSketch'));
     control.leaveDrawingWorkspace();
   }
   function assertViewportWorkspace() {
     assertCurrent();
-    if (control.state().activeTab === 'drawing') throw new Error('Viewport workspace changed');
+    if (control.state().activeTab === 'drawing') throw new Error(translate('view.errorViewportWorkspaceChanged'));
   }
   function waitUntil<T>(ready: () => T | undefined): Promise<T> {
     return new Promise((resolve, reject) => {
@@ -113,7 +114,7 @@ export async function applyView(
   const api = await waitUntil(() => control.camera() ?? undefined);
   const assertCamera = () => {
     assertViewportWorkspace();
-    if (control.camera() !== api) throw new Error('Viewport camera changed');
+    if (control.camera() !== api) throw new Error(translate('view.errorViewportCameraChanged'));
   };
   assertCamera();
   // Frame and orient in one deliberate motion.
@@ -130,8 +131,8 @@ export async function applyView(
     // camera even if an earlier, unrelated animation was cancelled.
     if (animationId === undefined) return true;
     const current = api.getAnimationState();
-    if (current.id !== animationId) throw new Error('Camera animation was replaced');
-    if (current.status === 'cancelled') throw new Error('Camera animation was cancelled');
+    if (current.id !== animationId) throw new Error(translate('view.errorCameraAnimationReplaced'));
+    if (current.status === 'cancelled') throw new Error(translate('view.errorCameraAnimationCancelled'));
     return current.status === 'completed' ? true : undefined;
   };
   await waitUntil(() => {
@@ -140,6 +141,8 @@ export async function applyView(
   });
   assertCamera();
   animationCompleted();
-  presentation.applied(request.orbit_degrees === undefined ? `Camera: ${request.view}` : `Camera: orbit ${request.orbit_degrees}°`);
+  presentation.applied(request.orbit_degrees === undefined
+    ? translate('view.presentCamera').replace('{view}', String(request.view))
+    : translate('view.presentCameraOrbit').replace('{deg}', String(request.orbit_degrees)));
   return api.getSnapshot();
 }
