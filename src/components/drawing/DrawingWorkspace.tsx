@@ -11,6 +11,7 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from 'react';
 import { Eye, EyeOff, Maximize, Minus, Plus, Printer, Trash2, X } from 'lucide-react';
+import { translate, useTranslation } from '../../i18n';
 import { getEngine } from '../../engine';
 import type {
   DrawingAnnotationDto,
@@ -223,6 +224,7 @@ type SheetPanDrag = {
 };
 
 export function DrawingWorkspace() {
+  const { t } = useTranslation();
   const drawing = useAppStore((state) => state.drawingDocument);
   const projectTabId = useAppStore((state) => state.activeProjectTabId);
   const scene = useAppStore((state) => state.solidScene);
@@ -609,7 +611,7 @@ export function DrawingWorkspace() {
       return addDrawingBomItem({ body_id: bodyId }).then(() => {
         const active = useAppStore.getState().drawingDocument.sheets.find((candidate) => candidate.id === sheet.id);
         const created = active?.bom.find((item) => item.body_id === bodyId);
-        if (!created) throw new Error('Could not create the BOM item for this body.');
+        if (!created) throw new Error(t('drawing.workspace.errorBomItemCreateFailed'));
         return addDrawingItemBalloon(viewId, attachment, position, created.id);
       });
     }
@@ -1059,9 +1061,9 @@ export function DrawingWorkspace() {
           <div className="flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap text-[11px] text-mute">
             <span className="truncate font-semibold text-ink" title={sheet.name}>{sheet.name}</span>
             <span>·</span>
-            <span>{drawingFormatShortLabel(sheet.format)} {sheet.orientation}</span>
+            <span>{drawingFormatShortLabel(sheet.format)} {sheet.orientation === 'portrait' ? t('drawing.workspace.orientationPortrait') : t('drawing.workspace.orientationLandscape')}</span>
             <span>·</span>
-            <span>{sheet.projection_method === 'first_angle' ? 'First-angle' : 'Third-angle'}</span>
+            <span>{sheet.projection_method === 'first_angle' ? t('drawing.workspace.projectionFirstAngle') : t('drawing.workspace.projectionThirdAngle')}</span>
             {drawingTool && (
               <span className="ml-2 flex min-w-0 items-center gap-2 rounded border border-accent/45 bg-accent/10 px-2 py-1 text-accent">
                 <span className="truncate">{drawingToolPrompt(
@@ -1077,16 +1079,16 @@ export function DrawingWorkspace() {
                       ? circleDraft?.features.length ?? Number(centerlineEdgeDraft !== null)
                       : anchorDraft?.anchors.length ?? 0,
                 )}</span>
-                <button type="button" title="Cancel drawing tool" onClick={cancelTool} className="rounded hover:bg-accent/15"><X size={12} /></button>
+                <button type="button" title={t('drawing.workspace.cancelDrawingTool')} onClick={cancelTool} className="rounded hover:bg-accent/15"><X size={12} /></button>
               </span>
             )}
           </div>
           <div className="flex shrink-0 items-center gap-1" data-interface-group="drawing/sheet">
-            <button className="drawing-mini-button" type="button" onClick={fitSheet} title="Fit sheet" aria-pressed={sheetFitted}><Maximize size={14} /></button>
-            <button className="drawing-mini-button" type="button" onClick={() => zoomAtPoint(zoomRef.current - 0.1)} title="Zoom out"><Minus size={14} /></button>
+            <button className="drawing-mini-button" type="button" onClick={fitSheet} title={t('drawing.workspace.fitSheet')} aria-pressed={sheetFitted}><Maximize size={14} /></button>
+            <button className="drawing-mini-button" type="button" onClick={() => zoomAtPoint(zoomRef.current - 0.1)} title={t('drawing.workspace.zoomOut')}><Minus size={14} /></button>
             <span className="w-12 text-center font-mono text-[10px] text-mute">{Math.round(zoom * 100)}%</span>
-            <button className="drawing-mini-button" type="button" onClick={() => zoomAtPoint(zoomRef.current + 0.1)} title="Zoom in"><Plus size={14} /></button>
-            <button className="drawing-mini-button ml-2" type="button" data-interface-group="drawing/output" onClick={printActiveDrawing} title="Print / Save as PDF"><Printer size={14} /></button>
+            <button className="drawing-mini-button" type="button" onClick={() => zoomAtPoint(zoomRef.current + 0.1)} title={t('drawing.workspace.zoomIn')}><Plus size={14} /></button>
+            <button className="drawing-mini-button ml-2" type="button" data-interface-group="drawing/output" onClick={printActiveDrawing} title={t('drawing.workspace.printSaveAsPdf')}><Printer size={14} /></button>
           </div>
         </div>
         <div
@@ -1110,7 +1112,7 @@ export function DrawingWorkspace() {
             height={height * 3 * zoom}
             viewBox={`0 0 ${width} ${height}`}
             role="img"
-            aria-label={`${sheet.name} technical drawing`}
+            aria-label={t('drawing.workspace.sheetAriaLabel').replace('{name}', sheet.name)}
             onPointerDownCapture={placeSheetItem}
             onPointerMove={trackSheetPointer}
           >
@@ -1229,6 +1231,7 @@ type ManufacturingProfileChoice = {
 };
 
 function ManufacturingProfileExportDialog({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation();
   const [catalogs, setCatalogs] = useState<ProfileCatalogItemDto[]>([]);
   const [selectedKey, setSelectedKey] = useState('');
   const [loading, setLoading] = useState(true);
@@ -1285,13 +1288,13 @@ function ManufacturingProfileExportDialog({ onClose }: { onClose: () => void }) 
   >
     <section className="flex max-h-[min(720px,calc(100vh-40px))] w-[min(860px,calc(100vw-40px))] flex-col overflow-hidden rounded-xl border border-edge bg-panel shadow-2xl">
       <header className="flex items-start justify-between border-b border-edge bg-header px-5 py-4">
-        <div><h2 className="text-[15px] font-semibold text-ink">Export 1:1 manufacturing profile</h2><p className="mt-1 text-[11px] text-mute">Choose one material region. Its exact sketch curves and immediate hole wires are exported in local sketch-plane millimetres, without sheet scale.</p></div>
-        <button type="button" title="Close" disabled={busy} onClick={onClose} className="drawing-mini-button"><X size={15} /></button>
+        <div><h2 className="text-[15px] font-semibold text-ink">{t('drawing.workspace.exportManufacturingProfile')}</h2><p className="mt-1 text-[11px] text-mute">{t('drawing.workspace.exportManufacturingProfileHint')}</p></div>
+        <button type="button" title={t('drawing.workspace.close')} disabled={busy} onClick={onClose} className="drawing-mini-button"><X size={15} /></button>
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(260px,0.8fr)_minmax(320px,1.2fr)]">
         <div className="min-h-0 overflow-auto border-r border-edge p-4">
-          {loading && <p className="text-[12px] text-mute">Loading finished sketch profiles…</p>}
-          {!loading && choices.length === 0 && <div className="rounded-lg border border-edge bg-header/60 p-4 text-[12px] leading-relaxed text-mute">No closed finished-sketch profile is available. Finish a sketch containing at least one closed material region first.</div>}
+          {loading && <p className="text-[12px] text-mute">{t('drawing.workspace.loadingFinishedSketchProfiles')}</p>}
+          {!loading && choices.length === 0 && <div className="rounded-lg border border-edge bg-header/60 p-4 text-[12px] leading-relaxed text-mute">{t('drawing.workspace.noFinishedSketchProfile')}</div>}
           <div className="space-y-2">
             {choices.map((choice) => {
               const key = keyFor(choice);
@@ -1302,29 +1305,30 @@ function ManufacturingProfileExportDialog({ onClose }: { onClose: () => void }) 
                 onClick={() => setSelectedKey(key)}
                 className={`w-full rounded-lg border px-3 py-2.5 text-left transition-colors ${key === (selected ? keyFor(selected) : '') ? 'border-accent bg-accent/10' : 'border-edge bg-header/45 hover:bg-edge/50'}`}
               >
-                <div className="flex items-center justify-between gap-3"><span className="truncate text-[12px] font-semibold text-ink">{choice.catalog.sketch_name} · Profile {choice.profile.index + 1}</span><span className="shrink-0 font-mono text-[10px] text-mute">{trimNumber(choice.profile.area)} mm²</span></div>
-                <div className="mt-1 text-[10px] text-mute">{choice.profile.curves.length || choice.profile.points.length} boundary element(s) · {holes} hole wire(s)</div>
+                <div className="flex items-center justify-between gap-3"><span className="truncate text-[12px] font-semibold text-ink">{t('drawing.workspace.profileChoiceLabel').replace('{name}', choice.catalog.sketch_name).replace('{index}', String(choice.profile.index + 1))}</span><span className="shrink-0 font-mono text-[10px] text-mute">{trimNumber(choice.profile.area)} mm²</span></div>
+                <div className="mt-1 text-[10px] text-mute">{t('drawing.workspace.profileBoundarySummary').replace('{elements}', String(choice.profile.curves.length || choice.profile.points.length)).replace('{holes}', String(holes))}</div>
               </button>;
             })}
           </div>
         </div>
         <div className="flex min-h-0 flex-col bg-viewport p-5">
-          {selected ? <ManufacturingProfilePreview choice={selected} /> : <div className="flex flex-1 items-center justify-center text-[12px] text-mute">No profile selected</div>}
-          <div className="mt-4 rounded-lg border border-edge bg-panel px-3 py-2 text-[10px] leading-relaxed text-mute"><strong className="text-ink">Industrial output:</strong> model-space DXF at 1:1, millimetres, analytic LINE / ARC / CIRCLE entities where available. The outside and hole wires are separated onto PROFILE_OUTER and PROFILE_HOLES layers.</div>
+          {selected ? <ManufacturingProfilePreview choice={selected} /> : <div className="flex flex-1 items-center justify-center text-[12px] text-mute">{t('drawing.workspace.noProfileSelected')}</div>}
+          <div className="mt-4 rounded-lg border border-edge bg-panel px-3 py-2 text-[10px] leading-relaxed text-mute"><strong className="text-ink">{t('drawing.workspace.industrialOutput')}</strong> {t('drawing.workspace.industrialOutputHint')}</div>
         </div>
       </div>
       {error && <div className="border-t border-red-400/40 bg-red-500/10 px-5 py-2 text-[11px] text-red-600">{error}</div>}
-      <footer className="flex items-center justify-end gap-2 border-t border-edge bg-header px-5 py-3"><button type="button" disabled={busy} onClick={onClose} className="rounded border border-edge px-4 py-2 text-[12px] text-ink hover:bg-edge">Cancel</button><button type="button" disabled={!selected || busy} onClick={exportSelected} className="rounded bg-accent px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-45">{busy ? 'Exporting…' : 'Export profile DXF'}</button></footer>
+      <footer className="flex items-center justify-end gap-2 border-t border-edge bg-header px-5 py-3"><button type="button" disabled={busy} onClick={onClose} className="rounded border border-edge px-4 py-2 text-[12px] text-ink hover:bg-edge">{t('drawing.workspace.cancel')}</button><button type="button" disabled={!selected || busy} onClick={exportSelected} className="rounded bg-accent px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-45">{busy ? t('drawing.workspace.exporting') : t('drawing.workspace.exportProfileDxf')}</button></footer>
     </section>
   </div>;
 }
 
 function ManufacturingProfilePreview({ choice }: { choice: ManufacturingProfileChoice }) {
+  const { t } = useTranslation();
   const holes = choice.catalog.profiles.filter((profile) => profile.parent_index === choice.profile.index);
   const loops = [choice.profile, ...holes];
   const points = loops.flatMap((loop) => loop.points);
   if (points.length === 0) {
-    return <div className="flex min-h-[300px] flex-1 items-center justify-center rounded-lg border border-edge bg-white text-[12px] text-mute">This profile has no previewable boundary points.</div>;
+    return <div className="flex min-h-[300px] flex-1 items-center justify-center rounded-lg border border-edge bg-white text-[12px] text-mute">{t('drawing.workspace.noPreviewableBoundaryPoints')}</div>;
   }
   const minX = Math.min(...points.map((point) => point.x));
   const maxX = Math.max(...points.map((point) => point.x));
@@ -1334,7 +1338,7 @@ function ManufacturingProfilePreview({ choice }: { choice: ManufacturingProfileC
   const pad = extent * 0.12;
   const path = loops.map((loop) => loop.points.length < 3 ? '' : `M${loop.points.map((point) => `${point.x},${-point.y}`).join('L')}Z`).join(' ');
   return <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-edge bg-white shadow-inner">
-    <svg className="h-full min-h-[300px] w-full" viewBox={`${minX - pad} ${-(maxY + pad)} ${maxX - minX + pad * 2} ${maxY - minY + pad * 2}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={`${choice.catalog.sketch_name} profile preview`}>
+    <svg className="h-full min-h-[300px] w-full" viewBox={`${minX - pad} ${-(maxY + pad)} ${maxX - minX + pad * 2} ${maxY - minY + pad * 2}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={t('drawing.workspace.profilePreviewAriaLabel').replace('{name}', choice.catalog.sketch_name)}>
       <path d={path} fill="#7160d7" fillOpacity="0.13" fillRule="evenodd" stroke="#5546b8" strokeWidth={extent / 280} vectorEffect="non-scaling-stroke" />
     </svg>
   </div>;
@@ -1405,6 +1409,7 @@ function ProjectedDrawingView({
   onAddSymmetryAxis: (axis: 'x' | 'y' | 'both') => void;
   preview?: boolean;
 }) {
+  const { t } = useTranslation();
   const scene = useAppStore((state) => state.solidScene);
   const globallySelectedViewId = useAppStore((state) => state.selectedDrawingViewId);
   const [projected, setProjection] = useState<{value: DrawingProjectionDto; requestKey: string;
@@ -1446,7 +1451,7 @@ function ProjectedDrawingView({
   const hiddenLine = drawingSvgLineAttributes(style, 'hidden');
   const hatchLine = drawingSvgLineAttributes(style, 'hatch');
 
-  if (error || requestError) return <text x={view.position[0]} y={view.position[1]} fill={preview ? '#6654c7' : '#b33'} fontSize="3" textAnchor="middle"><title>{requestError ?? error}</title>{requestError ? 'Reassociate view reference' : 'Projection failed'}</text>;
+  if (error || requestError) return <text x={view.position[0]} y={view.position[1]} fill={preview ? '#6654c7' : '#b33'} fontSize="3" textAnchor="middle"><title>{requestError ?? error}</title>{requestError ? t('drawing.workspace.reassociateViewReference') : t('drawing.workspace.projectionFailed')}</text>;
   if (!projection) return <g data-testid={preview ? 'drawing-view-placement-preview' : undefined} data-preview-scale={preview ? view.scale : undefined} data-preview-x={preview ? view.position[0] : undefined} data-preview-y={preview ? view.position[1] : undefined} stroke={preview ? '#6654c7' : '#9aa0a8'} strokeWidth={preview ? 0.45 : visibleLine.strokeWidth} className="pointer-events-none"><path d={`M${view.position[0] - 4} ${view.position[1]}h8M${view.position[0]} ${view.position[1] - 4}v8`} /></g>;
 
   const position = dragPosition ?? view.position;
@@ -1465,7 +1470,7 @@ function ProjectedDrawingView({
     : null;
   const activeRepairKind = repairTarget?.kind ?? derivedRepairTarget?.kind ?? null;
   const confirmRepair = (label: string) => window.confirm(
-    `Replace the saved ${label} with this exact OCCT topology reference?\n\nThis is an explicit reassociation and will be recorded as one Drawing history operation.`,
+    t('drawing.workspace.reassociateConfirm').replace('{label}', label),
   );
   const completeRepair = (update: DrawingAnnotationUpdate) => {
     if (!repairAnnotation) return;
@@ -1663,7 +1668,7 @@ function ProjectedDrawingView({
           onAddSymmetryAxis('both');
         } : undefined}
       />
-      <text x={position[0]} y={labelY} fill={preview || selected ? '#6654c7' : '#4b5159'} fontFamily={style.font_family} fontSize={style.small_text_height_mm} fontWeight={preview ? 650 : 400} textAnchor="middle" className="pointer-events-none">{preview ? 'Place ' : ''}{view.name} · {scaleLabel(view.scale)}</text>
+      <text x={position[0]} y={labelY} fill={preview || selected ? '#6654c7' : '#4b5159'} fontFamily={style.font_family} fontSize={style.small_text_height_mm} fontWeight={preview ? 650 : 400} textAnchor="middle" className="pointer-events-none">{preview ? t('drawing.workspace.placePrefix') : ''}{view.name} · {scaleLabel(view.scale)}</text>
       {derivedChildren.map((child) => <DerivedViewSourceGraphic key={child.id} child={child} parentView={displayView} projection={projection} />)}
       {lineDimensionDraft?.viewId === view.id && (
         <LineDimensionPreviewGraphic
@@ -1750,8 +1755,8 @@ function ProjectedDrawingView({
             fill="transparent"
             pointerEvents="all"
             onPointerDown={pickSmartCenter}
-          ><title>Center point for a linear dimension</title></circle>}
-          <title>{smartDimension ? 'Circle edge for diameter; center for linear dimension' : centerPicking ? 'Circular center' : 'Circular edge'}</title>
+          ><title>{t('drawing.workspace.centerPointForLinearDimension')}</title></circle>}
+          <title>{smartDimension ? t('drawing.workspace.circleEdgeOrCenterForSmartDimension') : centerPicking ? t('drawing.workspace.circularCenter') : t('drawing.workspace.circularEdge')}</title>
         </g>;
       })}
       {centerlineEdgeTargets.length > 0 && (
@@ -1851,9 +1856,9 @@ function ProjectedDrawingView({
                 pointerEvents="stroke"
               />
               <title>{drawingTool === 'dimension'
-                ? active ? 'Selected dimension edge' : 'Straight edge for smart dimension'
-                : active ? 'First symmetry edge selected'
-                  : drawingTool === 'center_line' ? 'Straight edge for centerline' : 'Selectable straight edge'}</title>
+                ? active ? t('drawing.workspace.selectedDimensionEdge') : t('drawing.workspace.straightEdgeForSmartDimension')
+                : active ? t('drawing.workspace.firstSymmetryEdgeSelected')
+                  : drawingTool === 'center_line' ? t('drawing.workspace.straightEdgeForCenterline') : t('drawing.workspace.selectableStraightEdge')}</title>
             </g>;
           })}
         </g>
@@ -1902,7 +1907,7 @@ function ProjectedDrawingView({
                 strokeWidth="7"
                 pointerEvents="stroke"
               />
-              <title>{`Chamfer ${trimNumber(candidate.distance)} × ${trimNumber(candidate.angleDeg)}°`}</title>
+              <title>{t('drawing.workspace.chamferPreviewTitle').replace('{distance}', trimNumber(candidate.distance)).replace('{angle}', trimNumber(candidate.angleDeg))}</title>
             </g>;
           })}
         </g>
@@ -3142,79 +3147,79 @@ function drawingReferenceRepairTarget(
     attachment: DrawingAttachmentRefDto,
     update: (attachment: DrawingAttachmentRefDto) => DrawingAnnotationUpdate,
   ): DrawingReferenceRepairTarget => {
-    if (attachment.type === 'anchor') return { kind: 'anchor', label: 'attachment point', update: (reference) => update({ type: 'anchor', reference }) };
-    if (attachment.type === 'circle') return { kind: 'circle', label: 'circular attachment', update: (reference) => update({ type: 'circle', reference }) };
-    return { kind: 'line', label: 'edge attachment', update: (reference) => update({ type: 'line', reference }) };
+    if (attachment.type === 'anchor') return { kind: 'anchor', label: translate('drawing.workspace.repairAttachmentPoint'), update: (reference) => update({ type: 'anchor', reference }) };
+    if (attachment.type === 'circle') return { kind: 'circle', label: translate('drawing.workspace.repairCircularAttachment'), update: (reference) => update({ type: 'circle', reference }) };
+    return { kind: 'line', label: translate('drawing.workspace.repairEdgeAttachment'), update: (reference) => update({ type: 'line', reference }) };
   };
 
   switch (annotation.kind) {
     case 'linear_dimension': return anchorTarget([
-      { label: 'first dimension point', reference: annotation.first, update: (first) => ({ first }) },
-      { label: 'second dimension point', reference: annotation.second, update: (second) => ({ second }) },
+      { label: translate('drawing.workspace.repairFirstDimensionPoint'), reference: annotation.first, update: (first) => ({ first }) },
+      { label: translate('drawing.workspace.repairSecondDimensionPoint'), reference: annotation.second, update: (second) => ({ second }) },
     ]);
     case 'line_dimension': return lineTarget([
-      { label: 'first dimension edge', reference: annotation.first, update: (first) => ({ first }) },
+      { label: translate('drawing.workspace.repairFirstDimensionEdge'), reference: annotation.first, update: (first) => ({ first }) },
       ...(annotation.second ? [{
-        label: 'second dimension edge',
+        label: translate('drawing.workspace.repairSecondDimensionEdge'),
         reference: annotation.second,
         update: (second: DrawingLineRefDto) => ({ second }),
       }] : []),
     ]);
     case 'point_line_dimension': {
       if (!resolveDrawingAnchor(annotation.point, view, projection)) {
-        return { kind: 'anchor', label: 'dimension point', update: (point) => ({ point }) };
+        return { kind: 'anchor', label: translate('drawing.workspace.repairDimensionPoint'), update: (point) => ({ point }) };
       }
       if (!resolveDrawingLine(annotation.line, view, projection)) {
-        return { kind: 'line', label: 'dimension edge', update: (line) => ({ line }) };
+        return { kind: 'line', label: translate('drawing.workspace.repairDimensionEdge'), update: (line) => ({ line }) };
       }
-      return { kind: 'anchor', label: 'dimension point', update: (point) => ({ point }) };
+      return { kind: 'anchor', label: translate('drawing.workspace.repairDimensionPoint'), update: (point) => ({ point }) };
     }
     case 'angular_dimension': return anchorTarget([
-      { label: 'angle vertex', reference: annotation.vertex, update: (vertex) => ({ vertex }) },
-      { label: 'first angle ray', reference: annotation.first, update: (first) => ({ first }) },
-      { label: 'second angle ray', reference: annotation.second, update: (second) => ({ second }) },
+      { label: translate('drawing.workspace.repairAngleVertex'), reference: annotation.vertex, update: (vertex) => ({ vertex }) },
+      { label: translate('drawing.workspace.repairFirstAngleRay'), reference: annotation.first, update: (first) => ({ first }) },
+      { label: translate('drawing.workspace.repairSecondAngleRay'), reference: annotation.second, update: (second) => ({ second }) },
     ]);
     case 'chamfer_note': return anchorTarget([
-      { label: 'first chamfer endpoint', reference: annotation.first, update: (first) => ({ first }) },
-      { label: 'second chamfer endpoint', reference: annotation.second, update: (second) => ({ second }) },
+      { label: translate('drawing.workspace.repairFirstChamferEndpoint'), reference: annotation.first, update: (first) => ({ first }) },
+      { label: translate('drawing.workspace.repairSecondChamferEndpoint'), reference: annotation.second, update: (second) => ({ second }) },
     ]);
     case 'chain_dimension': return anchorTarget(annotation.anchors.map((reference, index) => ({
-      label: `dimension point ${index + 1}`,
+      label: translate('drawing.workspace.repairDimensionPointIndexed').replace('{index}', String(index + 1)),
       reference,
       update: (replacement) => ({ anchors: annotation.anchors.map((value, candidate) => candidate === index ? replacement : value) }),
     })));
     case 'ordinate_dimension': return anchorTarget([
-      { label: 'ordinate origin', reference: annotation.origin, update: (origin) => ({ origin }) },
-      { label: 'ordinate target', reference: annotation.target, update: (target) => ({ target }) },
+      { label: translate('drawing.workspace.repairOrdinateOrigin'), reference: annotation.origin, update: (origin) => ({ origin }) },
+      { label: translate('drawing.workspace.repairOrdinateTarget'), reference: annotation.target, update: (target) => ({ target }) },
     ]);
     case 'arc_length_dimension': {
       const brokenCircle = !resolveDrawingCircle(annotation.feature, view, projection);
-      if (brokenCircle) return { kind: 'circle', label: 'arc feature', update: (feature) => ({ feature }) };
+      if (brokenCircle) return { kind: 'circle', label: translate('drawing.workspace.repairArcFeature'), update: (feature) => ({ feature }) };
       return anchorTarget([
-        { label: 'arc start', reference: annotation.first, update: (first) => ({ first }) },
-        { label: 'arc end', reference: annotation.second, update: (second) => ({ second }) },
-      ]) ?? { kind: 'circle', label: 'arc feature', update: (feature) => ({ feature }) };
+        { label: translate('drawing.workspace.repairArcStart'), reference: annotation.first, update: (first) => ({ first }) },
+        { label: translate('drawing.workspace.repairArcEnd'), reference: annotation.second, update: (second) => ({ second }) },
+      ]) ?? { kind: 'circle', label: translate('drawing.workspace.repairArcFeature'), update: (feature) => ({ feature }) };
     }
     case 'radial_dimension':
     case 'hole_note':
     case 'center_mark':
     case 'jogged_radius_dimension':
-      return { kind: 'circle', label: 'circular feature', update: (feature) => ({ feature }) };
+      return { kind: 'circle', label: translate('drawing.workspace.repairCircularFeature'), update: (feature) => ({ feature }) };
     case 'center_line': return circleTarget([
-      { label: 'first center', reference: annotation.first, update: (first) => ({ first }) },
-      { label: 'second center', reference: annotation.second, update: (second) => ({ second }) },
+      { label: translate('drawing.workspace.repairFirstCenter'), reference: annotation.first, update: (first) => ({ first }) },
+      { label: translate('drawing.workspace.repairSecondCenter'), reference: annotation.second, update: (second) => ({ second }) },
     ]);
     case 'bolt_circle_center_line': return circleTarget(annotation.features.map((reference, index) => ({
-      label: `bolt-circle center ${index + 1}`,
+      label: translate('drawing.workspace.repairBoltCircleCenter').replace('{index}', String(index + 1)),
       reference,
       update: (replacement) => ({ features: annotation.features.map((value, candidate) => candidate === index ? replacement : value) }),
     })));
     case 'center_line_between_edges': return lineTarget([
-      { label: 'first symmetry edge', reference: annotation.first, update: (first) => ({ first }) },
-      { label: 'second symmetry edge', reference: annotation.second, update: (second) => ({ second }) },
+      { label: translate('drawing.workspace.repairFirstSymmetryEdge'), reference: annotation.first, update: (first) => ({ first }) },
+      { label: translate('drawing.workspace.repairSecondSymmetryEdge'), reference: annotation.second, update: (second) => ({ second }) },
     ]);
-    case 'edge_requirement': return { kind: 'line', label: 'required edge', update: (attachment) => ({ attachment }) };
-    case 'weld_symbol': return { kind: 'line', label: 'weld attachment edge', update: (attachment) => ({ attachment }) };
+    case 'edge_requirement': return { kind: 'line', label: translate('drawing.workspace.repairRequiredEdge'), update: (attachment) => ({ attachment }) };
+    case 'weld_symbol': return { kind: 'line', label: translate('drawing.workspace.repairWeldAttachmentEdge'), update: (attachment) => ({ attachment }) };
     case 'datum_feature':
     case 'gdt_frame':
     case 'surface_texture':
@@ -3238,14 +3243,14 @@ function drawingDerivedReferenceRepairTarget(
     const repairFirst = !resolveDrawingAnchor(derivation.first, parent, projection)
       || Boolean(resolveDrawingAnchor(derivation.second, parent, projection));
     return repairFirst
-      ? { kind: 'anchor', label: 'cutting-plane start', update: (first) => ({ ...derivation, first }) }
-      : { kind: 'anchor', label: 'cutting-plane end', update: (second) => ({ ...derivation, second }) };
+      ? { kind: 'anchor', label: translate('drawing.workspace.repairCuttingPlaneStart'), update: (first) => ({ ...derivation, first }) }
+      : { kind: 'anchor', label: translate('drawing.workspace.repairCuttingPlaneEnd'), update: (second) => ({ ...derivation, second }) };
   }
   if (derivation.type === 'detail') {
-    return { kind: 'anchor', label: 'detail center', update: (center) => ({ ...derivation, center }) };
+    return { kind: 'anchor', label: translate('drawing.workspace.repairDetailCenter'), update: (center) => ({ ...derivation, center }) };
   }
   if (derivation.type === 'auxiliary') {
-    return { kind: 'line', label: 'auxiliary reference edge', update: (reference) => ({ ...derivation, reference }) };
+    return { kind: 'line', label: translate('drawing.workspace.repairAuxiliaryReferenceEdge'), update: (reference) => ({ ...derivation, reference }) };
   }
   return null;
 }
@@ -3423,6 +3428,7 @@ function AnnotationExtensionGrip({
   position: [number, number];
   binding: AnnotationExtensionGripBinding;
 }) {
+  const { t } = useTranslation();
   return <g>
     <circle
       data-testid={testId}
@@ -3434,7 +3440,7 @@ function AnnotationExtensionGrip({
       className="cursor-grab active:cursor-grabbing"
       {...binding}
     >
-      <title>Drag to adjust center-line extension</title>
+      <title>{t('drawing.workspace.dragToAdjustCenterLineExtension')}</title>
     </circle>
     <rect
       x={position[0] - 0.85}
@@ -3520,7 +3526,8 @@ function MultilineOutlinedText({ position, text, color, selected }: { position: 
 }
 
 function BrokenAnnotation({ view, onSelect }: { view: DrawingViewDto; onSelect: () => void }) {
-  return <g data-testid="drawing-broken-annotation" onPointerDown={(event) => { event.stopPropagation(); onSelect(); }} className="cursor-pointer"><circle cx={view.position[0]} cy={view.position[1] - 8} r="3.1" fill="#fff3f0" stroke="#b54432" strokeWidth="0.45" /><text x={view.position[0]} y={view.position[1] - 6.8} fill="#b54432" fontSize="3.5" fontWeight="700" textAnchor="middle">!</text><title>Annotation reference is missing or invalid</title></g>;
+  const { t } = useTranslation();
+  return <g data-testid="drawing-broken-annotation" onPointerDown={(event) => { event.stopPropagation(); onSelect(); }} className="cursor-pointer"><circle cx={view.position[0]} cy={view.position[1] - 8} r="3.1" fill="#fff3f0" stroke="#b54432" strokeWidth="0.45" /><text x={view.position[0]} y={view.position[1] - 6.8} fill="#b54432" fontSize="3.5" fontWeight="700" textAnchor="middle">!</text><title>{t('drawing.workspace.annotationReferenceMissing')}</title></g>;
 }
 
 type ViewPlacementInspectorState = {
@@ -3551,49 +3558,146 @@ function DrawingInspector({
   placement: ViewPlacementInspectorState | null;
   chamfer: ChamferPlacementInspectorState | null;
 }) {
+  const { t } = useTranslation();
   const assembly = useAppStore((state) => state.assemblyDocument);
   const scene = useAppStore((state) => state.solidScene);
   const view = sheet.views.find((candidate) => candidate.id === selectedViewId) ?? null;
   const annotation = sheet.annotations.find((candidate) => candidate.id === selectedAnnotationId) ?? null;
   const run = (action: Promise<void>) => void action.catch(showDrawingError);
   return <aside data-mcp-surface="drawing/inspector" className="w-[300px] shrink-0 overflow-y-auto border-l border-edge bg-panel p-3">
-    <div className="mb-3 text-[10px] font-semibold tracking-[0.16em] text-mute">{placement ? 'PLACING VIEW' : chamfer ? 'CHAMFER NOTE' : annotation ? 'ANNOTATION' : view ? 'DRAWING VIEW' : 'SHEET PROPERTIES'}</div>
+    <div className="mb-3 text-[10px] font-semibold tracking-[0.16em] text-mute">{placement ? t('drawing.workspace.sectionPlacingView') : chamfer ? t('drawing.workspace.sectionChamferNote') : annotation ? t('drawing.workspace.sectionAnnotation') : view ? t('drawing.workspace.sectionDrawingView') : t('drawing.workspace.sectionSheetProperties')}</div>
     {placement ? <ViewPlacementInspector placement={placement} /> : chamfer ? <ChamferPlacementInspector chamfer={chamfer} /> : annotation ? <AnnotationInspector annotation={annotation} sheet={sheet} run={run} /> : view ? <>
-      <Field label="Name"><input className="drawing-input" value={view.name} onChange={(event) => run(updateDrawingView(view.id, { name: event.target.value || 'View' }))} /></Field>
-      <Field label="Model scope"><select className="drawing-input" value={view.scope ?? 'definition'} onChange={(event) => run(updateDrawingView(view.id, { scope: event.target.value as 'definition' | 'assembly', occurrence_ids: [] }))}><option value="definition">Part definitions</option><option value="assembly">Placed assembly</option></select></Field>
-      {view.scope === 'assembly' && <Field label="Occurrence"><select className="drawing-input" value={(view.occurrence_ids ?? []).length === 1 ? view.occurrence_ids![0] : ''} onChange={(event) => run(updateDrawingView(view.id, { occurrence_ids: event.target.value ? [Number(event.target.value)] : [] }))}><option value="">All visible occurrences</option>{assembly.component_structure.occurrences.map((occurrence) => <option key={occurrence.id} value={occurrence.id}>{occurrence.name}</option>)}</select></Field>}
-      <Field label="Projection group scale"><select className="drawing-input" value={view.scale} onChange={(event) => run(updateDrawingView(view.id, { scale: Number(event.target.value) }))}>{drawingScales.map((scale) => <option key={scale} value={scale}>{scaleLabel(scale)}</option>)}</select></Field>
-      {view.parent_view_id !== null && <div className="mb-3 rounded border border-accent/30 bg-accent/8 p-2 text-[10px] leading-relaxed text-mute"><span className="font-semibold text-accent">GROUPED VIEW</span><br />{view.alignment === 'vertical' ? 'X position' : view.alignment === 'horizontal' ? 'Y position' : 'Scale'} follows {drawingViewGroupRoot(sheet, view.id)?.name ?? 'base view'}.</div>}
+      <Field label={t('drawing.workspace.fieldName')}><input className="drawing-input" value={view.name} onChange={(event) => run(updateDrawingView(view.id, { name: event.target.value || t('drawing.workspace.defaultViewName') }))} /></Field>
+      <Field label={t('drawing.workspace.fieldModelScope')}><select className="drawing-input" value={view.scope ?? 'definition'} onChange={(event) => run(updateDrawingView(view.id, { scope: event.target.value as 'definition' | 'assembly', occurrence_ids: [] }))}><option value="definition">{t('drawing.workspace.scopePartDefinitions')}</option><option value="assembly">{t('drawing.workspace.scopePlacedAssembly')}</option></select></Field>
+      {view.scope === 'assembly' && <Field label={t('drawing.workspace.fieldOccurrence')}><select className="drawing-input" value={(view.occurrence_ids ?? []).length === 1 ? view.occurrence_ids![0] : ''} onChange={(event) => run(updateDrawingView(view.id, { occurrence_ids: event.target.value ? [Number(event.target.value)] : [] }))}><option value="">{t('drawing.workspace.optionAllVisibleOccurrences')}</option>{assembly.component_structure.occurrences.map((occurrence) => <option key={occurrence.id} value={occurrence.id}>{occurrence.name}</option>)}</select></Field>}
+      <Field label={t('drawing.workspace.fieldProjectionGroupScale')}><select className="drawing-input" value={view.scale} onChange={(event) => run(updateDrawingView(view.id, { scale: Number(event.target.value) }))}>{drawingScales.map((scale) => <option key={scale} value={scale}>{scaleLabel(scale)}</option>)}</select></Field>
+      {view.parent_view_id !== null && <div className="mb-3 rounded border border-accent/30 bg-accent/8 p-2 text-[10px] leading-relaxed text-mute"><span className="font-semibold text-accent">{t('drawing.workspace.sectionGroupedView')}</span><br />{t('drawing.workspace.groupedViewFollows').replace('{field}', view.alignment === 'vertical' ? t('drawing.workspace.alignmentXPosition') : view.alignment === 'horizontal' ? t('drawing.workspace.alignmentYPosition') : t('drawing.workspace.alignmentScale')).replace('{root}', drawingViewGroupRoot(sheet, view.id)?.name ?? t('drawing.workspace.defaultBaseViewName'))}</div>}
       {view.derivation && <DerivedViewInspector view={view} run={run} />}
-      <Toggle label="Hidden lines" checked={view.show_hidden_lines} icon={view.show_hidden_lines ? <Eye size={14} /> : <EyeOff size={14} />} onChange={(checked) => run(updateDrawingView(view.id, { show_hidden_lines: checked }))} />
-      <Toggle label="Tangent edges" checked={view.show_tangent_edges} onChange={(checked) => run(updateDrawingView(view.id, { show_tangent_edges: checked }))} />
-      <div className="mt-4 border-t border-edge pt-3"><div className="mb-2 text-[10px] font-semibold tracking-wider text-mute">BODIES</div>
-        <label className="flex items-center gap-2 py-1.5 text-[11px] text-ink"><input type="checkbox" checked={view.body_ids.length === 0} onChange={() => run(updateDrawingView(view.id, { body_ids: [] }))} />All active bodies</label>
+      <Toggle label={t('drawing.workspace.toggleHiddenLines')} checked={view.show_hidden_lines} icon={view.show_hidden_lines ? <Eye size={14} /> : <EyeOff size={14} />} onChange={(checked) => run(updateDrawingView(view.id, { show_hidden_lines: checked }))} />
+      <Toggle label={t('drawing.workspace.toggleTangentEdges')} checked={view.show_tangent_edges} onChange={(checked) => run(updateDrawingView(view.id, { show_tangent_edges: checked }))} />
+      <div className="mt-4 border-t border-edge pt-3"><div className="mb-2 text-[10px] font-semibold tracking-wider text-mute">{t('drawing.workspace.sectionBodies')}</div>
+        <label className="flex items-center gap-2 py-1.5 text-[11px] text-ink"><input type="checkbox" checked={view.body_ids.length === 0} onChange={() => run(updateDrawingView(view.id, { body_ids: [] }))} />{t('drawing.workspace.optionAllActiveBodies')}</label>
         {scene.bodies.map((body) => { const all = view.body_ids.length === 0; const explicit = view.body_ids.includes(body.id); return <label key={body.id} className="flex items-center gap-2 py-1.5 pl-3 text-[11px] text-mute"><input type="checkbox" checked={all || explicit} onChange={() => { const base = all ? scene.bodies.map((candidate) => candidate.id) : view.body_ids; const ids = all || explicit ? base.filter((id) => id !== body.id) : [...new Set([...base, body.id])]; if (ids.length > 0) run(updateDrawingView(view.id, { body_ids: ids.length === scene.bodies.length ? [] : ids })); }} />{body.name}</label>; })}
       </div>
-      <button type="button" onClick={() => run(deleteDrawingView(view.id))} className="mt-5 flex h-8 w-full items-center justify-center gap-2 rounded border border-warn/35 text-[11px] text-warn hover:bg-warn/10"><Trash2 size={13} /> Delete view</button>
+      <button type="button" onClick={() => run(deleteDrawingView(view.id))} className="mt-5 flex h-8 w-full items-center justify-center gap-2 rounded border border-warn/35 text-[11px] text-warn hover:bg-warn/10"><Trash2 size={13} /> {t('drawing.workspace.deleteView')}</button>
     </> : <SheetInspector sheet={sheet} run={run} />}
   </aside>;
 }
 
+const derivationKindKeys: Record<string, string> = {
+  section: 'drawing.workspace.derivationSection',
+  removed_section: 'drawing.workspace.derivationRemovedSection',
+  detail: 'drawing.workspace.derivationDetail',
+  auxiliary: 'drawing.workspace.derivationAuxiliary',
+  broken: 'drawing.workspace.derivationBroken',
+};
+function derivationKindKey(type: string): string { return derivationKindKeys[type] ?? 'drawing.workspace.derivationSection'; }
+
+const titleBlockFieldKeys: Record<string, string> = {
+  title: 'drawing.workspace.titleBlockTitle',
+  drawing_number: 'drawing.workspace.titleBlockDrawingNumber',
+  revision: 'drawing.workspace.titleBlockRevision',
+  author: 'drawing.workspace.titleBlockAuthor',
+  checked_by: 'drawing.workspace.titleBlockCheckedBy',
+  approved_by: 'drawing.workspace.titleBlockApprovedBy',
+  company: 'drawing.workspace.titleBlockCompany',
+  material: 'drawing.workspace.titleBlockMaterial',
+  finish: 'drawing.workspace.titleBlockFinish',
+};
+function titleBlockFieldKey(key: string): string { return titleBlockFieldKeys[key] ?? key; }
+
+const lineRoleKeys: Record<string, string> = {
+  visible: 'drawing.workspace.lineRoleVisible',
+  hidden: 'drawing.workspace.lineRoleHidden',
+  center: 'drawing.workspace.lineRoleCenter',
+  cutting_plane: 'drawing.workspace.lineRoleCuttingPlane',
+  phantom: 'drawing.workspace.lineRolePhantom',
+  break_line: 'drawing.workspace.lineRoleBreakLine',
+  dimension: 'drawing.workspace.lineRoleDimension',
+  extension: 'drawing.workspace.lineRoleExtension',
+  leader: 'drawing.workspace.lineRoleLeader',
+  hatch: 'drawing.workspace.lineRoleHatch',
+};
+function lineRoleKey(role: string): string { return lineRoleKeys[role] ?? role; }
+
+const surfaceLayKeys: Record<string, string> = {
+  none: 'drawing.workspace.surfaceLayNone',
+  parallel: 'drawing.workspace.surfaceLayParallel',
+  perpendicular: 'drawing.workspace.surfaceLayPerpendicular',
+  crossed: 'drawing.workspace.surfaceLayCrossed',
+  multidirectional: 'drawing.workspace.surfaceLayMultidirectional',
+  circular: 'drawing.workspace.surfaceLayCircular',
+  radial: 'drawing.workspace.surfaceLayRadial',
+  particulate: 'drawing.workspace.surfaceLayParticulate',
+};
+function surfaceLayKey(lay: string): string { return surfaceLayKeys[lay] ?? lay; }
+
+const weldTypeKeys: Record<string, string> = {
+  fillet: 'drawing.workspace.weldTypeFillet',
+  square_groove: 'drawing.workspace.weldTypeSquareGroove',
+  v_groove: 'drawing.workspace.weldTypeVGroove',
+  bevel_groove: 'drawing.workspace.weldTypeBevelGroove',
+  u_groove: 'drawing.workspace.weldTypeUGroove',
+  j_groove: 'drawing.workspace.weldTypeJGroove',
+  plug_slot: 'drawing.workspace.weldTypePlugSlot',
+  spot: 'drawing.workspace.weldTypeSpot',
+  seam: 'drawing.workspace.weldTypeSeam',
+  surfacing: 'drawing.workspace.weldTypeSurfacing',
+};
+function weldTypeKey(type: string): string { return weldTypeKeys[type] ?? type; }
+
+const gdtCharacteristicKeys: Record<string, string> = {
+  straightness: 'drawing.workspace.gdtStraightness',
+  flatness: 'drawing.workspace.gdtFlatness',
+  circularity: 'drawing.workspace.gdtCircularity',
+  cylindricity: 'drawing.workspace.gdtCylindricity',
+  profile_line: 'drawing.workspace.gdtProfileLine',
+  profile_surface: 'drawing.workspace.gdtProfileSurface',
+  angularity: 'drawing.workspace.gdtAngularity',
+  perpendicularity: 'drawing.workspace.gdtPerpendicularity',
+  parallelism: 'drawing.workspace.gdtParallelism',
+  position: 'drawing.workspace.gdtPosition',
+  concentricity: 'drawing.workspace.gdtConcentricity',
+  symmetry: 'drawing.workspace.gdtSymmetry',
+  circular_runout: 'drawing.workspace.gdtCircularRunout',
+  total_runout: 'drawing.workspace.gdtTotalRunout',
+};
+function gdtCharacteristicKey(characteristic: string): string { return gdtCharacteristicKeys[characteristic] ?? characteristic; }
+
+const viewKindKeys: Record<string, string> = {
+  front: 'drawing.workspace.viewKindFront',
+  rear: 'drawing.workspace.viewKindRear',
+  left: 'drawing.workspace.viewKindLeft',
+  right: 'drawing.workspace.viewKindRight',
+  top: 'drawing.workspace.viewKindTop',
+  bottom: 'drawing.workspace.viewKindBottom',
+  isometric: 'drawing.workspace.viewKindIsometric',
+  custom: 'drawing.workspace.viewKindCustom',
+  section: 'drawing.workspace.viewKindSection',
+  detail: 'drawing.workspace.viewKindDetail',
+  auxiliary: 'drawing.workspace.viewKindAuxiliary',
+};
+function viewKindWordKey(kind: string): string { return viewKindKeys[kind] ?? kind; }
+
 function DerivedViewInspector({ view, run }: { view: DrawingViewDto; run: (action: Promise<void>) => void }) {
+  const { t } = useTranslation();
   const derivation = view.derivation;
   const setDrawingTool = useAppStore((state) => state.setDrawingTool);
   if (!derivation) return null;
   const update = (changes: Partial<typeof derivation>) => run(updateDrawingView(view.id, { derivation: { ...derivation, ...changes } as typeof derivation }));
   return <div className="mb-4 rounded border border-accent/30 bg-accent/8 p-2">
-    <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-accent">Associative {derivation.type.replace('_', ' ')}</div>
-    {derivation.type !== 'broken' && <button type="button" data-testid="drawing-reassociate-view-reference" onClick={() => setDrawingTool('reassociate')} className="mb-3 flex h-7 w-full items-center justify-center rounded border border-accent/40 bg-panel text-[10px] font-semibold text-accent hover:bg-accent/10">Reassociate source reference…</button>}
-    {'label' in derivation && <Field label="View identifier"><input className="drawing-input" value={derivation.label} onChange={(event) => update({ label: event.target.value } as Partial<typeof derivation>)} /></Field>}
-    {derivation.type === 'detail' && <NumberField label="Detail radius (model mm)" value={derivation.radius} onChange={(radius) => update({ radius })} />}
+    <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-accent">{t('drawing.workspace.associativeView').replace('{kind}', t(derivationKindKey(derivation.type)))}</div>
+    {derivation.type !== 'broken' && <button type="button" data-testid="drawing-reassociate-view-reference" onClick={() => setDrawingTool('reassociate')} className="mb-3 flex h-7 w-full items-center justify-center rounded border border-accent/40 bg-panel text-[10px] font-semibold text-accent hover:bg-accent/10">{t('drawing.workspace.reassociateSourceReference')}</button>}
+    {'label' in derivation && <Field label={t('drawing.workspace.fieldViewIdentifier')}><input className="drawing-input" value={derivation.label} onChange={(event) => update({ label: event.target.value } as Partial<typeof derivation>)} /></Field>}
+    {derivation.type === 'detail' && <NumberField label={t('drawing.workspace.fieldDetailRadius')} value={derivation.radius} onChange={(radius) => update({ radius })} />}
     {(derivation.type === 'section' || derivation.type === 'removed_section') && <>
-      {derivation.type === 'section' && <OptionalNumberField label="Section depth (blank = full)" value={derivation.depth} onChange={(depth) => update({ depth })} />}
-      <div className="grid grid-cols-2 gap-2"><NumberField label="Hatch angle" value={derivation.hatch_angle_deg} onChange={(hatch_angle_deg) => update({ hatch_angle_deg })} /><NumberField label="Hatch spacing" value={derivation.hatch_spacing_mm} onChange={(hatch_spacing_mm) => update({ hatch_spacing_mm })} /></div>
+      {derivation.type === 'section' && <OptionalNumberField label={t('drawing.workspace.fieldSectionDepth')} value={derivation.depth} onChange={(depth) => update({ depth })} />}
+      <div className="grid grid-cols-2 gap-2"><NumberField label={t('drawing.workspace.fieldHatchAngle')} value={derivation.hatch_angle_deg} onChange={(hatch_angle_deg) => update({ hatch_angle_deg })} /><NumberField label={t('drawing.workspace.fieldHatchSpacing')} value={derivation.hatch_spacing_mm} onChange={(hatch_spacing_mm) => update({ hatch_spacing_mm })} /></div>
     </>}
-    {derivation.type === 'auxiliary' && <Toggle label="Flip viewing direction" checked={derivation.flipped} onChange={(flipped) => update({ flipped })} />}
+    {derivation.type === 'auxiliary' && <Toggle label={t('drawing.workspace.toggleFlipViewingDirection')} checked={derivation.flipped} onChange={(flipped) => update({ flipped })} />}
     {derivation.type === 'broken' && <>
-      <Field label="Break axis"><select className="drawing-input" value={derivation.axis} onChange={(event) => update({ axis: event.target.value as typeof derivation.axis })}><option value="horizontal">Horizontal shortening</option><option value="vertical">Vertical shortening</option></select></Field>
-      <NumberField label="Paper gap (mm)" value={derivation.gap_mm} onChange={(gap_mm) => update({ gap_mm: Math.max(2, gap_mm) })} />
+      <Field label={t('drawing.workspace.fieldBreakAxis')}><select className="drawing-input" value={derivation.axis} onChange={(event) => update({ axis: event.target.value as typeof derivation.axis })}><option value="horizontal">{t('drawing.workspace.optionHorizontalShortening')}</option><option value="vertical">{t('drawing.workspace.optionVerticalShortening')}</option></select></Field>
+      <NumberField label={t('drawing.workspace.fieldPaperGap')} value={derivation.gap_mm} onChange={(gap_mm) => update({ gap_mm: Math.max(2, gap_mm) })} />
     </>}
   </div>;
 }
@@ -3603,39 +3707,41 @@ function ChamferPlacementInspector({
 }: {
   chamfer: ChamferPlacementInspectorState;
 }) {
+  const { t } = useTranslation();
   const units = useAppStore((state) => state.document?.settings.units ?? 'mm');
   if (!chamfer.draft) {
     return <div data-testid="drawing-chamfer-placement-controls">
       <div className="mb-3 rounded border border-[#1688c9]/45 bg-[#1688c9]/10 p-3 text-[11px] leading-relaxed text-ink">
-        <div className="font-semibold text-[#1688c9]">Select a highlighted chamfer edge</div>
-        <div className="mt-1 text-mute">Eligible true-shape chamfers are highlighted in the projected views. Hover one to confirm it, then click it.</div>
+        <div className="font-semibold text-[#1688c9]">{t('drawing.workspace.selectHighlightedChamferEdge')}</div>
+        <div className="mt-1 text-mute">{t('drawing.workspace.chamferEligibleHint')}</div>
       </div>
-      <button type="button" onClick={chamfer.onCancel} className="drawing-mini-button h-8 w-full">Cancel chamfer note</button>
+      <button type="button" onClick={chamfer.onCancel} className="drawing-mini-button h-8 w-full">{t('drawing.workspace.cancelChamferNote')}</button>
     </div>;
   }
   const { candidate, position } = chamfer.draft;
   return <div data-testid="drawing-chamfer-placement-controls">
     <div className="mb-3 rounded border border-accent/40 bg-accent/10 p-3 text-[11px] leading-relaxed text-ink">
-      <div className="font-semibold text-accent">Leader preview is active</div>
-      <div className="mt-1 text-mute">Move over the sheet and click to place the note. The exact OCCT edge remains highlighted.</div>
+      <div className="font-semibold text-accent">{t('drawing.workspace.leaderPreviewActive')}</div>
+      <div className="mt-1 text-mute">{t('drawing.workspace.leaderPreviewHint')}</div>
     </div>
-    <Field label={`${chamfer.standard === 'iso' ? 'ISO' : 'ANSI / ASME'} callout`}>
+    <Field label={t('drawing.workspace.calloutLabel').replace('{standard}', chamfer.standard === 'iso' ? 'ISO' : 'ANSI / ASME')}>
       <div className="drawing-input flex items-center font-mono font-semibold" data-testid="drawing-chamfer-callout-preview">
         {drawingChamferText(candidate.distance, candidate.angleDeg, '', chamfer.standard, units)}
       </div>
     </Field>
     <div className="grid grid-cols-2 gap-2">
-      <NumberField label="Paper X (mm)" value={position[0]} onChange={(value) => chamfer.onPositionChange([value, position[1]])} />
-      <NumberField label="Paper Y (mm)" value={position[1]} onChange={(value) => chamfer.onPositionChange([position[0], value])} />
+      <NumberField label={t('drawing.workspace.fieldPaperX')} value={position[0]} onChange={(value) => chamfer.onPositionChange([value, position[1]])} />
+      <NumberField label={t('drawing.workspace.fieldPaperY')} value={position[1]} onChange={(value) => chamfer.onPositionChange([position[0], value])} />
     </div>
     <div className="mb-3 rounded border border-edge bg-header/45 p-2 text-[10px] leading-relaxed text-mute">
-      Automatic geometry: {trimNumber(candidate.distance)} mm setback at {trimNumber(candidate.angleDeg)}°. You can edit these after placement when a special manufacturing callout is required.
+      {t('drawing.workspace.chamferAutoGeometry').replace('{distance}', trimNumber(candidate.distance)).replace('{angle}', trimNumber(candidate.angleDeg))}
     </div>
-    <button type="button" onClick={chamfer.onCancel} className="drawing-mini-button h-8 w-full">Cancel placement</button>
+    <button type="button" onClick={chamfer.onCancel} className="drawing-mini-button h-8 w-full">{t('drawing.workspace.cancelPlacement')}</button>
   </div>;
 }
 
 function ViewPlacementInspector({ placement }: { placement: ViewPlacementInspectorState }) {
+  const { t } = useTranslation();
   const alignment = placement.kind === 'top' || placement.kind === 'bottom'
     ? 'vertical'
     : placement.kind === 'left' || placement.kind === 'right'
@@ -3643,10 +3749,10 @@ function ViewPlacementInspector({ placement }: { placement: ViewPlacementInspect
       : 'free';
   return <div data-testid="drawing-view-placement-controls">
     <div className="mb-3 rounded border border-accent/40 bg-accent/10 p-3 text-[11px] leading-relaxed text-ink">
-      <div className="font-semibold text-accent">{viewKindLabel(placement.kind)} preview is active</div>
-      <div className="mt-1 text-mute">Move over the sheet to position it. You can keep using these controls while the preview is attached to the pointer.</div>
+      <div className="font-semibold text-accent">{t('drawing.workspace.viewPreviewActive').replace('{kind}', viewKindLabel(placement.kind))}</div>
+      <div className="mt-1 text-mute">{t('drawing.workspace.viewPlacementHint')}</div>
     </div>
-    <Field label="Projection group scale">
+    <Field label={t('drawing.workspace.fieldProjectionGroupScale')}>
       <select
         className="drawing-input"
         data-testid="drawing-placement-scale"
@@ -3658,22 +3764,23 @@ function ViewPlacementInspector({ placement }: { placement: ViewPlacementInspect
     </Field>
     <div className="mb-3 rounded border border-edge bg-header/45 p-2 text-[10px] leading-relaxed text-mute">
       {placement.root ? <>
-        <span className="font-semibold text-ink">Aligned to {placement.root.name}</span><br />
-        {alignment === 'vertical' ? 'Shares its paper X position' : alignment === 'horizontal' ? 'Shares its paper Y position' : 'Position remains free'}, and inherits the root view scale. Changing scale previews the entire group and commits it as one placement command.
+        <span className="font-semibold text-ink">{t('drawing.workspace.alignedTo').replace('{name}', placement.root.name)}</span><br />
+        {t('drawing.workspace.alignmentInherit').replace('{position}', alignment === 'vertical' ? t('drawing.workspace.sharesPaperXPosition') : alignment === 'horizontal' ? t('drawing.workspace.sharesPaperYPosition') : t('drawing.workspace.positionRemainsFree'))}
       </> : <>
-        <span className="font-semibold text-ink">New projection group</span><br />
-        This first view establishes the scale and alignment origin for views placed after it.
+        <span className="font-semibold text-ink">{t('drawing.workspace.newProjectionGroup')}</span><br />
+        {t('drawing.workspace.newProjectionGroupHint')}
       </>}
     </div>
-    <button type="button" onClick={placement.onCancel} className="drawing-mini-button h-8 w-full">Cancel placement</button>
+    <button type="button" onClick={placement.onCancel} className="drawing-mini-button h-8 w-full">{t('drawing.workspace.cancelPlacement')}</button>
   </div>;
 }
 
 function SheetInspector({ sheet, run }: { sheet: DrawingSheetDto; run: (action: Promise<void>) => void }) {
+  const { t } = useTranslation();
   const formats = drawingFormatsForStandard(sheet.standard);
   const scene = useAppStore((state) => state.solidScene);
   const templates = useAppStore((state) => state.drawingDocument.templates);
-  const [templateName, setTemplateName] = useState(sheet.template_name || 'Company Standard');
+  const [templateName, setTemplateName] = useState(sheet.template_name || translate('drawing.workspace.defaultCompanyStandard'));
   const setStandard = (standard: DrawingStandard) => run(updateActiveDrawingSheet({
     standard,
     format: defaultDrawingFormat(standard),
@@ -3681,201 +3788,204 @@ function SheetInspector({ sheet, run }: { sheet: DrawingSheetDto; run: (action: 
     tolerance_note: { preset: standard === 'ansi' ? 'ansi_decimal' : 'iso2768_medium', custom: '' },
   }));
   return <>
-    <Field label="Sheet name"><input className="drawing-input" value={sheet.name} onChange={(event) => run(updateActiveDrawingSheet({ name: event.target.value || 'Sheet' }))} /></Field>
-    <Field label="Standard"><select className="drawing-input" value={sheet.standard} onChange={(event) => setStandard(event.target.value as DrawingStandard)}><option value="iso">ISO</option><option value="ansi">ANSI / ASME</option></select></Field>
-    <Field label="Paper"><select className="drawing-input" value={sheet.format} onChange={(event) => run(updateActiveDrawingSheet({ format: event.target.value as DrawingSheetFormat }))}>{formats.map((format) => <option key={format} value={format}>{drawingFormatLabel(format)}</option>)}</select></Field>
-    <Field label="Orientation"><select className="drawing-input" value={sheet.orientation} onChange={(event) => run(updateActiveDrawingSheet({ orientation: event.target.value as DrawingSheetDto['orientation'] }))}><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></Field>
-    <Field label="Projection convention"><select className="drawing-input" value={sheet.projection_method} onChange={(event) => run(updateActiveDrawingSheet({ projection_method: event.target.value as DrawingSheetDto['projection_method'] }))}><option value="first_angle">First-angle</option><option value="third_angle">Third-angle</option></select></Field>
-    <Field label="General tolerance"><select className="drawing-input" value={sheet.tolerance_note.preset} onChange={(event) => run(updateActiveDrawingSheet({ tolerance_note: { ...sheet.tolerance_note, preset: event.target.value as DrawingTolerancePreset } }))}><option value="none">None</option>{sheet.standard === 'iso' ? <><option value="iso2768_fine">ISO 2768-f</option><option value="iso2768_medium">ISO 2768-m</option><option value="iso2768_coarse">ISO 2768-c</option><option value="iso2768_very_coarse">ISO 2768-v</option></> : <option value="ansi_decimal">ANSI decimal places</option>}<option value="custom">Custom</option></select></Field>
-    {sheet.tolerance_note.preset === 'custom' && <Field label="Tolerance note"><textarea className="drawing-input min-h-16 py-2" value={sheet.tolerance_note.custom} onChange={(event) => run(updateActiveDrawingSheet({ tolerance_note: { ...sheet.tolerance_note, custom: event.target.value } }))} /></Field>}
-    <div className="mt-4 border-t border-edge pt-3 text-[10px] font-semibold tracking-wider text-mute">TITLE BLOCK</div>
-    {(['title', 'drawing_number', 'revision', 'author', 'checked_by', 'approved_by', 'company', 'material', 'finish'] as const).map((key) => <Field key={key} label={key.replace(/_/g, ' ')}><input className="drawing-input" value={sheet.title_block[key]} onChange={(event) => run(updateActiveDrawingSheet({ title_block: { ...sheet.title_block, [key]: event.target.value } }))} /></Field>)}
+    <Field label={t('drawing.workspace.fieldSheetName')}><input className="drawing-input" value={sheet.name} onChange={(event) => run(updateActiveDrawingSheet({ name: event.target.value || t('drawing.workspace.defaultSheetName') }))} /></Field>
+    <Field label={t('drawing.workspace.fieldStandard')}><select className="drawing-input" value={sheet.standard} onChange={(event) => setStandard(event.target.value as DrawingStandard)}><option value="iso">ISO</option><option value="ansi">ANSI / ASME</option></select></Field>
+    <Field label={t('drawing.workspace.fieldPaper')}><select className="drawing-input" value={sheet.format} onChange={(event) => run(updateActiveDrawingSheet({ format: event.target.value as DrawingSheetFormat }))}>{formats.map((format) => <option key={format} value={format}>{drawingFormatLabel(format)}</option>)}</select></Field>
+    <Field label={t('drawing.workspace.fieldOrientation')}><select className="drawing-input" value={sheet.orientation} onChange={(event) => run(updateActiveDrawingSheet({ orientation: event.target.value as DrawingSheetDto['orientation'] }))}><option value="landscape">{t('drawing.workspace.orientationLandscape')}</option><option value="portrait">{t('drawing.workspace.orientationPortrait')}</option></select></Field>
+    <Field label={t('drawing.workspace.fieldProjectionConvention')}><select className="drawing-input" value={sheet.projection_method} onChange={(event) => run(updateActiveDrawingSheet({ projection_method: event.target.value as DrawingSheetDto['projection_method'] }))}><option value="first_angle">{t('drawing.workspace.projectionFirstAngle')}</option><option value="third_angle">{t('drawing.workspace.projectionThirdAngle')}</option></select></Field>
+    <Field label={t('drawing.workspace.fieldGeneralTolerance')}><select className="drawing-input" value={sheet.tolerance_note.preset} onChange={(event) => run(updateActiveDrawingSheet({ tolerance_note: { ...sheet.tolerance_note, preset: event.target.value as DrawingTolerancePreset } }))}><option value="none">{t('drawing.workspace.toleranceNone')}</option>{sheet.standard === 'iso' ? <><option value="iso2768_fine">ISO 2768-f</option><option value="iso2768_medium">ISO 2768-m</option><option value="iso2768_coarse">ISO 2768-c</option><option value="iso2768_very_coarse">ISO 2768-v</option></> : <option value="ansi_decimal">{t('drawing.workspace.toleranceAnsiDecimal')}</option>}<option value="custom">{t('drawing.workspace.toleranceCustom')}</option></select></Field>
+    {sheet.tolerance_note.preset === 'custom' && <Field label={t('drawing.workspace.fieldToleranceNote')}><textarea className="drawing-input min-h-16 py-2" value={sheet.tolerance_note.custom} onChange={(event) => run(updateActiveDrawingSheet({ tolerance_note: { ...sheet.tolerance_note, custom: event.target.value } }))} /></Field>}
+    <div className="mt-4 border-t border-edge pt-3 text-[10px] font-semibold tracking-wider text-mute">{t('drawing.workspace.sectionTitleBlock')}</div>
+    {(['title', 'drawing_number', 'revision', 'author', 'checked_by', 'approved_by', 'company', 'material', 'finish'] as const).map((key) => <Field key={key} label={t(titleBlockFieldKey(key))}><input className="drawing-input" value={sheet.title_block[key]} onChange={(event) => run(updateActiveDrawingSheet({ title_block: { ...sheet.title_block, [key]: event.target.value } }))} /></Field>)}
 
-    <div className="mt-4 border-t border-edge pt-3 text-[10px] font-semibold tracking-wider text-mute">STYLE &amp; TEMPLATE</div>
-    <Field label="Company template"><select className="drawing-input" value={templates.find((template) => template.name === sheet.template_name)?.id ?? ''} onChange={(event) => { if (event.target.value) run(applyDrawingTemplate(Number(event.target.value))); }}><option value="">{sheet.template_name || 'Sheet-local style'}</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></Field>
-    <div className="mb-3 grid grid-cols-[1fr_76px_30px] gap-1"><input className="drawing-input" aria-label="Template name" value={templateName} onChange={(event) => setTemplateName(event.target.value)} /><button type="button" className="drawing-mini-button" onClick={() => run(saveActiveDrawingTemplate(templateName))}>Save</button><button type="button" className="drawing-mini-button" title="Delete selected company template" disabled={!templates.some((template) => template.name === sheet.template_name)} onClick={() => { const template = templates.find((candidate) => candidate.name === sheet.template_name); if (template) run(deleteDrawingTemplate(template.id)); }}><Trash2 size={12} /></button></div>
-    <div className="mb-3 rounded border border-edge bg-header/35 p-2 text-[10px] leading-relaxed text-mute">Templates are stored in this project. Applying one copies its standard, title defaults, and full line-style registry into the sheet, so already-issued sheets remain unchanged.</div>
-    <Field label="Style name"><input className="drawing-input" value={sheet.style.name} onChange={(event) => run(updateActiveDrawingSheet({ style: { ...sheet.style, name: event.target.value } }))} /></Field>
-    <Field label="Font family"><input className="drawing-input" value={sheet.style.font_family} onChange={(event) => run(updateActiveDrawingSheet({ style: { ...sheet.style, font_family: event.target.value } }))} /></Field>
-    <div className="grid grid-cols-2 gap-2"><NumberField label="Text height (mm)" value={sheet.style.text_height_mm} onChange={(text_height_mm) => run(updateActiveDrawingSheet({ style: { ...sheet.style, text_height_mm } }))} /><NumberField label="Small text (mm)" value={sheet.style.small_text_height_mm} onChange={(small_text_height_mm) => run(updateActiveDrawingSheet({ style: { ...sheet.style, small_text_height_mm } }))} /><NumberField label="Arrow size (mm)" value={sheet.style.arrow_size_mm} onChange={(arrow_size_mm) => run(updateActiveDrawingSheet({ style: { ...sheet.style, arrow_size_mm } }))} /></div>
-    <div className="mb-3 rounded border border-edge bg-header/25 p-2"><div className="mb-2 grid grid-cols-[1fr_58px_1.2fr] gap-1 text-[9px] font-semibold uppercase tracking-wider text-mute"><span>Line role</span><span>mm</span><span>Dash / gap mm</span></div>{(['visible', 'hidden', 'center', 'cutting_plane', 'phantom', 'break_line', 'dimension', 'extension', 'leader', 'hatch'] as DrawingLineRole[]).map((role) => <DrawingLineStyleEditor key={role} sheet={sheet} role={role} run={run} />)}</div>
-    <div className="grid grid-cols-2 gap-2"><NumberField label="Hatch angle" value={sheet.style.hatch_angle_deg} onChange={(hatch_angle_deg) => run(updateActiveDrawingSheet({ style: { ...sheet.style, hatch_angle_deg } }))} /><NumberField label="Hatch spacing" value={sheet.style.hatch_spacing_mm} onChange={(hatch_spacing_mm) => run(updateActiveDrawingSheet({ style: { ...sheet.style, hatch_spacing_mm } }))} /></div>
+    <div className="mt-4 border-t border-edge pt-3 text-[10px] font-semibold tracking-wider text-mute">{t('drawing.workspace.sectionStyleTemplate')}</div>
+    <Field label={t('drawing.workspace.fieldCompanyTemplate')}><select className="drawing-input" value={templates.find((template) => template.name === sheet.template_name)?.id ?? ''} onChange={(event) => { if (event.target.value) run(applyDrawingTemplate(Number(event.target.value))); }}><option value="">{sheet.template_name || t('drawing.workspace.templateSheetLocalStyle')}</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></Field>
+    <div className="mb-3 grid grid-cols-[1fr_76px_30px] gap-1"><input className="drawing-input" aria-label={t('drawing.workspace.ariaTemplateName')} value={templateName} onChange={(event) => setTemplateName(event.target.value)} /><button type="button" className="drawing-mini-button" onClick={() => run(saveActiveDrawingTemplate(templateName))}>{t('drawing.workspace.actionSave')}</button><button type="button" className="drawing-mini-button" title={t('drawing.workspace.titleDeleteCompanyTemplate')} disabled={!templates.some((template) => template.name === sheet.template_name)} onClick={() => { const template = templates.find((candidate) => candidate.name === sheet.template_name); if (template) run(deleteDrawingTemplate(template.id)); }}><Trash2 size={12} /></button></div>
+    <div className="mb-3 rounded border border-edge bg-header/35 p-2 text-[10px] leading-relaxed text-mute">{t('drawing.workspace.templateStoredHint')}</div>
+    <Field label={t('drawing.workspace.fieldStyleName')}><input className="drawing-input" value={sheet.style.name} onChange={(event) => run(updateActiveDrawingSheet({ style: { ...sheet.style, name: event.target.value } }))} /></Field>
+    <Field label={t('drawing.workspace.fieldFontFamily')}><input className="drawing-input" value={sheet.style.font_family} onChange={(event) => run(updateActiveDrawingSheet({ style: { ...sheet.style, font_family: event.target.value } }))} /></Field>
+    <div className="grid grid-cols-2 gap-2"><NumberField label={t('drawing.workspace.fieldTextHeight')} value={sheet.style.text_height_mm} onChange={(text_height_mm) => run(updateActiveDrawingSheet({ style: { ...sheet.style, text_height_mm } }))} /><NumberField label={t('drawing.workspace.fieldSmallText')} value={sheet.style.small_text_height_mm} onChange={(small_text_height_mm) => run(updateActiveDrawingSheet({ style: { ...sheet.style, small_text_height_mm } }))} /><NumberField label={t('drawing.workspace.fieldArrowSize')} value={sheet.style.arrow_size_mm} onChange={(arrow_size_mm) => run(updateActiveDrawingSheet({ style: { ...sheet.style, arrow_size_mm } }))} /></div>
+    <div className="mb-3 rounded border border-edge bg-header/25 p-2"><div className="mb-2 grid grid-cols-[1fr_58px_1.2fr] gap-1 text-[9px] font-semibold uppercase tracking-wider text-mute"><span>{t('drawing.workspace.lineRoleHeader')}</span><span>mm</span><span>{t('drawing.workspace.lineDashGapHeader')}</span></div>{(['visible', 'hidden', 'center', 'cutting_plane', 'phantom', 'break_line', 'dimension', 'extension', 'leader', 'hatch'] as DrawingLineRole[]).map((role) => <DrawingLineStyleEditor key={role} sheet={sheet} role={role} run={run} />)}</div>
+    <div className="grid grid-cols-2 gap-2"><NumberField label={t('drawing.workspace.fieldHatchAngle')} value={sheet.style.hatch_angle_deg} onChange={(hatch_angle_deg) => run(updateActiveDrawingSheet({ style: { ...sheet.style, hatch_angle_deg } }))} /><NumberField label={t('drawing.workspace.fieldHatchSpacing')} value={sheet.style.hatch_spacing_mm} onChange={(hatch_spacing_mm) => run(updateActiveDrawingSheet({ style: { ...sheet.style, hatch_spacing_mm } }))} /></div>
 
-    <div className="mt-4 border-t border-edge pt-3 text-[10px] font-semibold tracking-wider text-mute">REVISIONS &amp; RELEASE</div>
-    <Field label="Document status"><select className="drawing-input" value={sheet.release.status} disabled={sheet.release.status === 'released'} onChange={(event) => run(updateActiveDrawingSheet({ release: { ...sheet.release, status: event.target.value as typeof sheet.release.status } }))}><option value="draft">Draft</option><option value="in_review">In review</option><option value="released">Released</option><option value="superseded">Superseded</option><option value="obsolete">Obsolete</option></select></Field>
-    {sheet.release.released_revision && <div className="mb-3 rounded border border-accent/30 bg-accent/8 p-2 text-[10px] leading-relaxed text-mute">Last issued revision <span className="font-semibold text-accent">{sheet.release.released_revision}</span>{sheet.release.released_at ? ` · ${sheet.release.released_at}` : ''}. Editing issued content automatically starts a new Draft while preserving this release record.</div>}
-    <Toggle label="Show revision table" checked={sheet.revision_table_position !== null} onChange={(checked) => run(updateActiveDrawingSheet({ revision_table_position: checked ? [10, 10] : null }))} />
+    <div className="mt-4 border-t border-edge pt-3 text-[10px] font-semibold tracking-wider text-mute">{t('drawing.workspace.sectionRevisionsRelease')}</div>
+    <Field label={t('drawing.workspace.fieldDocumentStatus')}><select className="drawing-input" value={sheet.release.status} disabled={sheet.release.status === 'released'} onChange={(event) => run(updateActiveDrawingSheet({ release: { ...sheet.release, status: event.target.value as typeof sheet.release.status } }))}><option value="draft">{t('drawing.workspace.statusDraft')}</option><option value="in_review">{t('drawing.workspace.statusInReview')}</option><option value="released">{t('drawing.workspace.statusReleased')}</option><option value="superseded">{t('drawing.workspace.statusSuperseded')}</option><option value="obsolete">{t('drawing.workspace.statusObsolete')}</option></select></Field>
+    {sheet.release.released_revision && <div className="mb-3 rounded border border-accent/30 bg-accent/8 p-2 text-[10px] leading-relaxed text-mute">{t('drawing.workspace.lastIssuedRevision')} <span className="font-semibold text-accent">{sheet.release.released_revision}</span>{sheet.release.released_at ? ` · ${sheet.release.released_at}` : ''}. {t('drawing.workspace.editingIssuedContent')}</div>}
+    <Toggle label={t('drawing.workspace.toggleShowRevisionTable')} checked={sheet.revision_table_position !== null} onChange={(checked) => run(updateActiveDrawingSheet({ revision_table_position: checked ? [10, 10] : null }))} />
     <div className="space-y-2">
       {sheet.revisions.map((revision) => { const locked = revision.status === 'released'; return <div key={revision.id} className="rounded border border-edge bg-header/35 p-2">
-        <div className="mb-2 grid grid-cols-[54px_1fr_28px] gap-1"><input className="drawing-input uppercase px-1" disabled={locked} value={revision.revision} onChange={(event) => run(updateDrawingRevision(revision.id, { revision: event.target.value.toUpperCase() }))} /><input className="drawing-input px-1" disabled={locked} value={revision.description} placeholder="Description" onChange={(event) => run(updateDrawingRevision(revision.id, { description: event.target.value }))} /><button type="button" className="drawing-mini-button" disabled={locked} title={locked ? 'Released revisions are immutable' : 'Delete revision'} onClick={() => run(deleteDrawingRevision(revision.id))}><Trash2 size={12} /></button></div>
-        <div className="grid grid-cols-2 gap-1"><input className="drawing-input px-1" disabled={locked} type="date" value={revision.date} onChange={(event) => run(updateDrawingRevision(revision.id, { date: event.target.value }))} /><select className="drawing-input px-1" disabled={locked} value={revision.status} onChange={(event) => run(updateDrawingRevision(revision.id, { status: event.target.value as typeof revision.status }))}><option value="draft">Draft</option><option value="in_review">In review</option><option value="released">Released</option><option value="superseded">Superseded</option><option value="obsolete">Obsolete</option></select></div>
-        {locked && <div className="mt-1 text-[9px] font-semibold uppercase tracking-wider text-accent">Issued · immutable</div>}
+        <div className="mb-2 grid grid-cols-[54px_1fr_28px] gap-1"><input className="drawing-input uppercase px-1" disabled={locked} value={revision.revision} onChange={(event) => run(updateDrawingRevision(revision.id, { revision: event.target.value.toUpperCase() }))} /><input className="drawing-input px-1" disabled={locked} value={revision.description} placeholder={t('drawing.workspace.placeholderDescription')} onChange={(event) => run(updateDrawingRevision(revision.id, { description: event.target.value }))} /><button type="button" className="drawing-mini-button" disabled={locked} title={locked ? t('drawing.workspace.titleReleasedRevisionImmutable') : t('drawing.workspace.deleteRevision')} onClick={() => run(deleteDrawingRevision(revision.id))}><Trash2 size={12} /></button></div>
+        <div className="grid grid-cols-2 gap-1"><input className="drawing-input px-1" disabled={locked} type="date" value={revision.date} onChange={(event) => run(updateDrawingRevision(revision.id, { date: event.target.value }))} /><select className="drawing-input px-1" disabled={locked} value={revision.status} onChange={(event) => run(updateDrawingRevision(revision.id, { status: event.target.value as typeof revision.status }))}><option value="draft">{t('drawing.workspace.statusDraft')}</option><option value="in_review">{t('drawing.workspace.statusInReview')}</option><option value="released">{t('drawing.workspace.statusReleased')}</option><option value="superseded">{t('drawing.workspace.statusSuperseded')}</option><option value="obsolete">{t('drawing.workspace.statusObsolete')}</option></select></div>
+        {locked && <div className="mt-1 text-[9px] font-semibold uppercase tracking-wider text-accent">{t('drawing.workspace.issuedImmutable')}</div>}
       </div>; })}
     </div>
-    <div className="mt-2 grid grid-cols-2 gap-2"><button type="button" className="drawing-mini-button h-8" onClick={() => run(addDrawingRevision({ revision: nextRevisionCode(sheet.title_block.revision), description: '', date: currentIsoDate(), author: sheet.title_block.author, checked_by: sheet.title_block.checked_by, approved_by: sheet.title_block.approved_by, change_order: '', status: 'draft' }))}>Add revision</button><button type="button" className="drawing-mini-button h-8 border-accent/45 text-accent" onClick={() => run(addDrawingRevision({ revision: nextRevisionCode(sheet.title_block.revision), description: 'Released drawing', date: currentIsoDate(), author: sheet.title_block.author, checked_by: sheet.title_block.checked_by, approved_by: sheet.title_block.approved_by, change_order: '', status: 'released' }))}>Release revision</button></div>
+    <div className="mt-2 grid grid-cols-2 gap-2"><button type="button" className="drawing-mini-button h-8" onClick={() => run(addDrawingRevision({ revision: nextRevisionCode(sheet.title_block.revision), description: '', date: currentIsoDate(), author: sheet.title_block.author, checked_by: sheet.title_block.checked_by, approved_by: sheet.title_block.approved_by, change_order: '', status: 'draft' }))}>{t('drawing.workspace.actionAddRevision')}</button><button type="button" className="drawing-mini-button h-8 border-accent/45 text-accent" onClick={() => run(addDrawingRevision({ revision: nextRevisionCode(sheet.title_block.revision), description: t('drawing.workspace.releasedDrawingDescription'), date: currentIsoDate(), author: sheet.title_block.author, checked_by: sheet.title_block.checked_by, approved_by: sheet.title_block.approved_by, change_order: '', status: 'released' }))}>{t('drawing.workspace.actionReleaseRevision')}</button></div>
 
-    <div className="mt-4 border-t border-edge pt-3 text-[10px] font-semibold tracking-wider text-mute">BILL OF MATERIALS</div>
-    <Toggle label="Show BOM table" checked={sheet.bom_table_position !== null} onChange={(checked) => run(updateActiveDrawingSheet({ bom_table_position: checked ? [10, 45] : null }))} />
+    <div className="mt-4 border-t border-edge pt-3 text-[10px] font-semibold tracking-wider text-mute">{t('drawing.workspace.sectionBillOfMaterials')}</div>
+    <Toggle label={t('drawing.workspace.toggleShowBomTable')} checked={sheet.bom_table_position !== null} onChange={(checked) => run(updateActiveDrawingSheet({ bom_table_position: checked ? [10, 45] : null }))} />
     <div className="space-y-2">
       {sheet.bom.map((item) => <div key={item.id} className="rounded border border-edge bg-header/35 p-2">
-        <div className="mb-1 grid grid-cols-[42px_1fr_28px] gap-1"><input className="drawing-input px-1" value={item.item_number} onChange={(event) => run(updateDrawingBomItem(item.id, { item_number: event.target.value }))} /><input className="drawing-input px-1" value={item.part_number} placeholder="Part number" onChange={(event) => run(updateDrawingBomItem(item.id, { part_number: event.target.value }))} /><button type="button" className="drawing-mini-button" title="Delete BOM item" onClick={() => run(deleteDrawingBomItem(item.id))}><Trash2 size={12} /></button></div>
-        <input className="drawing-input mb-1 px-1" value={item.description} placeholder="Description" onChange={(event) => run(updateDrawingBomItem(item.id, { description: event.target.value }))} />
-        <div className="grid grid-cols-2 gap-1"><select className="drawing-input px-1" value={item.body_id ?? ''} onChange={(event) => run(updateDrawingBomItem(item.id, { body_id: event.target.value ? Number(event.target.value) : null }))}><option value="">No model body</option>{scene.bodies.map((body) => <option key={body.id} value={body.id}>{body.name}</option>)}</select><input className="drawing-input px-1" type="number" min="1" value={item.quantity} onChange={(event) => run(updateDrawingBomItem(item.id, { quantity: Math.max(1, Math.round(Number(event.target.value) || 1)) }))} /></div>
+        <div className="mb-1 grid grid-cols-[42px_1fr_28px] gap-1"><input className="drawing-input px-1" value={item.item_number} onChange={(event) => run(updateDrawingBomItem(item.id, { item_number: event.target.value }))} /><input className="drawing-input px-1" value={item.part_number} placeholder={t('drawing.workspace.placeholderPartNumber')} onChange={(event) => run(updateDrawingBomItem(item.id, { part_number: event.target.value }))} /><button type="button" className="drawing-mini-button" title={t('drawing.workspace.titleDeleteBomItem')} onClick={() => run(deleteDrawingBomItem(item.id))}><Trash2 size={12} /></button></div>
+        <input className="drawing-input mb-1 px-1" value={item.description} placeholder={t('drawing.workspace.placeholderDescription')} onChange={(event) => run(updateDrawingBomItem(item.id, { description: event.target.value }))} />
+        <div className="grid grid-cols-2 gap-1"><select className="drawing-input px-1" value={item.body_id ?? ''} onChange={(event) => run(updateDrawingBomItem(item.id, { body_id: event.target.value ? Number(event.target.value) : null }))}><option value="">{t('drawing.workspace.optionNoModelBody')}</option>{scene.bodies.map((body) => <option key={body.id} value={body.id}>{body.name}</option>)}</select><input className="drawing-input px-1" type="number" min="1" value={item.quantity} onChange={(event) => run(updateDrawingBomItem(item.id, { quantity: Math.max(1, Math.round(Number(event.target.value) || 1)) }))} /></div>
       </div>)}
     </div>
-    <button type="button" className="drawing-mini-button mt-2 h-8 w-full" onClick={() => run(addDrawingBomItem())}>Add BOM item</button>
+    <button type="button" className="drawing-mini-button mt-2 h-8 w-full" onClick={() => run(addDrawingBomItem())}>{t('drawing.workspace.actionAddBomItem')}</button>
   </>;
 }
 
 function DrawingLineStyleEditor({ sheet, role, run }: { sheet: DrawingSheetDto; role: DrawingLineRole; run: (action: Promise<void>) => void }) {
+  const { t } = useTranslation();
   const line = sheet.style[role];
   const update = (changes: Partial<typeof line>) => run(updateActiveDrawingSheet({ style: { ...sheet.style, [role]: { ...line, ...changes } } }));
-  return <div className="mb-1 grid grid-cols-[1fr_58px_1.2fr] items-center gap-1"><span className="truncate text-[10px] capitalize text-ink">{role.replace('_', ' ')}</span><input className="drawing-input h-7 px-1" aria-label={`${role.replace('_', ' ')} width`} type="number" min="0.05" max="5" step="0.05" value={line.width_mm} onChange={(event) => { const value = Number(event.target.value); if (value > 0) update({ width_mm: value }); }} /><input className="drawing-input h-7 px-1 font-mono" aria-label={`${role.replace('_', ' ')} dash pattern`} value={line.dash_mm.join(' ')} placeholder="continuous" onChange={(event) => update({ dash_mm: event.target.value.split(/[ ,]+/).map(Number).filter((value) => Number.isFinite(value) && value > 0).slice(0, 16) })} /></div>;
+  const roleLabel = t(lineRoleKey(role));
+  return <div className="mb-1 grid grid-cols-[1fr_58px_1.2fr] items-center gap-1"><span className="truncate text-[10px] capitalize text-ink">{roleLabel}</span><input className="drawing-input h-7 px-1" aria-label={t('drawing.workspace.lineRoleWidth').replace('{role}', roleLabel)} type="number" min="0.05" max="5" step="0.05" value={line.width_mm} onChange={(event) => { const value = Number(event.target.value); if (value > 0) update({ width_mm: value }); }} /><input className="drawing-input h-7 px-1 font-mono" aria-label={t('drawing.workspace.lineRoleDashPattern').replace('{role}', roleLabel)} value={line.dash_mm.join(' ')} placeholder={t('drawing.workspace.placeholderContinuous')} onChange={(event) => update({ dash_mm: event.target.value.split(/[ ,]+/).map(Number).filter((value) => Number.isFinite(value) && value > 0).slice(0, 16) })} /></div>;
 }
 
 function AnnotationInspector({ annotation, sheet, run }: { annotation: DrawingAnnotationDto; sheet: DrawingSheetDto; run: (action: Promise<void>) => void }) {
+  const { t } = useTranslation();
   const standard = sheet.standard;
   const units = useAppStore((state) => state.document?.settings.units ?? 'mm');
   const setDrawingTool = useAppStore((state) => state.setDrawingTool);
   if (annotation.kind === 'note') return <NoteAnnotationInspector note={annotation} run={run} />;
   const canReassociate = !['revision_cloud', 'automatic_symmetry_axis'].includes(annotation.kind);
-  const associative = annotation.kind === 'revision_cloud' ? null : <div className="mb-3 rounded border border-accent/35 bg-accent/10 p-2 text-[10px] leading-relaxed text-mute"><span className="font-semibold text-accent">ASSOCIATIVE</span><br />Attached to stable model topology and updated when the view or model changes.{canReassociate && <button type="button" data-testid="drawing-reassociate-reference" onClick={() => setDrawingTool('reassociate')} className="mt-2 flex h-7 w-full items-center justify-center rounded border border-accent/40 bg-panel text-[10px] font-semibold text-accent hover:bg-accent/10">Reassociate topology reference…</button>}</div>;
+  const associative = annotation.kind === 'revision_cloud' ? null : <div className="mb-3 rounded border border-accent/35 bg-accent/10 p-2 text-[10px] leading-relaxed text-mute"><span className="font-semibold text-accent">{t('drawing.workspace.sectionAssociative')}</span><br />{t('drawing.workspace.associativeHint')}{canReassociate && <button type="button" data-testid="drawing-reassociate-reference" onClick={() => setDrawingTool('reassociate')} className="mt-2 flex h-7 w-full items-center justify-center rounded border border-accent/40 bg-panel text-[10px] font-semibold text-accent hover:bg-accent/10">{t('drawing.workspace.reassociateTopologyReference')}</button>}</div>;
   let fields: ReactNode;
   switch (annotation.kind) {
     case 'linear_dimension': fields = <>
-      <Field label="Orientation"><select className="drawing-input" value={annotation.mode} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { mode: event.target.value as typeof annotation.mode }))}><option value="aligned">Aligned</option><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option></select></Field>
-      <NumberField label="Offset (mm)" value={annotation.offset} onChange={(offset) => run(updateDrawingAnnotation(annotation.id, { offset }))} />
+      <Field label={t('drawing.workspace.fieldOrientation')}><select className="drawing-input" value={annotation.mode} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { mode: event.target.value as typeof annotation.mode }))}><option value="aligned">{t('drawing.workspace.optionAligned')}</option><option value="horizontal">{t('drawing.workspace.optionHorizontal')}</option><option value="vertical">{t('drawing.workspace.optionVertical')}</option></select></Field>
+      <NumberField label={t('drawing.workspace.fieldOffset')} value={annotation.offset} onChange={(offset) => run(updateDrawingAnnotation(annotation.id, { offset }))} />
       <DimensionTextFields annotation={annotation} run={run} />
     </>; break;
     case 'line_dimension': fields = <>
-      <Field label="Smart relationship"><div className="drawing-input flex items-center capitalize">{annotation.mode === 'length' ? 'Selected edge length' : annotation.mode === 'distance' ? 'Distance between parallel edges' : 'Angle between edges'}</div></Field>
-      <div className="grid grid-cols-2 gap-2"><NumberField label="Paper X (mm)" value={annotation.position[0]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [value, annotation.position[1]] }))} /><NumberField label="Paper Y (mm)" value={annotation.position[1]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [annotation.position[0], value] }))} /></div>
+      <Field label={t('drawing.workspace.fieldSmartRelationship')}><div className="drawing-input flex items-center capitalize">{annotation.mode === 'length' ? t('drawing.workspace.smartSelectedEdgeLength') : annotation.mode === 'distance' ? t('drawing.workspace.smartDistanceBetweenParallelEdges') : t('drawing.workspace.smartAngleBetweenEdges')}</div></Field>
+      <div className="grid grid-cols-2 gap-2"><NumberField label={t('drawing.workspace.fieldPaperX')} value={annotation.position[0]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [value, annotation.position[1]] }))} /><NumberField label={t('drawing.workspace.fieldPaperY')} value={annotation.position[1]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [annotation.position[0], value] }))} /></div>
       <DimensionTextFields annotation={annotation} run={run} />
     </>; break;
     case 'point_line_dimension': fields = <>
-      <Field label="Smart relationship"><div className="drawing-input flex items-center">Perpendicular distance from point to edge</div></Field>
-      <div className="grid grid-cols-2 gap-2"><NumberField label="Paper X (mm)" value={annotation.position[0]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [value, annotation.position[1]] }))} /><NumberField label="Paper Y (mm)" value={annotation.position[1]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [annotation.position[0], value] }))} /></div>
+      <Field label={t('drawing.workspace.fieldSmartRelationship')}><div className="drawing-input flex items-center">{t('drawing.workspace.smartPerpendicularDistance')}</div></Field>
+      <div className="grid grid-cols-2 gap-2"><NumberField label={t('drawing.workspace.fieldPaperX')} value={annotation.position[0]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [value, annotation.position[1]] }))} /><NumberField label={t('drawing.workspace.fieldPaperY')} value={annotation.position[1]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [annotation.position[0], value] }))} /></div>
       <DimensionTextFields annotation={annotation} run={run} />
     </>; break;
     case 'radial_dimension': fields = <>
-      <Field label="Type"><select className="drawing-input" value={annotation.mode} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { mode: event.target.value as typeof annotation.mode }))}><option value="diameter" disabled={!annotation.feature.closed}>Diameter</option><option value="radius">Radius</option></select></Field>
-      <NumberField label="Leader angle (deg)" value={annotation.leader_angle_deg} onChange={(leader_angle_deg) => run(updateDrawingAnnotation(annotation.id, { leader_angle_deg }))} />
-      <NumberField label="Leader offset (mm)" value={annotation.offset} onChange={(offset) => run(updateDrawingAnnotation(annotation.id, { offset }))} />
+      <Field label={t('drawing.workspace.fieldType')}><select className="drawing-input" value={annotation.mode} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { mode: event.target.value as typeof annotation.mode }))}><option value="diameter" disabled={!annotation.feature.closed}>{t('drawing.workspace.optionDiameter')}</option><option value="radius">{t('drawing.workspace.optionRadius')}</option></select></Field>
+      <NumberField label={t('drawing.workspace.fieldLeaderAngle')} value={annotation.leader_angle_deg} onChange={(leader_angle_deg) => run(updateDrawingAnnotation(annotation.id, { leader_angle_deg }))} />
+      <NumberField label={t('drawing.workspace.fieldLeaderOffset')} value={annotation.offset} onChange={(offset) => run(updateDrawingAnnotation(annotation.id, { offset }))} />
       <DimensionTextFields annotation={annotation} run={run} />
     </>; break;
     case 'angular_dimension': fields = <>
-      <NumberField label="Arc radius (mm)" value={annotation.radius} onChange={(radius) => run(updateDrawingAnnotation(annotation.id, { radius }))} />
+      <NumberField label={t('drawing.workspace.fieldArcRadius')} value={annotation.radius} onChange={(radius) => run(updateDrawingAnnotation(annotation.id, { radius }))} />
       <DimensionTextFields annotation={annotation} run={run} />
     </>; break;
     case 'hole_note': fields = <>
-      {annotation.source_feature_id !== null && <div className="mb-3 rounded border border-accent/35 bg-accent/10 p-2 text-[10px] text-mute"><span className="font-semibold text-accent">MODELED HOLE FEATURE</span><br />{annotation.feature_name || `Feature ${annotation.source_feature_id}`} · values came from feature history.</div>}
-      <NumberField label="Quantity" value={annotation.quantity} step={1} onChange={(quantity) => run(updateDrawingAnnotation(annotation.id, { quantity: Math.max(1, Math.round(quantity)) }))} />
-      <NumberField label="Diameter (mm)" value={annotation.diameter} onChange={(diameter) => run(updateDrawingAnnotation(annotation.id, { diameter }))} />
-      <OptionalNumberField label="Depth (blank = through)" value={annotation.depth} onChange={(depth) => run(updateDrawingAnnotation(annotation.id, { depth }))} />
-      <Field label="Hole style"><select className="drawing-input" value={annotation.hole_style} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { hole_style: event.target.value as typeof annotation.hole_style }))}><option value="simple">Simple</option><option value="counterbore">Counterbore</option><option value="countersink">Countersink</option></select></Field>
-      {annotation.hole_style === 'counterbore' && <div className="grid grid-cols-2 gap-2"><OptionalNumberField label="C'BORE diameter" value={annotation.counterbore_diameter} onChange={(counterbore_diameter) => run(updateDrawingAnnotation(annotation.id, { counterbore_diameter }))} /><OptionalNumberField label="C'BORE depth" value={annotation.counterbore_depth} onChange={(counterbore_depth) => run(updateDrawingAnnotation(annotation.id, { counterbore_depth }))} /></div>}
-      {annotation.hole_style === 'countersink' && <div className="grid grid-cols-2 gap-2"><OptionalNumberField label="C'SINK diameter" value={annotation.countersink_diameter} onChange={(countersink_diameter) => run(updateDrawingAnnotation(annotation.id, { countersink_diameter }))} /><OptionalNumberField label="C'SINK angle" value={annotation.countersink_angle_deg} onChange={(countersink_angle_deg) => run(updateDrawingAnnotation(annotation.id, { countersink_angle_deg }))} /></div>}
-      <Field label="Thread designation"><input className="drawing-input" placeholder="e.g. M6 × 1 - 6H" value={annotation.thread} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { thread: event.target.value }))} /></Field>
-      <OptionalNumberField label="Thread depth" value={annotation.thread_depth} onChange={(thread_depth) => run(updateDrawingAnnotation(annotation.id, { thread_depth }))} />
-      <Field label="Pattern note"><input className="drawing-input" placeholder="EQ SP ON PCD…" value={annotation.pattern_note} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { pattern_note: event.target.value }))} /></Field>
-      <Field label="Additional note"><input className="drawing-input" placeholder="THRU, C'BORE…" value={annotation.note} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { note: event.target.value }))} /></Field>
-      <Field label={`${standard === 'iso' ? 'ISO' : 'ANSI / ASME'} generated callout`}><pre className="drawing-input h-auto min-h-10 whitespace-pre-wrap py-2 font-mono text-[10px]">{drawingHoleCalloutText(annotation, standard, units)}</pre></Field>
+      {annotation.source_feature_id !== null && <div className="mb-3 rounded border border-accent/35 bg-accent/10 p-2 text-[10px] text-mute"><span className="font-semibold text-accent">{t('drawing.workspace.sectionModeledHoleFeature')}</span><br />{annotation.feature_name || t('drawing.workspace.featureFallback').replace('{id}', String(annotation.source_feature_id))} · {t('drawing.workspace.valuesFromFeatureHistory')}</div>}
+      <NumberField label={t('drawing.workspace.fieldQuantity')} value={annotation.quantity} step={1} onChange={(quantity) => run(updateDrawingAnnotation(annotation.id, { quantity: Math.max(1, Math.round(quantity)) }))} />
+      <NumberField label={t('drawing.workspace.fieldDiameter')} value={annotation.diameter} onChange={(diameter) => run(updateDrawingAnnotation(annotation.id, { diameter }))} />
+      <OptionalNumberField label={t('drawing.workspace.fieldDepth')} value={annotation.depth} onChange={(depth) => run(updateDrawingAnnotation(annotation.id, { depth }))} />
+      <Field label={t('drawing.workspace.fieldHoleStyle')}><select className="drawing-input" value={annotation.hole_style} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { hole_style: event.target.value as typeof annotation.hole_style }))}><option value="simple">{t('drawing.workspace.optionSimple')}</option><option value="counterbore">{t('drawing.workspace.optionCounterbore')}</option><option value="countersink">{t('drawing.workspace.optionCountersink')}</option></select></Field>
+      {annotation.hole_style === 'counterbore' && <div className="grid grid-cols-2 gap-2"><OptionalNumberField label={t('drawing.workspace.fieldCounterboreDiameter')} value={annotation.counterbore_diameter} onChange={(counterbore_diameter) => run(updateDrawingAnnotation(annotation.id, { counterbore_diameter }))} /><OptionalNumberField label={t('drawing.workspace.fieldCounterboreDepth')} value={annotation.counterbore_depth} onChange={(counterbore_depth) => run(updateDrawingAnnotation(annotation.id, { counterbore_depth }))} /></div>}
+      {annotation.hole_style === 'countersink' && <div className="grid grid-cols-2 gap-2"><OptionalNumberField label={t('drawing.workspace.fieldCountersinkDiameter')} value={annotation.countersink_diameter} onChange={(countersink_diameter) => run(updateDrawingAnnotation(annotation.id, { countersink_diameter }))} /><OptionalNumberField label={t('drawing.workspace.fieldCountersinkAngle')} value={annotation.countersink_angle_deg} onChange={(countersink_angle_deg) => run(updateDrawingAnnotation(annotation.id, { countersink_angle_deg }))} /></div>}
+      <Field label={t('drawing.workspace.fieldThreadDesignation')}><input className="drawing-input" placeholder={t('drawing.workspace.placeholderThreadDesignation')} value={annotation.thread} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { thread: event.target.value }))} /></Field>
+      <OptionalNumberField label={t('drawing.workspace.fieldThreadDepth')} value={annotation.thread_depth} onChange={(thread_depth) => run(updateDrawingAnnotation(annotation.id, { thread_depth }))} />
+      <Field label={t('drawing.workspace.fieldPatternNote')}><input className="drawing-input" placeholder={t('drawing.workspace.placeholderPatternNote')} value={annotation.pattern_note} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { pattern_note: event.target.value }))} /></Field>
+      <Field label={t('drawing.workspace.fieldAdditionalNote')}><input className="drawing-input" placeholder={t('drawing.workspace.placeholderAdditionalNote')} value={annotation.note} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { note: event.target.value }))} /></Field>
+      <Field label={t('drawing.workspace.generatedCallout').replace('{standard}', standard === 'iso' ? 'ISO' : 'ANSI / ASME')}><pre className="drawing-input h-auto min-h-10 whitespace-pre-wrap py-2 font-mono text-[10px]">{drawingHoleCalloutText(annotation, standard, units)}</pre></Field>
     </>; break;
     case 'chamfer_note': fields = <>
-      <Field label={`${standard === 'iso' ? 'ISO' : 'ANSI / ASME'} callout`}><div className="drawing-input flex items-center font-mono font-semibold" data-testid="drawing-chamfer-callout-text">{drawingChamferText(annotation.length, annotation.angle_deg, annotation.prefix, standard, units)}</div></Field>
-      <NumberField label="Chamfer setback (model mm)" value={annotation.length} onChange={(length) => run(updateDrawingAnnotation(annotation.id, { length }))} />
-      <NumberField label="Angle (deg)" value={annotation.angle_deg} onChange={(angle_deg) => run(updateDrawingAnnotation(annotation.id, { angle_deg }))} />
-      <Field label="Prefix"><input className="drawing-input" value={annotation.prefix} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { prefix: event.target.value }))} /></Field>
-      <div className="grid grid-cols-2 gap-2"><NumberField label="Paper X (mm)" value={annotation.position[0]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [value, annotation.position[1]] }))} /><NumberField label="Paper Y (mm)" value={annotation.position[1]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [annotation.position[0], value] }))} /></div>
+      <Field label={t('drawing.workspace.calloutLabel').replace('{standard}', standard === 'iso' ? 'ISO' : 'ANSI / ASME')}><div className="drawing-input flex items-center font-mono font-semibold" data-testid="drawing-chamfer-callout-text">{drawingChamferText(annotation.length, annotation.angle_deg, annotation.prefix, standard, units)}</div></Field>
+      <NumberField label={t('drawing.workspace.fieldChamferSetback')} value={annotation.length} onChange={(length) => run(updateDrawingAnnotation(annotation.id, { length }))} />
+      <NumberField label={t('drawing.workspace.fieldAngle')} value={annotation.angle_deg} onChange={(angle_deg) => run(updateDrawingAnnotation(annotation.id, { angle_deg }))} />
+      <Field label={t('drawing.workspace.fieldPrefix')}><input className="drawing-input" value={annotation.prefix} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { prefix: event.target.value }))} /></Field>
+      <div className="grid grid-cols-2 gap-2"><NumberField label={t('drawing.workspace.fieldPaperX')} value={annotation.position[0]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [value, annotation.position[1]] }))} /><NumberField label={t('drawing.workspace.fieldPaperY')} value={annotation.position[1]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [annotation.position[0], value] }))} /></div>
     </>; break;
     case 'center_mark': fields = <>
-      <Field label="Reference"><div className="drawing-input flex items-center font-mono">Body {annotation.feature.body_id} · Circle {annotation.feature.edge_id}</div></Field>
-      <NumberField label="Extension beyond hole (mm)" value={annotation.extension} onChange={(extension) => run(updateDrawingAnnotation(annotation.id, { extension }))} />
+      <Field label={t('drawing.workspace.fieldReference')}><div className="drawing-input flex items-center font-mono">{t('drawing.workspace.refBodyCircle').replace('{body}', String(annotation.feature.body_id)).replace('{circle}', String(annotation.feature.edge_id))}</div></Field>
+      <NumberField label={t('drawing.workspace.fieldExtensionBeyondHole')} value={annotation.extension} onChange={(extension) => run(updateDrawingAnnotation(annotation.id, { extension }))} />
     </>; break;
     case 'center_line': fields = <>
-      <Field label="References"><div className="drawing-input flex items-center font-mono">Circle {annotation.first.edge_id} → Circle {annotation.second.edge_id}</div></Field>
-      <NumberField label="End extension (mm)" value={annotation.extension} onChange={(extension) => run(updateDrawingAnnotation(annotation.id, { extension }))} />
+      <Field label={t('drawing.workspace.fieldReferences')}><div className="drawing-input flex items-center font-mono">{t('drawing.workspace.refCircleToCircle').replace('{first}', String(annotation.first.edge_id)).replace('{second}', String(annotation.second.edge_id))}</div></Field>
+      <NumberField label={t('drawing.workspace.fieldEndExtension')} value={annotation.extension} onChange={(extension) => run(updateDrawingAnnotation(annotation.id, { extension }))} />
     </>; break;
     case 'center_line_between_edges': fields = <>
-      <Field label="References"><div className="drawing-input flex items-center font-mono">Edge {annotation.first.edge_id} ↔ Edge {annotation.second.edge_id}</div></Field>
-      <Field label="Construction"><div className="drawing-input flex items-center">Midline between parallel projected edges</div></Field>
-      <NumberField label="End extension (mm)" value={annotation.extension} onChange={(extension) => run(updateDrawingAnnotation(annotation.id, { extension }))} />
+      <Field label={t('drawing.workspace.fieldReferences')}><div className="drawing-input flex items-center font-mono">{t('drawing.workspace.refEdgeToEdge').replace('{first}', String(annotation.first.edge_id)).replace('{second}', String(annotation.second.edge_id))}</div></Field>
+      <Field label={t('drawing.workspace.fieldConstruction')}><div className="drawing-input flex items-center">{t('drawing.workspace.constructionMidline')}</div></Field>
+      <NumberField label={t('drawing.workspace.fieldEndExtension')} value={annotation.extension} onChange={(extension) => run(updateDrawingAnnotation(annotation.id, { extension }))} />
     </>; break;
     case 'automatic_symmetry_axis': fields = <>
-      <Field label="Axes"><select className="drawing-input" value={annotation.axis} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { axis: event.target.value as typeof annotation.axis }))}><option value="both">Horizontal and vertical</option><option value="x">Horizontal</option><option value="y">Vertical</option></select></Field>
-      <NumberField label="End extension (mm)" value={annotation.extension} onChange={(extension) => run(updateDrawingAnnotation(annotation.id, { extension }))} />
+      <Field label={t('drawing.workspace.fieldAxes')}><select className="drawing-input" value={annotation.axis} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { axis: event.target.value as typeof annotation.axis }))}><option value="both">{t('drawing.workspace.optionHorizontalAndVertical')}</option><option value="x">{t('drawing.workspace.optionHorizontal')}</option><option value="y">{t('drawing.workspace.optionVertical')}</option></select></Field>
+      <NumberField label={t('drawing.workspace.fieldEndExtension')} value={annotation.extension} onChange={(extension) => run(updateDrawingAnnotation(annotation.id, { extension }))} />
     </>; break;
     case 'bolt_circle_center_line': fields = <>
-      <Field label="Pattern"><div className="drawing-input flex items-center">{annotation.features.length} circular centers on pitch circle</div></Field>
-      <NumberField label="Center-mark extension (mm)" value={annotation.extension} onChange={(extension) => run(updateDrawingAnnotation(annotation.id, { extension }))} />
+      <Field label={t('drawing.workspace.fieldPattern')}><div className="drawing-input flex items-center">{t('drawing.workspace.patternCircularCenters').replace('{count}', String(annotation.features.length))}</div></Field>
+      <NumberField label={t('drawing.workspace.fieldCenterMarkExtension')} value={annotation.extension} onChange={(extension) => run(updateDrawingAnnotation(annotation.id, { extension }))} />
     </>; break;
     case 'chain_dimension': fields = <>
-      <Field label="Layout"><select className="drawing-input" value={annotation.layout} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { layout: event.target.value as typeof annotation.layout }))}><option value="chain">Chain</option><option value="baseline">Baseline</option><option value="continued">Continued</option></select></Field>
-      <Field label="Orientation"><select className="drawing-input" value={annotation.mode} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { mode: event.target.value as typeof annotation.mode }))}><option value="aligned">Aligned</option><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option></select></Field>
-      <NumberField label="Offset (mm)" value={annotation.offset} onChange={(offset) => run(updateDrawingAnnotation(annotation.id, { offset }))} />
-      <NumberField label="Baseline spacing (mm)" value={annotation.spacing} onChange={(spacing) => run(updateDrawingAnnotation(annotation.id, { spacing }))} />
+      <Field label={t('drawing.workspace.fieldLayout')}><select className="drawing-input" value={annotation.layout} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { layout: event.target.value as typeof annotation.layout }))}><option value="chain">{t('drawing.workspace.optionChain')}</option><option value="baseline">{t('drawing.workspace.optionBaseline')}</option><option value="continued">{t('drawing.workspace.optionContinued')}</option></select></Field>
+      <Field label={t('drawing.workspace.fieldOrientation')}><select className="drawing-input" value={annotation.mode} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { mode: event.target.value as typeof annotation.mode }))}><option value="aligned">{t('drawing.workspace.optionAligned')}</option><option value="horizontal">{t('drawing.workspace.optionHorizontal')}</option><option value="vertical">{t('drawing.workspace.optionVertical')}</option></select></Field>
+      <NumberField label={t('drawing.workspace.fieldOffset')} value={annotation.offset} onChange={(offset) => run(updateDrawingAnnotation(annotation.id, { offset }))} />
+      <NumberField label={t('drawing.workspace.fieldBaselineSpacing')} value={annotation.spacing} onChange={(spacing) => run(updateDrawingAnnotation(annotation.id, { spacing }))} />
       <DimensionTextFields annotation={annotation} run={run} />
     </>; break;
     case 'ordinate_dimension': fields = <>
-      <Field label="Axis"><select className="drawing-input" value={annotation.axis} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { axis: event.target.value as typeof annotation.axis }))}><option value="both">X and Y</option><option value="x">X</option><option value="y">Y</option></select></Field>
-      <NumberField label="Leader offset (mm)" value={annotation.offset} onChange={(offset) => run(updateDrawingAnnotation(annotation.id, { offset }))} />
+      <Field label={t('drawing.workspace.fieldAxis')}><select className="drawing-input" value={annotation.axis} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { axis: event.target.value as typeof annotation.axis }))}><option value="both">{t('drawing.workspace.optionXAndY')}</option><option value="x">X</option><option value="y">Y</option></select></Field>
+      <NumberField label={t('drawing.workspace.fieldLeaderOffset')} value={annotation.offset} onChange={(offset) => run(updateDrawingAnnotation(annotation.id, { offset }))} />
       <DimensionTextFields annotation={annotation} run={run} />
     </>; break;
     case 'arc_length_dimension': fields = <>
-      <NumberField label="Arc offset (mm)" value={annotation.offset} onChange={(offset) => run(updateDrawingAnnotation(annotation.id, { offset }))} />
+      <NumberField label={t('drawing.workspace.fieldArcOffset')} value={annotation.offset} onChange={(offset) => run(updateDrawingAnnotation(annotation.id, { offset }))} />
       <DimensionTextFields annotation={annotation} run={run} />
     </>; break;
     case 'jogged_radius_dimension': fields = <>
-      <div className="grid grid-cols-2 gap-2"><NumberField label="Text X (mm)" value={annotation.position[0]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [value, annotation.position[1]] }))} /><NumberField label="Text Y (mm)" value={annotation.position[1]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [annotation.position[0], value] }))} /></div>
-      <div className="grid grid-cols-2 gap-2"><NumberField label="Jog X (mm)" value={annotation.jog[0]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { jog: [value, annotation.jog[1]] }))} /><NumberField label="Jog Y (mm)" value={annotation.jog[1]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { jog: [annotation.jog[0], value] }))} /></div>
+      <div className="grid grid-cols-2 gap-2"><NumberField label={t('drawing.workspace.fieldTextX')} value={annotation.position[0]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [value, annotation.position[1]] }))} /><NumberField label={t('drawing.workspace.fieldTextY')} value={annotation.position[1]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { position: [annotation.position[0], value] }))} /></div>
+      <div className="grid grid-cols-2 gap-2"><NumberField label={t('drawing.workspace.fieldJogX')} value={annotation.jog[0]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { jog: [value, annotation.jog[1]] }))} /><NumberField label={t('drawing.workspace.fieldJogY')} value={annotation.jog[1]} onChange={(value) => run(updateDrawingAnnotation(annotation.id, { jog: [annotation.jog[0], value] }))} /></div>
       <DimensionTextFields annotation={annotation} run={run} />
     </>; break;
     case 'datum_feature': fields = <>
-      <Field label="Datum identifier"><input className="drawing-input uppercase" maxLength={3} value={annotation.label} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { label: event.target.value.toUpperCase() || 'A' }))} /></Field>
-      <OptionalNumberField label="Datum target index" value={annotation.target_index} onChange={(target_index) => run(updateDrawingAnnotation(annotation.id, { target_index: target_index === null ? null : Math.max(1, Math.round(target_index)) }))} />
+      <Field label={t('drawing.workspace.fieldDatumIdentifier')}><input className="drawing-input uppercase" maxLength={3} value={annotation.label} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { label: event.target.value.toUpperCase() || 'A' }))} /></Field>
+      <OptionalNumberField label={t('drawing.workspace.fieldDatumTargetIndex')} value={annotation.target_index} onChange={(target_index) => run(updateDrawingAnnotation(annotation.id, { target_index: target_index === null ? null : Math.max(1, Math.round(target_index)) }))} />
       <PositionFields position={annotation.position} onChange={(position) => run(updateDrawingAnnotation(annotation.id, { position }))} />
     </>; break;
     case 'gdt_frame': fields = <>
-      <Field label={`${standard === 'iso' ? 'ISO 1101' : 'ASME Y14.5'} characteristic`}><select className="drawing-input" value={annotation.characteristic} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { characteristic: event.target.value as typeof annotation.characteristic }))}>{gdtCharacteristics.map((value) => <option key={value} value={value}>{gdtCharacteristicLabel(value)}</option>)}</select></Field>
-      <NumberField label="Tolerance (mm)" value={annotation.tolerance} onChange={(tolerance) => run(updateDrawingAnnotation(annotation.id, { tolerance }))} />
-      <Toggle label="Diameter tolerance zone" checked={annotation.diameter_zone} onChange={(diameter_zone) => run(updateDrawingAnnotation(annotation.id, { diameter_zone }))} />
-      <Field label="Material condition"><select className="drawing-input" value={annotation.material_condition} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { material_condition: event.target.value as typeof annotation.material_condition }))}>{materialConditions.map((condition) => <option key={condition} value={condition}>{materialConditionLabel(condition)}</option>)}</select></Field>
-      {[0, 1, 2].map((index) => <div key={index} className="mb-2 grid grid-cols-[1fr_1.5fr] gap-2"><Field label={`Datum ${index + 1}`}><input className="drawing-input uppercase" maxLength={3} value={annotation.datums[index]?.label ?? ''} onChange={(event) => { const datums = [...annotation.datums]; const label = event.target.value.toUpperCase(); if (!label) datums.splice(index, 1); else datums[index] = { label, material_condition: datums[index]?.material_condition ?? 'none' }; run(updateDrawingAnnotation(annotation.id, { datums })); }} /></Field><Field label="Modifier"><select className="drawing-input" value={annotation.datums[index]?.material_condition ?? 'none'} onChange={(event) => { const datums = [...annotation.datums]; if (!datums[index]) datums[index] = { label: String.fromCharCode(65 + index), material_condition: 'none' }; datums[index] = { ...datums[index], material_condition: event.target.value as typeof annotation.material_condition }; run(updateDrawingAnnotation(annotation.id, { datums })); }}>{materialConditions.map((condition) => <option key={condition} value={condition}>{materialConditionLabel(condition)}</option>)}</select></Field></div>)}
-      <OptionalNumberField label="Projected tolerance zone (mm)" value={annotation.projected_zone} onChange={(projected_zone) => run(updateDrawingAnnotation(annotation.id, { projected_zone }))} />
-      <Toggle label="Free-state modifier" checked={annotation.free_state} onChange={(free_state) => run(updateDrawingAnnotation(annotation.id, { free_state }))} />
+      <Field label={t('drawing.workspace.characteristicLabel').replace('{standard}', standard === 'iso' ? 'ISO 1101' : 'ASME Y14.5')}><select className="drawing-input" value={annotation.characteristic} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { characteristic: event.target.value as typeof annotation.characteristic }))}>{gdtCharacteristics.map((value) => <option key={value} value={value}>{gdtCharacteristicLabel(value)}</option>)}</select></Field>
+      <NumberField label={t('drawing.workspace.fieldTolerance')} value={annotation.tolerance} onChange={(tolerance) => run(updateDrawingAnnotation(annotation.id, { tolerance }))} />
+      <Toggle label={t('drawing.workspace.toggleDiameterToleranceZone')} checked={annotation.diameter_zone} onChange={(diameter_zone) => run(updateDrawingAnnotation(annotation.id, { diameter_zone }))} />
+      <Field label={t('drawing.workspace.fieldMaterialCondition')}><select className="drawing-input" value={annotation.material_condition} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { material_condition: event.target.value as typeof annotation.material_condition }))}>{materialConditions.map((condition) => <option key={condition} value={condition}>{materialConditionLabel(condition)}</option>)}</select></Field>
+      {[0, 1, 2].map((index) => <div key={index} className="mb-2 grid grid-cols-[1fr_1.5fr] gap-2"><Field label={t('drawing.workspace.fieldDatum').replace('{index}', String(index + 1))}><input className="drawing-input uppercase" maxLength={3} value={annotation.datums[index]?.label ?? ''} onChange={(event) => { const datums = [...annotation.datums]; const label = event.target.value.toUpperCase(); if (!label) datums.splice(index, 1); else datums[index] = { label, material_condition: datums[index]?.material_condition ?? 'none' }; run(updateDrawingAnnotation(annotation.id, { datums })); }} /></Field><Field label={t('drawing.workspace.fieldModifier')}><select className="drawing-input" value={annotation.datums[index]?.material_condition ?? 'none'} onChange={(event) => { const datums = [...annotation.datums]; if (!datums[index]) datums[index] = { label: String.fromCharCode(65 + index), material_condition: 'none' }; datums[index] = { ...datums[index], material_condition: event.target.value as typeof annotation.material_condition }; run(updateDrawingAnnotation(annotation.id, { datums })); }}>{materialConditions.map((condition) => <option key={condition} value={condition}>{materialConditionLabel(condition)}</option>)}</select></Field></div>)}
+      <OptionalNumberField label={t('drawing.workspace.fieldProjectedToleranceZone')} value={annotation.projected_zone} onChange={(projected_zone) => run(updateDrawingAnnotation(annotation.id, { projected_zone }))} />
+      <Toggle label={t('drawing.workspace.toggleFreeStateModifier')} checked={annotation.free_state} onChange={(free_state) => run(updateDrawingAnnotation(annotation.id, { free_state }))} />
       <PositionFields position={annotation.position} onChange={(position) => run(updateDrawingAnnotation(annotation.id, { position }))} />
     </>; break;
     case 'surface_texture': fields = <>
-      <NumberField label="Ra roughness (µm)" value={annotation.roughness_ra} onChange={(roughness_ra) => run(updateDrawingAnnotation(annotation.id, { roughness_ra }))} />
-      <Field label="Manufacturing process"><input className="drawing-input" value={annotation.process} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { process: event.target.value }))} /></Field>
-      <Field label="Surface lay"><select className="drawing-input" value={annotation.lay} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { lay: event.target.value as typeof annotation.lay }))}>{surfaceLays.map((lay) => <option key={lay} value={lay}>{lay.replace('_', ' ')}</option>)}</select></Field>
-      <OptionalNumberField label="Machining allowance (mm)" value={annotation.machining_allowance} onChange={(machining_allowance) => run(updateDrawingAnnotation(annotation.id, { machining_allowance }))} />
+      <NumberField label={t('drawing.workspace.fieldRaRoughness')} value={annotation.roughness_ra} onChange={(roughness_ra) => run(updateDrawingAnnotation(annotation.id, { roughness_ra }))} />
+      <Field label={t('drawing.workspace.fieldManufacturingProcess')}><input className="drawing-input" value={annotation.process} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { process: event.target.value }))} /></Field>
+      <Field label={t('drawing.workspace.fieldSurfaceLay')}><select className="drawing-input" value={annotation.lay} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { lay: event.target.value as typeof annotation.lay }))}>{surfaceLays.map((lay) => <option key={lay} value={lay}>{t(surfaceLayKey(lay))}</option>)}</select></Field>
+      <OptionalNumberField label={t('drawing.workspace.fieldMachiningAllowance')} value={annotation.machining_allowance} onChange={(machining_allowance) => run(updateDrawingAnnotation(annotation.id, { machining_allowance }))} />
       <PositionFields position={annotation.position} onChange={(position) => run(updateDrawingAnnotation(annotation.id, { position }))} />
     </>; break;
     case 'edge_requirement': fields = <>
-      <div className="grid grid-cols-2 gap-2"><NumberField label="Upper deviation" value={annotation.upper_deviation} onChange={(upper_deviation) => run(updateDrawingAnnotation(annotation.id, { upper_deviation }))} /><NumberField label="Lower deviation" value={annotation.lower_deviation} onChange={(lower_deviation) => run(updateDrawingAnnotation(annotation.id, { lower_deviation }))} /></div>
-      <Field label="Additional requirement"><input className="drawing-input" value={annotation.note} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { note: event.target.value }))} /></Field>
+      <div className="grid grid-cols-2 gap-2"><NumberField label={t('drawing.workspace.fieldUpperDeviation')} value={annotation.upper_deviation} onChange={(upper_deviation) => run(updateDrawingAnnotation(annotation.id, { upper_deviation }))} /><NumberField label={t('drawing.workspace.fieldLowerDeviation')} value={annotation.lower_deviation} onChange={(lower_deviation) => run(updateDrawingAnnotation(annotation.id, { lower_deviation }))} /></div>
+      <Field label={t('drawing.workspace.fieldAdditionalRequirement')}><input className="drawing-input" value={annotation.note} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { note: event.target.value }))} /></Field>
       <PositionFields position={annotation.position} onChange={(position) => run(updateDrawingAnnotation(annotation.id, { position }))} />
     </>; break;
     case 'weld_symbol': fields = <>
-      <Field label="Weld type"><select className="drawing-input" value={annotation.weld_type} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { weld_type: event.target.value as typeof annotation.weld_type }))}>{weldTypes.map((type) => <option key={type} value={type}>{type.replace(/_/g, ' ')}</option>)}</select></Field>
-      <Field label="Side"><select className="drawing-input" value={annotation.side} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { side: event.target.value as typeof annotation.side }))}><option value="arrow">Arrow side</option><option value="other">Other side</option><option value="both">Both sides</option></select></Field>
-      <NumberField label="Size (mm)" value={annotation.size} onChange={(size) => run(updateDrawingAnnotation(annotation.id, { size }))} />
-      <div className="grid grid-cols-2 gap-2"><OptionalNumberField label="Length" value={annotation.length} onChange={(length) => run(updateDrawingAnnotation(annotation.id, { length }))} /><OptionalNumberField label="Pitch" value={annotation.pitch} onChange={(pitch) => run(updateDrawingAnnotation(annotation.id, { pitch }))} /></div>
-      <Field label="Contour"><select className="drawing-input" value={annotation.contour} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { contour: event.target.value as typeof annotation.contour }))}><option value="none">None</option><option value="flush">Flush</option><option value="convex">Convex</option><option value="concave">Concave</option></select></Field>
-      <Field label="Finish method"><input className="drawing-input" value={annotation.finish} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { finish: event.target.value }))} /></Field>
-      <Toggle label="All around" checked={annotation.all_around} onChange={(all_around) => run(updateDrawingAnnotation(annotation.id, { all_around }))} />
-      <Toggle label="Field weld" checked={annotation.field_weld} onChange={(field_weld) => run(updateDrawingAnnotation(annotation.id, { field_weld }))} />
-      <Field label="Tail note"><input className="drawing-input" value={annotation.tail} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { tail: event.target.value }))} /></Field>
+      <Field label={t('drawing.workspace.fieldWeldType')}><select className="drawing-input" value={annotation.weld_type} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { weld_type: event.target.value as typeof annotation.weld_type }))}>{weldTypes.map((type) => <option key={type} value={type}>{t(weldTypeKey(type))}</option>)}</select></Field>
+      <Field label={t('drawing.workspace.fieldSide')}><select className="drawing-input" value={annotation.side} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { side: event.target.value as typeof annotation.side }))}><option value="arrow">{t('drawing.workspace.optionArrowSide')}</option><option value="other">{t('drawing.workspace.optionOtherSide')}</option><option value="both">{t('drawing.workspace.optionBothSides')}</option></select></Field>
+      <NumberField label={t('drawing.workspace.fieldSize')} value={annotation.size} onChange={(size) => run(updateDrawingAnnotation(annotation.id, { size }))} />
+      <div className="grid grid-cols-2 gap-2"><OptionalNumberField label={t('drawing.workspace.fieldLength')} value={annotation.length} onChange={(length) => run(updateDrawingAnnotation(annotation.id, { length }))} /><OptionalNumberField label={t('drawing.workspace.fieldPitch')} value={annotation.pitch} onChange={(pitch) => run(updateDrawingAnnotation(annotation.id, { pitch }))} /></div>
+      <Field label={t('drawing.workspace.fieldContour')}><select className="drawing-input" value={annotation.contour} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { contour: event.target.value as typeof annotation.contour }))}><option value="none">{t('drawing.workspace.optionNone')}</option><option value="flush">{t('drawing.workspace.optionFlush')}</option><option value="convex">{t('drawing.workspace.optionConvex')}</option><option value="concave">{t('drawing.workspace.optionConcave')}</option></select></Field>
+      <Field label={t('drawing.workspace.fieldFinishMethod')}><input className="drawing-input" value={annotation.finish} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { finish: event.target.value }))} /></Field>
+      <Toggle label={t('drawing.workspace.toggleAllAround')} checked={annotation.all_around} onChange={(all_around) => run(updateDrawingAnnotation(annotation.id, { all_around }))} />
+      <Toggle label={t('drawing.workspace.toggleFieldWeld')} checked={annotation.field_weld} onChange={(field_weld) => run(updateDrawingAnnotation(annotation.id, { field_weld }))} />
+      <Field label={t('drawing.workspace.fieldTailNote')}><input className="drawing-input" value={annotation.tail} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { tail: event.target.value }))} /></Field>
       <PositionFields position={annotation.position} onChange={(position) => run(updateDrawingAnnotation(annotation.id, { position }))} />
     </>; break;
     case 'item_balloon': fields = <>
-      <Field label="BOM item"><select className="drawing-input" value={annotation.bom_item_id} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { bom_item_id: Number(event.target.value) }))}>{sheet.bom.map((item) => <option key={item.id} value={item.id}>{item.item_number} · {item.description}</option>)}</select></Field>
+      <Field label={t('drawing.workspace.fieldBomItem')}><select className="drawing-input" value={annotation.bom_item_id} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { bom_item_id: Number(event.target.value) }))}>{sheet.bom.map((item) => <option key={item.id} value={item.id}>{item.item_number} · {item.description}</option>)}</select></Field>
       <PositionFields position={annotation.position} onChange={(position) => run(updateDrawingAnnotation(annotation.id, { position }))} />
     </>; break;
     case 'revision_cloud': fields = <>
-      <Field label="Revision"><input className="drawing-input uppercase" value={annotation.revision} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { revision: event.target.value.toUpperCase() }))} /></Field>
-      <div className="rounded border border-edge bg-header/40 p-2 text-[10px] text-mute">{annotation.points.length} associative paper-space cloud vertices. Drag the cloud to reposition it.</div>
+      <Field label={t('drawing.workspace.fieldRevision')}><input className="drawing-input uppercase" value={annotation.revision} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { revision: event.target.value.toUpperCase() }))} /></Field>
+      <div className="rounded border border-edge bg-header/40 p-2 text-[10px] text-mute">{t('drawing.workspace.revisionCloudSummary').replace('{count}', String(annotation.points.length))}</div>
     </>; break;
   }
   return <>{associative}{fields}<DeleteAnnotationButton annotationId={annotation.id} run={run} /></>;
@@ -3886,29 +3996,31 @@ type DrawingDimensionAnnotation = Extract<DrawingAnnotationDto, {
 }>;
 
 function DimensionTextFields({ annotation, run }: { annotation: DrawingDimensionAnnotation; run: (action: Promise<void>) => void }) {
+  const { t } = useTranslation();
   const presentation = annotation.presentation;
   const updatePresentation = (update: Partial<typeof presentation>) => run(updateDrawingAnnotation(annotation.id, { presentation: { ...presentation, ...update } }));
   const updateTolerance = (update: Partial<typeof presentation.tolerance>) => updatePresentation({ tolerance: { ...presentation.tolerance, ...update } });
   return <>
-    <Field label="Precision"><select className="drawing-input" value={annotation.precision} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { precision: Number(event.target.value) }))}>{[0, 1, 2, 3, 4, 5, 6].map((precision) => <option key={precision} value={precision}>{precision} decimal{precision === 1 ? '' : 's'}</option>)}</select></Field>
-    {'prefix' in annotation && <Field label="Prefix"><input className="drawing-input" value={annotation.prefix} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { prefix: event.target.value }))} /></Field>}
-    {'suffix' in annotation && <Field label="Suffix"><input className="drawing-input" value={annotation.suffix} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { suffix: event.target.value }))} /></Field>}
-    <div className="mt-4 border-t border-edge pt-3 text-[10px] font-semibold tracking-wider text-mute">TOLERANCE &amp; DISPLAY</div>
-    <Field label="Tolerance"><select className="drawing-input" value={presentation.tolerance.mode} onChange={(event) => updateTolerance({ mode: event.target.value as typeof presentation.tolerance.mode })}><option value="none">None</option><option value="symmetric">Plus / minus</option><option value="deviation">Unequal deviation</option><option value="limits">Limit dimensions</option></select></Field>
-    {presentation.tolerance.mode !== 'none' && <div className="grid grid-cols-2 gap-2"><NumberField label={presentation.tolerance.mode === 'symmetric' ? '± tolerance' : 'Upper'} value={presentation.tolerance.upper} onChange={(upper) => updateTolerance({ upper })} /><NumberField label="Lower" value={presentation.tolerance.lower} onChange={(lower) => updateTolerance({ lower })} /></div>}
-    <Toggle label="Basic dimension" checked={presentation.basic} onChange={(basic) => updatePresentation({ basic, reference: basic ? false : presentation.reference })} />
-    <Toggle label="Reference dimension" checked={presentation.reference} onChange={(reference) => updatePresentation({ reference, basic: reference ? false : presentation.basic })} />
-    <Field label="Fit / class"><input className="drawing-input" placeholder="H7, h6, RC3…" value={presentation.fit_class} onChange={(event) => updatePresentation({ fit_class: event.target.value })} /></Field>
-    <Toggle label="Dual units" checked={presentation.dual_units !== null} onChange={(checked) => updatePresentation({ dual_units: checked ? { unit: 'inch', precision: 3, placement: 'bracketed' } : null })} />
-    {presentation.dual_units && <div className="grid grid-cols-2 gap-2"><Field label="Secondary unit"><select className="drawing-input" value={presentation.dual_units.unit} onChange={(event) => updatePresentation({ dual_units: { ...presentation.dual_units!, unit: event.target.value as typeof presentation.dual_units.unit } })}><option value="millimetre">Millimetre</option><option value="centimetre">Centimetre</option><option value="inch">Inch</option></select></Field><Field label="Placement"><select className="drawing-input" value={presentation.dual_units.placement} onChange={(event) => updatePresentation({ dual_units: { ...presentation.dual_units!, placement: event.target.value as typeof presentation.dual_units.placement } })}><option value="bracketed">Bracketed</option><option value="stacked">Stacked</option></select></Field><NumberField label="Dual precision" value={presentation.dual_units.precision} step={1} onChange={(precision) => updatePresentation({ dual_units: { ...presentation.dual_units!, precision: Math.max(0, Math.min(8, Math.round(precision))) } })} /></div>}
+    <Field label={t('drawing.workspace.fieldPrecision')}><select className="drawing-input" value={annotation.precision} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { precision: Number(event.target.value) }))}>{[0, 1, 2, 3, 4, 5, 6].map((precision) => <option key={precision} value={precision}>{t(precision === 1 ? 'drawing.workspace.precisionDecimalsSingular' : 'drawing.workspace.precisionDecimalsPlural').replace('{precision}', String(precision))}</option>)}</select></Field>
+    {'prefix' in annotation && <Field label={t('drawing.workspace.fieldPrefix')}><input className="drawing-input" value={annotation.prefix} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { prefix: event.target.value }))} /></Field>}
+    {'suffix' in annotation && <Field label={t('drawing.workspace.fieldSuffix')}><input className="drawing-input" value={annotation.suffix} onChange={(event) => run(updateDrawingAnnotation(annotation.id, { suffix: event.target.value }))} /></Field>}
+    <div className="mt-4 border-t border-edge pt-3 text-[10px] font-semibold tracking-wider text-mute">{t('drawing.workspace.sectionToleranceDisplay')}</div>
+    <Field label={t('drawing.workspace.fieldToleranceMode')}><select className="drawing-input" value={presentation.tolerance.mode} onChange={(event) => updateTolerance({ mode: event.target.value as typeof presentation.tolerance.mode })}><option value="none">{t('drawing.workspace.optionNone')}</option><option value="symmetric">{t('drawing.workspace.optionPlusMinus')}</option><option value="deviation">{t('drawing.workspace.optionUnequalDeviation')}</option><option value="limits">{t('drawing.workspace.optionLimitDimensions')}</option></select></Field>
+    {presentation.tolerance.mode !== 'none' && <div className="grid grid-cols-2 gap-2"><NumberField label={presentation.tolerance.mode === 'symmetric' ? t('drawing.workspace.fieldSymmetricTolerance') : t('drawing.workspace.fieldUpper')} value={presentation.tolerance.upper} onChange={(upper) => updateTolerance({ upper })} /><NumberField label={t('drawing.workspace.fieldLower')} value={presentation.tolerance.lower} onChange={(lower) => updateTolerance({ lower })} /></div>}
+    <Toggle label={t('drawing.workspace.toggleBasicDimension')} checked={presentation.basic} onChange={(basic) => updatePresentation({ basic, reference: basic ? false : presentation.reference })} />
+    <Toggle label={t('drawing.workspace.toggleReferenceDimension')} checked={presentation.reference} onChange={(reference) => updatePresentation({ reference, basic: reference ? false : presentation.basic })} />
+    <Field label={t('drawing.workspace.fieldFitClass')}><input className="drawing-input" placeholder="H7, h6, RC3…" value={presentation.fit_class} onChange={(event) => updatePresentation({ fit_class: event.target.value })} /></Field>
+    <Toggle label={t('drawing.workspace.toggleDualUnits')} checked={presentation.dual_units !== null} onChange={(checked) => updatePresentation({ dual_units: checked ? { unit: 'inch', precision: 3, placement: 'bracketed' } : null })} />
+    {presentation.dual_units && <div className="grid grid-cols-2 gap-2"><Field label={t('drawing.workspace.fieldSecondaryUnit')}><select className="drawing-input" value={presentation.dual_units.unit} onChange={(event) => updatePresentation({ dual_units: { ...presentation.dual_units!, unit: event.target.value as typeof presentation.dual_units.unit } })}><option value="millimetre">{t('drawing.workspace.unitMillimetre')}</option><option value="centimetre">{t('drawing.workspace.unitCentimetre')}</option><option value="inch">{t('drawing.workspace.unitInch')}</option></select></Field><Field label={t('drawing.workspace.fieldPlacement')}><select className="drawing-input" value={presentation.dual_units.placement} onChange={(event) => updatePresentation({ dual_units: { ...presentation.dual_units!, placement: event.target.value as typeof presentation.dual_units.placement } })}><option value="bracketed">{t('drawing.workspace.optionBracketed')}</option><option value="stacked">{t('drawing.workspace.optionStacked')}</option></select></Field><NumberField label={t('drawing.workspace.fieldDualPrecision')} value={presentation.dual_units.precision} step={1} onChange={(precision) => updatePresentation({ dual_units: { ...presentation.dual_units!, precision: Math.max(0, Math.min(8, Math.round(precision))) } })} /></div>}
   </>;
 }
 
 function NoteAnnotationInspector({ note, run }: { note: Extract<DrawingAnnotationDto, { kind: 'note' }>; run: (action: Promise<void>) => void }) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useState(note.text);
   useEffect(() => setDraft(note.text), [note.id, note.text]);
   useEffect(() => { if (!draft.trim() || draft === note.text) return; const timer = window.setTimeout(() => run(updateDrawingAnnotation(note.id, { text: draft })), 180); return () => window.clearTimeout(timer); }, [draft, note.id, note.text, run]);
-  return <><Field label="Text"><textarea className="drawing-input min-h-24 resize-y py-2" value={draft} onChange={(event) => setDraft(event.target.value)} onBlur={() => { if (!draft.trim()) setDraft(note.text); }} /></Field><div className="grid grid-cols-2 gap-2"><NumberField label="Paper X (mm)" value={note.position[0]} onChange={(value) => run(updateDrawingAnnotation(note.id, { position: [value, note.position[1]] }))} /><NumberField label="Paper Y (mm)" value={note.position[1]} onChange={(value) => run(updateDrawingAnnotation(note.id, { position: [note.position[0], value] }))} /></div><DeleteAnnotationButton annotationId={note.id} run={run} /></>;
+  return <><Field label={t('drawing.workspace.fieldText')}><textarea className="drawing-input min-h-24 resize-y py-2" value={draft} onChange={(event) => setDraft(event.target.value)} onBlur={() => { if (!draft.trim()) setDraft(note.text); }} /></Field><div className="grid grid-cols-2 gap-2"><NumberField label={t('drawing.workspace.fieldPaperX')} value={note.position[0]} onChange={(value) => run(updateDrawingAnnotation(note.id, { position: [value, note.position[1]] }))} /><NumberField label={t('drawing.workspace.fieldPaperY')} value={note.position[1]} onChange={(value) => run(updateDrawingAnnotation(note.id, { position: [note.position[0], value] }))} /></div><DeleteAnnotationButton annotationId={note.id} run={run} /></>;
 }
 
 function DrawingNoteGraphic({ note, sheetWidth, sheetHeight, selected, onSelect }: { note: Extract<DrawingAnnotationDto, { kind: 'note' }>; sheetWidth: number; sheetHeight: number; selected: boolean; onSelect: () => void }) {
@@ -3962,6 +4074,7 @@ function RevisionCloudGraphic({ cloud, sheetWidth, sheetHeight, selected, onSele
 }
 
 function SheetFrame({ sheet, width, height }: { sheet: DrawingSheetDto; width: number; height: number }) {
+  const { t } = useTranslation();
   const style = useDrawingStyle();
   const visibleLine = useDrawingLine('visible');
   const tableLine = useDrawingLine('dimension');
@@ -3975,7 +4088,7 @@ function SheetFrame({ sheet, width, height }: { sheet: DrawingSheetDto; width: n
         {layout.cells.map(cell => <g key={cell.id} data-title-block-cell={cell.id}
           data-cell-bounds={[cell.x, cell.y, cell.width, cell.height].join(',')}
           data-overflow={cell.overflow || undefined} className="pointer-events-auto">
-          <title>{cell.overflow ? `${cell.label} is too long. Shorten this field or move detailed instructions into drawing notes.\n` : ''}{cell.text}</title>
+          <title>{cell.overflow ? t('drawing.workspace.titleBlockCellTooLong').replace('{label}', cell.label) : ''}{cell.text}</title>
           {cell.lines.map((line, index) => <text key={index} x={line.x} y={line.y}
             style={{fontSize: cell.fontSize}} fontWeight={cell.id === 'title' ? 650 : undefined}
             fill={cell.overflow ? '#b54432' : undefined}
@@ -4043,12 +4156,12 @@ const gdtCharacteristics = [
 const materialConditions = ['none', 'maximum', 'least', 'regardless'] as const;
 const surfaceLays = ['none', 'parallel', 'perpendicular', 'crossed', 'multidirectional', 'circular', 'radial', 'particulate'] as const;
 const weldTypes = ['fillet', 'square_groove', 'v_groove', 'bevel_groove', 'u_groove', 'j_groove', 'plug_slot', 'spot', 'seam', 'surfacing'] as const;
-function gdtCharacteristicLabel(value: typeof gdtCharacteristics[number]): string { return `${gdtCharacteristicSymbol(value)}  ${value.replace(/_/g, ' ')}`; }
+function gdtCharacteristicLabel(value: typeof gdtCharacteristics[number]): string { return `${gdtCharacteristicSymbol(value)}  ${translate(gdtCharacteristicKey(value))}`; }
 function materialConditionLabel(value: typeof materialConditions[number]): string {
-  return value === 'maximum' ? 'Maximum material (MMC)'
-    : value === 'least' ? 'Least material (LMC)'
-      : value === 'regardless' ? 'Regardless of feature size'
-        : 'None';
+  return value === 'maximum' ? translate('drawing.workspace.materialConditionMaximum')
+    : value === 'least' ? translate('drawing.workspace.materialConditionLeast')
+      : value === 'regardless' ? translate('drawing.workspace.materialConditionRegardless')
+        : translate('drawing.workspace.optionNone');
 }
 function currentIsoDate(): string { return new Date().toISOString().slice(0, 10); }
 function nextRevisionCode(current: string): string {
@@ -4062,60 +4175,69 @@ function nextRevisionCode(current: string): string {
   return 'A';
 }
 function PositionFields({ position, onChange }: { position: [number, number]; onChange: (position: [number, number]) => void }) {
-  return <div className="grid grid-cols-2 gap-2"><NumberField label="Paper X (mm)" value={position[0]} onChange={(value) => onChange([value, position[1]])} /><NumberField label="Paper Y (mm)" value={position[1]} onChange={(value) => onChange([position[0], value])} /></div>;
+  const { t } = useTranslation();
+  return <div className="grid grid-cols-2 gap-2"><NumberField label={t('drawing.workspace.fieldPaperX')} value={position[0]} onChange={(value) => onChange([value, position[1]])} /><NumberField label={t('drawing.workspace.fieldPaperY')} value={position[1]} onChange={(value) => onChange([position[0], value])} /></div>;
 }
 
 function NumberField({ label, value, onChange, step = 0.5 }: { label: string; value: number; onChange: (value: number) => void; step?: number }) { return <Field label={label}><input type="number" step={step} className="drawing-input" value={value} onChange={(event) => { const next = Number(event.target.value); if (Number.isFinite(next)) onChange(next); }} /></Field>; }
-function OptionalNumberField({ label, value, onChange }: { label: string; value: number | null; onChange: (value: number | null) => void }) { return <Field label={label}><input type="number" step="0.5" className="drawing-input" value={value ?? ''} placeholder="Through" onChange={(event) => { if (!event.target.value.trim()) onChange(null); else { const next = Number(event.target.value); if (Number.isFinite(next)) onChange(next); } }} /></Field>; }
-function DeleteAnnotationButton({ annotationId, run }: { annotationId: number; run: (action: Promise<void>) => void }) { return <button type="button" onClick={() => run(deleteDrawingAnnotation(annotationId))} className="mt-4 flex h-8 w-full items-center justify-center gap-2 rounded border border-warn/35 text-[11px] text-warn hover:bg-warn/10"><Trash2 size={13} /> Delete annotation</button>; }
+function OptionalNumberField({ label, value, onChange }: { label: string; value: number | null; onChange: (value: number | null) => void }) { const { t } = useTranslation(); return <Field label={label}><input type="number" step="0.5" className="drawing-input" value={value ?? ''} placeholder={t('drawing.workspace.placeholderThrough')} onChange={(event) => { if (!event.target.value.trim()) onChange(null); else { const next = Number(event.target.value); if (Number.isFinite(next)) onChange(next); } }} /></Field>; }
+function DeleteAnnotationButton({ annotationId, run }: { annotationId: number; run: (action: Promise<void>) => void }) { const { t } = useTranslation(); return <button type="button" onClick={() => run(deleteDrawingAnnotation(annotationId))} className="mt-4 flex h-8 w-full items-center justify-center gap-2 rounded border border-warn/35 text-[11px] text-warn hover:bg-warn/10"><Trash2 size={13} /> {t('drawing.workspace.deleteAnnotation')}</button>; }
 function Field({ label, children }: { label: string; children: ReactNode }) { return <label className="mb-3 block"><span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-mute">{label}</span>{children}</label>; }
 function Toggle({ label, checked, onChange, icon }: { label: string; checked: boolean; onChange: (checked: boolean) => void; icon?: ReactNode }) { return <label className="mb-2 flex h-9 items-center gap-2 rounded border border-edge px-2.5 text-[11px] text-ink hover:bg-edge/30"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />{icon}{label}</label>; }
 
 function drawingToolPrompt(tool: DrawingTool, pending: DrawingViewDto['kind'] | null, count: number): string {
   switch (tool) {
-    case 'place_view': return `Move to preview and click to place ${pending ? `${pending} view` : 'view'}; scale and alignment follow the group root`;
+    case 'place_view': return pending
+      ? translate('drawing.workspace.promptPlaceViewWithKind').replace('{kind}', lowerFirst(translate(viewKindWordKey(pending))))
+      : translate('drawing.workspace.promptPlaceView');
     case 'dimension': return count === 0
-      ? 'Dimension: select an edge, circle, arc, center, or first point'
+      ? translate('drawing.workspace.promptDimensionStart')
       : count === 1
-        ? 'Dimension: select the second point'
+        ? translate('drawing.workspace.promptDimensionSecond')
         : count === 2
-          ? 'Length preview: move normal to the edge and click, or select a second edge'
-          : 'Smart dimension preview: move the cursor and click to place';
-    case 'angle': return ['Angle: select vertex', 'Angle: select first ray point', 'Angle: select second ray point'][count] ?? 'Angle';
-    case 'chamfer_note': return count === 0 ? 'Chamfer note: select a highlighted chamfer edge' : 'Chamfer note: click to place the leader text';
-    case 'diameter': return 'Select a circular edge for a diameter dimension';
-    case 'radius': return 'Select a circular edge or arc for a radius dimension';
-    case 'hole_note': return 'Select a circular hole edge, then edit its callout';
-    case 'center_mark': return 'Center mark: select a highlighted circular center';
+          ? translate('drawing.workspace.promptDimensionLengthPreview')
+          : translate('drawing.workspace.promptDimensionPlace');
+    case 'angle': return [
+      translate('drawing.workspace.promptAngleVertex'),
+      translate('drawing.workspace.promptAngleFirstRay'),
+      translate('drawing.workspace.promptAngleSecondRay'),
+    ][count] ?? translate('drawing.workspace.promptAngle');
+    case 'chamfer_note': return count === 0 ? translate('drawing.workspace.promptChamferSelect') : translate('drawing.workspace.promptChamferPlace');
+    case 'diameter': return translate('drawing.workspace.promptDiameter');
+    case 'radius': return translate('drawing.workspace.promptRadius');
+    case 'hole_note': return translate('drawing.workspace.promptHoleNote');
+    case 'center_mark': return translate('drawing.workspace.promptCenterMark');
     case 'center_line': return count === 0
-      ? 'Centerline: select a circular center or first straight edge'
-      : 'Centerline: select the matching second center or parallel edge';
-    case 'symmetry_axis': return 'Automatic axes: click the projected view outline';
-    case 'bolt_circle': return `Bolt circle: select circular center ${Math.min(count + 1, 3)} of at least 3`;
-    case 'chain_dimension': return `Chain dimension: select point ${Math.min(count + 1, 3)} of 3`;
-    case 'baseline_dimension': return `Baseline dimensions: select datum and ${count === 0 ? 'first' : 'remaining'} point`;
-    case 'continued_dimension': return `Continued dimensions: select point ${Math.min(count + 1, 3)} of 3`;
-    case 'ordinate_dimension': return count === 0 ? 'Ordinate: select the datum origin' : 'Ordinate: select the measured point';
-    case 'arc_length': return count === 0 ? 'Arc length: select an arc' : `Arc length: select endpoint ${count} of 2`;
-    case 'jogged_radius': return 'Jogged radius: select a circular edge or arc';
-    case 'section_view': return count === 0 ? 'Section: select the cutting-plane start' : 'Section: select the cutting-plane end';
-    case 'removed_section': return count === 0 ? 'Removed section: select the cutting-plane start' : 'Removed section: select the cutting-plane end';
-    case 'detail_view': return 'Detail: select the detail center';
-    case 'auxiliary_view': return 'Auxiliary view: select a straight reference edge';
-    case 'broken_view': return count === 0 ? 'Broken view: select the first break location' : 'Broken view: select the second break location';
-    case 'datum': return 'Datum: select a point, circular feature, or straight edge';
-    case 'gdt': return 'GD&T: select the controlled feature';
-    case 'surface_texture': return 'Surface texture: select a point, circular feature, or edge';
-    case 'edge_requirement': return 'Edge requirement: select a straight edge';
-    case 'weld': return 'Weld symbol: select the joint edge';
-    case 'balloon': return 'Item balloon: select model geometry';
-    case 'revision_cloud': return `Revision cloud: click corners (${count}/4); click the first point to close`;
-    case 'reassociate': return 'Reassociate: choose the highlighted replacement topology; confirmation is required';
-    case 'note': return 'Click the sheet to place a note';
+      ? translate('drawing.workspace.promptCenterlineFirst')
+      : translate('drawing.workspace.promptCenterlineSecond');
+    case 'symmetry_axis': return translate('drawing.workspace.promptSymmetryAxis');
+    case 'bolt_circle': return translate('drawing.workspace.promptBoltCircle').replace('{index}', String(Math.min(count + 1, 3)));
+    case 'chain_dimension': return translate('drawing.workspace.promptChainDimension').replace('{index}', String(Math.min(count + 1, 3)));
+    case 'baseline_dimension': return translate('drawing.workspace.promptBaselineDimension').replace('{point}', count === 0 ? translate('drawing.workspace.promptPointFirst') : translate('drawing.workspace.promptPointRemaining'));
+    case 'continued_dimension': return translate('drawing.workspace.promptContinuedDimension').replace('{index}', String(Math.min(count + 1, 3)));
+    case 'ordinate_dimension': return count === 0 ? translate('drawing.workspace.promptOrdinateOrigin') : translate('drawing.workspace.promptOrdinateTarget');
+    case 'arc_length': return count === 0 ? translate('drawing.workspace.promptArcLengthSelect') : translate('drawing.workspace.promptArcLengthEndpoint').replace('{index}', String(count));
+    case 'jogged_radius': return translate('drawing.workspace.promptJoggedRadius');
+    case 'section_view': return count === 0 ? translate('drawing.workspace.promptSectionStart') : translate('drawing.workspace.promptSectionEnd');
+    case 'removed_section': return count === 0 ? translate('drawing.workspace.promptRemovedSectionStart') : translate('drawing.workspace.promptRemovedSectionEnd');
+    case 'detail_view': return translate('drawing.workspace.promptDetailView');
+    case 'auxiliary_view': return translate('drawing.workspace.promptAuxiliaryView');
+    case 'broken_view': return count === 0 ? translate('drawing.workspace.promptBrokenViewFirst') : translate('drawing.workspace.promptBrokenViewSecond');
+    case 'datum': return translate('drawing.workspace.promptDatum');
+    case 'gdt': return translate('drawing.workspace.promptGdt');
+    case 'surface_texture': return translate('drawing.workspace.promptSurfaceTexture');
+    case 'edge_requirement': return translate('drawing.workspace.promptEdgeRequirement');
+    case 'weld': return translate('drawing.workspace.promptWeld');
+    case 'balloon': return translate('drawing.workspace.promptBalloon');
+    case 'revision_cloud': return translate('drawing.workspace.promptRevisionCloud').replace('{count}', String(count));
+    case 'reassociate': return translate('drawing.workspace.promptReassociate');
+    case 'note': return translate('drawing.workspace.promptNote');
     case null: return '';
     default: return '';
   }
 }
+
+function lowerFirst(value: string): string { return value ? value.charAt(0).toLowerCase() + value.slice(1) : value; }
 
 function nextDerivedViewLabel(sheet: DrawingSheetDto, prefix: string): string {
   const normalizedPrefix = prefix.trim().toUpperCase();
@@ -4309,4 +4431,4 @@ function defaultPointLineDimensionPosition(
 function normalize2(vector: [number, number]): [number, number] { const length = Math.hypot(vector[0], vector[1]); return length < 1e-8 ? [1, 0] : [vector[0] / length, vector[1] / length]; }
 function trimNumber(value: number): string { return Number(value.toFixed(3)).toString(); }
 function scaleLabel(scale: number): string { return scale >= 1 ? `${scale}:1` : `1:${Number((1 / scale).toFixed(2))}`; }
-function viewKindLabel(kind: DrawingViewKind): string { return kind === 'isometric' ? 'Isometric view' : `${kind.charAt(0).toUpperCase()}${kind.slice(1)} view`; }
+function viewKindLabel(kind: DrawingViewKind): string { return translate(viewKindWordKey(kind)); }

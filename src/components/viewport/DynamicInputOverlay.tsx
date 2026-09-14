@@ -72,10 +72,11 @@ function DynamicFieldInput({
   onFocus: (index: number | null, selectAll?: boolean) => void;
   onClear: (key: string, value: string, locked: boolean) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       data-dyn-field={field.key}
-      title="Click to select the value; type to replace"
+      title={t('dyn.clickToSelectValue')}
       onPointerDown={(event) => {
         event.stopPropagation();
         onFocus(index);
@@ -107,7 +108,7 @@ function DynamicFieldInput({
         allowExpressions
         readOnly
         tabIndex={-1}
-        aria-label={`${label} ${field.value || 'empty'}`}
+        aria-label={`${label} ${field.value || t('dyn.empty')}`}
         value={field.value}
         onValueChange={() => undefined}
         placeholder="—"

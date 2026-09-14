@@ -5,6 +5,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import type { PlaneBasis } from '../../engine/types';
+import { useTranslation } from '../../i18n';
 import { useAppStore } from '../../store/appStore';
 import { DimensionInput } from '../DimensionInput';
 import type { ViewportCameraApi } from './cameraApi';
@@ -44,6 +45,7 @@ export function OffsetPlaneManipulator({
   onDistanceChange,
   onCommit,
 }: Props) {
+  const { t } = useTranslation();
   const setPreview = useAppStore((state) => state.setSolidCommandPreview);
   const handleRef = useRef<HTMLButtonElement>(null);
   const fieldRef = useRef<HTMLLabelElement>(null);
@@ -194,8 +196,8 @@ export function OffsetPlaneManipulator({
         ref={handleRef}
         type="button"
         data-testid="offset-plane-direction-handle"
-        aria-label="Drag to change the signed plane offset"
-        title="Drag to change the signed plane offset"
+        aria-label={t('offsetPlane.dragToChangeOffset')}
+        title={t('offsetPlane.dragToChangeOffset')}
         tabIndex={-1}
         disabled={disabled}
         onPointerDown={beginDrag}
@@ -214,12 +216,12 @@ export function OffsetPlaneManipulator({
         onClick={(event) => event.stopPropagation()}
       >
         <span className="text-[9px] font-semibold uppercase tracking-wide text-mute">
-          Offset
+          {t('offsetPlane.offset')}
         </span>
         <DimensionInput
           autoSelectKey={`offset:${basis.origin.join(',')}:${basis.normal.join(',')}`}
           data-testid="offset-plane-canvas-distance"
-          aria-label="Offset plane distance"
+          aria-label={t('offsetPlane.offsetPlaneDistance')}
           step="any"
           value={distance}
           disabled={disabled}

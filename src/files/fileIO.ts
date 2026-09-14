@@ -1,10 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
 import { isTauriRuntime } from '../engine';
+import { translate } from '../i18n';
 
 const MAX_FILE_BYTES = 256 * 1024 * 1024;
 
 export interface SaveType {
   description: string;
+  /** Dotted i18n key; when present the picker/dialog label follows the locale. */
+  descriptionKey?: string;
   extension: string;
   alternateExtensions?: string[];
   mime: string;
@@ -46,9 +49,13 @@ function pathName(path: string): string {
   return path.split(/[\\/]/).pop() || path;
 }
 
+function saveTypeLabel(type: SaveType): string {
+  return type.descriptionKey ? translate(type.descriptionKey) : type.description;
+}
+
 function pickerType(type: SaveType) {
   return {
-    description: type.description,
+    description: saveTypeLabel(type),
     accept: {
       [type.mime]: [type.extension, ...(type.alternateExtensions ?? [])],
     },
@@ -76,7 +83,7 @@ export async function chooseSaveTarget(
         defaultPath: fileName,
         filters: [
           {
-            name: type.description,
+            name: saveTypeLabel(type),
             extensions: [
               type.extension.slice(1),
               ...(type.alternateExtensions ?? []).map((extension) =>
@@ -109,7 +116,7 @@ export async function chooseSaveTarget(
 
 export async function writeSaveTarget(target: SaveTarget, bytes: Uint8Array): Promise<void> {
   if (bytes.byteLength > MAX_FILE_BYTES) {
-    throw new Error('The file exceeds the 256 MB safety limit.');
+    throw new Error(translate('file.errorFileTooLarge'));
   }
   if (target.kind === 'native') {
     await invoke('write_binary_file_atomic', {
@@ -146,7 +153,7 @@ export async function chooseOpenFile(type: SaveType, pathOverride?: string): Pro
         directory: false,
         filters: [
           {
-            name: type.description,
+            name: saveTypeLabel(type),
             extensions: [
               type.extension.slice(1),
               ...(type.alternateExtensions ?? []).map((extension) =>
@@ -175,7 +182,7 @@ export async function chooseOpenFile(type: SaveType, pathOverride?: string): Pro
       if (!handle) return null;
       const file = await handle.getFile();
       if (file.size > MAX_FILE_BYTES) {
-        throw new Error('The file exceeds the 256 MB safety limit.');
+        throw new Error(translate('file.errorFileTooLarge'));
       }
       return {
         name: file.name,
@@ -225,7 +232,7 @@ export async function chooseOpenFile(type: SaveType, pathOverride?: string): Pro
         return;
       }
       if (file.size > MAX_FILE_BYTES) {
-        fail(new Error('The file exceeds the 256 MB safety limit.'));
+        fail(new Error(translate('file.errorFileTooLarge')));
         return;
       }
       try {

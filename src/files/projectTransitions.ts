@@ -1,4 +1,6 @@
-const changedMessage = 'The document changed while preparing export. Start the export again.';
+import { translate } from '../i18n';
+
+const changedMessage = () => translate('file.errorDocumentChangedDuringExport');
 
 export interface ProjectTransitionRelease {
   (changed?: boolean, published?: boolean): void;
@@ -66,11 +68,11 @@ export class ProjectTransitions {
 
   assertSettled(revision: number): void {
     this.assertPublished(revision);
-    if (this.pending.size) throw new Error(changedMessage);
+    if (this.pending.size) throw new Error(changedMessage());
   }
 
   assertPublished(revision: number): void {
-    if (!this.published || revision !== this.revision) throw new Error(changedMessage);
+    if (!this.published || revision !== this.revision) throw new Error(changedMessage());
   }
 
   /** Publication may run inside its own applied inbox operation, after that
@@ -79,7 +81,7 @@ export class ProjectTransitions {
     const revision = this.revision;
     const assertCurrent = () => {
       if (!this.published || revision !== this.revision
-        || [...this.pending.keys()].some(transition => transition !== owner)) throw new Error(changedMessage);
+        || [...this.pending.keys()].some(transition => transition !== owner)) throw new Error(changedMessage());
     };
     assertCurrent();
     let settled!: () => void;
