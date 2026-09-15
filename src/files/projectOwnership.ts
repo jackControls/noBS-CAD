@@ -4,17 +4,32 @@ import { projectTransitions } from './projectTransitions';
 
 /** Retain the published document and every frontend-owned part of its model.
  * A tab ID survives Open, and dirty alone does not identify a later edit. */
-export function captureProjectOwner(allowSolidBusy = false, operationOwner?: EngineOperationOwner) {
+export interface ProjectOwnerOptions {
+  /** Writers that never consume the derived assembly read-model may ignore its
+   *  background refresh: `applySolidUpdate` re-reads `assemblyDocument` from
+   *  the engine asynchronously, and that read landing mid-write does not change
+   *  the document the writer is bound to. Save keeps the strict check because a
+   *  save reads assembly content from the engine. */
+  ignoreAssemblyReadModel?: boolean;
+}
+
+export function captureProjectOwner(
+  allowSolidBusy = false,
+  operationOwner?: EngineOperationOwner,
+  options: ProjectOwnerOptions = {},
+) {
   const state = useAppStore.getState();
   const revision = projectTransitions.capture();
   const assertUnchanged = () => {
     projectTransitions.assertPublished(revision);
     const current = useAppStore.getState();
+    const assemblyReadModelChanged = !options.ignoreAssemblyReadModel
+      && current.assemblyDocument !== state.assemblyDocument;
     if (current.activeProjectTabId !== state.activeProjectTabId
       || current.document !== state.document || current.solidScene !== state.solidScene
       || current.finishedSketches !== state.finishedSketches || current.datumPlanes !== state.datumPlanes
       || current.bodyAppearances !== state.bodyAppearances || current.drawingDocument !== state.drawingDocument
-      || current.assemblyDocument !== state.assemblyDocument || current.projectVisibility !== state.projectVisibility
+      || assemblyReadModelChanged || current.projectVisibility !== state.projectVisibility
       || current.activeSketch !== state.activeSketch || current.historyEdit !== state.historyEdit) {
       throw new Error('The document changed while saving. Start Save again.');
     }
