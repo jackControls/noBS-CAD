@@ -527,6 +527,44 @@ try {
   await ribbonPage.waitForTimeout(400);
   assert.equal(await flyout.count(),0,'Leaving the row must unmount the flyout so its island is released with it');
   console.log('PASS production ribbon flyout island: '+JSON.stringify(flyoutIsland));
+  const row=id=>ribbonPage.locator(`[data-ribbon-menu-id="${id}"]`);
+  const activeRow=()=>ribbonPage.evaluate(()=>document.activeElement?.getAttribute('data-ribbon-menu-id'));
+  const flyoutRows=()=>ribbonPage.evaluate(()=>[...document.querySelectorAll('[data-ribbon-flyout] [data-ribbon-menu-id]')]
+   .map(element=>element.getAttribute('data-ribbon-menu-id')));
+  const tabUntil=async id=>{
+   for(let attempt=0;attempt<8;attempt++){
+    if(await activeRow()===id)return true;
+    await ribbonPage.keyboard.press('Tab');
+   }
+   return await activeRow()===id;
+  };
+  // Keyboard focus enters, owns and releases the panel it opened.
+  await row('rectangle').focus();
+  await ribbonPage.keyboard.press('ArrowRight');
+  await flyout.waitFor({state:'visible'});
+  assert.equal(await tabUntil('rectCenter'),true,'Tab must enter the open submenu');
+  await ribbonPage.keyboard.press('Escape');
+  assert.equal(await flyout.count(),0,'Escape from a child must close the submenu');
+  assert.equal(await ribbonPage.locator('[role="menu"]').count(),1,'Dismissing a submenu must keep the parent menu open');
+  assert.equal(await activeRow(),'rectangle','Escape from a child must restore focus to its parent row');
+  await ribbonPage.keyboard.press('ArrowRight');
+  await flyout.waitFor({state:'visible'});
+  assert.equal(await tabUntil('circle'),true,'Tab must leave the submenu for the next parent row');
+  assert.equal(await flyout.count(),0,'Focus leaving a submenu must dismiss the panel it left');
+  await ribbonPage.keyboard.press('ArrowRight');
+  await flyout.waitFor({state:'visible'});
+  assert.deepEqual(await flyoutRows(),['circleCenter','circle2pt','circle3pt'],'The focused row owns the only open panel');
+  // A panel whose commands hold focus survives the pointer crossing away.
+  await row('arc').hover();
+  await flyout.waitFor({state:'visible'});
+  await ribbonPage.locator('[data-ribbon-flyout] [data-ribbon-menu-id="arc3pt"]').focus();
+  await ribbonPage.mouse.move(20,600);
+  await ribbonPage.waitForTimeout(400);
+  assert.equal(await flyout.count(),1,'A panel that owns focus must survive pointer leave');
+  assert.equal(await activeRow(),'arc3pt','Pointer leave must not drop focused commands');
+  console.log('PASS production ribbon flyout focus ownership: '+JSON.stringify({
+   focusedMenu:await flyoutRows(),focus:await activeRow(),
+  }));
  } finally {
   await ribbonPage.evaluate(()=>window.ribbonMenuContract?.unmount());
   await ribbonPage.close();

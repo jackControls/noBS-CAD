@@ -1,6 +1,6 @@
 /**
  * Ribbon dropdown menu: renders a MenuEntry tree (items, separators,
- * hover flyout submenus) using the application menu system.
+ * flyout submenus) using the application menu system.
  *
  * The flyout is React state, not a CSS `:hover` reveal. On the desktop
  * builds the opaque native viewport is cut open around DOM overlay islands,
@@ -9,7 +9,15 @@
  * flyout now covers part of the viewport, so the panel used to paint behind
  * the native child on macOS (issue 127).
  */
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type FocusEvent as ReactFocusEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type SetStateAction,
+} from 'react';
 import { ChevronRight } from 'lucide-react';
 import { useTranslation } from '../i18n';
 import { cx } from '../lib/cx';
@@ -19,11 +27,15 @@ import { useAppStore } from '../store/appStore';
 import { CONSTRAINT_ICON_IDS, ToolIcon } from './icons';
 
 /**
- * Grace period before a flyout closes. The pointer can leave the parent row
- * for a frame while crossing into the panel; closing immediately would make
- * the submenu impossible to reach with a fast mouse or a trackpad flick.
+ * Grace period before a pointer that left a row closes its flyout. The pointer
+ * can leave the row for a frame while crossing into the panel; closing
+ * immediately would make the submenu impossible to reach with a fast mouse or
+ * a trackpad flick. Keyboard focus always outranks this timer.
  */
 const FLYOUT_CLOSE_DELAY_MS = 180;
+
+/** Open flyout per menu level: `openPath[depth]` is the row that owns it. */
+type FlyoutPath = string[];
 
 function actionRequiresDrawingSheet(action?: RibbonAction): boolean {
   return action === 'drawingAutoLayout'
@@ -55,6 +67,10 @@ export function RibbonMenu({
       && state.drawingDocument.sheets.some((sheet) => sheet.id === state.drawingDocument.active_sheet_id);
     return activeSheetExists && !state.drawingSheetSetupOpen;
   });
+  // One panel per level. Keeping the path here (rather than per row) is what
+  // makes a hover, a click and keyboard focus agree on a single open submenu:
+  // opening a row replaces its siblings and every deeper level.
+  const [openPath, setOpenPath] = useState<FlyoutPath>([]);
   return (
     <div
       role="menu"
@@ -67,21 +83,36 @@ export function RibbonMenu({
           onClose={onClose}
           submenuSide={submenuSide}
           drawingSheetReady={drawingSheetReady}
+          depth={0}
+          openPath={openPath}
+          setOpenPath={setOpenPath}
         />
       ))}
     </div>
   );
 }
 
-function MenuRow({ entry, onClose, submenuSide, drawingSheetReady }: {
+function MenuRow({
+  entry,
+  onClose,
+  submenuSide,
+  drawingSheetReady,
+  depth,
+  openPath,
+  setOpenPath,
+}: {
   entry: MenuEntry;
   onClose: () => void;
   submenuSide: 'left' | 'right';
   drawingSheetReady: boolean;
+  depth: number;
+  openPath: FlyoutPath;
+  setOpenPath: Dispatch<SetStateAction<FlyoutPath>>;
 }) {
   const { t } = useTranslation();
   const activeConstraintTool = useAppStore((state) => state.pendingConstraintTool);
-  const [flyoutOpen, setFlyoutOpen] = useState(false);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const flyoutRef = useRef<HTMLDivElement | null>(null);
   const closeTimer = useRef<number | null>(null);
 
   useEffect(
@@ -99,6 +130,7 @@ function MenuRow({ entry, onClose, submenuSide, drawingSheetReady }: {
 
   const available = entryAvailable(entry, drawingSheetReady);
   const hasFlyout = Boolean(entry.children && entry.children.length > 0);
+  const flyoutOpen = hasFlyout && openPath[depth] === entry.id;
   const clickable = Boolean(
     entry.enabled
       && !entry.children
@@ -119,19 +151,50 @@ function MenuRow({ entry, onClose, submenuSide, drawingSheetReady }: {
   const openFlyout = () => {
     if (!hasFlyout || !available) return;
     cancelFlyoutClose();
-    setFlyoutOpen(true);
+    setOpenPath((path) => [...path.slice(0, depth), entry.id]);
   };
+  /** Close this row's panel and every level below it. A row that is not the
+   *  open one at its depth leaves the path alone. */
   const closeFlyout = () => {
-    cancelFlyoutClose();
-    setFlyoutOpen(false);
+    setOpenPath((path) => (path[depth] === entry.id ? path.slice(0, depth) : path));
   };
-  const scheduleFlyoutClose = () => {
+  const flyoutOwnsFocus = () => Boolean(flyoutRef.current?.contains(document.activeElement));
+  /**
+   * A hovered row takes the panel over from a sibling that owned keyboard
+   * focus. Move focus onto the hovered row so the panel it replaces cannot
+   * strand focus on the document body.
+   */
+  const claimFocusFromOtherFlyout = () => {
+    const focused = document.activeElement;
+    if (!(focused instanceof Element) || focused === document.body) return;
+    if (rowRef.current?.contains(focused)) return;
+    if (!focused.closest('[data-ribbon-flyout]')) return;
+    rowRef.current?.focus({ preventScroll: true });
+  };
+  const onPointerEnterRow = () => {
+    if (!hasFlyout || !available) return;
+    claimFocusFromOtherFlyout();
+    openFlyout();
+  };
+  const onPointerLeaveRow = () => {
     if (!hasFlyout) return;
     cancelFlyoutClose();
     closeTimer.current = window.setTimeout(() => {
       closeTimer.current = null;
-      setFlyoutOpen(false);
+      // Focus owns the panel: a pointer crossing must not unmount the command
+      // the user is working in.
+      if (flyoutOwnsFocus()) return;
+      closeFlyout();
     }, FLYOUT_CLOSE_DELAY_MS);
+  };
+  /** Focus departure dismisses the panel it left, so a keyboard-opened submenu
+   *  never stays behind while another row owns the keyboard. */
+  const onRowBlur = (event: ReactFocusEvent<HTMLDivElement>) => {
+    if (!hasFlyout) return;
+    const next = event.relatedTarget as Node | null;
+    if (next && event.currentTarget.contains(next)) return;
+    cancelFlyoutClose();
+    closeFlyout();
   };
   const onRowKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (hasFlyout && (event.key === 'ArrowRight' || event.key === 'Enter' || event.key === ' ')) {
@@ -143,7 +206,10 @@ function MenuRow({ entry, onClose, submenuSide, drawingSheetReady }: {
       // Close only this level; the shell must not also dismiss the whole menu.
       event.preventDefault();
       event.stopPropagation();
+      const restoreFocus = flyoutOwnsFocus();
+      cancelFlyoutClose();
       closeFlyout();
+      if (restoreFocus) rowRef.current?.focus({ preventScroll: true });
       return;
     }
     if (!clickable || (event.key !== 'Enter' && event.key !== ' ')) return;
@@ -153,6 +219,7 @@ function MenuRow({ entry, onClose, submenuSide, drawingSheetReady }: {
 
   return (
     <div
+      ref={rowRef}
       role="menuitem"
       aria-disabled={!available}
       aria-haspopup={hasFlyout ? 'menu' : undefined}
@@ -170,8 +237,9 @@ function MenuRow({ entry, onClose, submenuSide, drawingSheetReady }: {
           : 'cursor-default text-mute/40 hover:bg-edge/70',
         active && 'bg-accent/25',
       )}
-      onPointerEnter={hasFlyout ? openFlyout : undefined}
-      onPointerLeave={hasFlyout ? scheduleFlyoutClose : undefined}
+      onPointerEnter={hasFlyout ? onPointerEnterRow : undefined}
+      onPointerLeave={hasFlyout ? onPointerLeaveRow : undefined}
+      onBlur={hasFlyout ? onRowBlur : undefined}
       onClick={clickable ? activate : hasFlyout && available ? openFlyout : undefined}
       onKeyDown={onRowKeyDown}
     >
@@ -186,6 +254,7 @@ function MenuRow({ entry, onClose, submenuSide, drawingSheetReady }: {
 
       {hasFlyout && flyoutOpen && (
         <div
+          ref={flyoutRef}
           // The panel overflows the portaled menu's own box, so it needs its
           // own cut-out island: the desktop host masks the native viewport
           // with the union of these rectangles, and a child's overflow is not
@@ -205,6 +274,9 @@ function MenuRow({ entry, onClose, submenuSide, drawingSheetReady }: {
                 onClose={onClose}
                 submenuSide={submenuSide}
                 drawingSheetReady={drawingSheetReady}
+                depth={depth + 1}
+                openPath={openPath}
+                setOpenPath={setOpenPath}
               />
             ))}
           </div>

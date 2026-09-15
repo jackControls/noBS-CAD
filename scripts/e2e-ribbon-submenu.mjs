@@ -114,24 +114,70 @@ try {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(150);
 
-  // --- 3. Keyboard reaches the flyout, Escape closes only that level -------
-  console.log('3. keyboard access');
+  // --- 3. Keyboard enters, owns and releases the flyout --------------------
+  console.log('3. keyboard access and focus ownership');
   await page.getByRole('button', { name: 'DRAW', exact: true }).click();
   await page.waitForTimeout(200);
-  const arcRow = page.locator('[data-ribbon-menu] [data-ribbon-menu-id="arc"]');
-  await arcRow.focus();
+  const menuRow = (id) => page.locator(`[data-ribbon-menu-id="${id}"]`);
+  const activeRow = () => page.evaluate(() => document.activeElement?.getAttribute('data-ribbon-menu-id'));
+  const flyoutRows = () => page.evaluate(() => [...document.querySelectorAll('[data-ribbon-flyout] [data-ribbon-menu-id]')]
+    .map((element) => element.getAttribute('data-ribbon-menu-id')));
+  const tabUntil = async (id) => {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      if (await activeRow() === id) return true;
+      await page.keyboard.press('Tab');
+      await page.waitForTimeout(60);
+    }
+    return await activeRow() === id;
+  };
+
+  await menuRow('arc').focus();
   await page.keyboard.press('ArrowRight');
   await page.waitForTimeout(150);
   check('ArrowRight opens the focused flyout', await page.locator('[data-ribbon-flyout]').isVisible());
+  check('Tab enters the open submenu', await tabUntil('arcCenter'));
   await page.keyboard.press('Escape');
   await page.waitForTimeout(150);
   check('Escape closes only the flyout', (await page.locator('[data-ribbon-flyout]').count()) === 0);
   check('the parent menu stays open', (await page.locator('[data-ribbon-menu]').count()) === 1);
+  check('Escape from a child restores parent focus', await activeRow() === 'arc');
+  await page.keyboard.press('ArrowRight');
+  await page.waitForTimeout(150);
+  check('the parent row reopens its flyout from the keyboard', await page.locator('[data-ribbon-flyout]').isVisible());
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
 
-  // --- 4. Leaving the row closes the flyout --------------------------------
-  console.log('4. pointer leave closes the flyout');
+  // Focus departure dismisses the panel it left; one row owns one panel.
+  await menuRow('rectangle').focus();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForTimeout(150);
+  check('Tab leaves the submenu for the next parent row', await tabUntil('circle'));
+  check('the departed panel is dismissed', (await page.locator('[data-ribbon-flyout]').count()) === 0);
+  await page.keyboard.press('ArrowRight');
+  await page.waitForTimeout(150);
+  check(
+    'the focused row owns the only open panel',
+    JSON.stringify(await flyoutRows()) === JSON.stringify(['circleCenter', 'circle2pt', 'circle3pt']),
+    JSON.stringify(await flyoutRows()),
+  );
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(150);
+
+  // A panel holding keyboard focus survives the pointer crossing away.
+  await menuRow('arc').hover();
+  await page.waitForTimeout(150);
+  await page.locator('[data-ribbon-flyout] [data-ribbon-menu-id="arc3pt"]').focus();
+  await page.mouse.move(20, 600);
+  await page.waitForTimeout(500);
+  check('focused panel survives pointer leave', (await page.locator('[data-ribbon-flyout]').count()) === 1);
+  check('pointer leave keeps focused commands', await activeRow() === 'arc3pt');
+
+  // --- 4. Leaving an unfocused row closes the flyout -----------------------
+  console.log('4. pointer leave closes an unfocused flyout');
   const lineRow = page.locator('[data-ribbon-menu] [data-ribbon-menu-id="line"]');
-  await arcRow.hover();
+  await lineRow.focus();
+  await page.waitForTimeout(100);
+  await menuRow('arc').hover();
   await page.waitForTimeout(150);
   check('flyout reopens on hover', await page.locator('[data-ribbon-flyout]').isVisible());
   await lineRow.hover();
