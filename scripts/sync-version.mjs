@@ -107,8 +107,20 @@ function jsonDocument(text, label) {
   return data;
 }
 
+// `withNpmVersion` maintains two fields of a lockfile — the top-level `version`
+// and the root package record `packages[""].version` — so both are read back
+// here. A partial manual bump or a merge resolution that leaves only one of them
+// behind must not be reported as "every carrier agrees".
 export function npmVersion(text) {
-  return jsonDocument(text, 'npm manifest').version;
+  const data = jsonDocument(text, 'npm manifest');
+  const rootPackageVersion = data.packages?.['']?.version;
+  if (typeof rootPackageVersion === 'string' && rootPackageVersion !== data.version) {
+    throw new Error(
+      `records ${JSON.stringify(data.version)} at the top level but `
+      + `${JSON.stringify(rootPackageVersion)} for the root package`,
+    );
+  }
+  return data.version;
 }
 
 export function withNpmVersion(text, version) {
@@ -156,17 +168,23 @@ export function withContainerVersion(text, version) {
   return text.replace(pattern, `$1${version}$2`);
 }
 
-const documentedNames = /(?:noBS-CAD-|noBS\.CAD_)(\d+\.\d+\.\d+)/g;
+// A packaged-file example always ends in a platform segment — `...-windows-x64.zip`,
+// `...-windows-<architecture>/`, `..._amd64.deb`, `..._aarch64.dmg` — so the version
+// is everything between the product prefix and that segment. A prerelease is part of
+// it: matching only `MAJOR.MINOR.PATCH` truncated `0.3.0-rc.1` to `0.3.0`, which made
+// `--check` fail on a prerelease bump and made a second sync write `-rc.1-rc.1`.
+const productPrefix = String.raw`(?:noBS-CAD-|noBS\.CAD_)`;
+const documentedVersion = String.raw`\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`;
+const platformSegment = String.raw`(?:-windows-|_amd64|_aarch64)`;
+const documentedNames = new RegExp(`(${productPrefix})(${documentedVersion})(?=${platformSegment})`, 'g');
 
 /** Versions quoted by packaged-file examples, which must all be the current one. */
 export function documentedVersions(text) {
-  return [...text.matchAll(documentedNames)].map(([, version]) => version);
+  return [...text.matchAll(documentedNames)].map(([, , version]) => version);
 }
 
 export function withDocumentedVersions(text, version) {
-  return text
-    .replace(/(noBS-CAD-)\d+\.\d+\.\d+/g, `$1${version}`)
-    .replace(/(noBS\.CAD_)\d+\.\d+\.\d+/g, `$1${version}`);
+  return text.replace(documentedNames, `$1${version}`);
 }
 
 // --- Carriers --------------------------------------------------------------
@@ -317,7 +335,7 @@ export function versionCarriers(root = repositoryRoot) {
       path: '.github/workflows/desktop-packages.yml',
       description: 'artifact names derived from package.json',
       verify(text) {
-        const literals = text.match(/noBS(?:-CAD-|\.CAD_)\d+\.\d+\.\d+/g);
+        const literals = text.match(new RegExp(`noBS(?:-CAD-|\\.CAD_)${documentedVersion}`, 'g'));
         if (literals) return `hard-codes ${[...new Set(literals)].join(', ')}`;
         return /require\('\.\/package\.json'\)\.version/.test(text)
           ? null
