@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -574,12 +574,8 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
         ],
     )?;
     let live = args.contains_key("--session") || args.contains_key("--desktop");
-    if !live
-        && (args.contains_key("--save")
-            || args.contains_key("--new")
-            || args.contains_key("--present"))
-    {
-        bail!("Save, new-tab and presentation options require a desktop session");
+    if !live && (args.contains_key("--new") || args.contains_key("--present")) {
+        bail!("New-tab and presentation options require a desktop session");
     }
     if args.contains_key("--session") && args.contains_key("--desktop") {
         bail!("Choose existing session or desktop launch");
@@ -691,10 +687,21 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
             report["session_id"] = json!(session);
         }
         outputs.complete(iteration, &report, |save| {
-            client.call(
-                "cad_interface",
-                json!({"action":"file","command":"save","path":save}),
-            )
+            if live {
+                client.call(
+                    "cad_interface",
+                    json!({"action":"file","command":"save","path":save}),
+                )
+            } else {
+                save_headless(
+                    &mut client,
+                    save,
+                    server,
+                    &options.server_arguments,
+                    initialization_timeout,
+                )?;
+                Ok(json!({"saved":true}))
+            }
         })?;
         if repeat > 1 || args.contains_key("--compare") {
             let semantic = semantic_result(&report)?;
@@ -730,7 +737,8 @@ fn print_usage(script: bool) {
   --repeat N                     Compare independent headless runs (default: 1).\n\
   --compare REPORT.json          Compare the final model with a previous replay.\n\
   --out DIRECTORY                Retain replay reports and model snapshots.\n\
-  --save FILE.nbcad               Save the live design after replay.");
+  --save FILE.nbcad               Save after replay (headless or live).\n\
+                                 Headless exports are reopened in a fresh native engine before writing.");
     } else {
         println!("Usage: cargo xtask cad-call --server PATH [--tool NAME] [--args JSON | --args-file FILE] [OPTIONS]\n\
   --tool NAME                    MCP tool name (default: cad_interface).\n\
@@ -744,6 +752,74 @@ fn print_usage(script: bool) {
 \nPackaged CAD: --server PATH --server-arg --mcp\n\
 AppImage without FUSE: --server PATH --server-arg --appimage-extract-and-run --server-arg --mcp\n\
 Standalone nbcad-mcp: --server PATH (no server argument required)");
+}
+
+fn save_headless(
+    client: &mut Client,
+    path: &Path,
+    server: &str,
+    server_arguments: &[String],
+    initialization_timeout: Duration,
+) -> Result<()> {
+    // Export the current document, not an optional/stale final_model field
+    // supplied by the script. This includes sketches, history, assemblies,
+    // drawings, visibility, appearances and CAM intent, not flattened meshes.
+    let exported = client.call("cad_project_model", json!({}))?;
+    let model_json = exported
+        .as_str()
+        .context("Project export is not JSON text")?;
+    let expected: Value = serde_json::from_str(model_json)?;
+    let version = client.initialization()["serverInfo"]["_meta"]["nbcad/build"]["version"]
+        .as_str()
+        .or_else(|| client.initialization()["serverInfo"]["version"].as_str())
+        .context("MCP server did not identify its application version")?;
+    let bytes = crate::project_archive::encode(model_json, version)?;
+    let archived_model = crate::project_archive::model(&bytes)?;
+    let body_ids = |scene: &Value| -> Result<Vec<Value>> {
+        ensure!(
+            scene["errors"] == json!([]),
+            "Project has geometry errors: {}",
+            scene["errors"]
+        );
+        scene["bodies"]
+            .as_array()
+            .context("Project has no body array")?
+            .iter()
+            .map(|body| body.get("id").cloned().context("Project body has no ID"))
+            .collect()
+    };
+    let expected_bodies = body_ids(&client.call("solid_scene", json!({}))?)?;
+    // Only independent stdio servers are used. No session discovery, attachment,
+    // desktop launch, display server or UI file command is involved.
+    let mut restored =
+        Client::start_with_arguments(server, server_arguments, initialization_timeout)?;
+    restored
+        .call(
+            "cad_load_project_model",
+            json!({"model_json":archived_model}),
+        )
+        .context("Reopen generated project in a fresh native engine")?;
+    let resaved = restored.call("cad_project_model", json!({}))?;
+    let actual: Value = serde_json::from_str(
+        resaved
+            .as_str()
+            .context("Reopened project is not JSON text")?,
+    )?;
+    ensure!(
+        actual == expected,
+        "Reopening the generated project changed its model at {}",
+        first_difference(&expected, &actual, "").unwrap_or_default()
+    );
+    ensure!(
+        body_ids(&restored.call("solid_scene", json!({}))?)? == expected_bodies,
+        "Reopening the generated project changed its solid bodies"
+    );
+    restored.finish(Duration::from_secs(10))?;
+    // Do not touch an existing destination if serialization or native reload
+    // fails. ReplayOutputs has already checked its parent and retained reports.
+    fs::write(path, bytes).with_context(|| format!("Write headless project {}", path.display()))?;
+    eprintln!("Saved and reopened headless project {}", path.display());
+    Ok(())
 }
 
 fn semantic_result(report: &Value) -> Result<Value> {

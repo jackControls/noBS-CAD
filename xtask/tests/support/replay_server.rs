@@ -53,8 +53,17 @@ fn main() {
             thread::park();
         }
     }
+    let mut loaded = false;
     for line in std::io::stdin().lock().lines() {
         let line = line.unwrap();
+        if let Some(path) = std::env::var_os("NBCAD_FIXTURE_REQUESTS") {
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .unwrap();
+            writeln!(file, "{line}").unwrap();
+        }
         let Some(id) = line.split("\"id\":").nth(1) else {
             continue;
         };
@@ -71,7 +80,29 @@ fn main() {
                 r#"{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}}"#.to_owned()
             }
         } else {
-            let payload = if line.contains("\"action\":\"recipes\"") {
+            let exported_model;
+            let payload = if line.contains("\"name\":\"cad_project_model\"") {
+                let model = if mode == "invalid-model" {
+                    "{}"
+                } else if mode == "changed-model" && loaded {
+                    r#"{"format":"nbcad-project","schema_version":7,"document":{"name":"changed"},"sketches":[1],"drawings":{"sheets":[1]},"assembly":{"joints":[1]}}"#
+                } else {
+                    r#"{"format":"nbcad-project","schema_version":7,"document":{"name":"headless fixture"},"sketches":[1],"drawings":{"sheets":[1]},"assembly":{"joints":[1]}}"#
+                };
+                exported_model = format!("{model:?}");
+                &exported_model
+            } else if line.contains("\"name\":\"cad_load_project_model\"") {
+                loaded = true;
+                r#"{"loaded":true}"#
+            } else if line.contains("\"name\":\"solid_scene\"") {
+                if mode == "broken-geometry" && loaded {
+                    r#"{"bodies":[{"id":1}],"errors":["recompute failed"]}"#
+                } else if mode == "missing-body" && loaded {
+                    r#"{"bodies":[],"errors":[]}"#
+                } else {
+                    r#"{"bodies":[{"id":1}],"errors":[]}"#
+                }
+            } else if line.contains("\"action\":\"recipes\"") {
                 if mode == "unknown-recipe" {
                     "[]"
                 } else {
@@ -87,7 +118,10 @@ fn main() {
             };
             // The fixture payloads above are ASCII JSON. Rust's debug string
             // quoting produces the required JSON string for the text content.
-            format!("{{\"content\":[{{\"type\":\"text\",\"text\":{payload:?}}}]}}")
+            let is_error = mode == "failed-reload"
+                && line.contains("\"name\":\"cad_load_project_model\"")
+                || mode == "failed-script" && line.contains("\"action\":\"script\"");
+            format!("{{\"isError\":{is_error},\"content\":[{{\"type\":\"text\",\"text\":{payload:?}}}]}}")
         };
         println!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{result}}}");
         std::io::stdout().flush().unwrap();
