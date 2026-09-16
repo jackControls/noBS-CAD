@@ -24,7 +24,9 @@ export function enqueueCamMutation<T>(label: string, mutate: (context: {
   assertCurrent(): void;
   publish(document: CamDocumentDto, selection?: Partial<CamSelection>, preserveSimulationInputs?: boolean): void;
 }) => Promise<T>): Promise<T> {
-  const owner = captureProjectOwner();
+  // CAM writes only consume the CAM document and the solid scene, never the
+  // derived assembly read-model, so its background refresh must not abort them.
+  const owner = captureProjectOwner(false, undefined, { ignoreAssemblyReadModel: true });
   const revision = projectTransitions.capture();
   const documentVersion = presentation.documentVersion();
   const finish = beginCamActivity(label);

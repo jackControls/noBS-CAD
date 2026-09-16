@@ -343,7 +343,11 @@ export function projectSceneForDrawing(
     const projected = candidate.map((point) => projectPoint(point, basis));
     for (const segment of classifyPolyline(projected, triangles)) {
       const points = segment.points.map(([x, y]) => [x, y] as [number, number]);
-      const key = polylineKey(points);
+      // Visibility is part of the identity: an edge whose hidden and visible
+      // portions project onto the same 2D segment (the Top/Right case, where a
+      // footprint edge coincides with the one below it) must not have its
+      // visible half suppressed by the hidden half arriving first.
+      const key = `${segment.hidden ? 'hidden' : 'visible'}:${polylineKey(points)}`;
       if (seen.has(key)) continue;
       seen.add(key);
       if (segment.hidden) {
