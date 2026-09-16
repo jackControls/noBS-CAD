@@ -111,6 +111,15 @@ export function npmVersion(text) {
   return jsonDocument(text, 'npm manifest').version;
 }
 
+// A lockfile records the root package version twice: at the top level and in
+// `packages[""]`. Both must be checked, or a merge resolution can leave one
+// stale while the guard reports that every carrier agrees.
+export function npmLockfileVersions(text) {
+  const data = jsonDocument(text, 'npm lockfile');
+  const root = data.packages?.[''];
+  return { header: data.version, packages: root === undefined ? null : root.version };
+}
+
 export function withNpmVersion(text, version) {
   const data = jsonDocument(text, 'npm manifest');
   data.version = version;
@@ -156,17 +165,31 @@ export function withContainerVersion(text, version) {
   return text.replace(pattern, `$1${version}$2`);
 }
 
-const documentedNames = /(?:noBS-CAD-|noBS\.CAD_)(\d+\.\d+\.\d+)/g;
+// Package file names carry the whole version, prerelease suffix included, and
+// then continue with a platform segment. Match the complete version but stop at
+// that boundary: a greedy prerelease pattern would otherwise swallow
+// `-windows-x64.zip`, and a bare `MAJOR.MINOR.PATCH` pattern would silently drop
+// the suffix on read-back.
+const versionPattern = String.raw`\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`;
+
+function documentedPatterns() {
+  return [
+    new RegExp(String.raw`(noBS-CAD-)(${versionPattern})(?=-windows-|-ubuntu-)`, 'g'),
+    new RegExp(String.raw`(noBS\.CAD_)(${versionPattern})(?=_)`, 'g'),
+  ];
+}
 
 /** Versions quoted by packaged-file examples, which must all be the current one. */
 export function documentedVersions(text) {
-  return [...text.matchAll(documentedNames)].map(([, version]) => version);
+  return documentedPatterns().flatMap(pattern =>
+    [...text.matchAll(pattern)].map(([, , version]) => version));
 }
 
 export function withDocumentedVersions(text, version) {
-  return text
-    .replace(/(noBS-CAD-)\d+\.\d+\.\d+/g, `$1${version}`)
-    .replace(/(noBS\.CAD_)\d+\.\d+\.\d+/g, `$1${version}`);
+  return documentedPatterns().reduce(
+    (current, pattern) => current.replace(pattern, (_match, prefix) => `${prefix}${version}`),
+    text,
+  );
 }
 
 // --- Carriers --------------------------------------------------------------
@@ -278,12 +301,20 @@ export function versionCarriers(root = repositoryRoot) {
       read: npmVersion,
       write: withNpmVersion,
     }),
-    scalarCarrier({
-      file: 'package-lock.json',
+    {
+      path: 'package-lock.json',
       description: 'npm lockfile version',
-      read: npmVersion,
-      write: withNpmVersion,
-    }),
+      verify(text, version) {
+        const { header, packages } = npmLockfileVersions(text);
+        const wrong = [];
+        if (header !== version) wrong.push(`top-level version is ${JSON.stringify(header)}`);
+        if (packages !== null && packages !== version) {
+          wrong.push(`packages[""].version is ${JSON.stringify(packages)}`);
+        }
+        return wrong.length === 0 ? null : `${wrong.join('; ')}, expected ${version}`;
+      },
+      sync: withNpmVersion,
+    },
     scalarCarrier({
       file: 'src-tauri/tauri.conf.json',
       description: 'Tauri bundle version',
@@ -307,7 +338,13 @@ export function versionCarriers(root = repositoryRoot) {
       description: 'documented package file names',
       verify(text, version) {
         const found = documentedVersions(text);
-        if (found.length === 0) return null;
+        // A packaged name the patterns cannot read would otherwise be skipped
+        // in silence, so report a mention that carries no recognizable version.
+        if (found.length === 0) {
+          return /noBS-CAD-|noBS\.CAD_/.test(text)
+            ? 'mentions a packaged file name this script cannot read a version from'
+            : null;
+        }
         const wrong = found.filter(value => value !== version);
         return wrong.length === 0 ? null : `names ${[...new Set(wrong)].join(', ')}, expected ${version}`;
       },

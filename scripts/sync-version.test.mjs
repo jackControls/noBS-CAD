@@ -9,6 +9,7 @@ import {
   documentedVersions,
   lockfileVersions,
   manifestVersion,
+  npmLockfileVersions,
   readVersion,
   repositoryRoot,
   syncAll,
@@ -136,6 +137,41 @@ test('npm manifests keep dependency versions and refuse lossy rewrites', () => {
   assert.throws(() => withNpmVersion(compact, '0.3.0'), /round-trip/);
 });
 
+test('the npm lockfile is checked at both places it records the version', () => {
+  const lock = [
+    '{',
+    '  "name": "nbcad",',
+    '  "version": "0.2.0",',
+    '  "lockfileVersion": 3,',
+    '  "packages": {',
+    '    "": {',
+    '      "name": "nbcad",',
+    '      "version": "0.2.0"',
+    '    },',
+    '    "node_modules/vite": {',
+    '      "version": "7.0.1"',
+    '    }',
+    '  }',
+    '}',
+    '',
+  ].join('\n');
+  assert.deepEqual(npmLockfileVersions(lock), { header: '0.2.0', packages: '0.2.0' });
+  assert.equal(npmLockfileVersions(withNpmVersion(lock, '0.3.0')).packages, '0.3.0');
+
+  const stale = JSON.parse(lock);
+  stale.packages[''].version = '9.9.9';
+  const staleText = `${JSON.stringify(stale, null, 2)}\n`;
+  assert.deepEqual(npmLockfileVersions(staleText), { header: '0.2.0', packages: '9.9.9' });
+  const lockCarrier = versionCarriers().find(carrier => carrier.path === 'package-lock.json');
+  assert.match(lockCarrier.verify(staleText, '0.2.0'), /packages\[""\]\.version/);
+  assert.equal(lockCarrier.verify(lock, '0.2.0'), null);
+
+  // A lockfile without the root package record only promises the header.
+  const headerOnly = `${JSON.stringify({ name: 'nbcad', version: '0.2.0', lockfileVersion: 1 }, null, 2)}\n`;
+  assert.deepEqual(npmLockfileVersions(headerOnly), { header: '0.2.0', packages: null });
+  assert.equal(lockCarrier.verify(headerOnly, '0.2.0'), null);
+});
+
 test('the Tauri config keeps its compact nested JSON intact', () => {
   const config = [
     '{',
@@ -171,22 +207,59 @@ test('the container manifest and documented file names follow VERSION', () => {
   assert.match(synced, /`bench\.nbcad`/);
 });
 
+test('packaged file names keep a prerelease suffix and return to stable', () => {
+  const releaseCandidate = [
+    '`noBS-CAD-0.3.0-rc.1-windows-x64.zip`,',
+    '`noBS-CAD-0.3.0-rc.1-windows-<architecture>.zip.sha256`,',
+    '`noBS.CAD_0.3.0-rc.1_amd64.deb`,',
+  ].join(' ');
+  assert.deepEqual(documentedVersions(releaseCandidate), ['0.3.0-rc.1', '0.3.0-rc.1', '0.3.0-rc.1']);
+  assert.equal(withDocumentedVersions(releaseCandidate, '0.3.0-rc.1'), releaseCandidate);
+
+  const stable = withDocumentedVersions(releaseCandidate, '0.3.0');
+  assert.match(stable, /`noBS-CAD-0\.3\.0-windows-x64\.zip`/);
+  assert.match(stable, /`noBS\.CAD_0\.3\.0_amd64\.deb`/);
+  assert.doesNotMatch(stable, /rc\.1/);
+  assert.deepEqual(documentedVersions(stable), ['0.3.0', '0.3.0', '0.3.0']);
+
+  // A hyphenated prerelease identifier must not swallow the platform segment.
+  assert.deepEqual(documentedVersions('noBS-CAD-0.3.0-rc-1-windows-x64.zip'), ['0.3.0-rc-1']);
+  assert.deepEqual(documentedVersions('noBS.CAD_0.3.0-beta.2_amd64.AppImage'), ['0.3.0-beta.2']);
+});
+
+test('a packaged file name this script cannot read is reported, not skipped', () => {
+  const install = versionCarriers().find(carrier => carrier.path === 'docs/INSTALL.md');
+  assert.match(
+    install.verify('Download `noBS-CAD-windows-x64.zip`.', '0.2.0'),
+    /cannot read a version/,
+  );
+  assert.equal(install.verify('No packaged file names here.', '0.2.0'), null);
+  assert.equal(install.verify('`noBS-CAD-0.2.0-windows-x64.zip`', '0.2.0'), null);
+  assert.match(install.verify('`noBS-CAD-0.2.0-windows-x64.zip`', '0.3.0'), /expected 0\.3\.0/);
+});
+
 test('the checked-in tree is in sync and re-syncs from VERSION', async () => {
   assert.deepEqual(collectDrift(repositoryRoot), []);
+
+  // The rehearsal must work whatever the repository currently says, including
+  // on the pull request that performs a real bump.
+  const current = readVersion(repositoryRoot);
+  const target = nextVersion(current);
+  assert.notEqual(target, current);
 
   const root = await mkdtemp(path.join(os.tmpdir(), 'nbcad-version-tree-'));
   try {
     const carriers = versionCarriers(repositoryRoot);
     for (const carrier of carriers) {
-      const target = path.join(root, carrier.path);
-      await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(target, await readFile(path.join(repositoryRoot, carrier.path), 'utf8'));
+      const file = path.join(root, carrier.path);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, await readFile(path.join(repositoryRoot, carrier.path), 'utf8'));
     }
-    await writeFile(path.join(root, versionFile), '0.3.0\n');
+    await writeFile(path.join(root, versionFile), `${target}\n`);
 
-    // The copied tree still carries 0.2.0 wherever the version is written out,
-    // so a bump reports drift until the sync rewrites each carrier.
-    const drift = collectDrift(root, '0.3.0');
+    // The copied carriers still quote the current version wherever it is
+    // written out, so a bump reports drift until the sync rewrites each one.
+    const drift = collectDrift(root, target);
     for (const file of [
       'Cargo.toml',
       'Cargo.lock',
@@ -199,21 +272,38 @@ test('the checked-in tree is in sync and re-syncs from VERSION', async () => {
       'src/files/nbcad.ts',
       'docs/INSTALL.md',
     ]) {
-      assert.ok(drift.some(problem => problem.startsWith(`${file}:`)), `${file} should report drift`);
+      assert.ok(drift.some(problem => problem.startsWith(`${file}:`)), `${file} should report drift for ${target}`);
     }
     assert.ok(!drift.some(problem => problem.startsWith('.github/workflows/desktop-packages.yml:')));
 
-    const changed = syncAll(root, '0.3.0');
+    const changed = syncAll(root, target);
     assert.ok(changed.includes('package.json'));
     assert.ok(changed.includes('Cargo.lock'));
     assert.ok(changed.includes('docs/INSTALL.md'));
     // Members already inherit the workspace version, so they need no rewrite.
     assert.ok(!changed.includes('crates/core/Cargo.toml'));
     assert.ok(!changed.includes('.github/workflows/desktop-packages.yml'));
-    assert.deepEqual(collectDrift(root, '0.3.0'), []);
-    assert.equal(JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8')).version, '0.3.0');
+    assert.deepEqual(collectDrift(root, target), []);
+    const lock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'));
+    assert.equal(lock.version, target);
+    assert.equal(lock.packages[''].version, target);
     assert.match(await readFile(path.join(root, 'crates/core/Cargo.toml'), 'utf8'), /^version\.workspace = true$/m);
+
+    // A stale root record alone must fail the check, not just the header.
+    const stalePath = path.join(root, 'package-lock.json');
+    lock.packages[''].version = '9.9.9';
+    await writeFile(stalePath, `${JSON.stringify(lock, null, 2)}\n`);
+    assert.ok(
+      collectDrift(root, target).some(problem => problem.startsWith('package-lock.json:') && problem.includes('packages[""]')),
+      'a stale packages[""] version must report drift',
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// The next patch release, whatever the repository currently carries.
+function nextVersion(version) {
+  const [major, minor, patch] = version.split('-')[0].split('.').map(Number);
+  return `${major}.${minor}.${patch + 1}`;
+}
