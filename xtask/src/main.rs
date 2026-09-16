@@ -9,6 +9,7 @@ mod install_mcp;
 mod package;
 mod package_mcp;
 mod playback_test;
+mod project_archive;
 mod replay;
 mod test_mcp;
 
