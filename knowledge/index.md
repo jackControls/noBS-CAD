@@ -22,6 +22,7 @@ Keep concepts **thin**. Longer material lives in the repository’s
 - [Additive workholding](concepts/additive-workholding.md) - Captured guides, assembly access, D-flat roots and qualification.
 - [Small wind rotors and low-speed generators](concepts/small-wind-generators.md) - Power, startup, gearing, motor dimensions and measured loads.
 - [Bearing supports and axial retention](concepts/bearing-stacks.md) - Hardware variants, inner-race contact, spacer stacks and low-drag assembly.
+- [Parametric primitives primer](concepts/parametric-primitives.md) - MCP step vs script, and minimal command patterns for core solids.
 
 ## Read through MCP
 

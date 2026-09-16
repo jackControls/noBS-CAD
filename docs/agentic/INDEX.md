@@ -6,6 +6,7 @@ Committed operating docs for humans and coding agents working on noBS CAD.
 | Doc | Purpose |
 |-----|---------|
 | [STEERABLE_MCP.md](STEERABLE_MCP.md) | Soft disclosure invariants |
+| [PARAMETRIC_PRIMITIVES.md](PARAMETRIC_PRIMITIVES.md) | Tiny MCP/script primitives primer (success-rate) |
 | [INSTALL_MCP.md](INSTALL_MCP.md) | Standalone development-server installer |
 | [../DEVELOPMENT.md](../DEVELOPMENT.md) | Canonical build, SDK and test setup |
 | [MAINTENANCE.md](MAINTENANCE.md) | Native maintenance and review notes |

@@ -10,6 +10,7 @@ Maximum rate builds the same model without presentation waits. Pause and Step
 let you inspect the sequence; paced presentation adds chapter notes and camera
 moves. All modes use the same Rust interpreter and construction source.
 
+- [Parametric primitives primer](parametric-primitives-primer.nbcad.jsonc): hello path covering sketch → extrude → hole → combine cut → fillet/chamfer → offset datum → 3MF. Not catalog-registered; run via `path` on `cad_interface` script action.
 - [Sketch, extrude, ease the edges](fillet-basics.nbcad.jsonc): a first-part lesson
   for Solid → Refine → Fillet. Builds a fully located 60 × 30 mm sketch, extrudes
   12 mm of stock and rounds the four top edges by 2 mm. Demonstrates an 18 mm
