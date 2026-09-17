@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { isTauriRuntime } from '../engine';
 import type { CamToolDto } from '../engine/types';
+import { translate } from '../i18n';
 
 /**
  * Two-scope tool library model.
@@ -67,7 +68,7 @@ export async function loadCentralLibrary(): Promise<CentralCamLibrary | null> {
 async function saveCentralLibrary(library: CentralCamLibrary): Promise<void> {
   if (!isTauriRuntime()) return;
   const snapshot = snapshots.get(library);
-  if (!snapshot) throw new Error('Reload the central tool library before saving.');
+  if (!snapshot) throw new Error(translate('cam.errors.errorReloadLibraryBeforeSaving'));
   const next = await invoke<LibrarySnapshot>('cam_library_save', {
     json: JSON.stringify(library), expectedPath: snapshot.path, expectedRevision: snapshot.revision,
   });
@@ -78,7 +79,7 @@ async function editableLibrary(expected?: CentralCamLibrary): Promise<CentralCam
   if (!expected) return loadCentralLibrary();
   const copy = structuredClone(expected);
   const snapshot = snapshots.get(expected);
-  if (!snapshot) throw new Error('Reload the central tool library before editing.');
+  if (!snapshot) throw new Error(translate('cam.errors.errorReloadLibraryBeforeEditing'));
   snapshots.set(copy, snapshot);
   return copy;
 }
@@ -110,7 +111,7 @@ export async function updateCentralLibraryTool(
   expected?: CentralCamLibrary,
 ): Promise<void> {
   const library = await editableLibrary(expected);
-  if (library === null) throw new Error('The central library is unavailable. Check its folder in Settings.');
+  if (library === null) throw new Error(translate('cam.errors.errorCentralLibraryUnavailable'));
   const tool = library.tools.find((candidate) => candidate.id === toolId);
   if (!tool) return;
   mutate(tool);
@@ -121,7 +122,7 @@ export async function updateCentralLibraryTool(
  *  they are independent copies by design. */
 export async function deleteCentralLibraryTool(toolId: number, expected?: CentralCamLibrary): Promise<void> {
   const library = await editableLibrary(expected);
-  if (library === null) throw new Error('The central library is unavailable. Check its folder in Settings.');
+  if (library === null) throw new Error(translate('cam.errors.errorCentralLibraryUnavailable'));
   library.tools = library.tools.filter((candidate) => candidate.id !== toolId);
   await saveCentralLibrary(library);
 }
@@ -130,7 +131,7 @@ export async function deleteCentralLibraryTool(toolId: number, expected?: Centra
  *  same-id entry when one exists, append otherwise. */
 export async function publishToolToCentralLibrary(tool: CamToolDto): Promise<void> {
   const library = await loadCentralLibrary();
-  if (library === null) throw new Error('The central library is unavailable. Check its folder in Settings.');
+  if (library === null) throw new Error(translate('cam.errors.errorCentralLibraryUnavailable'));
   const index = library.tools.findIndex((candidate) => candidate.id === tool.id);
   const snapshot = structuredClone(tool);
   if (index >= 0) library.tools[index] = snapshot;

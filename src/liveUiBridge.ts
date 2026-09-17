@@ -10,6 +10,7 @@ import {pendingEngineOperations} from './engine/activity';
 import { applicationExitBarrier } from './files/applicationExit';
 import { leaveDrawingWorkspace } from './drawing/document';
 import { applyView, type ViewRequest as CameraViewRequest } from './viewControl';
+import { translate } from './i18n';
 import {acceptDrawingProjection, captureDrawingProjectionScope, holdAutomaticDrawingProjections, type CompletedDrawingProjection} from './drawing/projectionPresentation';
 
 let applying = false;
@@ -49,9 +50,9 @@ export async function applyLiveUiControl(publishChangedState: () => Promise<void
       // Native can deliver A's control just before Open and its IPC reply can
       // reach JavaScript after B is hydrated. Reject before even changing pace,
       // opening a file, clicking a control or moving the replacement's camera.
-      if (!ownsDocument()) throw new Error('Document changed before the UI request could run; inspect the current document');
+      if (!ownsDocument()) throw new Error(translate('ui.errorDocumentChangedBeforeRequest'));
       if (request.ui) {
-        if (request.expires_ms < Date.now()) throw new Error('UI request expired');
+        if (request.expires_ms < Date.now()) throw new Error(translate('ui.errorUiRequestExpired'));
         if (request.ui.pace_ms !== undefined) setPlaybackPace(request.ui.pace_ms);
         if (request.ui.action === 'open_recipe') {
           response.recipe = await queueRecipeOpen(request.ui.recipe ?? '');
@@ -70,20 +71,20 @@ export async function applyLiveUiControl(publishChangedState: () => Promise<void
           useAppStore.getState().setProjectBusy(true);
           try { response.completed = await operateUiFile(request.ui as UiFileRequest); }
           finally { useAppStore.getState().setProjectBusy(false); }
-          if (!response.completed) throw new Error('File operation did not complete; inspect the UI for details');
-          await presentOperation(`File: ${request.ui.command}`);
+          if (!response.completed) throw new Error(translate('ui.errorFileOperationIncomplete'));
+          await presentOperation(translate('ui.presentFile').replace('{cmd}', String(request.ui.command)));
         } else if (request.ui.action === 'viewport') {
-          if ([...window.document.querySelectorAll<HTMLElement>('[aria-modal="true"]')].some(visible)) throw new Error('A modal dialog blocks the viewport');
+          if ([...window.document.querySelectorAll<HTMLElement>('[aria-modal="true"]')].some(visible)) throw new Error(translate('ui.errorModalBlocksViewport'));
           const api = getSessionCamera();
           const drawing = request.ui.canvas === 'drawing' ? window.document.querySelector('[data-testid="drawing-sheet"]') : null;
-          if (request.ui.canvas === 'drawing' ? !drawing : !api) throw new Error('Requested canvas is unavailable');
-          if (drawing && request.ui.world) throw new Error('Drawing canvas uses window pixel coordinates');
+          if (request.ui.canvas === 'drawing' ? !drawing : !api) throw new Error(translate('ui.errorCanvasUnavailable'));
+          if (drawing && request.ui.world) throw new Error(translate('ui.errorDrawingCanvasPixelCoordinates'));
           const projected = request.ui.world ? api?.worldToScreen(request.ui.world) : null;
           const point = request.ui.point ?? (projected ? [projected.x, projected.y] as [number, number] : null);
-          if (!point) throw new Error('Viewport action requires point or world coordinates');
+          if (!point) throw new Error(translate('ui.errorViewportActionNeedsPoint'));
           if (drawing) await drivePointer(drawing, request.ui.gesture ?? 'click', point, request.ui.shift, request.ui.to);
           else await api!.pointer(request.ui.gesture ?? 'click', point, request.ui.shift, request.ui.to);
-          await presentOperation(`Viewport: ${request.ui.gesture ?? 'click'}`);
+          await presentOperation(translate('ui.presentViewport').replace('{gesture}', String(request.ui.gesture ?? 'click')));
         } else {
           const target = operateUi(request.ui as UiAction, document);
           if (request.ui.action !== 'inspect') await presentOperation(request.ui.action, target);
@@ -93,7 +94,7 @@ export async function applyLiveUiControl(publishChangedState: () => Promise<void
             response.awaiting_input = true;
             break;
           }
-          if (Date.now() >= request.expires_ms) throw new Error('UI operation is still busy; inspect before retrying');
+          if (Date.now() >= request.expires_ms) throw new Error(translate('ui.errorUiOperationBusy'));
           await waitForPlayback(25);
         }
         const after = useAppStore.getState();

@@ -3,6 +3,7 @@ import type {
   HoleThreadSeries,
   HoleThreadStandard,
 } from '../engine/types';
+import { translate } from '../i18n';
 
 export interface ThreadPreset {
   id: string;
@@ -131,10 +132,10 @@ export function isoMetricGrade6Envelope(
   fit: ThreadFit,
 ): IsoMetricThreadEnvelope {
   if (!Number.isFinite(nominalDiameter) || nominalDiameter <= 0) {
-    throw new Error('Thread nominal diameter must be positive');
+    throw new Error(translate('thread.errorNominalDiameterPositive'));
   }
   if (!Number.isFinite(pitch) || pitch <= 0) {
-    throw new Error('Thread pitch must be positive');
+    throw new Error(translate('thread.errorPitchPositive'));
   }
   const basicPitch = nominalDiameter - 3 * SQRT_3 * pitch / 8;
   const basicInternalMinor = nominalDiameter - 5 * SQRT_3 * pitch / 8;
@@ -193,7 +194,7 @@ export function isoMetricThreadEnvelope(
   const expectedClass = fit === 'internal' ? '6H' : '6g';
   if (thread.class.trim() !== expectedClass) {
     throw new Error(
-      `ISO metric ${fit} modeling currently supports tolerance class ${expectedClass}, got ${thread.class}`,
+      translate('thread.errorIsoMetricClassUnsupported').replace('{fit}', fit).replace('{expectedClass}', expectedClass).replace('{threadClass}', thread.class),
     );
   }
   return isoMetricGrade6Envelope(thread.nominal_diameter, thread.pitch, fit);

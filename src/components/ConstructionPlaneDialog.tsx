@@ -10,6 +10,7 @@ import type {
   PlaneRef,
 } from '../engine/types';
 import { isStraightSolidEdge } from '../solidEdgeEligibility';
+import { useTranslation } from '../i18n';
 import {
   useAppStore,
   type ConstructionPlanePickTarget,
@@ -117,6 +118,7 @@ function previewHalfSize(
 }
 
 export function ConstructionPlaneDialog() {
+  const { t } = useTranslation();
   const dialog = useAppStore((state) => state.constructionPlaneDialog);
   const close = useAppStore((state) => state.closeConstructionPlaneDialog);
   const cancel = () => void cancelTimelineFeatureEdit(close);
@@ -152,17 +154,17 @@ export function ConstructionPlaneDialog() {
     const result: PlaneOption[] = [
       {
         value: 'origin:xy',
-        label: 'XY origin plane',
+        label: t('constructionPlane.xyOriginPlane'),
         reference: { type: 'origin_plane', plane: 'xy' },
       },
       {
         value: 'origin:xz',
-        label: 'XZ origin plane',
+        label: t('constructionPlane.xzOriginPlane'),
         reference: { type: 'origin_plane', plane: 'xz' },
       },
       {
         value: 'origin:yz',
-        label: 'YZ origin plane',
+        label: t('constructionPlane.yzOriginPlane'),
         reference: { type: 'origin_plane', plane: 'yz' },
       },
     ];
@@ -171,7 +173,7 @@ export function ConstructionPlaneDialog() {
         if (!face.plane) return;
         result.push({
           value: `face:${face.id}`,
-          label: `${body.name} · planar face ${index + 1}`,
+          label: `${body.name} · ${t('constructionPlane.planarFace')} ${index + 1}`,
           reference: { type: 'planar_face', face_id: face.id },
         });
       });
@@ -185,7 +187,7 @@ export function ConstructionPlaneDialog() {
       });
     }
     return result;
-  }, [bodies, dialog?.featureId, knownPlanes]);
+  }, [bodies, dialog?.featureId, knownPlanes, t]);
 
   const offsetPreview = useMemo(() => {
     if (dialog?.kind !== 'offset') return null;
@@ -278,7 +280,7 @@ export function ConstructionPlaneDialog() {
       })
       .catch((cause: unknown) => {
         if (!cancelled) {
-          setError(cause instanceof Error ? cause.message : 'Could not load planes');
+          setError(cause instanceof Error ? cause.message : t('constructionPlane.loadFailed'));
         }
       })
       .finally(() => {
@@ -287,7 +289,7 @@ export function ConstructionPlaneDialog() {
     return () => {
       cancelled = true;
     };
-  }, [dialog?.featureId, dialog?.kind]);
+  }, [dialog?.featureId, dialog?.kind, t]);
 
   useEffect(() => {
     if (!dialog || !pickedReference) return;
@@ -341,12 +343,12 @@ export function ConstructionPlaneDialog() {
   const pickInstruction =
     pickTarget === 'first_reference'
       ? dialog.kind === 'midplane'
-        ? 'Selecting first reference — click a planar face or reference plane'
-        : 'Selecting reference plane — click a planar face or reference plane'
+        ? t('constructionPlane.selectingFirstReference')
+        : t('constructionPlane.selectingReferencePlane')
       : pickTarget === 'second_reference'
-        ? 'Selecting second reference — click another parallel face or plane'
+        ? t('constructionPlane.selectingSecondReference')
         : pickTarget === 'axis_edge'
-          ? 'Selecting rotation axis — click a straight model edge'
+          ? t('constructionPlane.selectingRotationAxis')
           : null;
   const firstLabel = options.find((option) => option.value === first)?.label;
   const secondLabel = options.find((option) => option.value === second)?.label;
@@ -390,10 +392,10 @@ export function ConstructionPlaneDialog() {
 
   const title =
     dialog.kind === 'offset'
-      ? 'Offset Plane'
+      ? t('constructionPlane.offsetPlane')
       : dialog.kind === 'midplane'
-        ? 'Midplane'
-        : 'Plane at Angle';
+        ? t('constructionPlane.midplane')
+        : t('constructionPlane.planeAtAngle');
 
   return (
     <div
@@ -420,7 +422,9 @@ export function ConstructionPlaneDialog() {
         <header className="feature-dialog-header flex h-10 items-center gap-2 border-b border-edge px-3">
           <Layers3 size={15} className="text-accent" />
           <span className="flex-1 text-xs font-semibold text-ink">
-            {dialog.featureId > 0 ? `Edit ${title}` : title}
+            {dialog.featureId > 0
+              ? t('constructionPlane.editTitle').replace('{title}', title)
+              : title}
           </span>
           <button
             type="button"
@@ -439,7 +443,7 @@ export function ConstructionPlaneDialog() {
             >
               <Crosshair size={15} className="mt-0.5 shrink-0 text-accent" />
               <div className="min-w-0 flex-1">
-                <p className="font-semibold text-accent">Viewport selection active</p>
+                <p className="font-semibold text-accent">{t('constructionPlane.viewportSelectionActive')}</p>
                 <p className="mt-0.5 leading-4">{pickInstruction}</p>
               </div>
               <span className="rounded border border-edge px-1.5 py-0.5 text-[9px] uppercase text-mute">
@@ -450,7 +454,7 @@ export function ConstructionPlaneDialog() {
           {loading ? (
             <p className="flex items-center gap-2 text-xs text-mute">
               <LoaderCircle size={14} className="animate-spin" />
-              Loading references…
+              {t('constructionPlane.loading')}
             </p>
           ) : error ? (
             <p className="rounded border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-300">
@@ -460,9 +464,9 @@ export function ConstructionPlaneDialog() {
             <>
               <ViewportSelectionField
                 testId="pick-construction-first-reference"
-                label={dialog.kind === 'midplane' ? 'First reference' : 'Reference plane'}
-                status={firstLabel ?? 'Click a planar face or visible reference plane'}
-                hint="The chosen plane remains highlighted in the viewport."
+                label={dialog.kind === 'midplane' ? t('constructionPlane.firstReference') : t('constructionPlane.referencePlane')}
+                status={firstLabel ?? t('constructionPlane.clickReference')}
+                hint={t('constructionPlane.referenceHint')}
                 active={pickTarget === 'first_reference'}
                 hasSelection={first !== ''}
                 onActivate={() => startPicking('first_reference')}
@@ -473,7 +477,7 @@ export function ConstructionPlaneDialog() {
               />
               {dialog.kind === 'offset' && (
                 <label>
-                  <span className={LABEL}>Offset distance (mm)</span>
+                  <span className={LABEL}>{t('constructionPlane.offsetDistance')}</span>
                   <DimensionInput
                     autoSelectKey={pickTarget === null ? first : null}
                     step="any"
@@ -485,9 +489,9 @@ export function ConstructionPlaneDialog() {
               {dialog.kind === 'midplane' && (
                 <ViewportSelectionField
                   testId="pick-construction-second-reference"
-                  label="Second reference"
-                  status={secondLabel ?? 'Click the second parallel face or plane'}
-                  hint="The two references must be distinct and parallel."
+                  label={t('constructionPlane.secondReference')}
+                  status={secondLabel ?? t('constructionPlane.clickSecondReference')}
+                  hint={t('constructionPlane.secondReferenceHint')}
                   active={pickTarget === 'second_reference'}
                   hasSelection={second !== ''}
                   onActivate={() => startPicking('second_reference')}
@@ -501,9 +505,11 @@ export function ConstructionPlaneDialog() {
                 <>
                   <ViewportSelectionField
                     testId="pick-construction-axis-edge"
-                    label="Straight axis edge"
-                    status={body && edgeId > 0 ? `${body.name} · straight edge selected` : 'Click a straight model edge in the viewport'}
-                    hint="The edge must lie on the selected reference plane."
+                    label={t('constructionPlane.straightAxisEdge')}
+                    status={body && edgeId > 0
+                      ? t('constructionPlane.straightEdgeSelected').replace('{body}', body.name)
+                      : t('constructionPlane.clickAxisEdge')}
+                    hint={t('constructionPlane.axisEdgeHint')}
                     active={pickTarget === 'axis_edge'}
                     hasSelection={bodyId > 0 && edgeId > 0}
                     onActivate={() => startPicking('axis_edge')}
@@ -514,7 +520,7 @@ export function ConstructionPlaneDialog() {
                     }}
                   />
                   <label>
-                    <span className={LABEL}>Angle (degrees)</span>
+                    <span className={LABEL}>{t('constructionPlane.angle')}</span>
                     <DimensionInput
                       autoSelectKey={pickTarget === null && edgeId > 0
                         ? `${bodyId}:${edgeId}:${first}`
@@ -525,7 +531,7 @@ export function ConstructionPlaneDialog() {
                     />
                   </label>
                   <p className="text-[10px] leading-4 text-mute">
-                    The selected straight edge must lie on the reference plane.
+                    {t('constructionPlane.axisEdgeNote')}
                   </p>
                 </>
               )}
@@ -533,8 +539,8 @@ export function ConstructionPlaneDialog() {
           )}
         </div>
         <footer className="flex h-11 items-center justify-end gap-2 border-t border-edge bg-header px-3">
-          <button type="button" onClick={cancel} disabled={busy} className="h-7 rounded border border-edge px-3 text-xs text-ink hover:bg-edge">Cancel</button>
-          <button data-testid="construction-plane-ok" type="submit" disabled={!valid} className="h-7 rounded bg-accent px-3 text-xs font-semibold text-white disabled:opacity-40">OK</button>
+          <button type="button" onClick={cancel} disabled={busy} className="h-7 rounded border border-edge px-3 text-xs text-ink hover:bg-edge">{t('constructionPlane.cancel')}</button>
+          <button data-testid="construction-plane-ok" type="submit" disabled={!valid} className="h-7 rounded bg-accent px-3 text-xs font-semibold text-white disabled:opacity-40">{t('constructionPlane.ok')}</button>
         </footer>
       </form>
     </div>

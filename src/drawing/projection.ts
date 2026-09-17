@@ -13,6 +13,7 @@ import type {
   Point3Dto,
   SolidSceneDto,
 } from '../engine/types';
+import { translate } from '../i18n';
 
 type DrawingInstanceBody = BodyDto & { drawingOccurrenceId?: number };
 
@@ -72,11 +73,11 @@ export function drawingInstanceScene(
   occurrenceIds: number[] = [],
   includeMesh = true,
 ): SolidSceneDto {
-  if (!solution.solved) throw new Error('Resolve assembly diagnostics before projecting its occurrences.');
+  if (!solution.solved) throw new Error(translate('drawing.errors.errorResolveAssemblyDiagnostics'));
   const selected = new Set(occurrenceIds);
   if (assembly) {
     for (const id of occurrenceIds) {
-      if (!assembly.component_structure.occurrences.some((node) => node.id === id)) throw new Error('Drawing occurrence is missing.');
+      if (!assembly.component_structure.occurrences.some((node) => node.id === id)) throw new Error(translate('drawing.errors.errorOccurrenceMissing'));
     }
     let before: number;
     do {
@@ -88,7 +89,7 @@ export function drawingInstanceScene(
   }
   const bodies = solution.instance_body_poses.filter((pose) => pose.visible && (selected.size === 0 || selected.has(pose.occurrence_id))).map((pose): DrawingInstanceBody => {
     const body = scene.bodies.find((value) => value.id === pose.body_id);
-    if (!body) throw new Error('Drawing occurrence source body is missing.');
+    if (!body) throw new Error(translate('drawing.errors.errorOccurrenceBodyMissing'));
     const q = new Quaternion(...pose.rotation).normalize();
     const t = new Vector3(...pose.translation);
     const point = (p: Point3Dto): Point3Dto => {
@@ -261,7 +262,7 @@ function resolveModelLine(
   const body = scene.bodies.find((candidate) => candidate.id === bodyId && ((candidate as DrawingInstanceBody).drawingOccurrenceId ?? null) === (occurrenceId ?? null));
   const currentSignature = body?.topology_signature ? `feature:${body.feature_id}:${body.topology_signature}` : null;
   if ((topologySignature ?? null) !== currentSignature) {
-    throw new Error('Drawing reference is unverified or its topology changed; explicitly reassociate the derived view.');
+    throw new Error(translate('drawing.errors.errorReferenceUnverified'));
   }
   const edge = body?.edges.find((candidate) => candidate.id === edgeId)
     ?? body?.edges.find((candidate) => candidate.key === edgeKey);
@@ -379,7 +380,7 @@ function normalizeSectionSlab(
   depth: number | null,
 ): SectionSlab {
   if (depth !== null && (!Number.isFinite(depth) || depth <= 0)) {
-    throw new Error('Drawing section depth must be a positive finite model distance.');
+    throw new Error(translate('drawing.errors.errorSectionDepthPositive'));
   }
   return {
     point,
@@ -923,7 +924,7 @@ function dot(a: Vec3, b: Vec3): number {
 function normalize(value: Vec3): Vec3 {
   const length = Math.hypot(...value);
   if (!Number.isFinite(length) || length < 1e-9) {
-    throw new Error('Drawing view direction and up vectors must be non-zero and non-parallel.');
+    throw new Error(translate('drawing.errors.errorViewBasisInvalid'));
   }
   return [value[0] / length, value[1] / length, value[2] / length];
 }

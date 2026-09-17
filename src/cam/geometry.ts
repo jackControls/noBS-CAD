@@ -16,6 +16,7 @@ import type {
   SolidSceneDto,
   Vec2,
 } from '../engine/types';
+import { translate } from '../i18n';
 import type { CamChainPickEntity, CamHolePickHole } from '../store/appStore';
 
 const CHAIN_TOLERANCE = 1.0e-6;
@@ -253,7 +254,7 @@ export function loopToSetupPath(
   wcs: CamWorkCoordinateSystemDto,
 ): CamPoint2Dto[] {
   const sketch = sketches.find((candidate) => candidate.name === loop.sketch);
-  if (!sketch) throw new Error(`Sketch '${loop.sketch}' no longer exists.`);
+  if (!sketch) throw new Error(translate('cam.errors.errorSketchMissing').replace('{sketch}', loop.sketch));
   return loop.points.map((uv) => sketchPointToSetup(sketch, uv, wcs));
 }
 
@@ -525,7 +526,7 @@ export function resolveWcsOrigin(
       };
     case 'model_box_point': {
       if (!modelBounds) {
-        throw new Error('The setup bodies have no model geometry to anchor the WCS to.');
+        throw new Error(translate('cam.errors.errorWcsNoModelGeometry'));
       }
       return {
         x: anchorValue(modelBounds.min.x, modelBounds.max.x, spec.x),
@@ -539,12 +540,12 @@ export function resolveWcsOrigin(
         (entity) => entity.kind === 'point' && entity.id === spec.entity_id,
       );
       if (!sketch || !point || point.kind !== 'point') {
-        throw new Error('The selected WCS sketch point no longer exists; pick it again.');
+        throw new Error(translate('cam.errors.errorWcsSketchPointMissing'));
       }
       return sketchUvToModel(sketch.basis, point.position);
     }
     default:
-      throw new Error('Explicit WCS origins carry their coordinates directly.');
+      throw new Error(translate('cam.errors.errorWcsExplicitOriginDirect'));
   }
 }
 
@@ -719,11 +720,11 @@ export function resolveStock(
   switch (spec.mode) {
     case 'fixed': {
       if (!modelBounds) {
-        throw new Error('Fixed-size stock is placed around the model; select setup bodies first.');
+        throw new Error(translate('cam.errors.errorFixedStockNeedsBodies'));
       }
       const { shape, size, placement } = spec;
       if (size.x <= 0 || size.z <= 0 || (shape === 'box' && size.y <= 0)) {
-        throw new Error('Fixed stock needs positive dimensions.');
+        throw new Error(translate('cam.errors.errorFixedStockPositiveDimensions'));
       }
       const modelCenter = {
         x: (modelBounds.min.x + modelBounds.max.x) * 0.5,
@@ -789,7 +790,7 @@ export function resolveStock(
     }
     case 'from_model': {
       if (!modelBounds) {
-        throw new Error('Model-grown stock needs the setup bodies selected first.');
+        throw new Error(translate('cam.errors.errorModelStockNeedsBodies'));
       }
       const { shape, offsets } = spec;
       const radial = Math.max(offsets.x_min, offsets.x_max, offsets.y_min, offsets.y_max);
@@ -856,7 +857,7 @@ export function resolveStock(
     }
     case 'rest_from_setup': {
       if (!sourceSetup) {
-        throw new Error('Pick the earlier setup whose remaining stock this setup continues from.');
+        throw new Error(translate('cam.errors.errorRestStockPickSourceSetup'));
       }
       const modelBox = sourceSetup.stock_model_box ?? setupBoxToModel(sourceSetup.stock, sourceSetup.wcs);
       return {
@@ -866,7 +867,7 @@ export function resolveStock(
     }
     case 'model_body': {
       if (!modelBounds) {
-        throw new Error('The modeled stock body has no mesh to measure.');
+        throw new Error(translate('cam.errors.errorModeledStockNoMesh'));
       }
       const bodyId = spec.body_id;
       return {
@@ -878,6 +879,6 @@ export function resolveStock(
       };
     }
     default:
-      throw new Error('Legacy stock boxes are edited through the resolved envelope.');
+      throw new Error(translate('cam.errors.errorLegacyStockEnvelope'));
   }
 }

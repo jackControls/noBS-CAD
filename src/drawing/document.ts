@@ -41,6 +41,7 @@ import {
   peekDrawingUndoHistory,
   recordDrawingHistory,
 } from '../engine/applicationHistory';
+import { translate } from '../i18n';
 import { useAppStore } from '../store/appStore';
 import { defaultDrawingFormat, defaultDrawingSheetStyle, drawingSheetSize } from './sheet';
 
@@ -92,7 +93,7 @@ export function defaultDrawingSheetSetup(
 export async function enterDrawingWorkspace(): Promise<void> {
   const state = useAppStore.getState();
   if (state.mode !== 'solid') {
-    throw new Error('Finish the active sketch before opening Drawings.');
+    throw new Error(translate('drawing.errors.errorFinishSketchBeforeDrawings'));
   }
   state.setSelectedDrawingViewId(null);
   state.setSelectedDrawingAnnotationId(null);
@@ -146,9 +147,9 @@ export function autoLayoutDrawingViews(): Promise<void> {
   return enqueueDrawingUpdate((drawing, state) => {
     const next = cloneDrawing(drawing);
     const sheet = activeSheet(next);
-    if (!sheet) throw new Error('Create a drawing sheet first.');
+    if (!sheet) throw new Error(translate('drawing.errors.errorCreateSheetFirst'));
     if (sheet.views.length > 0) {
-      throw new Error('Automatic layout is available on an empty sheet. Delete existing views or place additional views manually.');
+      throw new Error(translate('drawing.errors.errorAutoLayoutNeedsEmptySheet'));
     }
     const [width, height] = drawingSheetSize(sheet.format, sheet.orientation);
     const scale = suggestedViewScale(state.solidScene, width, height);
@@ -198,7 +199,7 @@ export function addDrawingView(
   requestedScale?: number,
 ): Promise<void> {
   return enqueueDrawingCommand((drawing, state) => {
-    const sheet = activeSheet(drawing); if (!sheet) throw new Error('Create a drawing sheet first.');
+    const sheet = activeSheet(drawing); if (!sheet) throw new Error(translate('drawing.errors.errorCreateSheetFirst'));
     const view = drawingViewPlacementDraft(sheet, state.solidScene, kind, position, requestedParentId, requestedScale, drawing.next_view_id);
     return { type: 'add_view', arguments: { sheet_id: sheet.id, view, rescale_group: requestedScale !== undefined } };
   }).then(() => {
@@ -276,7 +277,7 @@ export function addDrawingLinearDimension(
   let createdId: number;
   return enqueueDrawingCommand(drawing => {
     const sheet = drawing.sheets.find(s => s.views.some(v => v.id === viewId));
-    if (!sheet) throw new Error('Drawing dimension references a missing view.');
+    if (!sheet) throw new Error(translate('drawing.errors.errorDimensionMissingView'));
     createdId = drawing.next_annotation_id;
     return { type: 'add_linear_dimension', arguments: {
       sheet_id: sheet.id, view_id: viewId, first, second, mode, offset,
@@ -293,10 +294,10 @@ export function addDrawingLineDimension(
   position: [number, number],
 ): Promise<void> {
   if (mode === 'length' && second !== null) {
-    return Promise.reject(new Error('A line-length dimension accepts one straight edge.'));
+    return Promise.reject(new Error(translate('drawing.errors.errorLineLengthSingleEdge')));
   }
   if (mode !== 'length' && second === null) {
-    return Promise.reject(new Error('Line distance and angle dimensions require two straight edges.'));
+    return Promise.reject(new Error(translate('drawing.errors.errorLineDimensionsTwoEdges')));
   }
   return addViewAnnotation(viewId, (id) => ({
     kind: 'line_dimension', id, view_id: viewId, first, second, mode, position,
@@ -324,7 +325,7 @@ export function addDrawingRadialDimension(
   mode: DrawingRadialDimensionMode,
 ): Promise<void> {
   if (mode === 'diameter' && !feature.closed) {
-    return Promise.reject(new Error('Diameter dimensions require a complete circle. Use Radius for an arc.'));
+    return Promise.reject(new Error(translate('drawing.errors.errorDiameterNeedsCircle')));
   }
   return addViewAnnotation(viewId, (id) => ({
     kind: 'radial_dimension', id, view_id: viewId, feature, mode,
@@ -351,7 +352,7 @@ export async function addDrawingHoleNote(
   feature: DrawingCircularRefDto,
   position: [number, number],
 ): Promise<void> {
-  if (!feature.closed) throw new Error('Hole notes require a complete circular edge.');
+  if (!feature.closed) throw new Error(translate('drawing.errors.errorHoleNoteCircularEdge'));
   const definitions = await (await getEngine()).holeDefinitions().catch(() => []);
   const definition = bestHoleDefinitionForCircle(definitions, feature);
   const positions = definition
@@ -386,7 +387,7 @@ export function addDrawingCenterMark(
   feature: DrawingCircularRefDto,
   extension = 2.5,
 ): Promise<void> {
-  if (!feature.closed) return Promise.reject(new Error('Center marks require a complete circular edge.'));
+  if (!feature.closed) return Promise.reject(new Error(translate('drawing.errors.errorCenterMarkCircularEdge')));
   return addViewAnnotation(viewId, (id) => ({
     kind: 'center_mark', id, view_id: viewId, feature, extension,
   }));
@@ -399,13 +400,13 @@ export function addDrawingCenterLine(
   extension = 2.5,
 ): Promise<void> {
   if (!first.closed || !second.closed) {
-    return Promise.reject(new Error('Centerlines require two complete circular edges.'));
+    return Promise.reject(new Error(translate('drawing.errors.errorCenterlineTwoCircularEdges')));
   }
   if (
     (first.body_id === second.body_id && first.edge_id === second.edge_id)
     || distance3(first.fallback_center, second.fallback_center) < 1e-7
   ) {
-    return Promise.reject(new Error('Select two distinct circular centers for a centerline.'));
+    return Promise.reject(new Error(translate('drawing.errors.errorCenterlineDistinctCenters')));
   }
   return addViewAnnotation(viewId, (id) => ({
     kind: 'center_line', id, view_id: viewId, first, second, extension,
@@ -419,7 +420,7 @@ export function addDrawingCenterLineBetweenEdges(
   extension = 2.5,
 ): Promise<void> {
   if (first.body_id === second.body_id && first.edge_id === second.edge_id) {
-    return Promise.reject(new Error('Select two distinct parallel edges for a centerline.'));
+    return Promise.reject(new Error(translate('drawing.errors.errorCenterlineDistinctParallelEdges')));
   }
   return addViewAnnotation(viewId, (id) => ({
     kind: 'center_line_between_edges', id, view_id: viewId, first, second, extension,
@@ -441,7 +442,7 @@ export function addDrawingBoltCircleCenterLine(
   features: DrawingCircularRefDto[],
   extension = 2.5,
 ): Promise<void> {
-  if (features.length < 3) return Promise.reject(new Error('A bolt circle needs at least three circular centers.'));
+  if (features.length < 3) return Promise.reject(new Error(translate('drawing.errors.errorBoltCircleThreeCenters')));
   return addViewAnnotation(viewId, (id) => ({
     kind: 'bolt_circle_center_line', id, view_id: viewId,
     features: structuredClone(features), extension,
@@ -454,7 +455,7 @@ export function addDrawingChainDimension(
   layout: DrawingChainDimensionLayout = 'chain',
   mode: DrawingLinearDimensionMode = 'aligned',
 ): Promise<void> {
-  if (anchors.length < 2) return Promise.reject(new Error('Select at least two points for a dimension series.'));
+  if (anchors.length < 2) return Promise.reject(new Error(translate('drawing.errors.errorDimensionSeriesTwoPoints')));
   return addViewAnnotation(viewId, (id) => ({
     kind: 'chain_dimension', id, view_id: viewId, anchors: structuredClone(anchors),
     mode, layout, offset: 12, spacing: 7, prefix: '', suffix: '', precision: 2,
@@ -570,11 +571,11 @@ export function addDrawingRevisionCloud(
   points: Array<[number, number]>,
   revision: string,
 ): Promise<void> {
-  if (points.length < 3) return Promise.reject(new Error('A revision cloud needs at least three points.'));
+  if (points.length < 3) return Promise.reject(new Error(translate('drawing.errors.errorRevisionCloudPoints')));
   return enqueueDrawingUpdate((drawing) => {
     const next = cloneDrawing(drawing);
     const sheet = activeSheet(next);
-    if (!sheet) throw new Error('Create a drawing sheet first.');
+    if (!sheet) throw new Error(translate('drawing.errors.errorCreateSheetFirst'));
     const id = next.next_annotation_id++;
     sheet.annotations.push({ kind: 'revision_cloud', id, revision, points: structuredClone(points) });
     queueMicrotask(() => selectCreatedAnnotation(id));
@@ -592,7 +593,7 @@ export function addDrawingDerivedView(
     const next = cloneDrawing(drawing);
     const sheet = activeSheet(next);
     const parent = sheet?.views.find((view) => view.id === parentViewId);
-    if (!sheet || !parent) throw new Error('Select an existing parent view first.');
+    if (!sheet || !parent) throw new Error(translate('drawing.errors.errorSelectParentView'));
     const id = next.next_view_id++;
     const basis = derivedViewBasis(parent, derivation);
     sheet.views.push({
@@ -647,7 +648,7 @@ export function addDrawingChamferNote(
 
 export function addDrawingNote(position: [number, number], text = 'NOTE'): Promise<void> {
   return enqueueDrawingCommand(drawing => {
-    const sheet = activeSheet(drawing); if (!sheet) throw new Error('Create a drawing sheet first.');
+    const sheet = activeSheet(drawing); if (!sheet) throw new Error(translate('drawing.errors.errorCreateSheetFirst'));
     return { type: 'add_note', arguments: { sheet_id: sheet.id, text, position } };
   }).then(() => selectCreatedAnnotation(useAppStore.getState().drawingDocument.next_annotation_id - 1));
 }
@@ -761,10 +762,10 @@ export function updateActiveDrawingSheet(update: Partial<DrawingSheetDto>): Prom
 export function saveActiveDrawingTemplate(name: string): Promise<void> {
   return enqueueDrawingUpdate((drawing) => {
     const normalized = name.trim();
-    if (!normalized) throw new Error('Enter a template name first.');
+    if (!normalized) throw new Error(translate('drawing.errors.errorTemplateNameRequired'));
     const next = cloneDrawing(drawing);
     const sheet = activeSheet(next);
-    if (!sheet) throw new Error('Create a drawing sheet first.');
+    if (!sheet) throw new Error(translate('drawing.errors.errorCreateSheetFirst'));
     const existing = next.templates.find((template) => template.name.toLocaleLowerCase() === normalized.toLocaleLowerCase());
     const values: Omit<DrawingTemplateDto, 'id'> = {
       name: normalized,
@@ -786,7 +787,7 @@ export function applyDrawingTemplate(templateId: number): Promise<void> {
     const next = cloneDrawing(drawing);
     const sheet = activeSheet(next);
     const template = next.templates.find((candidate) => candidate.id === templateId);
-    if (!sheet || !template) throw new Error('The selected drawing template no longer exists.');
+    if (!sheet || !template) throw new Error(translate('drawing.errors.errorTemplateMissing'));
     sheet.standard = template.standard;
     sheet.projection_method = template.projection_method;
     sheet.tolerance_note = structuredClone(template.tolerance_note);
@@ -819,7 +820,7 @@ export function addDrawingRevision(
   return enqueueDrawingUpdate((drawing) => {
     const next = cloneDrawing(drawing);
     const sheet = activeSheet(next);
-    if (!sheet) throw new Error('Create a drawing sheet first.');
+    if (!sheet) throw new Error(translate('drawing.errors.errorCreateSheetFirst'));
     const entry: DrawingRevisionDto = { ...structuredClone(revision), id: next.next_revision_id++ };
     sheet.revisions.push(entry);
     sheet.title_block.revision = entry.revision;
@@ -844,7 +845,7 @@ export function updateDrawingRevision(
     const revision = sheet?.revisions.find((candidate) => candidate.id === revisionId);
     if (!sheet || !revision) return drawing;
     if (revision.status === 'released') {
-      throw new Error(`Revision ${revision.revision} is released and immutable. Add the next revision to make changes.`);
+      throw new Error(translate('drawing.errors.errorRevisionImmutable').replace('{revision}', revision.revision));
     }
     Object.assign(revision, structuredClone(update));
     sheet.title_block.revision = revision.revision;
@@ -866,7 +867,7 @@ export function deleteDrawingRevision(revisionId: number): Promise<void> {
     if (!sheet) return drawing;
     const revision = sheet.revisions.find((candidate) => candidate.id === revisionId);
     if (revision?.status === 'released') {
-      throw new Error(`Released revision ${revision.revision} cannot be deleted.`);
+      throw new Error(translate('drawing.errors.errorReleasedRevisionDelete').replace('{revision}', revision.revision));
     }
     sheet.revisions = sheet.revisions.filter((revision) => revision.id !== revisionId);
     return next;
@@ -879,7 +880,7 @@ export function addDrawingBomItem(
   return enqueueDrawingUpdate((drawing, state) => {
     const next = cloneDrawing(drawing);
     const sheet = activeSheet(next);
-    if (!sheet) throw new Error('Create a drawing sheet first.');
+    if (!sheet) throw new Error(translate('drawing.errors.errorCreateSheetFirst'));
     const body = item.body_id != null
       ? state.solidScene.bodies.find((candidate) => candidate.id === item.body_id)
       : state.solidScene.bodies.find((candidate) => !sheet.bom.some((entry) => entry.body_id === candidate.id));
@@ -946,7 +947,7 @@ function addViewAnnotation(
     const next = cloneDrawing(drawing);
     const sheet = activeSheet(next);
     if (!sheet?.views.some((view) => view.id === viewId)) {
-      throw new Error('The projected view for this annotation no longer exists.');
+      throw new Error(translate('drawing.errors.errorAnnotationViewMissing'));
     }
     const id = next.next_annotation_id++;
     sheet.annotations.push(make(id));
@@ -1031,7 +1032,7 @@ function enqueueDrawingHistoryRestore(
       ? commitDrawingUndoHistory(projectKey, entry)
       : commitDrawingRedoHistory(projectKey, entry);
     if (!committed) {
-      throw new Error('Drawing history changed while restoring a command.');
+      throw new Error(translate('drawing.errors.errorHistoryChanged'));
     }
     resetDrawingUiAfterHistory(target);
     return true;

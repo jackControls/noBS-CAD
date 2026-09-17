@@ -210,8 +210,10 @@ export function SweepDialog() {
                   <ViewportSelectionField
                     testId="sweep-profile-selection"
                     label={t('sweep.profile')}
-                    status={pickedProfile ? `Profile selected · ${profileSketch}` : 'Click a closed profile in the viewport'}
-                    hint="The selected profile is highlighted in the model."
+                    status={pickedProfile
+                      ? t('sweep.profileSelected').replace('{name}', profileSketch)
+                      : t('sweep.clickProfile')}
+                    hint={t('sweep.profileHint')}
                     active={modelingPickTarget === 'sweep_profile'}
                     hasSelection={pickedProfile !== undefined}
                     onActivate={activateProfilePicker}
@@ -222,9 +224,13 @@ export function SweepDialog() {
                   />
                   <ViewportSelectionField
                     testId="sweep-path-selection"
-                    label="Path"
-                    status={pathIds.length > 0 ? `${pathIds.length} path ${pathIds.length === 1 ? 'curve' : 'curves'} selected · ${pathSketch}` : 'Click the path in the viewport'}
-                    hint="Click connected sketch curves to add or remove them."
+                    label={t('sweep.path')}
+                    status={pathIds.length > 0
+                      ? (pathIds.length === 1
+                          ? t('sweep.pathCurveSelected').replace('{count}', String(pathIds.length)).replace('{name}', pathSketch)
+                          : t('sweep.pathCurvesSelected').replace('{count}', String(pathIds.length)).replace('{name}', pathSketch))
+                      : t('sweep.clickPath')}
+                    hint={t('sweep.pathHint')}
                     active={modelingPickTarget === 'sweep_path'}
                     hasSelection={pathIds.length > 0}
                     onActivate={() => activateCurvePicker('sweep_path', pathSketch, pathIds)}
@@ -235,10 +241,10 @@ export function SweepDialog() {
                     }}
                   />
                   <div className="grid grid-cols-2 gap-2">
-                    <label><span className={LABEL_CLASS}>Orientation</span><select data-testid="sweep-orientation" value={orientation} onChange={(event) => setOrientation(event.target.value as SweepOrientation)} className={INPUT_CLASS}><option value="corrected_frenet">Corrected Frenet</option><option value="frenet">Frenet</option><option value="fixed">Fixed profile</option></select></label>
-                    <label><span className={LABEL_CLASS}>Corner transition</span><select data-testid="sweep-transition" value={transition} onChange={(event) => setTransition(event.target.value as SweepTransition)} className={INPUT_CLASS}><option value="transformed">Transformed</option><option value="right_corner">Right corner</option><option value="round_corner">Round corner</option></select></label>
+                    <label><span className={LABEL_CLASS}>{t('sweep.orientation')}</span><select data-testid="sweep-orientation" value={orientation} onChange={(event) => setOrientation(event.target.value as SweepOrientation)} className={INPUT_CLASS}><option value="corrected_frenet">{t('sweep.correctedFrenet')}</option><option value="frenet">{t('sweep.frenet')}</option><option value="fixed">{t('sweep.fixedProfile')}</option></select></label>
+                    <label><span className={LABEL_CLASS}>{t('sweep.cornerTransition')}</span><select data-testid="sweep-transition" value={transition} onChange={(event) => setTransition(event.target.value as SweepTransition)} className={INPUT_CLASS}><option value="transformed">{t('sweep.transformed')}</option><option value="right_corner">{t('sweep.rightCorner')}</option><option value="round_corner">{t('sweep.roundCorner')}</option></select></label>
                   </div>
-                  <label className="flex cursor-pointer items-center gap-2 text-xs text-ink"><input data-testid="sweep-force-c1" type="checkbox" checked={forceC1} onChange={(event) => setForceC1(event.target.checked)} className="accent-accent" />Force C1 continuity where possible</label>
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-ink"><input data-testid="sweep-force-c1" type="checkbox" checked={forceC1} onChange={(event) => setForceC1(event.target.checked)} className="accent-accent" />{t('sweep.forceC1')}</label>
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-ink"><input data-testid="sweep-guide-enabled" type="checkbox" checked={guideEnabled} onChange={(event) => {
                     const enabled = event.target.checked;
                     setGuideEnabled(enabled);
@@ -246,13 +252,17 @@ export function SweepDialog() {
                     else if (modelingPickTarget === 'sweep_guide') {
                       activateCurvePicker('sweep_path', pathSketch, pathIds);
                     }
-                  }} className="accent-accent" />Use a guide rail</label>
+                  }} className="accent-accent" />{t('sweep.useGuideRail')}</label>
                   {guideEnabled && <>
                     <ViewportSelectionField
                       testId="sweep-guide-selection"
-                      label="Guide rail"
-                      status={guideIds.length > 0 ? `${guideIds.length} guide ${guideIds.length === 1 ? 'curve' : 'curves'} selected · ${guideSketch}` : 'Click a guide rail in the viewport'}
-                      hint="The guide is optional and may use connected sketch curves."
+                      label={t('sweep.guideRail')}
+                      status={guideIds.length > 0
+                        ? (guideIds.length === 1
+                            ? t('sweep.guideCurveSelected').replace('{count}', String(guideIds.length)).replace('{name}', guideSketch)
+                            : t('sweep.guideCurvesSelected').replace('{count}', String(guideIds.length)).replace('{name}', guideSketch))
+                        : t('sweep.clickGuide')}
+                      hint={t('sweep.guideHint')}
                       active={modelingPickTarget === 'sweep_guide'}
                       hasSelection={guideIds.length > 0}
                       onActivate={() => activateCurvePicker('sweep_guide', guideSketch, guideIds)}

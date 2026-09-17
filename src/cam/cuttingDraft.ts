@@ -1,4 +1,5 @@
 import type { CamCoolantMode, CamCuttingParametersDto, CamToolDto, CamUnits } from '../engine/types';
+import { translate } from '../i18n';
 import {
   commitCuttingSpeed, commitFeed, commitLength, cuttingSpeedFromRpm,
   displayCuttingSpeed, displayFeed, displayLength, rpmFromCuttingSpeed,
@@ -20,16 +21,16 @@ const text = (value: number) => Number.isFinite(value) ? String(Number(value.toP
 function positive(value: string | number | undefined, label: string): number {
   const parsed = Number(value);
   if (value === undefined || String(value).trim() === '' || !Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`${label} needs a positive finite number.`);
+    throw new Error(translate('cam.errors.errorPositiveFiniteNumber').replace('{label}', label));
   }
   return parsed;
 }
 function flutes(context: CuttingContext): number {
-  const count = positive(context.tool?.flute_count, 'Tool flute/insert count');
-  if (!Number.isInteger(count)) throw new Error('Tool flute/insert count must be a whole number.');
+  const count = positive(context.tool?.flute_count, translate('cam.errors.fieldToolFluteInsertCount'));
+  if (!Number.isInteger(count)) throw new Error(translate('cam.errors.errorToolFluteCountWhole'));
   return count;
 }
-const diameter = (context: CuttingContext) => positive(context.tool?.diameter, 'Tool diameter');
+const diameter = (context: CuttingContext) => positive(context.tool?.diameter, translate('cam.errors.fieldToolDiameter'));
 
 export function cuttingDraftFrom(cutting: CamCuttingParametersDto | undefined, units: CamUnits): CuttingDraft {
   return {
@@ -52,22 +53,22 @@ export function editCuttingDraft(draft: CuttingDraft, field: CuttingField, value
 
 function resolveRpm(draft: CuttingDraft, context: CuttingContext): number {
   const rpm = draft.speed.mode === 'surface'
-    ? rpmFromCuttingSpeed(commitCuttingSpeed(positive(draft.speed.value, 'Surface speed'), context.units), diameter(context))
-    : Math.round(positive(draft.speed.value, 'Spindle speed'));
+    ? rpmFromCuttingSpeed(commitCuttingSpeed(positive(draft.speed.value, translate('cam.errors.fieldSurfaceSpeed')), context.units), diameter(context))
+    : Math.round(positive(draft.speed.value, translate('cam.errors.fieldSpindleSpeed')));
   if (!Number.isSafeInteger(rpm) || rpm < 1 || rpm > 0xffff_ffff) {
-    throw new Error('Resolved spindle speed must be between 1 and 4294967295 rpm. Check surface speed and tool diameter.');
+    throw new Error(translate('cam.errors.errorSpindleSpeedRange'));
   }
   return rpm;
 }
 function resolveFeed(draft: CuttingDraft, context: CuttingContext): number {
   return positive(draft.feed.mode === 'per_tooth'
-    ? commitLength(positive(draft.feed.value, 'Feed per tooth'), context.units) * resolveRpm(draft, context) * flutes(context)
-    : commitFeed(positive(draft.feed.value, 'Cutting feedrate'), context.units), 'Resolved cutting feedrate');
+    ? commitLength(positive(draft.feed.value, translate('cam.errors.fieldFeedPerTooth')), context.units) * resolveRpm(draft, context) * flutes(context)
+    : commitFeed(positive(draft.feed.value, translate('cam.errors.fieldCuttingFeedrate')), context.units), translate('cam.errors.fieldResolvedCuttingFeedrate'));
 }
 function resolvePlunge(draft: CuttingDraft, context: CuttingContext): number {
   return positive(draft.plunge.mode === 'per_rev'
-    ? commitLength(positive(draft.plunge.value, 'Feed per revolution'), context.units) * resolveRpm(draft, context)
-    : commitFeed(positive(draft.plunge.value, 'Plunge feed'), context.units), 'Resolved plunge feed');
+    ? commitLength(positive(draft.plunge.value, translate('cam.errors.fieldFeedPerRevolution')), context.units) * resolveRpm(draft, context)
+    : commitFeed(positive(draft.plunge.value, translate('cam.errors.fieldPlungeFeed')), context.units), translate('cam.errors.fieldResolvedPlungeFeed'));
 }
 
 /** Invalid or incomplete driver inputs blank their dependents, never retain a
