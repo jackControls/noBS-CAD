@@ -121,7 +121,7 @@ fn headless_save_reopens_the_archive_and_preserves_existing_files_on_failure() {
             .output()
             .unwrap()
     };
-    succeeded(&run("", &["--server-arg", "--mcp"]));
+    succeeded(&run("", &["--server-arg", "--headless"]));
     let bytes = fs::read(&save).unwrap();
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
     let model: serde_json::Value =
