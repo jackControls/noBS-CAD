@@ -72,7 +72,7 @@ function point(p: Point3Dto): [number, number, number] {
 
 function unit(v: Point3Dto): [number, number, number] {
   const length = Math.hypot(v.x, v.y, v.z);
-  if (length < 1e-12) throw new Error('extrude normal is degenerate');
+  if (length < 1e-12) throw new Error(translate('engine.errorExtrudeNormalDegenerate'));
   return [v.x / length, v.y / length, v.z / length];
 }
 
@@ -96,7 +96,7 @@ function sectionTransform(
   );
   const scale = 1 + Math.tan(taperDeg * Math.PI / 180) * offset / radius;
   if (!Number.isFinite(scale) || scale <= 1e-6) {
-    throw new Error('taper collapses or inverts the profile');
+    throw new Error(translate('engine.errorTaperCollapsesProfile'));
   }
   return (p) => ({
     x: center[0] + (p.x - center[0]) * scale + n[0] * offset,
@@ -106,7 +106,7 @@ function sectionTransform(
 }
 
 function makePolygonWire(oc: Oc, points: Point3Dto[]) {
-  if (points.length < 3) throw new Error('profile must contain at least three points');
+  if (points.length < 3) throw new Error(translate('engine.errorProfileMinThreePoints'));
   const polygon = new oc.BRepBuilderAPI_MakePolygon_1();
   for (const value of points) {
     const p = new oc.gp_Pnt_3(value.x, value.y, value.z);
@@ -116,7 +116,7 @@ function makePolygonWire(oc: Oc, points: Point3Dto[]) {
   polygon.Close();
   if (!polygon.IsDone()) {
     polygon.delete();
-    throw new Error('OCCT could not build the profile wire');
+    throw new Error(translate('engine.errorProfileWireFailed'));
   }
   const wire = polygon.Wire();
   polygon.delete();
@@ -144,7 +144,7 @@ function makeWire(
     p2.delete();
     if (!edgeMaker.IsDone()) {
       edgeMaker.delete();
-      throw new Error('OCCT could not build a line profile edge');
+      throw new Error(translate('engine.errorLineProfileEdgeFailed'));
     }
     const edge = edgeMaker.Edge();
     wireMaker.Add_1(edge);
@@ -169,7 +169,7 @@ function makeWire(
           p2.delete();
           if (!arcMaker.IsDone()) {
             arcMaker.delete();
-            throw new Error('OCCT could not build an analytic arc');
+            throw new Error(translate('engine.errorAnalyticArcFailed'));
           }
           const trimmedArc = arcMaker.Value();
           // Embind does not apply OCCT handle inheritance automatically:
@@ -182,7 +182,7 @@ function makeWire(
           arcMaker.delete();
           if (!edgeMaker.IsDone()) {
             edgeMaker.delete();
-            throw new Error('OCCT could not build an arc profile edge');
+            throw new Error(translate('engine.errorArcProfileEdgeFailed'));
           }
           const edge = edgeMaker.Edge();
           wireMaker.Add_1(edge);
@@ -197,7 +197,7 @@ function makeWire(
           const dy = axisValue.y - centerValue.y;
           const dz = axisValue.z - centerValue.z;
           const radius = Math.hypot(dx, dy, dz);
-          if (radius < 1e-9) throw new Error('circle curve has a zero radius');
+          if (radius < 1e-9) throw new Error(translate('engine.errorCircleZeroRadius'));
           const center = new oc.gp_Pnt_3(centerValue.x, centerValue.y, centerValue.z);
           const normal = new oc.gp_Dir_4(curve.normal.x, curve.normal.y, curve.normal.z);
           const xDirection = new oc.gp_Dir_4(dx, dy, dz);
@@ -211,7 +211,7 @@ function makeWire(
           center.delete();
           if (!edgeMaker.IsDone()) {
             edgeMaker.delete();
-            throw new Error('OCCT could not build a circle profile edge');
+            throw new Error(translate('engine.errorCircleProfileEdgeFailed'));
           }
           const edge = edgeMaker.Edge();
           wireMaker.Add_1(edge);
@@ -226,12 +226,12 @@ function makeWire(
           break;
         default: {
           const exhaustive: never = curve;
-          throw new Error(`Unknown profile curve: ${String(exhaustive)}`);
+          throw new Error(translate('engine.errorUnknownProfileCurve').replace('{curve}', String(exhaustive)));
         }
       }
     }
     if (!wireMaker.IsDone()) {
-      throw new Error('OCCT could not build the analytic profile wire');
+      throw new Error(translate('engine.errorAnalyticProfileWireFailed'));
     }
     return wireMaker.Wire();
   } finally {
@@ -240,7 +240,7 @@ function makeWire(
 }
 
 function makeOpenWire(oc: Oc, points: Point3Dto[]) {
-  if (points.length < 2) throw new Error('path must contain at least two points');
+  if (points.length < 2) throw new Error(translate('engine.errorPathMinTwoPoints'));
   const polygon = new oc.BRepBuilderAPI_MakePolygon_1();
   for (const value of points) {
     const p = new oc.gp_Pnt_3(value.x, value.y, value.z);
@@ -249,7 +249,7 @@ function makeOpenWire(oc: Oc, points: Point3Dto[]) {
   }
   if (!polygon.IsDone()) {
     polygon.delete();
-    throw new Error('OCCT could not build the path wire');
+    throw new Error(translate('engine.errorPathWireFailed'));
   }
   const wire = polygon.Wire();
   polygon.delete();
@@ -257,7 +257,7 @@ function makeOpenWire(oc: Oc, points: Point3Dto[]) {
 }
 
 function makeCurveWire(oc: Oc, curves: KernelSweepJobDto['path'], label: string) {
-  if (curves.length === 0) throw new Error(`${label} contains no curves`);
+  if (curves.length === 0) throw new Error(translate('engine.errorCurveWireNoCurves').replace('{label}', label));
   try {
     return makeWire(oc, {
       profile_index: 0,
@@ -267,14 +267,14 @@ function makeCurveWire(oc: Oc, curves: KernelSweepJobDto['path'], label: string)
     });
   } catch (error) {
     throw new Error(
-      `${label}: ${error instanceof Error ? error.message : String(error)}`,
+      translate('engine.errorCurveWireFailed').replace('{label}', label).replace('{message}', error instanceof Error ? error.message : String(error)),
     );
   }
 }
 
 function fixedProfileAxes(oc: Oc, profile: KernelProfileDto) {
   if (profile.points.length < 3) {
-    throw new Error('Fixed sweep orientation needs three profile points');
+    throw new Error(translate('engine.errorFixedSweepNeedsThreePoints'));
   }
   const originValue = profile.points[0];
   const x = {
@@ -287,7 +287,7 @@ function fixedProfileAxes(oc: Oc, profile: KernelProfileDto) {
     normal = crossNormal(originValue, profile.points[1], profile.points[index]);
   }
   if (!normal || Math.hypot(x.x, x.y, x.z) < 1e-12) {
-    throw new Error('Fixed sweep profile plane is degenerate');
+    throw new Error(translate('engine.errorFixedSweepPlaneDegenerate'));
   }
   const origin = new oc.gp_Pnt_3(originValue.x, originValue.y, originValue.z);
   const normalDirection = new oc.gp_Dir_4(normal.x, normal.y, normal.z);
@@ -309,7 +309,7 @@ function makeProfileFace(
     const maker = new oc.BRepBuilderAPI_MakeFace_15(outer, true);
     if (!maker.IsDone()) {
       maker.delete();
-      throw new Error('OCCT could not build the profile face');
+      throw new Error(translate('engine.errorProfileFaceFailed'));
     }
     const face = maker.Face();
     maker.delete();
@@ -338,7 +338,7 @@ function loftPair(
       progress.delete();
       if (!loft.IsDone()) {
         loft.delete();
-        throw new Error('OCCT tapered loft construction failed');
+        throw new Error(translate('engine.errorTaperedLoftFailed'));
       }
       const shape = loft.Shape();
       loft.delete();
@@ -378,7 +378,7 @@ function makeTool(
         direction.delete();
         if (!prism.IsDone()) {
           prism.delete();
-          throw new Error('OCCT prism construction failed');
+          throw new Error(translate('engine.errorPrismFailed'));
         }
         const shape = prism.Shape();
         prism.delete();
@@ -409,7 +409,7 @@ function makeExactFaceTool(
   sourceFace: TopoDS_Face,
 ): TopoDS_Shape {
   const basis = facePlane(oc, sourceFace);
-  if (!basis) throw new Error('Extrude source face is not planar');
+  if (!basis) throw new Error(translate('engine.errorExtrudeSourceNotPlanar'));
   const normal = unit(job.normal);
   const properties = new oc.GProp_GProps_1();
   oc.BRepGProp.SurfaceProperties_1(sourceFace, properties, false, false);
@@ -428,7 +428,7 @@ function makeExactFaceTool(
     scale: number,
   ): TopoDS_Shape => {
     if (!Number.isFinite(scale) || scale <= 1e-6) {
-      throw new Error('Taper collapses or inverts the planar face');
+      throw new Error(translate('engine.errorTaperCollapsesPlanarFace'));
     }
     const transform = new oc.gp_Trsf_1();
     transform.SetValues(
@@ -440,13 +440,13 @@ function makeExactFaceTool(
       const maker = new oc.BRepBuilderAPI_Transform_2(shape, transform, true);
       if (!maker.IsDone()) {
         maker.delete();
-        throw new Error('OCCT could not transform the planar face');
+        throw new Error(translate('engine.errorPlanarFaceTransformFailed'));
       }
       const result = maker.Shape();
       maker.delete();
       if (result.IsNull()) {
         result.delete();
-        throw new Error('OCCT planar-face transform produced a null shape');
+        throw new Error(translate('engine.errorPlanarFaceTransformNull'));
       }
       return result;
     } finally {
@@ -469,7 +469,7 @@ function makeExactFaceTool(
       direction.delete();
       if (!prism.IsDone()) {
         prism.delete();
-        throw new Error('OCCT exact-face prism construction failed');
+        throw new Error(translate('engine.errorExactFacePrismFailed'));
       }
       const result = prism.Shape();
       prism.delete();
@@ -487,7 +487,7 @@ function makeExactFaceTool(
   );
   let radius = 0;
   try {
-    if (vertexMap.Size() === 0) throw new Error('Planar face has no boundary vertices');
+    if (vertexMap.Size() === 0) throw new Error(translate('engine.errorPlanarFaceNoBoundaryVertices'));
     for (let index = 1; index <= vertexMap.Size(); index += 1) {
       const raw = vertexMap.FindKey(index);
       const vertex = oc.TopoDS.Vertex_1(raw);
@@ -509,7 +509,7 @@ function makeExactFaceTool(
   const outer = oc.BRepTools.OuterWire(sourceFace);
   if (outer.IsNull()) {
     outer.delete();
-    throw new Error('Planar face has no outer boundary wire');
+    throw new Error(translate('engine.errorPlanarFaceNoOuterWire'));
   }
   const wires: TopoDS_Wire[] = [outer];
   const wireMap = new oc.TopTools_IndexedMapOfShape_1();
@@ -546,7 +546,7 @@ function makeExactFaceTool(
       progress.delete();
       if (!loft.IsDone()) {
         loft.delete();
-        throw new Error('OCCT exact-wire tapered loft failed');
+        throw new Error(translate('engine.errorExactWireTaperedLoftFailed'));
       }
       const result = loft.Shape();
       loft.delete();
@@ -575,7 +575,7 @@ function makeExactFaceTool(
 function makeSweepTool(oc: Oc, job: KernelSweepJobDto): TopoDS_Shape {
   const sweepProfile = (profile: KernelProfileDto, useGuide: boolean) => {
     const profileWire = makeWire(oc, profile);
-    const pathWire = makeCurveWire(oc, job.path, 'Sweep path');
+    const pathWire = makeCurveWire(oc, job.path, translate('engine.labelSweepPath'));
     try {
       const pipe = new oc.BRepOffsetAPI_MakePipeShell(pathWire);
       if (job.orientation === 'fixed') {
@@ -595,7 +595,7 @@ function makeSweepTool(oc: Oc, job: KernelSweepJobDto): TopoDS_Shape {
       pipe.SetForceApproxC1(job.force_c1);
       let guideWire: ReturnType<typeof makeCurveWire> | null = null;
       if (useGuide && job.guide_rail.length > 0) {
-        guideWire = makeCurveWire(oc, job.guide_rail, 'Sweep guide rail');
+        guideWire = makeCurveWire(oc, job.guide_rail, translate('engine.labelSweepGuideRail'));
         pipe.SetMode_5(
           guideWire,
           true,
@@ -609,12 +609,12 @@ function makeSweepTool(oc: Oc, job: KernelSweepJobDto): TopoDS_Shape {
       if (!pipe.IsDone()) {
         guideWire?.delete();
         pipe.delete();
-        throw new Error('OCCT sweep construction failed');
+        throw new Error(translate('engine.errorSweepFailed'));
       }
       if (!pipe.MakeSolid()) {
         guideWire?.delete();
         pipe.delete();
-        throw new Error('OCCT sweep could not close into a solid');
+        throw new Error(translate('engine.errorSweepNotSolid'));
       }
       const shape = pipe.Shape();
       guideWire?.delete();
@@ -637,15 +637,15 @@ function makeSweepTool(oc: Oc, job: KernelSweepJobDto): TopoDS_Shape {
 }
 
 function makeLoftTool(oc: Oc, job: KernelLoftJobDto): TopoDS_Shape {
-  if (job.sections.length < 2) throw new Error('Loft needs at least two sections');
+  if (job.sections.length < 2) throw new Error(translate('engine.errorLoftMinTwoSections'));
   const holeCount = job.sections[0].holes?.length ?? 0;
   if (job.sections.some((section) => (section.holes?.length ?? 0) !== holeCount)) {
-    throw new Error('Loft sections must contain the same number of profile holes');
+    throw new Error(translate('engine.errorLoftHoleCountMismatch'));
   }
   const guided = job.centerline.length > 0 || job.guide_rail.length > 0;
   const makeCenterline = () => {
     if (job.centerline.length > 0) {
-      return makeCurveWire(oc, job.centerline, 'Loft centerline');
+      return makeCurveWire(oc, job.centerline, translate('engine.labelLoftCenterline'));
     }
     const centroids = job.sections.map((section) => {
       const total = section.points.reduce(
@@ -674,7 +674,7 @@ function makeLoftTool(oc: Oc, job: KernelLoftJobDto): TopoDS_Shape {
         loft.SetForceApproxC1(job.continuity !== 'g0');
         let guide: ReturnType<typeof makeCurveWire> | null = null;
         if (profiles === job.sections && job.guide_rail.length > 0) {
-          guide = makeCurveWire(oc, job.guide_rail, 'Loft guide rail');
+          guide = makeCurveWire(oc, job.guide_rail, translate('engine.labelLoftGuideRail'));
           loft.SetMode_5(
             guide,
             true,
@@ -689,13 +689,13 @@ function makeLoftTool(oc: Oc, job: KernelLoftJobDto): TopoDS_Shape {
           guide?.delete();
           loft.delete();
           centerline.delete();
-          throw new Error('OCCT guided Loft construction failed');
+          throw new Error(translate('engine.errorGuidedLoftFailed'));
         }
         if (!loft.MakeSolid()) {
           guide?.delete();
           loft.delete();
           centerline.delete();
-          throw new Error('OCCT guided Loft could not close into a solid');
+          throw new Error(translate('engine.errorGuidedLoftNotSolid'));
         }
         const shape = loft.Shape();
         guide?.delete();
@@ -718,7 +718,7 @@ function makeLoftTool(oc: Oc, job: KernelLoftJobDto): TopoDS_Shape {
       progress.delete();
       if (!loft.IsDone()) {
         loft.delete();
-        throw new Error('OCCT Loft construction failed');
+        throw new Error(translate('engine.errorLoftFailed'));
       }
       const shape = loft.Shape();
       loft.delete();
@@ -768,7 +768,7 @@ function makeRevolveTool(
       axis.delete();
       if (!revolve.IsDone()) {
         revolve.delete();
-        throw new Error('OCCT revolve construction failed');
+        throw new Error(translate('engine.errorRevolveFailed'));
       }
       const shape = revolve.Shape();
       revolve.delete();
@@ -805,7 +805,7 @@ function booleanShape(
   progress.delete();
   if (!operation.IsDone()) {
     operation.delete();
-    throw new Error(`OCCT ${kind} failed`);
+    throw new Error(translate('engine.errorBooleanFailed').replace('{operation}', kind));
   }
   // Boolean builders retain same-domain subdivisions by default. Collapse
   // coplanar/tangent result faces once here so combined bodies do not expose
@@ -817,7 +817,7 @@ function booleanShape(
   operation.delete();
   if (result.IsNull()) {
     result.delete();
-    throw new Error(`${kind} produced a null shape`);
+    throw new Error(translate('engine.errorBooleanNullShape').replace('{operation}', kind));
   }
   return result;
 }
@@ -836,7 +836,7 @@ function cutThreadTools(
   cutters: TopoDS_Shape[],
 ): TopoDS_Shape {
   if (cutters.length === 0) {
-    throw new Error('Modeled thread contains no cutter');
+    throw new Error(translate('engine.errorModeledThreadNoCutter'));
   }
   const argumentsList = new oc.TopTools_ListOfShape_1();
   const tools = new oc.TopTools_ListOfShape_1();
@@ -852,12 +852,12 @@ function cutThreadTools(
     operation.Build(progress);
     progress.delete();
     if (!operation.IsDone() || operation.HasErrors()) {
-      throw new Error('Modeled thread batch cut failed');
+      throw new Error(translate('engine.errorModeledThreadBatchCutFailed'));
     }
     const result = operation.Shape();
     if (result.IsNull()) {
       result.delete();
-      throw new Error('Modeled thread batch cut produced a null result');
+      throw new Error(translate('engine.errorModeledThreadBatchCutNull'));
     }
     return result;
   } finally {
@@ -868,7 +868,7 @@ function cutThreadTools(
 }
 
 function fuseTools(oc: Oc, tools: TopoDS_Shape[]): TopoDS_Shape {
-  if (tools.length === 0) throw new Error('extrude contains no tool profiles');
+  if (tools.length === 0) throw new Error(translate('engine.errorExtrudeNoToolProfiles'));
   let result = tools[0];
   for (let index = 1; index < tools.length; index += 1) {
     const next = booleanShape(oc, 'join', result, tools[index]);
@@ -883,7 +883,7 @@ function selectedEdges(oc: Oc, shape: TopoDS_Shape, keys: string[]) {
   const indices = keys.map((key) => {
     const value = Number(key.replace(/^edge:/, ''));
     if (!Number.isInteger(value) || value < 0) {
-      throw new Error(`Invalid edge reference ${key}`);
+      throw new Error(translate('engine.errorInvalidEdgeReference').replace('{key}', key));
     }
     return value;
   });
@@ -891,7 +891,7 @@ function selectedEdges(oc: Oc, shape: TopoDS_Shape, keys: string[]) {
   oc.TopExp.MapShapes_1(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE as never, map);
   try {
     return indices.map((index) => {
-      if (index >= map.Size()) throw new Error('Referenced solid edge no longer exists');
+      if (index >= map.Size()) throw new Error(translate('engine.errorSolidEdgeMissing'));
       const raw = map.FindKey(index + 1);
       const edge = oc.TopoDS.Edge_1(raw);
       raw.delete();
@@ -915,7 +915,7 @@ function applyFillet(oc: Oc, target: TopoDS_Shape, job: KernelFilletJobDto): Top
     progress.delete();
     if (!maker.IsDone()) {
       maker.delete();
-      throw new Error('OCCT could not build the selected solid fillet');
+      throw new Error(translate('engine.errorSolidFilletFailed'));
     }
     const result = maker.Shape();
     maker.delete();
@@ -935,7 +935,7 @@ function applyChamfer(oc: Oc, target: TopoDS_Shape, job: KernelChamferJobDto): T
     progress.delete();
     if (!maker.IsDone()) {
       maker.delete();
-      throw new Error('OCCT could not build the selected solid chamfer');
+      throw new Error(translate('engine.errorSolidChamferFailed'));
     }
     const result = maker.Shape();
     maker.delete();
@@ -949,10 +949,10 @@ function boundedThroughDepth(oc: Oc, shape: TopoDS_Shape, margin: number): numbe
   const bounds = new oc.Bnd_Box_1();
   try {
     oc.BRepBndLib.Add(shape, bounds, true);
-    if (bounds.IsVoid()) throw new Error('Could not bound the through-hole target');
+    if (bounds.IsVoid()) throw new Error(translate('engine.errorThroughHoleBoundFailed'));
     const diagonal = Math.sqrt(bounds.SquareExtent());
     if (!Number.isFinite(diagonal) || diagonal <= 0) {
-      throw new Error('Through-hole target bounds are degenerate');
+      throw new Error(translate('engine.errorThroughHoleBoundsDegenerate'));
     }
     return diagonal + Math.max(margin, 1);
   } finally {
@@ -969,7 +969,7 @@ function boundedDirectionalDepth(
   const bounds = new oc.Bnd_Box_1();
   try {
     oc.BRepBndLib.Add(shape, bounds, true);
-    if (bounds.IsVoid()) throw new Error('Could not bound the threaded-hole target');
+    if (bounds.IsVoid()) throw new Error(translate('engine.errorThreadedHoleBoundFailed'));
     const minimum = bounds.CornerMin();
     const maximum = bounds.CornerMax();
     const values = {
@@ -992,7 +992,7 @@ function boundedDirectionalDepth(
       }
     }
     if (!Number.isFinite(depth) || depth <= 0) {
-      throw new Error('Threaded-hole target depth is degenerate');
+      throw new Error(translate('engine.errorThreadedHoleDepthDegenerate'));
     }
     return depth;
   } finally {
@@ -1037,7 +1037,7 @@ function makeTolerancedHelicalEdge(
   pitch: number,
   leftHand: boolean,
 ) {
-  let stage = 'sampling the analytic helix';
+  let stage = translate('engine.stageSamplingHelix');
   try {
     const angleSpan = (TAU * (centerEnd - centerStart)) / pitch;
     const sampleCount = Math.max(
@@ -1061,7 +1061,7 @@ function makeTolerancedHelicalEdge(
       parameters.SetValue(index + 1, Math.abs(angleSpan) * fraction);
       point.delete();
     }
-    stage = 'fitting the sub-micron helical curve';
+    stage = translate('engine.stageFittingHelix');
     const fitter = new oc.GeomAPI_PointsToBSpline_4(
       points,
       parameters as never,
@@ -1074,25 +1074,25 @@ function makeTolerancedHelicalEdge(
     points.delete();
     if (!fitter.IsDone()) {
       fitter.delete();
-      throw new Error('OCCT could not fit the helical curve');
+      throw new Error(translate('engine.errorHelixFitFailed'));
     }
     const curve = fitter.Curve();
     const baseCurve = new oc.Handle_Geom_Curve_2(curve.get());
-    stage = 'building the helical edge';
+    stage = translate('engine.stageBuildingHelixEdge');
     const maker = new oc.BRepBuilderAPI_MakeEdge_24(baseCurve);
     baseCurve.delete();
     curve.delete();
     fitter.delete();
     if (!maker.IsDone()) {
       maker.delete();
-      throw new Error('OCCT could not build the helical edge');
+      throw new Error(translate('engine.errorHelixEdgeFailed'));
     }
     const edge = maker.Edge();
     maker.delete();
     return edge;
   } catch (error) {
     throw new Error(
-      `helical rail failed while ${stage}: ${error instanceof Error ? error.message : String(error)}`,
+      translate('engine.errorHelicalRailFailed').replace('{stage}', stage).replace('{message}', error instanceof Error ? error.message : String(error)),
     );
   }
 }
@@ -1115,18 +1115,18 @@ function makeContinuousThreadCutter(
   const turns = (centerEnd - centerStart) / pitch;
   if (!Number.isFinite(turns) || turns <= 0 || turns > 256) {
     throw new Error(
-      `${label} thread interval is too short or exceeds 256 turns; use simplified representation`,
+      translate('engine.errorThreadIntervalInvalid').replace('{thread}', label),
     );
   }
   if (radiusHalfWidths.length < 2) {
-    throw new Error('Thread profile needs at least two radial stations');
+    throw new Error(translate('engine.errorThreadProfileMinStations'));
   }
   const innerRadius = radiusHalfWidths[0][0];
   const outerRadius = radiusHalfWidths[radiusHalfWidths.length - 1][0];
   if (!Number.isFinite(spineRadius)
     || spineRadius <= innerRadius
     || spineRadius >= outerRadius) {
-    throw new Error('Thread spine must lie inside its radial profile');
+    throw new Error(translate('engine.errorThreadSpineOutsideProfile'));
   }
   let previousRadius = -Infinity;
   for (const [radius, halfWidth] of radiusHalfWidths) {
@@ -1135,7 +1135,7 @@ function makeContinuousThreadCutter(
       || radius <= previousRadius
       || halfWidth <= 0
       || halfWidth >= pitch * 0.5) {
-      throw new Error('Thread profile radial stations are invalid');
+      throw new Error(translate('engine.errorThreadProfileStationsInvalid'));
     }
     previousRadius = radius;
   }
@@ -1154,18 +1154,18 @@ function makeContinuousThreadCutter(
       face = oc.BRepFill.Face(first, second);
     } catch (error) {
       throw new Error(
-        `OCCT could not construct a ruled ${label} thread face: ${error instanceof Error ? error.message : String(error)}`,
+        translate('engine.errorRuledThreadFaceFailed').replace('{thread}', label).replace('{message}', error instanceof Error ? error.message : String(error)),
       );
     }
     try {
       if (face.IsNull()) {
-        throw new Error(`OCCT could not build a ruled ${label} thread face`);
+        throw new Error(translate('engine.errorRuledThreadFaceNull').replace('{thread}', label));
       }
       try {
         sewing.Add(face);
       } catch (error) {
         throw new Error(
-          `OCCT could not add a ruled ${label} thread face to the sewing operation: ${error instanceof Error ? error.message : String(error)}`,
+          translate('engine.errorRuledThreadFaceSewFailed').replace('{thread}', label).replace('{message}', error instanceof Error ? error.message : String(error)),
         );
       }
     } finally {
@@ -1190,14 +1190,14 @@ function makeContinuousThreadCutter(
       }
       polygon.Close();
       if (!polygon.IsDone()) {
-        throw new Error(`OCCT could not close the continuous ${label} thread cutter end`);
+        throw new Error(translate('engine.errorThreadCutterEndCloseFailed').replace('{thread}', label));
       }
       const wire = polygon.Wire();
       try {
         const faceMaker = new oc.BRepBuilderAPI_MakeFace_15(wire, true);
         try {
           if (!faceMaker.IsDone()) {
-            throw new Error(`OCCT could not cap the continuous ${label} thread cutter`);
+            throw new Error(translate('engine.errorThreadCutterCapFailed').replace('{thread}', label));
           }
           const face = faceMaker.Face();
           try {
@@ -1216,11 +1216,11 @@ function makeContinuousThreadCutter(
     }
   };
 
-  let stage = 'building analytic helical faces';
+  let stage = translate('engine.stageBuildingHelicalFaces');
   try {
     const segmentCount = Math.ceil(turns - 1e-10);
     for (let segmentIndex = 0; segmentIndex < segmentCount; segmentIndex += 1) {
-      stage = `building analytic helical face segment ${segmentIndex + 1}`;
+      stage = translate('engine.stageBuildingHelicalFaceSegment').replace('{index}', String(segmentIndex + 1));
       const segmentStart = centerStart + segmentIndex * pitch;
       const segmentEnd = Math.min(segmentStart + pitch, centerEnd);
       const lowerRails: TopoDS_Edge[] = [];
@@ -1234,7 +1234,7 @@ function makeContinuousThreadCutter(
             ));
           } catch (error) {
             throw new Error(
-              `OCCT could not build the lower ${label} thread rail: ${error instanceof Error ? error.message : String(error)}`,
+              translate('engine.errorLowerThreadRailFailed').replace('{thread}', label).replace('{message}', error instanceof Error ? error.message : String(error)),
             );
           }
           try {
@@ -1244,7 +1244,7 @@ function makeContinuousThreadCutter(
             ));
           } catch (error) {
             throw new Error(
-              `OCCT could not build the upper ${label} thread rail: ${error instanceof Error ? error.message : String(error)}`,
+              translate('engine.errorUpperThreadRailFailed').replace('{thread}', label).replace('{message}', error instanceof Error ? error.message : String(error)),
             );
           }
         }
@@ -1263,34 +1263,34 @@ function makeContinuousThreadCutter(
       }
     }
 
-    stage = 'capping the thread start';
+    stage = translate('engine.stageCappingThreadStart');
     addCap(centerStart, 0);
-    stage = 'capping the thread end';
+    stage = translate('engine.stageCappingThreadEnd');
     addCap(centerEnd, (leftHand ? -1 : 1) * TAU * turns);
-    stage = 'sewing the exact thread boundary';
+    stage = translate('engine.stageSewingThreadBoundary');
     const progress = new oc.Message_ProgressRange_1();
     try {
       try {
         sewing.Perform(progress);
       } catch (error) {
         throw new Error(
-          `OCCT could not sew the continuous ${label} thread boundary: ${error instanceof Error ? error.message : String(error)}`,
+          translate('engine.errorSewThreadBoundaryFailed').replace('{thread}', label).replace('{message}', error instanceof Error ? error.message : String(error)),
         );
       }
     } finally {
       progress.delete();
     }
-    stage = 'reading the sewn thread boundary';
+    stage = translate('engine.stageReadingSewnBoundary');
     const sewed = sewing.SewedShape();
     if (sewed.IsNull()
       || sewing.NbFreeEdges() !== 0
       || sewing.NbMultipleEdges() !== 0) {
       sewed.delete();
       throw new Error(
-        `OCCT could not sew the continuous ${label} thread cutter into a closed shell`,
+        translate('engine.errorSewThreadCutterFailed').replace('{thread}', label),
       );
     }
-    stage = 'finding the closed thread shell';
+    stage = translate('engine.stageFindingThreadShell');
     const shells = new oc.TopTools_IndexedMapOfShape_1();
     oc.TopExp.MapShapes_1(
       sewed,
@@ -1300,14 +1300,14 @@ function makeContinuousThreadCutter(
     if (shells.Size() !== 1) {
       shells.delete();
       sewed.delete();
-      throw new Error(`OCCT continuous ${label} thread boundary did not produce one shell`);
+      throw new Error(translate('engine.errorThreadBoundaryShellCount').replace('{thread}', label));
     }
     const rawShell = shells.FindKey(1);
     const shell = oc.TopoDS.Shell_1(rawShell);
     rawShell.delete();
     shells.delete();
     sewed.delete();
-    stage = 'solidifying the closed thread shell';
+    stage = translate('engine.stageSolidifyingThreadShell');
     const solidFixer = new oc.ShapeFix_Solid_1();
     solidFixer.SetPrecision(1e-7);
     const cutter = solidFixer.SolidFromShell(shell);
@@ -1315,15 +1315,15 @@ function makeContinuousThreadCutter(
     shell.delete();
     if (cutter.IsNull()) {
       cutter.delete();
-      throw new Error(`OCCT could not solidify the continuous ${label} thread boundary`);
+      throw new Error(translate('engine.errorThreadBoundarySolidifyFailed').replace('{thread}', label));
     }
-    stage = 'normalizing the thread topology';
+    stage = translate('engine.stageNormalizingThreadTopology');
     oc.BRepLib.SameParameter_3(cutter, 1e-6, true);
     if (!oc.BRepLib.OrientClosedSolid(cutter)) {
       cutter.delete();
-      throw new Error(`OCCT could not orient the continuous ${label} thread cutter`);
+      throw new Error(translate('engine.errorThreadCutterOrientFailed').replace('{thread}', label));
     }
-    stage = 'classifying the thread solid orientation';
+    stage = translate('engine.stageClassifyingThreadOrientation');
     const sampleCenter = (centerStart + centerEnd) * 0.5;
     const sampleAngle = (leftHand ? -1 : 1) * TAU
       * (sampleCenter - centerStart) / pitch;
@@ -1369,7 +1369,7 @@ function makeContinuousThreadCutter(
       if (!correctlyOriented()) cutter.Reverse();
       if (!correctlyOriented()) {
         cutter.delete();
-        throw new Error(`OCCT continuous ${label} thread cutter is inside-out`);
+        throw new Error(translate('engine.errorThreadCutterInsideOut').replace('{thread}', label));
       }
     } finally {
       outsideOuterBoundary.delete();
@@ -1381,18 +1381,18 @@ function makeContinuousThreadCutter(
       axisPoint.delete();
       samplePoint.delete();
     }
-    stage = 'validating the thread solid';
+    stage = translate('engine.stageValidatingThreadSolid');
     const analyzer = new oc.BRepCheck_Analyzer(cutter, true, false);
     const valid = analyzer.IsValid_2();
     analyzer.delete();
     if (!valid || Math.abs(shapeVolume(oc, cutter)) <= 1e-9) {
       cutter.delete();
-      throw new Error(`OCCT continuous ${label} thread cutter is invalid`);
+      throw new Error(translate('engine.errorThreadCutterInvalid').replace('{thread}', label));
     }
     return cutter;
   } catch (error) {
     throw new Error(
-      `OCCT continuous ${label} thread failed while ${stage}: ${error instanceof Error ? error.message : String(error)}`,
+      translate('engine.errorContinuousThreadFailed').replace('{thread}', label).replace('{stage}', stage).replace('{message}', error instanceof Error ? error.message : String(error)),
     );
   } finally {
     sewing.delete();
@@ -1426,7 +1426,7 @@ function makeInternalThreadCutters(
   if (innerRadius <= 0 || pitchRadius <= innerRadius
     || outerRadius <= pitchRadius || outerHalfWidth <= 0
     || innerHalfWidth >= pitch * 0.499) {
-    throw new Error('ISO internal thread limits do not form a valid 60-degree profile');
+    throw new Error(translate('engine.errorIsoInternalProfileInvalid'));
   }
   return [makeContinuousThreadCutter(
     oc, axis, pitchRadius, [
@@ -1434,7 +1434,7 @@ function makeInternalThreadCutters(
       [minorRadius, innerHalfWidth],
       [outerRadius, outerHalfWidth],
     ],
-    pitch, threadDepth, leftHand, 'internal',
+    pitch, threadDepth, leftHand, translate('engine.threadKindInternal'),
   )];
 }
 
@@ -1465,7 +1465,7 @@ function makeExternalThreadCutters(
   if (innerRadius <= 0 || pitchRadius <= innerRadius
     || outerRadius <= pitchRadius || innerHalfWidth <= 0
     || outerHalfWidth >= pitch * 0.499) {
-    throw new Error('ISO external thread limits do not form a valid 60-degree profile');
+    throw new Error(translate('engine.errorIsoExternalProfileInvalid'));
   }
   return [makeContinuousThreadCutter(
     oc, axis, pitchRadius, [
@@ -1473,7 +1473,7 @@ function makeExternalThreadCutters(
       [majorRadius, outerHalfWidth],
       [outerRadius, outerHalfWidth],
     ],
-    pitch, threadDepth, leftHand, 'external',
+    pitch, threadDepth, leftHand, translate('engine.threadKindExternal'),
   )];
 }
 
@@ -1487,7 +1487,7 @@ function addThreadMetadataToStep(
   const markerIndex = text.indexOf(marker);
   const firstQuote = text.indexOf("'", markerIndex + marker.length);
   if (markerIndex < 0 || firstQuote < 0) {
-    throw new Error('OCCT STEP output is missing FILE_DESCRIPTION');
+    throw new Error(translate('engine.errorStepMissingFileDescription'));
   }
   let closingQuote = firstQuote + 1;
   while (closingQuote < text.length) {
@@ -1502,7 +1502,7 @@ function addThreadMetadataToStep(
     break;
   }
   if (closingQuote >= text.length) {
-    throw new Error('OCCT STEP FILE_DESCRIPTION is malformed');
+    throw new Error(translate('engine.errorStepMalformedFileDescription'));
   }
   const metadataHex = Array.from(
     new TextEncoder().encode(JSON.stringify(metadata)),
@@ -1618,7 +1618,7 @@ function applyHole(oc: Oc, target: TopoDS_Shape, job: KernelHoleJobDto): TopoDS_
       const halfAngle = job.drill_point_angle_deg * Math.PI / 360;
       const tipDepth = (finishedHoleDiameter * 0.5) / Math.tan(halfAngle);
       if (!Number.isFinite(tipDepth) || tipDepth <= 0) {
-        throw new Error('Drill point angle is invalid');
+        throw new Error(translate('engine.errorDrillPointAngleInvalid'));
       }
       const tipStart = new oc.gp_Pnt_3(
         job.center.x + direction[0] * (depth - overlap),
@@ -1655,9 +1655,10 @@ function applyHole(oc: Oc, target: TopoDS_Shape, job: KernelHoleJobDto): TopoDS_
         result = booleanShape(oc, 'cut', threadedResult, cutter, false);
       } catch (error) {
         throw new Error(
-          `Modeled thread cut failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          translate('engine.errorModeledThreadCutFailed').replace(
+            '{message}',
+            error instanceof Error ? error.message : String(error),
+          ),
         );
       } finally {
         threadedResult?.delete();
@@ -1671,7 +1672,7 @@ function applyHole(oc: Oc, target: TopoDS_Shape, job: KernelHoleJobDto): TopoDS_
       resultAnalyzer.delete();
       if (!resultIsValid) {
         result.delete();
-        throw new Error('OCCT modeled thread result is invalid');
+        throw new Error(translate('engine.errorModeledThreadResultInvalid'));
       }
     }
     return result;
@@ -1686,7 +1687,7 @@ function selectedFaces(oc: Oc, shape: TopoDS_Shape, keys: string[]) {
   const indices = keys.map((key) => {
     const value = Number(key.replace(/^face:/, ''));
     if (!Number.isInteger(value) || value < 0) {
-      throw new Error(`Invalid face reference ${key}`);
+      throw new Error(translate('engine.errorInvalidFaceReference').replace('{key}', key));
     }
     return value;
   });
@@ -1694,7 +1695,7 @@ function selectedFaces(oc: Oc, shape: TopoDS_Shape, keys: string[]) {
   oc.TopExp.MapShapes_1(shape, oc.TopAbs_ShapeEnum.TopAbs_FACE as never, map);
   try {
     return indices.map((index) => {
-      if (index >= map.Size()) throw new Error('Referenced Shell face no longer exists');
+      if (index >= map.Size()) throw new Error(translate('engine.errorShellFaceMissing'));
       const raw = map.FindKey(index + 1);
       const face = oc.TopoDS.Face_1(raw);
       raw.delete();
@@ -1711,7 +1712,7 @@ function applyExternalThread(
   job: KernelExternalThreadJobDto,
 ): TopoDS_Shape {
   const [face] = selectedFaces(oc, target, [job.face_key]);
-  if (!face) throw new Error('Referenced external-thread cylinder no longer exists');
+  if (!face) throw new Error(translate('engine.errorExternalThreadCylinderMissing'));
   const surface = new oc.BRepAdaptor_Surface_2(face, true);
   let cylinder: gp_Cylinder | null = null;
   let axes: gp_Ax3 | null = null;
@@ -1720,7 +1721,7 @@ function applyExternalThread(
   let xDirection: gp_Dir | null = null;
   try {
     if (surface.GetType() !== oc.GeomAbs_SurfaceType.GeomAbs_Cylinder) {
-      throw new Error('External Thread requires a cylindrical face');
+      throw new Error(translate('engine.errorExternalThreadNeedsCylinder'));
     }
     const firstU = surface.FirstUParameter();
     const lastU = surface.LastUParameter();
@@ -1734,7 +1735,7 @@ function applyExternalThread(
       || Math.abs(lastU - firstU) < TAU - 1e-5
     ) {
       throw new Error(
-        'External Thread requires a complete 360-degree cylindrical face',
+        translate('engine.errorExternalThreadNeedsFullCylinder'),
       );
     }
 
@@ -1742,7 +1743,7 @@ function applyExternalThread(
     const majorDiameter = cylinder.Radius() * 2;
     const diameterTolerance = Math.max(0.01, job.thread.nominal_diameter * 0.002);
     if (Math.abs(majorDiameter - job.thread.nominal_diameter) > diameterTolerance) {
-      throw new Error('Selected cylinder does not match the thread major diameter');
+      throw new Error(translate('engine.errorExternalThreadDiameterMismatch'));
     }
     axes = cylinder.Position();
     location = axes.Location();
@@ -1785,7 +1786,7 @@ function applyExternalThread(
       const radialLength = Math.hypot(...radial);
       const facing = orientation * (nx * radial[0] + ny * radial[1] + nz * radial[2]);
       if (normalLength <= 1e-9 || radialLength <= 1e-9 || facing <= 0) {
-        throw new Error('External Thread requires an outward-facing cylindrical surface');
+        throw new Error(translate('engine.errorExternalThreadNeedsOutward'));
       }
     } finally {
       dv.delete();
@@ -1812,11 +1813,11 @@ function applyExternalThread(
     const upper = Math.max(firstOffset, lastOffset);
     const availableDepth = upper - lower;
     if (!Number.isFinite(availableDepth) || availableDepth <= 1e-7) {
-      throw new Error('External thread cylinder has no axial length');
+      throw new Error(translate('engine.errorExternalThreadNoAxialLength'));
     }
     const requestedDepth = job.thread.depth ?? availableDepth;
     if (requestedDepth > availableDepth + 1e-6) {
-      throw new Error('External thread length exceeds the selected cylindrical face');
+      throw new Error(translate('engine.errorExternalThreadLengthExceedsFace'));
     }
     const directionSign = job.flip ? -1 : 1;
     const startOffset = job.flip ? upper : lower;
@@ -1911,12 +1912,12 @@ function applyExternalThread(
           const isValid = analyzer.IsValid_2();
           analyzer.delete();
           if (!isValid) {
-            throw new Error('OCCT modeled external thread result is invalid');
+            throw new Error(translate('engine.errorModeledExternalThreadInvalid'));
           }
           const volume = shapeVolume(oc, ownedResult);
           if (!Number.isFinite(volume) || Math.abs(volume) <= 1e-9) {
             throw new Error(
-              'OCCT modeled external thread removed the entire target body',
+              translate('engine.errorModeledExternalThreadRemovedBody'),
             );
           }
           const removedThreadVolume = beforeThread - Math.abs(volume);
@@ -1924,7 +1925,7 @@ function applyExternalThread(
           if (!Number.isFinite(removedThreadVolume)
             || removedThreadVolume <= minimumCutVolume) {
             throw new Error(
-              'OCCT modeled external thread did not remove material',
+              translate('engine.errorModeledExternalThreadNoMaterial'),
             );
           }
           const result = ownedResult;
@@ -2012,16 +2013,16 @@ function resolvePlanarFaceReference(
   if (matches.length !== 1) {
     matches.forEach((face) => face.delete());
     if (matches.length === 0) {
-      throw new Error('Referenced Extrude source face changed or no longer exists');
+      throw new Error(translate('engine.errorExtrudeSourceFaceChanged'));
     }
-    throw new Error('Referenced Extrude source face is ambiguous after topology change');
+    throw new Error(translate('engine.errorExtrudeSourceFaceAmbiguous'));
   }
   return matches[0];
 }
 
 function applyShell(oc: Oc, target: TopoDS_Shape, job: KernelShellJobDto): TopoDS_Shape {
   if (job.face_keys.length === 0 || job.thickness <= 0) {
-    throw new Error('Shell needs removable faces and a positive thickness');
+    throw new Error(translate('engine.errorShellNeedsFacesAndThickness'));
   }
   const faces = selectedFaces(oc, target, job.face_keys);
   const closing = new oc.TopTools_ListOfShape_1();
@@ -2047,13 +2048,13 @@ function applyShell(oc: Oc, target: TopoDS_Shape, job: KernelShellJobDto): TopoD
     progress.delete();
     if (!maker.IsDone()) {
       maker.delete();
-      throw new Error('OCCT could not build the selected Shell');
+      throw new Error(translate('engine.errorShellFailed'));
     }
     const result = maker.Shape();
     maker.delete();
     if (result.IsNull()) {
       result.delete();
-      throw new Error('Shell produced a null body');
+      throw new Error(translate('engine.errorShellNullBody'));
     }
     return result;
   } finally {
@@ -2109,7 +2110,7 @@ function makeTransform(oc: Oc, transform: KernelTransformDto) {
     const magnitude = Math.hypot(rawX, rawY, rawZ, rawW);
     if (!Number.isFinite(magnitude) || magnitude <= 1e-12) {
       value.delete();
-      throw new Error('Move/Copy rotation is degenerate');
+      throw new Error(translate('engine.errorMoveRotationDegenerate'));
     }
     const x = rawX / magnitude;
     const y = rawY / magnitude;
@@ -2145,13 +2146,13 @@ function applyBodyTransform(
     const maker = new oc.BRepBuilderAPI_Transform_2(source, value, true);
     if (!maker.IsDone()) {
       maker.delete();
-      throw new Error('OCCT body transform failed');
+      throw new Error(translate('engine.errorBodyTransformFailed'));
     }
     const result = maker.Shape();
     maker.delete();
     if (result.IsNull()) {
       result.delete();
-      throw new Error('Body transform produced a null body');
+      throw new Error(translate('engine.errorBodyTransformNullBody'));
     }
     return result;
   } finally {
@@ -2178,7 +2179,7 @@ function applySplitBody(
   if (!faceMaker.IsDone()) {
     origin.delete();
     faceMaker.delete();
-    throw new Error('OCCT could not build the splitting plane');
+    throw new Error(translate('engine.errorSplitPlaneFailed'));
   }
   const face = faceMaker.Face();
   faceMaker.delete();
@@ -2418,7 +2419,7 @@ function meshShape(oc: Oc, bodyId: number, shape: TopoDS_Shape): KernelBodyDto {
         const edge = boundary.FindKey(i);
         try {
           const index = edgeMap.FindIndex(edge);
-          if (index <= 0) throw new Error('Face boundary is absent from body topology.');
+          if (index <= 0) throw new Error(translate('engine.errorFaceBoundaryMissing'));
           edgeKeys.push(`edge:${index - 1}`);
         } finally { edge.delete(); }
       }
@@ -2530,7 +2531,7 @@ function decodeBase64(value: string): Uint8Array {
   try {
     binary = atob(value);
   } catch {
-    throw new Error('STEP import contains invalid base64 data');
+    throw new Error(translate('engine.errorStepInvalidBase64'));
   }
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
@@ -2545,18 +2546,18 @@ function importStepShape(oc: Oc, dataBase64: string): TopoDS_Shape {
   try {
     oc.FS.writeFile(path, decodeBase64(dataBase64));
     if (reader.ReadFile(path) !== oc.IFSelect_ReturnStatus.IFSelect_RetDone) {
-      throw new Error('OCCT could not read the STEP file');
+      throw new Error(translate('engine.errorStepReadFailed'));
     }
     const progress = new oc.Message_ProgressRange_1();
     const transferred = reader.TransferRoots(progress);
     progress.delete();
     if (transferred <= 0) {
-      throw new Error('STEP file did not contain transferable shapes');
+      throw new Error(translate('engine.errorStepNoShapes'));
     }
     const shape = reader.OneShape();
     if (shape.IsNull()) {
       shape.delete();
-      throw new Error('STEP import produced a null shape');
+      throw new Error(translate('engine.errorStepNullShape'));
     }
     return shape;
   } finally {
@@ -2602,7 +2603,7 @@ export class BrowserOcctKernel {
         }
         if (operation.kind === 'fillet') {
           const target = this.bodies.get(operation.job.target_body_id);
-          if (!target) throw new Error('Fillet target body is missing');
+          if (!target) throw new Error(translate('engine.errorFilletTargetMissing'));
           const result = applyFillet(this.oc, target, operation.job);
           target.delete();
           this.bodies.set(operation.job.target_body_id, result);
@@ -2610,7 +2611,7 @@ export class BrowserOcctKernel {
         }
         if (operation.kind === 'chamfer') {
           const target = this.bodies.get(operation.job.target_body_id);
-          if (!target) throw new Error('Chamfer target body is missing');
+          if (!target) throw new Error(translate('engine.errorChamferTargetMissing'));
           const result = applyChamfer(this.oc, target, operation.job);
           target.delete();
           this.bodies.set(operation.job.target_body_id, result);
@@ -2618,10 +2619,10 @@ export class BrowserOcctKernel {
         }
         if (operation.kind === 'hole') {
           if (operation.job.thread?.standard === 'custom_trapezoidal') {
-            throw new Error('Custom rounded trapezoidal threads require the native desktop kernel');
+            throw new Error(translate('engine.errorCustomTrapezoidalNeedsNative'));
           }
           const target = this.bodies.get(operation.job.target_body_id);
-          if (!target) throw new Error('Hole target body is missing');
+          if (!target) throw new Error(translate('engine.errorHoleTargetMissing'));
           const result = applyHole(this.oc, target, operation.job);
           target.delete();
           this.bodies.set(operation.job.target_body_id, result);
@@ -2629,10 +2630,10 @@ export class BrowserOcctKernel {
         }
         if (operation.kind === 'external_thread') {
           if (operation.job.thread.standard === 'custom_trapezoidal') {
-            throw new Error('Custom rounded trapezoidal threads require the native desktop kernel');
+            throw new Error(translate('engine.errorCustomTrapezoidalNeedsNative'));
           }
           const target = this.bodies.get(operation.job.target_body_id);
-          if (!target) throw new Error('External Thread target body is missing');
+          if (!target) throw new Error(translate('engine.errorExternalThreadTargetMissing'));
           if (operation.job.thread.representation === 'simplified') continue;
           const result = applyExternalThread(this.oc, target, operation.job);
           target.delete();
@@ -2641,7 +2642,7 @@ export class BrowserOcctKernel {
         }
         if (operation.kind === 'shell') {
           const target = this.bodies.get(operation.job.target_body_id);
-          if (!target) throw new Error('Shell target body is missing');
+          if (!target) throw new Error(translate('engine.errorShellTargetMissing'));
           const result = applyShell(this.oc, target, operation.job);
           target.delete();
           this.bodies.set(operation.job.target_body_id, result);
@@ -2650,13 +2651,13 @@ export class BrowserOcctKernel {
         if (operation.kind === 'transform') {
           const job: KernelTransformJobDto = operation.job;
           if (job.result_body_ids.length !== job.transforms.length * job.source_body_ids.length) {
-            throw new Error('Body transform output count is invalid');
+            throw new Error(translate('engine.errorBodyTransformOutputCount'));
           }
           let outputIndex = 0;
           for (const transform of job.transforms) {
             for (const sourceId of job.source_body_ids) {
               const source = this.bodies.get(sourceId);
-              if (!source) throw new Error(`Body transform source ${sourceId} is missing`);
+              if (!source) throw new Error(translate('engine.errorBodyTransformSourceMissing').replace('{id}', String(sourceId)));
               const resultId = job.result_body_ids[outputIndex];
               const result = applyBodyTransform(this.oc, source, transform);
               const previous = this.bodies.get(resultId);
@@ -2670,11 +2671,11 @@ export class BrowserOcctKernel {
         if (operation.kind === 'combine') {
           const job: KernelCombineJobDto = operation.job;
           const target = this.bodies.get(job.target_body_id);
-          if (!target) throw new Error('Combine target body is missing');
+          if (!target) throw new Error(translate('engine.errorCombineTargetMissing'));
           let result = target;
           for (const toolId of job.tool_body_ids) {
             const tool = this.bodies.get(toolId);
-            if (!tool) throw new Error(`Combine tool body ${toolId} is missing`);
+            if (!tool) throw new Error(translate('engine.errorCombineToolMissing').replace('{id}', String(toolId)));
             const next = booleanShape(this.oc, job.operation, result, tool);
             if (result !== target) result.delete();
             result = next;
@@ -2692,7 +2693,7 @@ export class BrowserOcctKernel {
         }
         if (operation.kind === 'split_body') {
           const target = this.bodies.get(operation.job.target_body_id);
-          if (!target) throw new Error('Split Body target is missing');
+          if (!target) throw new Error(translate('engine.errorSplitTargetMissing'));
           const [first, second] = applySplitBody(this.oc, target, operation.job);
           target.delete();
           this.bodies.set(operation.job.target_body_id, first);
@@ -2706,7 +2707,7 @@ export class BrowserOcctKernel {
             const source = operation.job.source_face;
             if (source) {
               const sourceBody = this.bodies.get(source.body_id);
-              if (!sourceBody) throw new Error('Extrude source body is missing');
+              if (!sourceBody) throw new Error(translate('engine.errorExtrudeSourceBodyMissing'));
               const face = resolvePlanarFaceReference(
                 this.oc,
                 sourceBody,
@@ -2741,7 +2742,7 @@ export class BrowserOcctKernel {
         if (job.operation === 'new_body') {
           if (tools.length !== job.result_body_ids.length) {
             tools.forEach((shape) => shape.delete());
-            throw new Error('New Body output count does not match profiles');
+            throw new Error(translate('engine.errorNewBodyOutputCount'));
           }
           tools.forEach((shape, index) => {
             this.bodies.set(job.result_body_ids[index], shape);
@@ -2749,7 +2750,7 @@ export class BrowserOcctKernel {
         } else if (job.operation === 'join' && job.target_body_ids.length === 0) {
           if (job.result_body_ids.length !== 1 || tools.length < 2) {
             tools.forEach((shape) => shape.delete());
-            throw new Error('Join Profiles needs multiple profiles and one output body');
+            throw new Error(translate('engine.errorJoinProfilesNeedsMultiple'));
           }
           this.bodies.set(job.result_body_ids[0], fuseTools(this.oc, tools));
         } else {
@@ -2757,7 +2758,7 @@ export class BrowserOcctKernel {
           try {
             for (const targetId of job.target_body_ids) {
               const target = this.bodies.get(targetId);
-              if (!target) throw new Error(`boolean target body ${targetId} is missing`);
+              if (!target) throw new Error(translate('engine.errorBooleanTargetMissing').replace('{id}', String(targetId)));
               const result = booleanShape(this.oc, job.operation, target, tool);
               target.delete();
               this.bodies.set(targetId, result);
@@ -2784,7 +2785,7 @@ export class BrowserOcctKernel {
   /** Export selected (or all) live B-reps as AP242 STEP bytes. */
   exportStep(request: StepExportRequest): Uint8Array {
     if (this.bodies.size === 0) {
-      throw new Error('There are no active bodies to export.');
+      throw new Error(translate('file.noBodies'));
     }
     const ids = request.body_ids.length > 0
       ? [...new Set(request.body_ids)]
@@ -2804,7 +2805,7 @@ export class BrowserOcctKernel {
         );
         progress.delete();
         if (status !== this.oc.IFSelect_ReturnStatus.IFSelect_RetDone) {
-          throw new Error(`OCCT could not transfer ${label} to STEP.`);
+          throw new Error(translate('engine.errorStepTransferFailed').replace('{label}', label));
         }
       };
       if (occurrences.length > 0) {
@@ -2812,13 +2813,15 @@ export class BrowserOcctKernel {
           const source = this.bodies.get(occurrence.body_id);
           if (!source) {
             throw new Error(
-              `Assembly occurrence ${occurrence.occurrence_id} references inactive Body${occurrence.body_id}.`,
+              translate('engine.errorAssemblyOccurrenceInactive')
+                .replace('{occurrence}', String(occurrence.occurrence_id))
+                .replace('{body}', String(occurrence.body_id)),
             );
           }
           const [rawX, rawY, rawZ, rawW] = occurrence.rotation;
           const magnitude = Math.hypot(rawX, rawY, rawZ, rawW);
           if (!Number.isFinite(magnitude) || magnitude <= 1e-12) {
-            throw new Error(`Assembly occurrence ${occurrence.occurrence_id} has an invalid rotation.`);
+            throw new Error(translate('engine.errorAssemblyOccurrenceRotation').replace('{occurrence}', String(occurrence.occurrence_id)));
           }
           const x = rawX / magnitude;
           const y = rawY / magnitude;
@@ -2834,12 +2837,12 @@ export class BrowserOcctKernel {
           const maker = new this.oc.BRepBuilderAPI_Transform_2(source, transform, true);
           try {
             if (!maker.IsDone()) {
-              throw new Error(`OCCT could not place assembly occurrence ${occurrence.occurrence_id}.`);
+              throw new Error(translate('engine.errorAssemblyOccurrencePlaceFailed').replace('{occurrence}', String(occurrence.occurrence_id)));
             }
             const placed = maker.Shape();
             try {
               if (placed.IsNull()) {
-                throw new Error(`Assembly occurrence ${occurrence.occurrence_id} produced null geometry.`);
+                throw new Error(translate('engine.errorAssemblyOccurrenceNullGeometry').replace('{occurrence}', String(occurrence.occurrence_id)));
               }
               transfer(placed, occurrence.name || `Occurrence ${occurrence.occurrence_id}`);
             } finally {
@@ -2853,12 +2856,12 @@ export class BrowserOcctKernel {
       } else {
         for (const bodyId of ids) {
           const shape = this.bodies.get(bodyId);
-          if (!shape) throw new Error(`Selected body ${bodyId} is not active.`);
+          if (!shape) throw new Error(translate('engine.errorSelectedBodyInactive').replace('{body}', String(bodyId)));
           transfer(shape, `Body${bodyId}`);
         }
       }
       if (writer.Write(path) !== this.oc.IFSelect_ReturnStatus.IFSelect_RetDone) {
-        throw new Error('OCCT could not write the STEP file.');
+        throw new Error(translate('engine.errorStepWriteFailed'));
       }
       return addThreadMetadataToStep(
         new Uint8Array(this.oc.FS.readFile(path)),

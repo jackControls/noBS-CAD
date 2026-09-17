@@ -12,6 +12,7 @@ import { displayLength, commitLength } from '../../cam/units';
 import { modelPointToSetup, setupPointToModel } from '../../cam/geometry';
 import { cancelCamPointPick, requestCamPointPick } from '../../cam/pointPick';
 import { useAppStore, type CamPointPickCandidate } from '../../store/appStore';
+import { translate, useTranslation } from '../../i18n';
 import {
   CAM_DIALOG_INPUT,
   CAM_DIALOG_LABEL,
@@ -131,10 +132,10 @@ export function useCamLinking(
             .map((line) => {
               const pair = line.trim().split(/[,\s]+/);
               if (pair.length !== 2)
-                throw new Error('Positions need one X, Y pair per line, in setup coordinates.');
+                throw new Error(translate('cam.linking.errorPositionsFormat'));
               return {
-                x: commitLength(parseDraft(pair[0], 'Position X'), units),
-                y: commitLength(parseDraft(pair[1], 'Position Y'), units),
+                x: commitLength(parseDraft(pair[0], translate('cam.linking.positionX')), units),
+                y: commitLength(parseDraft(pair[1], translate('cam.linking.positionY')), units),
               };
             });
         else if (typeof value === 'number') {
@@ -149,6 +150,7 @@ export function useCamLinking(
 }
 type Controller = ReturnType<typeof useCamLinking>;
 export function CamLinkingFields({ value, setup }: { value: Controller; setup: CamSetupDto }) {
+  const { t } = useTranslation();
   const { draft, change, kind, units } = value;
   const isFace = kind === 'face',
     isContour = kind === 'contour2d',
@@ -191,37 +193,37 @@ export function CamLinkingFields({ value, setup }: { value: Controller; setup: C
       {!isFace &&
         number(
           `${prefix}.horizontal_radius`,
-          `Horizontal ${prefix === 'lead_in' ? 'lead-in' : 'lead-out'} radius`,
+          t(prefix === 'lead_in' ? 'cam.linking.horizontalLeadInRadius' : 'cam.linking.horizontalLeadOutRadius'),
           length,
-          'Physical tool-center arc radius. Zero gives a straight lead.',
+          t('cam.linking.horizontalRadiusHint'),
         )}
       {(isContour || isChamfer) && (
         <>
           {number(
             `${prefix}.sweep_degrees`,
-            `${prefix === 'lead_in' ? 'Lead-in' : 'Lead-out'} sweep angle`,
+            t(prefix === 'lead_in' ? 'cam.linking.leadInSweepAngle' : 'cam.linking.leadOutSweepAngle'),
             'deg',
-            '0° removes the horizontal arc; 90° is a quarter circle.',
+            t('cam.linking.sweepHint'),
           )}
           {number(
             `${prefix}.linear_distance`,
-            `Linear ${prefix === 'lead_in' ? 'lead-in' : 'lead-out'} distance`,
+            t(prefix === 'lead_in' ? 'cam.linking.linearLeadInDistance' : 'cam.linking.linearLeadOutDistance'),
             length,
-            isChamfer ? 'Straight tool-center travel before the entry arc or after the exit arc. Zero omits it.'
-              : 'A positive straight move is required to engage or cancel controller compensation.',
+            isChamfer ? t('cam.linking.linearChamferHint')
+              : t('cam.linking.linearContourHint'),
           )}
           {check(
             `${prefix}.perpendicular`,
-            'Perpendicular',
-            'Approach toward the arc radially instead of tangentially. Software compensation only.',
+            t('cam.linking.perpendicular'),
+            t('cam.linking.perpendicularHint'),
           )}
         </>
       )}
       {number(
         `${prefix}.vertical_radius`,
-        `Vertical ${prefix === 'lead_in' ? 'lead-in' : 'lead-out'} radius`,
+        t(prefix === 'lead_in' ? 'cam.linking.verticalLeadInRadius' : 'cam.linking.verticalLeadOutRadius'),
         length,
-        'Round the plunge/withdrawal into the horizontal move. Zero disables vertical rounding.',
+        t('cam.linking.verticalRadiusHint'),
       )}
     </div>
   );
@@ -235,7 +237,7 @@ export function CamLinkingFields({ value, setup }: { value: Controller; setup: C
         for (const point of [...op.points, ...(op.holes ?? []).map((h) => h.point)])
           candidates.push({
             point: setupPointToModel({ ...point, z: setup.stock.max.z }, setup.wcs),
-            label: `${op.name} · drilled center`,
+            label: `${op.name} · ${t('cam.linking.drilledCenter')}`,
           });
       }
     } else {
@@ -247,7 +249,7 @@ export function CamLinkingFields({ value, setup }: { value: Controller; setup: C
           const key = `${p.x.toFixed(5)}:${p.y.toFixed(5)}:${p.z.toFixed(5)}`;
           if (!seen.has(key)) {
             seen.add(key);
-            candidates.push({ point: p, label: 'Preferred station near model vertex' });
+            candidates.push({ point: p, label: t('cam.linking.preferredStationLabel') });
           }
         }
       }
@@ -255,8 +257,8 @@ export function CamLinkingFields({ value, setup }: { value: Controller; setup: C
     if (!candidates.length) {
       setPickMessage(
         key === 'predrill_positions'
-          ? 'No earlier drilling positions are available. Add or move drilling before this operation.'
-          : 'No model vertices are available. Enter a setup X, Y coordinate instead.',
+          ? t('cam.linking.noDrillPositions')
+          : t('cam.linking.noModelVertices'),
       );
       return;
     }
@@ -265,8 +267,8 @@ export function CamLinkingFields({ value, setup }: { value: Controller; setup: C
       const result = await requestCamPointPick(
         candidates,
         key === 'predrill_positions'
-          ? 'Pick an earlier drilled hole'
-          : 'Pick near the preferred lead station',
+          ? t('cam.linking.pickEarlierHole')
+          : t('cam.linking.pickLeadStation'),
       );
       if (result) {
         const p = modelPointToSetup(result.point, setup.wcs);
@@ -279,134 +281,133 @@ export function CamLinkingFields({ value, setup }: { value: Controller; setup: C
   };
   return (
     <div className="space-y-4" data-testid="cam-linking-fields">
-      <DialogSection title="LINKING">
+      <DialogSection title={t('cam.linking.sectionLinking')}>
         {isAdaptive &&
           select(
             'retraction_policy',
-            'Retraction policy',
+            t('cam.linking.retractionPolicy'),
             [
-              ['full', 'Full retraction'],
-              ['minimum', 'Minimum retraction'],
-              ['shortest', 'Shortest checked link'],
+              ['full', t('cam.linking.retractionFull')],
+              ['minimum', t('cam.linking.retractionMinimum')],
+              ['shortest', t('cam.linking.retractionShortest')],
             ],
-            'Unproven links retract. Shortest links use G1 to avoid diagonal rapid ambiguity.',
+            t('cam.linking.retractionHint'),
           )}
-        {select('high_feed_mode', 'High feedrate mode', [
-          ['preserve', 'Preserve rapid movement'],
-          ['axial_radial', 'Preserve axial and radial rapids'],
-          ['axial', 'Preserve axial rapids'],
-          ['radial', 'Preserve radial rapids'],
-          ['single_axis', 'Preserve single-axis rapids'],
-          ['always', 'Always use high feed'],
+        {select('high_feed_mode', t('cam.linking.highFeedMode'), [
+          ['preserve', t('cam.linking.highFeedPreserve')],
+          ['axial_radial', t('cam.linking.highFeedAxialRadial')],
+          ['axial', t('cam.linking.highFeedAxial')],
+          ['radial', t('cam.linking.highFeedRadial')],
+          ['single_axis', t('cam.linking.highFeedSingleAxis')],
+          ['always', t('cam.linking.highFeedAlways')],
         ])}
         {(draft.high_feed_mode !== 'preserve' || draft.retraction_policy === 'shortest') &&
-          number('high_feed', 'High feedrate', feed)}
+          number('high_feed', t('cam.linking.highFeedrate'), feed)}
         {check(
           'allow_rapid_retract',
-          'Allow rapid retract',
-          'Disable to withdraw at lead-out feed instead of G0.',
+          t('cam.linking.allowRapidRetract'),
+          t('cam.linking.allowRapidRetractHint'),
         )}
         {(isContour || isFace || draft.retraction_policy !== 'full') &&
           number(
             'safe_distance',
-            'Safe distance',
+            t('cam.linking.safeDistance'),
             length,
-            'Clearance for entry/retract and non-cutting links. Cannot authorize an uncut shortcut.',
+            t('cam.linking.safeDistanceHint'),
           )}
-        {!isChamfer && check('keep_tool_down', 'Keep tool down', 'Only links proved clear of stock may stay down.')}
+        {!isChamfer && check('keep_tool_down', t('cam.linking.keepToolDown'), t('cam.linking.keepToolDownHint'))}
         {!isChamfer && !!draft.keep_tool_down && (
           <>
-            {number('maximum_stay_down', 'Maximum stay-down distance')}
-            {!isFace && number('minimum_clearance', 'Minimum stay-down clearance')}
+            {number('maximum_stay_down', t('cam.linking.maxStayDown'))}
+            {!isFace && number('minimum_clearance', t('cam.linking.minStayDownClearance'))}
             {isAdaptive &&
               select(
                 'stay_down_level',
-                'Stay-down search level',
+                t('cam.linking.stayDownLevel'),
                 Array.from({ length: 11 }, (_, i) => [
                   String(i * 10),
-                  i === 0 ? 'Least' : i === 10 ? 'Most' : `${i * 10}%`,
+                  i === 0 ? t('cam.linking.least') : i === 10 ? t('cam.linking.most') : `${i * 10}%`,
                 ]),
-                'Higher settings try more checked links; clearance and engagement limits never change.',
+                t('cam.linking.stayDownLevelHint'),
               )}
-            {!isFace && number('lift_height', 'Lift height')}
+            {!isFace && number('lift_height', t('cam.linking.liftHeight'))}
           </>
         )}
         {isFace &&
           check(
             'extend_before_retract',
-            'Extend before retract',
-            'Carry the cutter beyond incoming stock before lifting.',
+            t('cam.linking.extendBeforeRetract'),
+            t('cam.linking.extendBeforeRetractHint'),
           )}
-        {!isChamfer && number('no_engagement_feed', 'No-engagement feedrate', feed)}
-        {isChamfer && <p className="text-[10px] text-mute">Every chain retracts to Clearance Height before transferring to the next. Set transfer heights on the Heights tab.</p>}
+        {!isChamfer && number('no_engagement_feed', t('cam.linking.noEngagementFeedrate'), feed)}
+        {isChamfer && <p className="text-[10px] text-mute">{t('cam.linking.chamferNote')}</p>}
       </DialogSection>
-      <DialogSection title="LEADS & TRANSITIONS">
-        {check('lead_in.enabled', 'Lead-in (Entry)')}
+      <DialogSection title={t('cam.linking.sectionLeadsTransitions')}>
+        {check('lead_in.enabled', t('cam.linking.leadInEntry'))}
         {!!draft['lead_in.enabled'] && lead('lead_in')}
-        {check('lead_out.enabled', 'Lead-out (Exit)')}
+        {check('lead_out.enabled', t('cam.linking.leadOutExit'))}
         {!!draft['lead_out.enabled'] && (
           <>
-            {check('same_as_lead_in', 'Same as lead-in')}
+            {check('same_as_lead_in', t('cam.linking.sameAsLeadIn'))}
             {!draft.same_as_lead_in && lead('lead_out')}
           </>
         )}
-        {number('lead_in_feed', 'Lead-in feedrate', feed)}
-        {number('lead_out_feed', 'Lead-out feedrate', feed)}
+        {number('lead_in_feed', t('cam.linking.leadInFeedrate'), feed)}
+        {number('lead_out_feed', t('cam.linking.leadOutFeedrate'), feed)}
         {isFace &&
           select(
             'transition',
-            'Transition type',
+            t('cam.linking.transitionType'),
             [
-              ['no_contact', 'No contact'],
-              ['straight', 'Straight line'],
-              ['shortest', 'Shortest path'],
-              ['smooth', 'Smooth'],
+              ['no_contact', t('cam.linking.transitionNoContact')],
+              ['straight', t('cam.linking.transitionStraight')],
+              ['shortest', t('cam.linking.transitionShortest')],
+              ['smooth', t('cam.linking.transitionSmooth')],
             ],
-            'Stay-down transitions need Keep tool down and a clear path; otherwise retract.',
+            t('cam.linking.transitionHint'),
           )}
         <p className="text-[10px] text-mute">
-          {isChamfer && 'These values apply to every selected chain. Manual dimensions are never automatically reduced; a chain that cannot fit blocks generation. '}
-          Radii describe the physical tool center. Leads are checked before posting; neighboring fixtures and
-          holders still need separate verification.
+          {isChamfer && t('cam.linking.chamferValuesHelp')}
+          {t('cam.linking.leadHelp')}
         </p>
       </DialogSection>
       {(isContour || isAdaptive) && (
-        <DialogSection title="RAMP">
-          {isContour && check('ramp_enabled', 'Ramp along closed contour')}
+        <DialogSection title={t('cam.linking.sectionRamp')}>
+          {isContour && check('ramp_enabled', t('cam.linking.rampAlongContour'))}
           {(!!draft.ramp_enabled || isAdaptive) && (
             <>
               {isAdaptive &&
                 select(
                   'ramp_type',
-                  'Ramp type',
+                  t('cam.linking.rampType'),
                   [
-                    ['predrill', 'Predrill'],
-                    ['plunge', 'Plunge'],
-                    ['helix', 'Helix'],
+                    ['predrill', t('cam.linking.rampPredrill')],
+                    ['plunge', t('cam.linking.rampPlunge')],
+                    ['helix', t('cam.linking.rampHelix')],
                   ],
-                  'Predrill requires earlier hole-removal evidence. Plunge explicitly permits full-width axial cutting at Ramp Feed with a center-cutting tool.',
+                  t('cam.linking.rampTypeHint'),
                 )}
               {(isContour || draft.ramp_type === 'helix') && (
                 <>
-                  {number('ramp_angle', 'Ramping angle', 'deg')}
-                  {number('ramp_stepdown', 'Maximum ramp stepdown')}
-                  {isAdaptive && number('ramp_taper_angle', 'Ramp taper angle', 'deg')}
-                  {number('ramp_clearance', 'Ramp clearance height')}
+                  {number('ramp_angle', t('cam.linking.rampingAngle'), 'deg')}
+                  {number('ramp_stepdown', t('cam.linking.maxRampStepdown'))}
+                  {isAdaptive && number('ramp_taper_angle', t('cam.linking.rampTaperAngle'), 'deg')}
+                  {number('ramp_clearance', t('cam.linking.rampClearanceHeight'))}
                   {isAdaptive && (
                     <>
-                      {number('helix_diameter', 'Maximum helical ramp diameter')}
-                      {number('minimum_helix_diameter', 'Minimum ramp diameter')}
+                      {number('helix_diameter', t('cam.linking.maxHelicalRampDiameter'))}
+                      {number('minimum_helix_diameter', t('cam.linking.minRampDiameter'))}
                     </>
                   )}
                 </>
               )}
-              {number('ramp_feed', 'Ramp feedrate', feed)}
+              {number('ramp_feed', t('cam.linking.rampFeedrate'), feed)}
             </>
           )}
         </DialogSection>
       )}
       {(isContour || isAdaptive) && (
-        <DialogSection title="POSITIONS">
+        <DialogSection title={t('cam.linking.sectionPositions')}>
           {pointsKeys
             .filter((key) => key !== 'exit_positions' || isContour)
             .map((key) => (
@@ -414,29 +415,31 @@ export function CamLinkingFields({ value, setup }: { value: Controller; setup: C
                 <label className="block">
                   <span className={CAM_DIALOG_LABEL}>
                     {key === 'predrill_positions'
-                      ? 'Predrill positions'
+                      ? t('cam.linking.predrillPositions')
                       : key === 'entry_positions'
-                        ? 'Preferred lead-in position'
-                        : 'Preferred exit position'}
+                        ? t('cam.linking.preferredLeadInPosition')
+                        : t('cam.linking.preferredExitPosition')}
                   </span>
                   <textarea
-                    aria-label={key.replace(/_/g, ' ')}
+                    aria-label={key === 'predrill_positions'
+                      ? t('cam.linking.predrillPositions')
+                      : key === 'entry_positions'
+                        ? t('cam.linking.preferredLeadInPosition')
+                        : t('cam.linking.preferredExitPosition')}
                     rows={2}
                     className={`${CAM_DIALOG_INPUT} h-auto font-mono`}
-                    placeholder={`X, Y (${length}, setup WCS)`}
+                    placeholder={t('cam.linking.textareaPlaceholder').replace('{unit}', length)}
                     value={String(draft[key])}
                     onChange={(e) => change(key, e.target.value)}
                   />
                 </label>
                 <button type="button" className="text-[10px] text-accent" onClick={() => void pick(key)}>
-                  {picking ? 'Pick in viewport…' : 'Select in viewport…'}
+                  {picking ? t('cam.linking.pickInViewport') : t('cam.linking.selectInViewport')}
                 </button>
               </div>
             ))}
           <p className="text-[10px] text-mute">
-            Entry/exit points are preferences, not plunge permissions. A predrill position must be backed by
-            an earlier enabled hole deep and wide enough for the tool. Coordinates are saved in this setup’s
-            WCS.
+            {t('cam.linking.positionsHelp')}
           </p>
           {pickMessage && (
             <p role="status" className="text-[10px] text-amber-600">

@@ -1,4 +1,5 @@
 /** Presentation observes the same ordered modeling operations as the UI. */
+import { translate } from './i18n';
 export class SerialPlayback {
   private running = false;
   async tick(work: () => Promise<void>): Promise<boolean> {
@@ -86,27 +87,27 @@ export class PresentationController {
       step_pending: this.credits > 0 };
   }
   configurePace(ms: number): void {
-    if (!Number.isInteger(ms) || ms < 0 || ms > 2000) throw new Error('pace_ms must be an integer from 0 to 2000');
+    if (!Number.isInteger(ms) || ms < 0 || ms > 2000) throw new Error(translate('playback.errorPaceMsRange'));
     this.control({ command: 'configure', mode: ms ? 'present' : 'fast' });
     this.paceMs = ms;
   }
   control(request: PresentationRequest): ReturnType<PresentationController['status']> {
     const command = request.command ?? 'status';
-    if (!['configure', 'note', 'pause', 'resume', 'step', 'status', 'finish', 'stop', 'dismiss', 'show'].includes(command)) throw new Error('Unknown presentation command');
-    if (request.mode !== undefined && !['fast', 'present'].includes(request.mode)) throw new Error('mode must be fast or present');
-    if (request.speed !== undefined && (!Number.isFinite(request.speed) || request.speed < 0.1 || request.speed > 16)) throw new Error('speed must be from 0.1 to 16');
-    if (request.duration_ms !== undefined && (!Number.isInteger(request.duration_ms) || request.duration_ms < 0 || request.duration_ms > 10000)) throw new Error('duration_ms must be an integer from 0 to 10000');
+    if (!['configure', 'note', 'pause', 'resume', 'step', 'status', 'finish', 'stop', 'dismiss', 'show'].includes(command)) throw new Error(translate('playback.errorUnknownPresentationCommand'));
+    if (request.mode !== undefined && !['fast', 'present'].includes(request.mode)) throw new Error(translate('playback.errorModeInvalid'));
+    if (request.speed !== undefined && (!Number.isFinite(request.speed) || request.speed < 0.1 || request.speed > 16)) throw new Error(translate('playback.errorSpeedRange'));
+    if (request.duration_ms !== undefined && (!Number.isInteger(request.duration_ms) || request.duration_ms < 0 || request.duration_ms > 10000)) throw new Error(translate('playback.errorDurationMsRange'));
     for (const key of ['text', 'chapter'] as const) {
       const value = request[key];
       const limit = key === 'text' ? 4000 : 200;
-      if (value !== undefined && (typeof value !== 'string' || value.length > limit || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value))) throw new Error(`${key} must contain at most ${limit} printable characters`);
+      if (value !== undefined && (typeof value !== 'string' || value.length > limit || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value))) throw new Error(translate('playback.errorFieldPrintableLimit').replace('{key}', key).replace('{limit}', String(limit)));
     }
-    for (const key of ['step_index', 'step_count'] as const) if (request[key] !== undefined && (!Number.isSafeInteger(request[key]) || request[key]! < 0)) throw new Error(`${key} must be a nonnegative integer`);
+    for (const key of ['step_index', 'step_count'] as const) if (request[key] !== undefined && (!Number.isSafeInteger(request[key]) || request[key]! < 0)) throw new Error(translate('playback.errorFieldNonnegativeInteger').replace('{key}', key));
     const index = request.step_index ?? this.state.step_index;
     const count = request.step_count ?? this.state.step_count;
-    if (count && index > count) throw new Error('step_index cannot exceed step_count');
-    if (command === 'finish' && this.state.stopped) throw new Error('Playback was stopped; it cannot be marked complete');
-    if (command === 'show' && !this.state.active) throw new Error('No playback is available to show');
+    if (count && index > count) throw new Error(translate('playback.errorStepIndexExceedsCount'));
+    if (command === 'finish' && this.state.stopped) throw new Error(translate('playback.errorPlaybackStoppedComplete'));
+    if (command === 'show' && !this.state.active) throw new Error(translate('playback.errorNoPlaybackToShow'));
     this.advance();
     if (command === 'status') return this.status();
     if (command === 'dismiss' || command === 'show') {
@@ -132,11 +133,11 @@ export class PresentationController {
     if (command === 'note') this.remainingMs = request.duration_ms ?? 0;
     if (command === 'pause') { patch.paused = true; this.credits = 0; }
     if (command === 'resume') {
-      if (this.state.stopped) throw new Error('Playback stopped; configure a new run before resuming');
+      if (this.state.stopped) throw new Error(translate('playback.errorPlaybackStoppedResume'));
       patch.paused = false; this.credits = 0;
     }
     if (command === 'step') {
-      if (this.state.stopped) throw new Error('Playback stopped; configure a new run before stepping');
+      if (this.state.stopped) throw new Error(translate('playback.errorPlaybackStoppedStep'));
       patch.paused = true; this.credits += 1;
     }
     if (command === 'finish' || command === 'stop') {
@@ -208,7 +209,7 @@ export function installOperationFeedback(): () => void {
       || event.target.closest('[data-interface-group="document/presentation"]')) return;
     const target = event.target.closest<HTMLElement>('button,[role="button"],[role="menuitem"]');
     if (target && !target.matches(':disabled,[aria-disabled="true"]')) {
-      presentation.applied(target.getAttribute('aria-label') || target.title || target.textContent || 'Select');
+      presentation.applied(target.getAttribute('aria-label') || target.title || target.textContent || translate('playback.selectLabel'));
     }
   };
   document.addEventListener('pointerdown', touch, true);

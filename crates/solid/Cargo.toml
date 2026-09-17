@@ -1,6 +1,6 @@
 [package]
 name = "nbcad-solid"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Host-neutral solid feature history, stable topology ids, and kernel DTOs"
 license = "LGPL-2.1-or-later"

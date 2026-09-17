@@ -8,6 +8,7 @@ import type {
   ProfileCatalogItemDto,
 } from '../engine/types';
 import { chooseSaveTarget, writeSaveTarget, type SaveType } from '../files/fileIO';
+import { translate } from '../i18n';
 import { useAppStore } from '../store/appStore';
 import type { UnitSystem } from '../types/document';
 import {
@@ -48,12 +49,14 @@ import {assertTitleBlockFits, drawingTitleBlock} from './titleBlock';
 
 const DXF_TYPE: SaveType = {
   description: 'Drawing Exchange Format',
+  descriptionKey: 'drawing.export.dxfDescription',
   extension: '.dxf',
   mime: 'application/dxf',
 };
 
 const SVG_TYPE: SaveType = {
   description: 'Scalable Vector Drawing',
+  descriptionKey: 'drawing.export.svgDescription',
   extension: '.svg',
   mime: 'image/svg+xml',
 };
@@ -64,7 +67,7 @@ export async function exportActiveDrawingDxf(): Promise<boolean> {
   const sheet = state.drawingDocument.sheets.find(
     (candidate) => candidate.id === state.drawingDocument.active_sheet_id,
   );
-  if (!sheet) throw new Error('There is no active drawing sheet to export.');
+  if (!sheet) throw new Error(translate('drawing.errors.errorNoActiveSheetExport'));
   const dxf = await drawingSheetDxf(sheet, state.document?.settings.units ?? 'mm');
   const project = safeFilePart(state.document?.name ?? 'Untitled');
   const sheetName = safeFilePart(sheet.name);
@@ -101,7 +104,7 @@ export async function exportActiveDrawingSvg(): Promise<boolean> {
   const sheet = state.drawingDocument.sheets.find(
     (candidate) => candidate.id === state.drawingDocument.active_sheet_id,
   );
-  if (!sheet) throw new Error('There is no active drawing sheet to export.');
+  if (!sheet) throw new Error(translate('drawing.errors.errorNoActiveSheetExport'));
   const svg = await drawingSheetSvg(sheet, state.document?.settings.units ?? 'mm');
   const project = safeFilePart(state.document?.name ?? 'Untitled');
   const sheetName = safeFilePart(sheet.name);

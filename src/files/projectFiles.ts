@@ -271,7 +271,7 @@ export async function saveAllUnsavedProjects(): Promise<boolean> {
 export async function openProject(options?: { filePath: string; discardChanges?: boolean }): Promise<boolean> {
   assertNoFeatureEdit();
   const state = useAppStore.getState();
-  if (state.dirty && options && !options.discardChanges) throw new Error('Save the current document or explicitly set discard_changes before replacing it');
+  if (state.dirty && options && !options.discardChanges) throw new Error(translate('file.errorReplaceNeedsSaveOrDiscard'));
   if (state.dirty && !options) {
     const decision = await requestUnsavedDecision(
       'replace',
@@ -509,7 +509,7 @@ function exportSelectionOwner(transition: ReturnType<typeof projectTransitions.c
       || current.solidScene !== state.solidScene || current.assemblyDocument !== state.assemblyDocument
       || current.assemblySolution !== state.assemblySolution || current.activeSketch !== state.activeSketch
       || current.bodyAppearances !== state.bodyAppearances) {
-      throw new Error('The document changed while preparing export. Start the export again.');
+      throw new Error(translate('file.errorDocumentChangedDuringExport'));
     }
   };
 }

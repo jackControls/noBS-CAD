@@ -282,7 +282,7 @@ export function HoleDialog() {
         } else {
           const customPreset: ThreadPreset = {
             id: `custom-${edit.feature_id}`,
-            label: `${editThread.designation} — custom`,
+            label: t('hole.customPresetLabel').replace('{designation}', editThread.designation),
             standard: editThread.standard,
             series: editThread.series,
             designation: editThread.designation,
@@ -505,7 +505,7 @@ export function HoleDialog() {
       const nominal = selectedThreadPreset.nominalDiameterMm;
       const pitch = selectedThreadPreset.pitchMm;
       const profile = initialRoundedThreadProfile(pitch);
-      const preset: ThreadPreset = {id: 'custom-rounded', label: 'Custom rounded trapezoidal',
+      const preset: ThreadPreset = {id: 'custom-rounded', label: t('hole.customRoundedTrapezoidal'),
         standard, series: 'rounded', designation: 'Custom rounded trapezoidal', class: 'custom',
         nominalDiameterMm: nominal, pitchMm: pitch, threadsPerInch: null,
         tapDrillDiameterMm: values.diameter, tapDrillDesignation: null, roundedProfile: profile};
@@ -584,9 +584,11 @@ export function HoleDialog() {
                 : <>
                   <ViewportSelectionField
                     testId="hole-face"
-                    label="Support face"
-                    status={body && supportFace ? `${body.name} · planar face selected` : 'Click a planar face in the viewport'}
-                    hint="This face sets the hole plane and cutting direction."
+                    label={t('hole.supportFace')}
+                    status={body && supportFace
+                      ? t('hole.planarFaceSelected').replace('{body}', body.name)
+                      : t('hole.clickPlanarFace')}
+                    hint={t('hole.supportFaceHint')}
                     active={modelingPickTarget === 'hole_support'}
                     hasSelection={Boolean(body && supportFace)}
                     onActivate={() => setModelingPickTarget('hole_support')}
@@ -600,13 +602,15 @@ export function HoleDialog() {
                   />
                   <ViewportSelectionField
                     testId="hole-position-selection"
-                    label="Positions"
+                    label={t('hole.positions')}
                     status={pickedSketchPoints.length > 0
-                      ? `${pickedSketchPoints.length} associative ${pickedSketchPoints.length === 1 ? 'position' : 'positions'} selected`
+                      ? (pickedSketchPoints.length === 1
+                          ? t('hole.associativePositionSelected').replace('{count}', String(pickedSketchPoints.length))
+                          : t('hole.associativePositionsSelected').replace('{count}', String(pickedSketchPoints.length)))
                       : body && supportFace
-                        ? `Position set at U ${x}, V ${y}`
-                        : 'Select a support face first'}
-                    hint="Click visible sketch points, endpoints, corners, or centers. You can also enter U/V below."
+                        ? t('hole.positionSetAt').replace('{u}', x).replace('{v}', y)
+                        : t('hole.selectSupportFaceFirst')}
+                    hint={t('hole.positionsHint')}
                     active={modelingPickTarget === 'hole_positions'}
                     hasSelection={Boolean(body && supportFace)}
                     onActivate={() => {
@@ -627,7 +631,7 @@ export function HoleDialog() {
                         <span>{t('hole.associativeCount').replace('{count}', String(pickedSketchPoints.length))}</span>
                         <button type="button" onClick={() => setPickedSketchPoints([])} className="text-mute hover:text-ink">{t('hole.clearPositions')}</button>
                       </div>
-                      <div className="mt-1 truncate text-[9px] text-mute">The selected points remain associative to their sketches.</div>
+                      <div className="mt-1 truncate text-[9px] text-mute">{t('hole.associativeHint')}</div>
                     </div>
                   )}
                   <label>
@@ -671,7 +675,7 @@ export function HoleDialog() {
                           >
                             <option value="iso_metric">{t('hole.isoMetric')}</option>
                             <option value="unified_inch">{t('hole.asmeUnified')}</option>
-                            <option value="custom_trapezoidal">Custom rounded trapezoidal</option>
+                            <option value="custom_trapezoidal">{t('hole.customRoundedTrapezoidal')}</option>
                           </select>
                         </label>
                         <label>
@@ -685,7 +689,7 @@ export function HoleDialog() {
                             className={INPUT_CLASS}
                           >
                             {threadStandard === 'custom_trapezoidal' ? (
-                              <option value="rounded">Rounded profile</option>
+                              <option value="rounded">{t('hole.roundedProfile')}</option>
                             ) : threadStandard === 'iso_metric' ? (
                               <>
                                 <option value="metric_coarse">{t('hole.metricCoarse')}</option>
@@ -785,10 +789,10 @@ export function HoleDialog() {
                       </dl>
                       {threadStandard === 'custom_trapezoidal' && <>
                         <div className="grid grid-cols-2 gap-2">
-                          <label><span className={LABEL_CLASS}>Thread nominal diameter (mm)</span>
+                          <label><span className={LABEL_CLASS}>{t('hole.threadNominalDiameter')}</span>
                             <DimensionInput data-testid="hole-thread-nominal" min="0.000001" step="any"
                               value={customNominal} onValueChange={setCustomNominal} /></label>
-                          <label><span className={LABEL_CLASS}>Thread pitch (mm)</span>
+                          <label><span className={LABEL_CLASS}>{t('hole.threadPitch')}</span>
                             <DimensionInput data-testid="hole-thread-pitch" min="0.000001" step="any"
                               value={customPitch} onValueChange={setCustomPitch} /></label>
                         </div>

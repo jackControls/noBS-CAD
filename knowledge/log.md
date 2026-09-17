@@ -1,7 +1,15 @@
 # noBS CAD knowledge update log
 
-## 2026-09-11
+## 2026-09-13
 
+- Added four mechanical-design articles covering datums, fits, manufacturing
+  and assembly decisions. The existing native MCP resource inventory embeds
+  and serves them with the rest of the knowledge bundle.
+- Consolidated useful materials/hardware guidance; removed placeholder pages,
+  unused search exports and unimplemented search/UI proposals.
+- Extended the knowledge gate to validate source provenance and recipe references.
+
+## 2026-09-11
 - **Update**: Added actual G-code footprint, bridge-anchor and preceding-layer checks; zero support paths alone do not establish printability.
 - **Update**: Added small-generator/rotor/load matching and bearing/axial-retention guidance, with manufacturer and experimental references. Both use the existing automatic MCP resource inventory.
 - **Update**: Added sourced gear-identification/pair-design and additive-workholding guidance.

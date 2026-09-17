@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { getEngine } from '../engine';
 import { cancelTimelineFeatureEdit, submitBodyFeature } from '../engine/controller';
+import { useTranslation } from '../i18n';
 import type {
   AssemblyDocumentDto,
   AssemblySolutionDto,
@@ -495,15 +496,15 @@ function SolidPreviewPublisher({
   return null;
 }
 
-const TITLES: Record<BodyFeatureKind, string> = {
-  move_copy: 'Move/Copy',
-  external_thread: 'External Thread',
-  shell: 'Shell',
-  mirror: 'Mirror',
-  rectangular_pattern: 'Rectangular Pattern',
-  circular_pattern: 'Circular Pattern',
-  combine: 'Combine',
-  split_body: 'Split Body',
+const TITLES: Record<BodyFeatureKind, { labelKey: string }> = {
+  move_copy: { labelKey: 'bodyFeature.titleMoveCopy' },
+  external_thread: { labelKey: 'bodyFeature.titleExternalThread' },
+  shell: { labelKey: 'bodyFeature.titleShell' },
+  mirror: { labelKey: 'bodyFeature.titleMirror' },
+  rectangular_pattern: { labelKey: 'bodyFeature.titleRectangularPattern' },
+  circular_pattern: { labelKey: 'bodyFeature.titleCircularPattern' },
+  combine: { labelKey: 'bodyFeature.titleCombine' },
+  split_body: { labelKey: 'bodyFeature.titleSplitBody' },
 };
 
 const ICONS = {
@@ -518,6 +519,7 @@ const ICONS = {
 } satisfies Record<BodyFeatureKind, typeof PanelTop>;
 
 export function BodyFeatureDialog() {
+  const { t } = useTranslation();
   const dialog = useAppStore((state) => state.bodyFeatureDialog);
   const close = useAppStore((state) => state.closeBodyFeatureDialog);
   const cancel = () => void cancelTimelineFeatureEdit(close);
@@ -633,17 +635,17 @@ export function BodyFeatureDialog() {
     const result: PlaneOption[] = [
       {
         value: 'origin:xy',
-        label: 'XY origin plane',
+        label: t('bodyFeature.originPlaneXy'),
         reference: { type: 'origin_plane', plane: 'xy' },
       },
       {
         value: 'origin:xz',
-        label: 'XZ origin plane',
+        label: t('bodyFeature.originPlaneXz'),
         reference: { type: 'origin_plane', plane: 'xz' },
       },
       {
         value: 'origin:yz',
-        label: 'YZ origin plane',
+        label: t('bodyFeature.originPlaneYz'),
         reference: { type: 'origin_plane', plane: 'yz' },
       },
     ];
@@ -652,7 +654,7 @@ export function BodyFeatureDialog() {
         if (!face.plane) return;
         result.push({
           value: `face:${face.id}`,
-          label: `${body.name} · planar face ${index + 1}`,
+          label: `${body.name} · ${t('bodyFeature.planarFace')} ${index + 1}`,
           reference: { type: 'planar_face', face_id: face.id },
         });
       });
@@ -665,7 +667,7 @@ export function BodyFeatureDialog() {
       });
     }
     return result;
-  }, [bodies, datumPlanes]);
+  }, [bodies, datumPlanes, t]);
 
   useEffect(() => {
     if (!dialog) return;
@@ -964,7 +966,7 @@ export function BodyFeatureDialog() {
           setError(
             cause instanceof Error
               ? cause.message
-              : 'Could not load body operations',
+              : t('bodyFeature.loadFailed'),
           );
         }
       })
@@ -1623,7 +1625,7 @@ export function BodyFeatureDialog() {
       void moveCopyOccurrence(occurrence.id, localPose, moveCopy)
         .then(close)
         .catch((cause: unknown) => setError(
-          cause instanceof Error ? cause.message : 'Component Move/Copy failed',
+          cause instanceof Error ? cause.message : t('bodyFeature.componentMoveFailed'),
         ))
         .finally(() => setLoading(false));
       return;
@@ -1729,11 +1731,11 @@ export function BodyFeatureDialog() {
   const bodyChecklist = (
     <ViewportSelectionField
       testId={`${bodyPickTarget}-selection`}
-      label="Bodies"
+      label={t('bodyFeature.bodies')}
       status={bodyIds.length > 0
-        ? `${bodyIds.length} ${bodyIds.length === 1 ? 'body' : 'bodies'} selected${pickedBodyNames.length <= 2 ? ` · ${pickedBodyNames.join(', ')}` : ''}`
-        : 'Click bodies in the viewport'}
-      hint="Continue clicking, or use Shift/Ctrl/Cmd, to select multiple bodies."
+        ? `${(bodyIds.length === 1 ? t('bodyFeature.bodySelected') : t('bodyFeature.bodiesSelected')).replace('{count}', String(bodyIds.length))}${pickedBodyNames.length <= 2 ? ` · ${pickedBodyNames.join(', ')}` : ''}`
+        : t('bodyFeature.clickBodies')}
+      hint={t('bodyFeature.bodiesHint')}
       active={modelingPickTarget === bodyPickTarget}
       hasSelection={bodyIds.length > 0}
       onActivate={() => activateBodyPicker(bodyPickTarget, bodyIds)}
@@ -1748,9 +1750,9 @@ export function BodyFeatureDialog() {
   const planeField = (
     <ViewportSelectionField
       testId={`${planeTarget}-selection`}
-      label="Reference plane"
-      status={planeLabel ?? 'Click a planar face or visible reference plane'}
-      hint="The chosen plane is highlighted directly in the viewport."
+      label={t('bodyFeature.referencePlane')}
+      status={planeLabel ?? t('bodyFeature.clickPlane')}
+      hint={t('bodyFeature.planeHint')}
       active={modelingPickTarget === planeTarget}
       hasSelection={plane !== ''}
       onActivate={() => activatePlanePicker(planeTarget)}
@@ -1793,7 +1795,7 @@ export function BodyFeatureDialog() {
         <header className="feature-dialog-header flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
           <Icon size={15} className="text-accent" />
           <span className="flex-1 text-xs font-semibold text-ink">
-            {dialog.featureId > 0 ? `Edit ${TITLES[kind]}` : TITLES[kind]}
+            {dialog.featureId > 0 ? t('bodyFeature.editTitle').replace('{title}', t(TITLES[kind].labelKey)) : t(TITLES[kind].labelKey)}
           </span>
           <button
             type="button"
@@ -1809,7 +1811,7 @@ export function BodyFeatureDialog() {
           {loading ? (
             <p className="flex items-center gap-2 text-xs text-mute">
               <LoaderCircle size={14} className="animate-spin" />
-              Loading definition…
+              {t('bodyFeature.loading')}
             </p>
           ) : error ? (
             <p className="rounded border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-300">
@@ -1817,12 +1819,12 @@ export function BodyFeatureDialog() {
             </p>
           ) : bodies.length === 0 ? (
             <p className="text-xs text-mute">
-              Create a solid body before using {TITLES[kind]}.
+              {t('bodyFeature.createBodyFirst').replace('{title}', t(TITLES[kind].labelKey))}
             </p>
           ) : kind === 'move_copy' ? (
             <>
               <fieldset>
-                <legend className={LABEL}>Object type</legend>
+                <legend className={LABEL}>{t('bodyFeature.objectType')}</legend>
                 <div className="grid grid-cols-2 gap-2">
                   {(['bodies', 'component'] as const).map((value) => (
                     <button
@@ -1843,7 +1845,7 @@ export function BodyFeatureDialog() {
                           : 'border-edge bg-header text-ink hover:bg-edge'
                       } disabled:opacity-40`}
                     >
-                      {value === 'bodies' ? 'Bodies' : 'Component'}
+                      {value === 'bodies' ? t('bodyFeature.bodies') : t('bodyFeature.component')}
                     </button>
                   ))}
                 </div>
@@ -1852,9 +1854,9 @@ export function BodyFeatureDialog() {
                 <div>
                   <ViewportSelectionField
                     testId="move-component-selection"
-                    label="Component occurrence"
-                    status={moveOccurrence ? `${moveOccurrence.name} selected` : 'Click a component in the viewport'}
-                    hint="The clicked occurrence is selected by its visible geometry."
+                    label={t('bodyFeature.componentOccurrence')}
+                    status={moveOccurrence ? t('bodyFeature.namedSelected').replace('{name}', moveOccurrence.name) : t('bodyFeature.clickComponent')}
+                    hint={t('bodyFeature.componentHint')}
                     active={modelingPickTarget === 'move_component'}
                     hasSelection={Boolean(moveOccurrence)}
                     onActivate={() => {
@@ -1869,12 +1871,12 @@ export function BodyFeatureDialog() {
                   />
                   {moveOccurrenceCluster.length > 1 && moveOccurrenceAnchorId === occurrenceId && (
                     <span className="mt-1 block text-[10px] leading-4 text-mute">
-                      This is the mechanism anchor. Move/Copy keeps all {moveOccurrenceCluster.length} connected components together.
+                      {t('bodyFeature.mechanismAnchor').replace('{count}', String(moveOccurrenceCluster.length))}
                     </span>
                   )}
                   {constrainedNonAnchorMove && (
                     <span className="mt-1 block rounded border border-warn/40 bg-warn/10 p-2 text-[10px] leading-4 text-warn">
-                      This component is constrained by the mechanism. Move the anchored component or use joint motion dragging instead.
+                      {t('bodyFeature.constrainedComponent')}
                     </span>
                   )}
                 </div>
@@ -1883,12 +1885,12 @@ export function BodyFeatureDialog() {
                 const candidate = smartMoveOccurrence(assembly, null, bodyIds);
                 return candidate ? (
                   <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] leading-4 text-warn">
-                    Bodies edits the part geometry used by every occurrence. Choose Component to reposition this fixed or joint-connected part without changing its feature history.
+                    {t('bodyFeature.bodiesWarning')}
                   </p>
                 ) : null;
               })()}
               <label>
-                <span className={LABEL}>Move type</span>
+                <span className={LABEL}>{t('bodyFeature.moveType')}</span>
                 <select
                   value={moveMode}
                   onChange={(event) => {
@@ -1901,16 +1903,16 @@ export function BodyFeatureDialog() {
                   }}
                   className={INPUT}
                 >
-                  <option value="free">Free move — XYZ + XYZ rotation</option>
-                  <option value="translate">Translate — direction and distance</option>
-                  <option value="rotate">Rotate — axis and angle</option>
-                  <option value="point_to_point">Point to point</option>
+                  <option value="free">{t('bodyFeature.moveFree')}</option>
+                  <option value="translate">{t('bodyFeature.moveTranslate')}</option>
+                  <option value="rotate">{t('bodyFeature.moveRotate')}</option>
+                  <option value="point_to_point">{t('bodyFeature.movePointToPoint')}</option>
                 </select>
               </label>
               {moveMode === 'free' ? (
                 <>
                   <VectorFields
-                    label="Translation"
+                    label={t('bodyFeature.translation')}
                     unit="mm"
                     values={moveTranslation}
                     onChange={setMoveTranslation}
@@ -1918,14 +1920,14 @@ export function BodyFeatureDialog() {
                       ? `component:${occurrenceId}`
                       : bodyIds.length > 0 ? `bodies:${bodyIds.join(',')}` : null}
                   />
-                  <VectorFields label="Rotation" unit="°" values={moveRotation} onChange={setMoveRotation} />
+                  <VectorFields label={t('bodyFeature.rotation')} unit="°" values={moveRotation} onChange={setMoveRotation} />
                 </>
               ) : moveMode === 'translate' ? (
                 <>
                   <ViewportSelectionField
                     testId="move-direction-selection"
-                    label="Direction reference"
-                    status={modelingPickTarget === 'move_direction' && selectedEdges.length > 0 ? 'Straight edge selected' : 'Click a straight edge, or enter a vector below'}
+                    label={t('bodyFeature.directionReference')}
+                    status={modelingPickTarget === 'move_direction' && selectedEdges.length > 0 ? t('bodyFeature.straightEdgeSelected') : t('bodyFeature.clickEdgeVector')}
                     active={modelingPickTarget === 'move_direction'}
                     hasSelection={validVector(moveDirectionValue)}
                     onActivate={() => activateEdgePicker('move_direction')}
@@ -1935,9 +1937,9 @@ export function BodyFeatureDialog() {
                       activateEdgePicker('move_direction');
                     }}
                   />
-                  <VectorFields label="Direction" values={moveDirection} onChange={setMoveDirection} />
+                  <VectorFields label={t('bodyFeature.direction')} values={moveDirection} onChange={setMoveDirection} />
                   <label>
-                    <span className={LABEL}>Distance (mm)</span>
+                    <span className={LABEL}>{t('bodyFeature.distanceMm')}</span>
                     <DimensionInput autoSelectKey={bodyIds.length > 0 ? bodyIds.join(',') : null} step="any" value={moveDistance} onValueChange={setMoveDistance} />
                   </label>
                 </>
@@ -1945,8 +1947,8 @@ export function BodyFeatureDialog() {
                 <>
                   <ViewportSelectionField
                     testId="move-axis-selection"
-                    label="Rotation axis"
-                    status={modelingPickTarget === 'move_axis' && selectedEdges.length > 0 ? 'Straight edge selected' : 'Click a straight edge, or enter an axis below'}
+                    label={t('bodyFeature.rotationAxis')}
+                    status={modelingPickTarget === 'move_axis' && selectedEdges.length > 0 ? t('bodyFeature.straightEdgeSelected') : t('bodyFeature.clickEdgeAxis')}
                     active={modelingPickTarget === 'move_axis'}
                     hasSelection={validVector(moveAxisValue)}
                     onActivate={() => activateEdgePicker('move_axis')}
@@ -1956,9 +1958,9 @@ export function BodyFeatureDialog() {
                       activateEdgePicker('move_axis');
                     }}
                   />
-                  <VectorFields label="Axis" values={moveAxis} onChange={setMoveAxis} />
+                  <VectorFields label={t('bodyFeature.axis')} values={moveAxis} onChange={setMoveAxis} />
                   <label>
-                    <span className={LABEL}>Angle (degrees)</span>
+                    <span className={LABEL}>{t('bodyFeature.angleDegrees')}</span>
                     <span className="relative block">
                       <DimensionInput
                         autoSelectKey={bodyIds.length > 0 ? bodyIds.join(',') : null}
@@ -1975,8 +1977,8 @@ export function BodyFeatureDialog() {
                 <>
                   <ViewportSelectionField
                     testId="move-from-selection"
-                    label="From point"
-                    status="Click a point in the viewport, or enter coordinates below"
+                    label={t('bodyFeature.fromPoint')}
+                    status={t('bodyFeature.clickPoint')}
                     active={modelingPickTarget === 'move_from'}
                     hasSelection={finiteVector(moveFromValue)}
                     onActivate={() => setModelingPickTarget('move_from')}
@@ -1985,11 +1987,11 @@ export function BodyFeatureDialog() {
                       setModelingPickTarget('move_from');
                     }}
                   />
-                  <VectorFields label="From point" unit="mm" values={moveFrom} onChange={setMoveFrom} />
+                  <VectorFields label={t('bodyFeature.fromPoint')} unit="mm" values={moveFrom} onChange={setMoveFrom} />
                   <ViewportSelectionField
                     testId="move-to-selection"
-                    label="To point"
-                    status="Click a point in the viewport, or enter coordinates below"
+                    label={t('bodyFeature.toPoint')}
+                    status={t('bodyFeature.clickPoint')}
                     active={modelingPickTarget === 'move_to'}
                     hasSelection={finiteVector(moveToValue)}
                     onActivate={() => setModelingPickTarget('move_to')}
@@ -1998,15 +2000,15 @@ export function BodyFeatureDialog() {
                       setModelingPickTarget('move_to');
                     }}
                   />
-                  <VectorFields label="To point" unit="mm" values={moveTo} onChange={setMoveTo} />
+                  <VectorFields label={t('bodyFeature.toPoint')} unit="mm" values={moveTo} onChange={setMoveTo} />
                 </>
               )}
               {(moveMode === 'free' || moveMode === 'rotate') && (
                 <>
                   <ViewportSelectionField
                     testId="move-pivot-selection"
-                    label="Rotation pivot"
-                    status="Click a point in the viewport, or enter coordinates below"
+                    label={t('bodyFeature.rotationPivot')}
+                    status={t('bodyFeature.clickPoint')}
                     active={modelingPickTarget === 'move_pivot'}
                     hasSelection={finiteVector(movePivotValue)}
                     onActivate={() => setModelingPickTarget('move_pivot')}
@@ -2015,7 +2017,7 @@ export function BodyFeatureDialog() {
                       setModelingPickTarget('move_pivot');
                     }}
                   />
-                  <VectorFields label="Rotation pivot" unit="mm" values={movePivot} onChange={setMovePivot} />
+                  <VectorFields label={t('bodyFeature.rotationPivot')} unit="mm" values={movePivot} onChange={setMovePivot} />
                 </>
               )}
               <label className="flex cursor-pointer items-start gap-2 rounded border border-edge bg-header p-2 text-xs text-ink">
@@ -2027,11 +2029,11 @@ export function BodyFeatureDialog() {
                   className="mt-0.5 accent-accent"
                 />
                 <span>
-                  <strong>Create copy</strong>
+                  <strong>{t('bodyFeature.createCopy')}</strong>
                   <span className="mt-0.5 block text-[10px] leading-4 text-mute">
                     {moveObjectType === 'component'
-                      ? 'Creates a linked occurrence of the same component definition.'
-                      : 'Creates independent body geometry with its own stable body identity.'}
+                      ? t('bodyFeature.createCopyComponentHint')
+                      : t('bodyFeature.createCopyBodyHint')}
                   </span>
                 </span>
               </label>
@@ -2040,11 +2042,11 @@ export function BodyFeatureDialog() {
             <>
               <ViewportSelectionField
                 testId="external-thread-faces"
-                label="Cylindrical surface"
+                label={t('bodyFeature.cylindricalSurface')}
                 status={threadCylinder && body
-                  ? `${body.name} · exterior cylinder Ø${(threadCylinder.radius * 2).toFixed(3)} mm selected`
-                  : 'Click an exterior cylindrical surface in the viewport'}
-                hint="Only analytic cylindrical faces are accepted; internal hole walls are rejected."
+                  ? t('bodyFeature.exteriorCylinderSelected').replace('{body}', body.name).replace('{diameter}', (threadCylinder.radius * 2).toFixed(3))
+                  : t('bodyFeature.clickCylinder')}
+                hint={t('bodyFeature.cylinderHint')}
                 active={modelingPickTarget === 'external_thread_face'}
                 hasSelection={Boolean(threadCylinder && body)}
                 onActivate={() => activateFacePicker('external_thread_face', bodyId, faceIds)}
@@ -2058,33 +2060,32 @@ export function BodyFeatureDialog() {
 
               {threadCylinder && (
                 <div className="rounded border border-edge bg-header p-2 text-[10px] leading-4 text-mute">
-                  Selected shaft Ø{(threadCylinder.radius * 2).toFixed(3)} mm
-                  {threadAxialBounds ? ` · ${threadAxialBounds.length.toFixed(3)} mm long` : ''}
+                  {t('bodyFeature.selectedShaft').replace('{diameter}', (threadCylinder.radius * 2).toFixed(3))}
+                  {threadAxialBounds ? t('bodyFeature.shaftLength').replace('{length}', threadAxialBounds.length.toFixed(3)) : ''}
                 </div>
               )}
               {threadFaceOrientation !== null && threadFaceOrientation <= 0.1 && (
                 <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] leading-4 text-warn">
-                  This is an internal cylinder wall. External threads require an
-                  outward-facing shaft surface; use Hole for internal threads.
+                  {t('bodyFeature.internalWall')}
                 </p>
               )}
 
               <div className="grid grid-cols-2 gap-2">
                 <label>
-                  <span className={LABEL}>Standard</span>
+                  <span className={LABEL}>{t('bodyFeature.standard')}</span>
                   <select
                     data-testid="external-thread-standard"
                     value={threadStandard}
                     onChange={(event) => chooseThreadStandard(event.target.value as HoleThreadStandard)}
                     className={INPUT}
                   >
-                    <option value="iso_metric">ISO metric</option>
-                    <option value="unified_inch">Unified inch</option>
-                    <option value="custom_trapezoidal">Custom rounded trapezoidal</option>
+                    <option value="iso_metric">{t('bodyFeature.isoMetric')}</option>
+                    <option value="unified_inch">{t('bodyFeature.unifiedInch')}</option>
+                    <option value="custom_trapezoidal">{t('bodyFeature.customTrapezoidal')}</option>
                   </select>
                 </label>
                 <label>
-                  <span className={LABEL}>Series</span>
+                  <span className={LABEL}>{t('bodyFeature.series')}</span>
                   <select
                     data-testid="external-thread-series"
                     disabled={threadStandard === 'custom_trapezoidal'}
@@ -2093,16 +2094,16 @@ export function BodyFeatureDialog() {
                     className={INPUT}
                   >
                     {threadStandard === 'custom_trapezoidal' ? (
-                      <option value="rounded">Rounded profile</option>
+                      <option value="rounded">{t('bodyFeature.roundedProfile')}</option>
                     ) : threadStandard === 'iso_metric' ? (
                       <>
-                        <option value="metric_coarse">Metric coarse</option>
-                        <option value="metric_fine">Metric fine</option>
+                        <option value="metric_coarse">{t('bodyFeature.metricCoarse')}</option>
+                        <option value="metric_fine">{t('bodyFeature.metricFine')}</option>
                       </>
                     ) : (
                       <>
-                        <option value="unc">UNC</option>
-                        <option value="unf">UNF</option>
+                        <option value="unc">{t('bodyFeature.unc')}</option>
+                        <option value="unf">{t('bodyFeature.unf')}</option>
                       </>
                     )}
                   </select>
@@ -2110,7 +2111,7 @@ export function BodyFeatureDialog() {
               </div>
 
               <label>
-                <span className={LABEL}>Size and pitch</span>
+                <span className={LABEL}>{t('bodyFeature.sizeAndPitch')}</span>
                 <select
                   data-testid="external-thread-preset"
                   value={threadPresetId}
@@ -2126,7 +2127,7 @@ export function BodyFeatureDialog() {
                       ).designation}
                     </option>
                   ))}
-                  <option value="custom">Custom shaft diameter and pitch…</option>
+                  <option value="custom">{t('bodyFeature.customShaft')}</option>
                 </select>
               </label>
 
@@ -2134,7 +2135,7 @@ export function BodyFeatureDialog() {
                 <>
                   <div className="grid grid-cols-2 gap-2">
                     <label>
-                      <span className={LABEL}>Major diameter (mm)</span>
+                      <span className={LABEL}>{t('bodyFeature.majorDiameterMm')}</span>
                       <DimensionInput
                         data-testid="external-thread-nominal"
                         autoSelectKey={faceIds.length === 1 ? `${bodyId}:${faceIds[0]}` : null}
@@ -2145,7 +2146,7 @@ export function BodyFeatureDialog() {
                       />
                     </label>
                     <label>
-                      <span className={LABEL}>Pitch (mm)</span>
+                      <span className={LABEL}>{t('bodyFeature.pitchMm')}</span>
                       <DimensionInput
                         data-testid="external-thread-pitch"
                         min="0.000001"
@@ -2157,7 +2158,7 @@ export function BodyFeatureDialog() {
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <label>
-                      <span className={LABEL}>Tolerance class</span>
+                      <span className={LABEL}>{t('bodyFeature.toleranceClass')}</span>
                       <input
                         value={threadClass}
                         disabled={threadStandard === 'custom_trapezoidal'}
@@ -2166,7 +2167,7 @@ export function BodyFeatureDialog() {
                       />
                     </label>
                     <label>
-                      <span className={LABEL}>Designation</span>
+                      <span className={LABEL}>{t('bodyFeature.designation')}</span>
                       <input
                         value={threadDesignation}
                         onChange={(event) => setThreadDesignation(event.target.value)}
@@ -2177,8 +2178,7 @@ export function BodyFeatureDialog() {
                 </>
               ) : (
                 <div className="rounded border border-edge bg-header p-2 text-[10px] leading-4 text-mute">
-                  {threadValue.designation} · class {threadValue.class} · major Ø
-                  {threadValue.nominal_diameter.toFixed(3)} mm · pitch {threadValue.pitch.toFixed(3)} mm
+                  {t('bodyFeature.threadSummary').replace('{designation}', threadValue.designation).replace('{className}', threadValue.class).replace('{diameter}', threadValue.nominal_diameter.toFixed(3)).replace('{pitch}', threadValue.pitch.toFixed(3))}
                 </div>
               )}
 
@@ -2187,34 +2187,32 @@ export function BodyFeatureDialog() {
 
               {!threadDiameterMatches && threadCylinder && (
                 <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] leading-4 text-warn">
-                  Thread major diameter must match the selected shaft Ø
-                  {(threadCylinder.radius * 2).toFixed(3)} mm. Choose a matching
-                  standard size or enter that diameter as a custom thread.
+                  {t('bodyFeature.diameterMismatch').replace('{diameter}', (threadCylinder.radius * 2).toFixed(3))}
                 </p>
               )}
 
               <div className="grid grid-cols-2 gap-2">
                 <label>
-                  <span className={LABEL}>Hand</span>
+                  <span className={LABEL}>{t('bodyFeature.hand')}</span>
                   <select
                     value={threadHand}
                     onChange={(event) => setThreadHand(event.target.value as HoleThreadHand)}
                     className={INPUT}
                   >
-                    <option value="right">Right-hand</option>
-                    <option value="left">Left-hand</option>
+                    <option value="right">{t('bodyFeature.rightHand')}</option>
+                    <option value="left">{t('bodyFeature.leftHand')}</option>
                   </select>
                 </label>
                 <label>
-                  <span className={LABEL}>Representation</span>
+                  <span className={LABEL}>{t('bodyFeature.representation')}</span>
                   <select
                     data-testid="external-thread-representation"
                     value={threadRepresentation}
                     onChange={(event) => setThreadRepresentation(event.target.value as HoleThreadRepresentation)}
                     className={INPUT}
                   >
-                    <option value="simplified">Simplified / cosmetic</option>
-                    <option value="modeled">Modeled geometry</option>
+                    <option value="simplified">{t('bodyFeature.simplified')}</option>
+                    <option value="modeled">{t('bodyFeature.modeled')}</option>
                   </select>
                 </label>
               </div>
@@ -2226,11 +2224,11 @@ export function BodyFeatureDialog() {
                   onChange={(event) => setThreadFullLength(event.target.checked)}
                   className="accent-accent"
                 />
-                Thread the full cylindrical surface
+                {t('bodyFeature.fullThread')}
               </label>
               {!threadFullLength && (
                 <label>
-                  <span className={LABEL}>Thread length (mm)</span>
+                  <span className={LABEL}>{t('bodyFeature.threadLengthMm')}</span>
                   <DimensionInput
                     min="0.000001"
                     max={threadAxialBounds ? String(threadAxialBounds.length) : undefined}
@@ -2247,13 +2245,11 @@ export function BodyFeatureDialog() {
                   onChange={(event) => setThreadFlip(event.target.checked)}
                   className="accent-accent"
                 />
-                Flip thread start to the opposite end
+                {t('bodyFeature.flipThread')}
               </label>
               {threadRepresentation === 'modeled' && (
                 <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] leading-4 text-warn">
-                  Modeled threads cut the exact helical groove and increase recompute,
-                  display, and export cost. Simplified threads retain manufacturing
-                  metadata with a lightweight viewport indication.
+                  {t('bodyFeature.modeledWarning')}
                 </p>
               )}
             </>
@@ -2261,11 +2257,11 @@ export function BodyFeatureDialog() {
             <>
               <ViewportSelectionField
                 testId="shell-face-selection"
-                label="Faces to remove"
+                label={t('bodyFeature.facesToRemove')}
                 status={faceIds.length > 0 && body
-                  ? `${faceIds.length} ${faceIds.length === 1 ? 'face' : 'faces'} selected · ${body.name}`
-                  : 'Click faces to remove in the viewport'}
-                hint="All selected faces must belong to the same body."
+                  ? (faceIds.length === 1 ? t('bodyFeature.faceSelected') : t('bodyFeature.facesSelected')).replace('{count}', String(faceIds.length)).replace('{body}', body.name)
+                  : t('bodyFeature.clickFaces')}
+                hint={t('bodyFeature.shellHint')}
                 active={modelingPickTarget === 'shell_faces'}
                 hasSelection={faceIds.length > 0}
                 onActivate={() => activateFacePicker('shell_faces', bodyId, faceIds)}
@@ -2276,7 +2272,7 @@ export function BodyFeatureDialog() {
                 }}
               />
               <label>
-                <span className={LABEL}>Wall thickness (mm)</span>
+                <span className={LABEL}>{t('bodyFeature.wallThicknessMm')}</span>
                 <DimensionInput
                   autoSelectKey={faceIds.length > 0 ? `${bodyId}:${faceIds.join(',')}` : null}
                   min="0.000001"
@@ -2292,7 +2288,7 @@ export function BodyFeatureDialog() {
                   onChange={(event) => setInward(event.target.checked)}
                   className="accent-accent"
                 />
-                Offset walls inward
+                {t('bodyFeature.offsetInward')}
               </label>
             </>
           ) : kind === 'mirror' ? (
@@ -2305,8 +2301,8 @@ export function BodyFeatureDialog() {
               {bodyChecklist}
               <ViewportSelectionField
                 testId="rectangular-pattern-direction-selection"
-                label="First direction reference"
-                status={modelingPickTarget === 'rectangular_pattern_direction' && selectedEdges.length > 0 ? 'Straight edge selected' : 'Click a straight edge, or enter a vector below'}
+                label={t('bodyFeature.firstDirectionReference')}
+                status={modelingPickTarget === 'rectangular_pattern_direction' && selectedEdges.length > 0 ? t('bodyFeature.straightEdgeSelected') : t('bodyFeature.clickEdgeVector')}
                 active={modelingPickTarget === 'rectangular_pattern_direction'}
                 hasSelection={validVector(directionValue)}
                 onActivate={() => activateEdgePicker('rectangular_pattern_direction')}
@@ -2317,13 +2313,13 @@ export function BodyFeatureDialog() {
                 }}
               />
               <VectorFields
-                label="First direction"
+                label={t('bodyFeature.firstDirection')}
                 values={direction}
                 onChange={setDirection}
               />
               <div className="grid grid-cols-2 gap-2">
                 <label>
-                  <span className={LABEL}>Spacing (mm)</span>
+                  <span className={LABEL}>{t('bodyFeature.spacingMm')}</span>
                   <DimensionInput
                     autoSelectKey={bodyIds.length > 0 ? bodyIds.join(',') : null}
                     step="any"
@@ -2332,7 +2328,7 @@ export function BodyFeatureDialog() {
                   />
                 </label>
                 <label>
-                  <span className={LABEL}>Count</span>
+                  <span className={LABEL}>{t('bodyFeature.count')}</span>
                   <DimensionInput
                     min="2"
                     step="1"
@@ -2352,14 +2348,14 @@ export function BodyFeatureDialog() {
                   }}
                   className="accent-accent"
                 />
-                Add a second direction
+                {t('bodyFeature.addSecondDirection')}
               </label>
               {secondEnabled && (
                 <>
                   <ViewportSelectionField
                     testId="rectangular-pattern-second-direction-selection"
-                    label="Second direction reference"
-                    status={modelingPickTarget === 'rectangular_pattern_second_direction' && selectedEdges.length > 0 ? 'Straight edge selected' : 'Click a straight edge, or enter a vector below'}
+                    label={t('bodyFeature.secondDirectionReference')}
+                    status={modelingPickTarget === 'rectangular_pattern_second_direction' && selectedEdges.length > 0 ? t('bodyFeature.straightEdgeSelected') : t('bodyFeature.clickEdgeVector')}
                     active={modelingPickTarget === 'rectangular_pattern_second_direction'}
                     hasSelection={validVector(secondDirectionValue)}
                     onActivate={() => activateEdgePicker('rectangular_pattern_second_direction')}
@@ -2370,13 +2366,13 @@ export function BodyFeatureDialog() {
                     }}
                   />
                   <VectorFields
-                    label="Second direction"
+                    label={t('bodyFeature.secondDirection')}
                     values={secondDirection}
                     onChange={setSecondDirection}
                   />
                   <div className="grid grid-cols-2 gap-2">
                     <label>
-                      <span className={LABEL}>Spacing (mm)</span>
+                      <span className={LABEL}>{t('bodyFeature.spacingMm')}</span>
                       <DimensionInput
                         step="any"
                         value={secondSpacing}
@@ -2384,7 +2380,7 @@ export function BodyFeatureDialog() {
                       />
                     </label>
                     <label>
-                      <span className={LABEL}>Count</span>
+                      <span className={LABEL}>{t('bodyFeature.count')}</span>
                       <DimensionInput
                         min="2"
                         step="1"
@@ -2401,9 +2397,9 @@ export function BodyFeatureDialog() {
               {bodyChecklist}
               <ViewportSelectionField
                 testId="circular-pattern-axis-selection"
-                label="Axis reference"
-                status={modelingPickTarget === 'circular_pattern_axis' && selectedEdges.length > 0 ? 'Straight edge selected' : 'Click a straight edge, or enter the axis below'}
-                hint="A selected edge supplies both the axis origin and direction."
+                label={t('bodyFeature.axisReference')}
+                status={modelingPickTarget === 'circular_pattern_axis' && selectedEdges.length > 0 ? t('bodyFeature.straightEdgeSelected') : t('bodyFeature.clickEdgeAxis')}
+                hint={t('bodyFeature.axisHint')}
                 active={modelingPickTarget === 'circular_pattern_axis'}
                 hasSelection={validVector(axisDirectionValue) && finiteVector(axisOriginValue)}
                 onActivate={() => activateEdgePicker('circular_pattern_axis')}
@@ -2415,18 +2411,18 @@ export function BodyFeatureDialog() {
                 }}
               />
               <VectorFields
-                label="Axis origin"
+                label={t('bodyFeature.axisOrigin')}
                 values={axisOrigin}
                 onChange={setAxisOrigin}
               />
               <VectorFields
-                label="Axis direction"
+                label={t('bodyFeature.axisDirection')}
                 values={axisDirection}
                 onChange={setAxisDirection}
               />
               <div className="grid grid-cols-2 gap-2">
                 <label>
-                  <span className={LABEL}>Count</span>
+                  <span className={LABEL}>{t('bodyFeature.count')}</span>
                   <DimensionInput
                     autoSelectKey={bodyIds.length > 0 ? bodyIds.join(',') : null}
                     min="2"
@@ -2436,7 +2432,7 @@ export function BodyFeatureDialog() {
                   />
                 </label>
                 <label>
-                  <span className={LABEL}>Total angle (degrees)</span>
+                  <span className={LABEL}>{t('bodyFeature.totalAngleDegrees')}</span>
                   <DimensionInput
                     step="any"
                     value={totalAngle}
@@ -2449,10 +2445,10 @@ export function BodyFeatureDialog() {
             <>
               <ViewportSelectionField
                 testId="combine-target-selection"
-                label="Target body"
+                label={t('bodyFeature.targetBody')}
                 status={targetBodyId > 0
-                  ? `${bodies.find((candidate) => candidate.id === targetBodyId)?.name ?? 'Body'} selected`
-                  : 'Click the target body in the viewport'}
+                  ? t('bodyFeature.namedSelected').replace('{name}', bodies.find((candidate) => candidate.id === targetBodyId)?.name ?? t('bodyFeature.body'))
+                  : t('bodyFeature.clickTargetBody')}
                 active={modelingPickTarget === 'combine_target'}
                 hasSelection={targetBodyId > 0}
                 onActivate={() => activateBodyPicker('combine_target', targetBodyId > 0 ? [targetBodyId] : [])}
@@ -2463,11 +2459,11 @@ export function BodyFeatureDialog() {
               />
               <ViewportSelectionField
                 testId="combine-tools-selection"
-                label="Tool bodies"
+                label={t('bodyFeature.toolBodies')}
                 status={toolBodyIds.length > 0
-                  ? `${toolBodyIds.length} tool ${toolBodyIds.length === 1 ? 'body' : 'bodies'} selected`
-                  : targetBodyId > 0 ? 'Click one or more tool bodies' : 'Select a target body first'}
-                hint="The target remains distinct from the tool-body selection."
+                  ? (toolBodyIds.length === 1 ? t('bodyFeature.toolBodySelected') : t('bodyFeature.toolBodiesSelected')).replace('{count}', String(toolBodyIds.length))
+                  : targetBodyId > 0 ? t('bodyFeature.clickToolBodies') : t('bodyFeature.selectTargetFirst')}
+                hint={t('bodyFeature.combineHint')}
                 active={modelingPickTarget === 'combine_tools'}
                 hasSelection={toolBodyIds.length > 0}
                 onActivate={() => activateBodyPicker(
@@ -2480,7 +2476,7 @@ export function BodyFeatureDialog() {
                 }}
               />
               <label>
-                <span className={LABEL}>Operation</span>
+                <span className={LABEL}>{t('bodyFeature.operation')}</span>
                 <select
                   value={combineOperation}
                   onChange={(event) =>
@@ -2488,9 +2484,9 @@ export function BodyFeatureDialog() {
                   }
                   className={INPUT}
                 >
-                  <option value="join">Add</option>
-                  <option value="cut">Subtract</option>
-                  <option value="intersect">Common</option>
+                  <option value="join">{t('bodyFeature.join')}</option>
+                  <option value="cut">{t('bodyFeature.cut')}</option>
+                  <option value="intersect">{t('bodyFeature.intersect')}</option>
                 </select>
               </label>
               <label className="flex cursor-pointer items-center gap-2 text-xs text-ink">
@@ -2500,17 +2496,17 @@ export function BodyFeatureDialog() {
                   onChange={(event) => setKeepTools(event.target.checked)}
                   className="accent-accent"
                 />
-                Keep tool bodies
+                {t('bodyFeature.keepTools')}
               </label>
             </>
           ) : (
             <>
               <ViewportSelectionField
                 testId="split-body-selection"
-                label="Body to split"
+                label={t('bodyFeature.bodyToSplit')}
                 status={bodyId > 0
-                  ? `${bodies.find((candidate) => candidate.id === bodyId)?.name ?? 'Body'} selected`
-                  : 'Click the body to split in the viewport'}
+                  ? t('bodyFeature.namedSelected').replace('{name}', bodies.find((candidate) => candidate.id === bodyId)?.name ?? t('bodyFeature.body'))
+                  : t('bodyFeature.clickSplitBody')}
                 active={modelingPickTarget === 'split_body'}
                 hasSelection={bodyId > 0}
                 onActivate={() => activateBodyPicker('split_body', bodyId > 0 ? [bodyId] : [])}
@@ -2524,7 +2520,7 @@ export function BodyFeatureDialog() {
           )}
           {edit && edit.type !== kind && (
             <p className="text-xs text-red-300">
-              This timeline feature does not match the requested operation.
+              {t('bodyFeature.mismatch')}
             </p>
           )}
         </div>
@@ -2536,7 +2532,7 @@ export function BodyFeatureDialog() {
             disabled={busy}
             className="h-7 rounded border border-edge px-3 text-xs text-ink hover:bg-edge"
           >
-            Cancel
+            {t('bodyFeature.cancel')}
           </button>
           <button
             data-testid="body-feature-ok"
@@ -2544,7 +2540,7 @@ export function BodyFeatureDialog() {
             disabled={!valid}
             className="h-7 rounded bg-accent px-3 text-xs font-semibold text-white disabled:opacity-40"
           >
-            OK
+            {t('bodyFeature.ok')}
           </button>
         </footer>
       </form>

@@ -52,14 +52,15 @@ import {
   CAM_DIALOG_LABEL,
   DialogSection,
   DraftNumber,
-  NOT_APPLIED_YET,
+  notAppliedYetTitle,
   feedUnit,
   lengthUnit,
   parseDraft,
 } from './camFields';
 import { OP_PAGES, openCamToolPicker, useCamToolPickResult } from './opShared';
+import { useTranslation } from '../../i18n';
 
-import { CamOperationTabs, HeightField, HEIGHT_CHAIN_LABELS, type HeightFrom, type OpTab } from './camOperationFields';
+import { CamOperationTabs, HeightField, HEIGHT_CHAIN_LABEL_KEYS, type HeightFrom, type OpTab } from './camOperationFields';
 
 type OperationKind = Exclude<CamOperationInput['kind'], 'adaptive3d'>;
 /** Geometry input mode. Chain kinds (contour) offer all three — the solid's
@@ -169,7 +170,7 @@ function DeadCheck({ label, checked = false }: { label: string; checked?: boolea
   return (
     <label
       className="flex cursor-not-allowed items-center gap-2 text-[11px] text-mute/60"
-      title={NOT_APPLIED_YET}
+      title={notAppliedYetTitle()}
     >
       <input type="checkbox" checked={checked} disabled readOnly />
       {label}
@@ -180,7 +181,7 @@ function DeadCheck({ label, checked = false }: { label: string; checked?: boolea
 /** Placeholder select pinned to one display value. */
 function DeadSelect({ label, value }: { label: string; value: string }) {
   return (
-    <label className="block cursor-not-allowed opacity-45" title={NOT_APPLIED_YET}>
+    <label className="block cursor-not-allowed opacity-45" title={notAppliedYetTitle()}>
       <span className={CAM_DIALOG_LABEL}>{label}</span>
       <select disabled className={`${CAM_DIALOG_INPUT} cursor-not-allowed`}>
         <option>{value}</option>
@@ -195,7 +196,7 @@ function DeadButton({ label }: { label: string }) {
     <button
       type="button"
       disabled
-      title={NOT_APPLIED_YET}
+      title={notAppliedYetTitle()}
       className="h-7 cursor-not-allowed rounded border border-edge px-3 text-[10px] font-semibold text-mute/60 opacity-60"
     >
       {label}
@@ -210,6 +211,7 @@ function DeadButton({ label }: { label: string }) {
  *  operation kinds. Geometry, tool, heights, and feeds are all explicit;
  *  validation in the engine rejects incomplete input. */
 export function CamOperationDialog({ kind, editing, insertion }: { kind: OperationKind; editing?: CamOperationDto; insertion?: CamOperationPlacement }) {
+  const { t } = useTranslation();
   // Editing reuses this exact dialog: every draft below seeds from the stored
   // operation and Save writes back through the same submit path as Add, so
   // create and edit can never drift apart.
@@ -613,7 +615,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
         const holes = holePick?.holes ?? [];
         if (holes.length === 0) {
           throw new Error(
-            `${label}: pick hole faces in the viewport to use the hole top/bottom reference.`,
+            t('cam.operation.errorHeightRefPickHoles').replace('{label}', label),
           );
         }
         return from === 'hole_top'
@@ -623,7 +625,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
       case 'selection': {
         const z = selectionZ();
         if (z === null) {
-          throw new Error(`${label}: select a chain in one setup-Z plane on Geometry to use the Selection reference.`);
+          throw new Error(t('cam.operation.errorHeightRefSelection').replace('{label}', label));
         }
         return z;
       }
@@ -633,7 +635,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
       case 'retract': {
         const z = resolved[from];
         if (z === undefined) {
-          throw new Error(`${label} references the ${HEIGHT_CHAIN_LABELS[from]}, which this operation does not resolve.`);
+          throw new Error(t('cam.operation.errorHeightChainUnresolved').replace('{label}', label).replace('{reference}', t(HEIGHT_CHAIN_LABEL_KEYS[from]!)));
         }
         return z;
       }
@@ -956,10 +958,10 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
   }, [selectionAvailable]);
 
   const pathFromLoop = (): CamPoint2Dto[] => {
-    if (!setup) throw new Error('No active CAM setup.');
+    if (!setup) throw new Error(t('cam.operation.errorNoActiveSetup'));
     const loop = selectedLoop();
     if (!loop) {
-      throw new Error('Click a closed sketch loop in the viewport, or switch to manual coordinates.');
+      throw new Error(t('cam.operation.errorClickSketchLoop'));
     }
     return loopToSetupPath(loop, sketches, setup.wcs);
   };
@@ -972,11 +974,11 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
       .map((line, index) => {
         const values = line.split(/[\s,;]+/).filter(Boolean).map(Number);
         if (values.length !== 2 || !values.every(Number.isFinite)) {
-          throw new Error(`${label} line ${index + 1} must contain X,Y numbers.`);
+          throw new Error(t('cam.operation.errorManualLine').replace('{label}', label).replace('{line}', String(index + 1)));
         }
         return { x: commitLength(values[0], units), y: commitLength(values[1], units) };
       });
-    if (points.length === 0) throw new Error(`${label}: enter at least one point or pick sketch geometry.`);
+    if (points.length === 0) throw new Error(t('cam.operation.errorManualEmpty').replace('{label}', label));
     return points;
   };
 
@@ -986,7 +988,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
   const loopChainRef = (): CamChainRefDto | null => {
     if (source !== 'sketch') return null;
     const loop = selectedLoop();
-    if (!loop) throw new Error('Pick a closed sketch loop in the viewport.');
+    if (!loop) throw new Error(t('cam.operation.errorPickClosedLoop'));
     return {
       source: 'sketch',
       keys: loop.entityIds.map((id) => `sketch:${loop.sketch}:${id}`),
@@ -1002,20 +1004,16 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
     const checkCompensation = (closed: boolean) => {
       if (kind !== 'contour2d') return;
       if (!closed && (compensation === 'inside' || compensation === 'outside')) {
-        throw new Error(
-          'An open chain has no interior — choose On path, Left, or Right compensation.',
-        );
+        throw new Error(t('cam.operation.errorOpenChainCompensation'));
       }
       if (closed && (compensation === 'left' || compensation === 'right')) {
-        throw new Error(
-          'A closed path compensates Inside/Outside; left/right is for open chains.',
-        );
+        throw new Error(t('cam.operation.errorClosedPathCompensation'));
       }
     };
     if (source === 'model' || source === 'sketch') {
-      if (!setup) throw new Error('No active CAM setup.');
+      if (!setup) throw new Error(t('cam.operation.errorNoActiveSetup'));
       if (!chainResolution?.chain) {
-        throw new Error(chainResolution?.error ?? 'Click edges in the viewport to build the contour path.');
+        throw new Error(chainResolution?.error ?? t('cam.operation.errorClickEdgesContour'));
       }
       const points = chainResolution.chain.points.map(([x, y, z]) => {
         const projected = modelPointToSetup({ x, y, z }, setup.wcs);
@@ -1027,7 +1025,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
         closed: chainResolution.chain.closed,
       };
     }
-    const manual = parseManualPoints('Contour path');
+    const manual = parseManualPoints(t('cam.operation.labelContourPath'));
     // A manual path whose last point repeats its first is closed; store it
     // without the duplicate, like every other closed outline.
     let closed = false;
@@ -1050,7 +1048,8 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
   const resolveDrillTargets = (): { points: CamPoint2Dto[]; holes: CamHoleDto[] } => {
     if (unresolvedHoleRefs.length > 0) {
       throw new Error(
-        `${unresolvedHoleRefs.length} referenced hole face${unresolvedHoleRefs.length > 1 ? 's no longer exist' : ' no longer exists'}. Discard the broken reference and reselect the current face before saving.`,
+        t(unresolvedHoleRefs.length > 1 ? 'cam.operation.errorUnresolvedHolesMany' : 'cam.operation.errorUnresolvedHolesOne')
+          .replace('{count}', String(unresolvedHoleRefs.length)),
       );
     }
     // Fixed-axis planning drills along setup Z only; a picked hole whose axis
@@ -1059,7 +1058,8 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
     const tilted = (holePick?.holes ?? []).filter((hole) => Math.abs(hole.axis[2]) < 1 - 1e-6);
     if (tilted.length > 0) {
       throw new Error(
-        `${tilted.length} picked hole${tilted.length > 1 ? 's are' : ' is'} not aligned with setup Z — fixed-axis planning drills along setup Z only; indexed/5-axis tool orientation is not supported yet.`,
+        t(tilted.length > 1 ? 'cam.operation.errorTiltedHolesMany' : 'cam.operation.errorTiltedHolesOne')
+          .replace('{count}', String(tilted.length)),
       );
     }
     const holes: CamHoleDto[] = (holePick?.holes ?? []).map((hole) => ({
@@ -1069,9 +1069,9 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
       axis: hole.axis,
       face_key: hole.key,
     }));
-    const points = manualPoints.trim() ? parseManualPoints('Hole centers') : [];
+    const points = manualPoints.trim() ? parseManualPoints(t('cam.operation.labelHoleCenters')) : [];
     if (holes.length === 0 && points.length === 0) {
-      throw new Error('Click hole faces in the viewport, or enter hole centers manually.');
+      throw new Error(t('cam.operation.errorClickHoleFaces'));
     }
     return { points, holes };
   };
@@ -1083,15 +1083,15 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
     if (saveBusy) return;
     setError(null);
     try {
-      if (!setup) throw new Error('No active CAM setup.');
-      if (toolId === null) throw new Error('Pick a tool from the library first.');
-      if (!selectedTool || !pickCompatible(selectedTool)) throw new Error('The assigned tool is incompatible with this operation. Choose a supported tool from the library.');
+      if (!setup) throw new Error(t('cam.operation.errorNoActiveSetup'));
+      if (toolId === null) throw new Error(t('cam.operation.errorPickTool'));
+      if (!selectedTool || !pickCompatible(selectedTool)) throw new Error(t('cam.operation.errorAssignedToolIncompatibleLibrary'));
       // Heights resolve low to high so chain references (bottom → top →
       // feed → retract → clearance) read already-resolved values; the
       // stored result stays absolute setup Z either way.
       const hasBottomRow = pages.bottomZ === true || pages.faceTarget === true;
       const heightOffset = (offset: string, label: string): number =>
-        commitLength(parseDraft(offset, `${label} offset`), units);
+        commitLength(parseDraft(offset, t('cam.operation.labelOffset').replace('{label}', label)), units);
       const resolveOne = (
         from: HeightFrom,
         offset: string,
@@ -1100,15 +1100,15 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
       ): number =>
         heightRefZ(from, resolved, label) + heightOffset(offset, label);
       const bottomValue = hasBottomRow
-        ? resolveOne(bottomFrom, bottomOff, 'Bottom height', {})
+        ? resolveOne(bottomFrom, bottomOff, t('cam.operation.heightBottom'), {})
         : undefined;
-      if (isModeledChamfer && highestModeledTop === undefined) throw new Error(chamferResolution?.error ?? 'Select the modeled bevel and wait for its geometry to resolve.');
-      const topValue = highestModeledTop ?? resolveOne(topFrom, topOff, 'Top height', { bottom: bottomValue });
-      const feedValue = resolveOne(feedFrom, feedOff, 'Feed height', {
+      if (isModeledChamfer && highestModeledTop === undefined) throw new Error(chamferResolution?.error ?? t('cam.operation.errorSelectModeledBevel'));
+      const topValue = highestModeledTop ?? resolveOne(topFrom, topOff, t('cam.operation.heightTop'), { bottom: bottomValue });
+      const feedValue = resolveOne(feedFrom, feedOff, t('cam.operation.heightFeed'), {
         bottom: bottomValue,
         top: topValue,
       });
-      const retractValue = resolveOne(retractFrom, retractOff, 'Retract height', {
+      const retractValue = resolveOne(retractFrom, retractOff, t('cam.operation.heightRetract'), {
         bottom: bottomValue,
         top: topValue,
         feed: feedValue,
@@ -1116,9 +1116,9 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
       // Rapids stop at the feed plane: below it everything runs at feed
       // rate, so it must sit between the cut top and the retract plane.
       if (feedValue < topValue - 1e-9 || feedValue > retractValue + 1e-9) {
-        throw new Error('Feed height must sit between the top and retract heights.');
+        throw new Error(t('cam.operation.errorFeedHeightRange'));
       }
-      const clearanceValue = resolveOne(clearanceFrom, clearanceOff, 'Clearance height', {
+      const clearanceValue = resolveOne(clearanceFrom, clearanceOff, t('cam.operation.heightClearance'), {
         bottom: bottomValue,
         top: topValue,
         feed: feedValue,
@@ -1127,24 +1127,24 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
       const heightExpressions: CamOperationHeightExpressionsInput = {
         clearance: {
           reference: clearanceFrom,
-          offset: heightOffset(clearanceOff, 'Clearance height'),
+          offset: heightOffset(clearanceOff, t('cam.operation.heightClearance')),
         },
         retract: {
           reference: retractFrom,
-          offset: heightOffset(retractOff, 'Retract height'),
+          offset: heightOffset(retractOff, t('cam.operation.heightRetract')),
         },
         feed: {
           reference: feedFrom,
-          offset: heightOffset(feedOff, 'Feed height'),
+          offset: heightOffset(feedOff, t('cam.operation.heightFeed')),
         },
         top: {
           reference: topFrom,
-          offset: heightOffset(topOff, 'Top height'),
+          offset: heightOffset(topOff, t('cam.operation.heightTop')),
         },
         bottom: hasBottomRow
           ? {
               reference: bottomFrom,
-              offset: heightOffset(bottomOff, 'Bottom height'),
+              offset: heightOffset(bottomOff, t('cam.operation.heightBottom')),
             }
           : null,
       };
@@ -1160,7 +1160,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
       // Bottom height is a reference plane plus a signed offset, resolved to
       // absolute setup Z for the kinds that cut to a depth.
       const bottomAbs = () => {
-        if (bottomValue === undefined) throw new Error('This operation has no bottom height.');
+        if (bottomValue === undefined) throw new Error(t('cam.operation.errorNoBottomHeight'));
         return bottomValue;
       };
       let operation: CamOperationInput;
@@ -1170,12 +1170,12 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             ? { min: { x: setup.stock.min.x, y: setup.stock.min.y }, max: { x: setup.stock.max.x, y: setup.stock.max.y } }
             : {
                 min: {
-                  x: commitLength(parseDraft(faceMin.x, 'Face min X'), units),
-                  y: commitLength(parseDraft(faceMin.y, 'Face min Y'), units),
+                  x: commitLength(parseDraft(faceMin.x, t('cam.operation.labelFaceMinX')), units),
+                  y: commitLength(parseDraft(faceMin.y, t('cam.operation.labelFaceMinY')), units),
                 },
                 max: {
-                  x: commitLength(parseDraft(faceMax.x, 'Face max X'), units),
-                  y: commitLength(parseDraft(faceMax.y, 'Face max Y'), units),
+                  x: commitLength(parseDraft(faceMax.x, t('cam.operation.labelFaceMaxX')), units),
+                  y: commitLength(parseDraft(faceMax.y, t('cam.operation.labelFaceMaxY')), units),
                 },
               };
           const target = bottomAbs();
@@ -1185,12 +1185,12 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             bounds,
             top_z: top,
             target_z: target,
-            step_over: commitLength(parseDraft(stepOver, 'Stepover'), units),
+            step_over: commitLength(parseDraft(stepOver, t('cam.operation.labelStepover')), units),
             // Without multiple depths a single pass covers the full depth.
             step_down: multipleDepths
-              ? commitLength(parseDraft(stepDown, 'Maximum stepdown'), units)
+              ? commitLength(parseDraft(stepDown, t('cam.operation.labelMaximumStepdown')), units)
               : Math.max(Math.abs(top - target), 0.001),
-            safe_distance: commitLength(parseDraft(safeDistance, 'Safe distance'), units),
+            safe_distance: commitLength(parseDraft(safeDistance, t('cam.operation.labelSafeDistance')), units),
             direction: faceDirection,
             cutting: cutting(),
           };
@@ -1205,44 +1205,42 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
           const leadInMm = Math.max(1e-6, links.lead_in.linear_distance);
           const leadOutMm = Math.max(1e-6, links.same_as_lead_in ? links.lead_in.linear_distance : links.lead_out.linear_distance);
           if (leadInMm <= 0 || leadOutMm <= 0) {
-            throw new Error('Lead lengths must be positive.');
+            throw new Error(t('cam.operation.errorLeadLengthsPositive'));
           }
           const arcMm = links.lead_in.horizontal_radius || null;
           if (arcMm !== null && arcMm <= 0) {
-            throw new Error('Lead arc radius must be positive.');
+            throw new Error(t('cam.operation.errorLeadArcPositive'));
           }
           // Lead lengths and arc radius describe physical cutter-center
           // motion and carry no tool-diameter floor. In-control planning
           // expands the programmed lead arc by the selected tool radius so
           // the controller's compensated result still matches this value.
-          const passes = Math.max(1, Math.round(parseDraft(roughingPasses, 'Roughing passes')));
+          const passes = Math.max(1, Math.round(parseDraft(roughingPasses, t('cam.operation.labelRoughingPasses'))));
           let roughStepMm: number | null = null;
           if (passes > 1) {
-            roughStepMm = commitLength(parseDraft(roughingStepOver, 'Roughing stepover'), units);
-            if (roughStepMm <= 0) throw new Error('Roughing stepover must be positive.');
+            roughStepMm = commitLength(parseDraft(roughingStepOver, t('cam.operation.labelRoughingStepover')), units);
+            if (roughStepMm <= 0) throw new Error(t('cam.operation.errorRoughingStepoverPositive'));
             if (selectedTool && roughStepMm > selectedTool.diameter + 1e-9) {
-              throw new Error('Roughing stepover must not exceed the tool diameter.');
+              throw new Error(t('cam.operation.errorRoughingStepoverDiameter'));
             }
           }
           let allowanceMm = 0;
           let finishFeedMm: number | null = null;
           if (finishingPass) {
-            allowanceMm = commitLength(parseDraft(finishAllowance, 'Finish allowance'), units);
-            if (allowanceMm <= 0) throw new Error('Finish allowance must be positive.');
+            allowanceMm = commitLength(parseDraft(finishAllowance, t('cam.operation.labelFinishAllowance')), units);
+            if (allowanceMm <= 0) throw new Error(t('cam.operation.errorFinishAllowancePositive'));
             finishFeedMm = finishFeed.trim()
-              ? commitFeed(parseDraft(finishFeed, 'Finish feed'), units)
+              ? commitFeed(parseDraft(finishFeed, t('cam.operation.labelFinishFeed')), units)
               : null;
           }
           if (springPass && !geometry.closed) {
-            throw new Error('A spring pass repeats the final lap, which needs a closed path.');
+            throw new Error(t('cam.operation.errorSpringPassClosed'));
           }
           // On-path compensation rides the tool center on the contour — no
           // offset to step, so radial passes and a finishing pass have no
           // meaning (the engine rejects the combination too).
           if (compensation === 'on' && (passes > 1 || finishingPass)) {
-            throw new Error(
-              'On-path compensation has no wall offset to step — multi-pass roughing and a finishing pass need Inside/Outside (or Left/Right on open chains).',
-            );
+            throw new Error(t('cam.operation.errorOnPathCompensation'));
           }
           operation = {
             ...base,
@@ -1251,7 +1249,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             closed: geometry.closed,
             top_z: top,
             bottom_z: bottom,
-            step_down: commitLength(parseDraft(stepDown, 'Maximum stepdown'), units),
+            step_down: commitLength(parseDraft(stepDown, t('cam.operation.labelMaximumStepdown')), units),
             compensation,
             compensation_mode: compensationMode,
             direction: millingDirection,
@@ -1280,30 +1278,30 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
           operation = {
             ...base,
             kind,
-            outline: resolvePath('Pocket outline'),
+            outline: resolvePath(t('cam.operation.labelPocketOutline')),
             chain_ref: loopChainRef(),
             top_z: top,
             bottom_z: bottom,
             step_down: multipleDepths
-              ? commitLength(parseDraft(stepDown, 'Maximum stepdown'), units)
+              ? commitLength(parseDraft(stepDown, t('cam.operation.labelMaximumStepdown')), units)
               : Math.max(Math.abs(top - bottom), 0.001),
-            step_over: commitLength(parseDraft(stepOver, 'Stepover'), units),
+            step_over: commitLength(parseDraft(stepOver, t('cam.operation.labelStepover')), units),
             direction: millingDirection,
             cutting: cutting(),
           };
           break;
         }
         case 'chamfer2d': {
-          const added = isModeledChamfer ? commitLength(parseDraft(additionalWidth, 'Additional chamfer width'), units) : 0;
-          const width = isModeledChamfer ? 0 : commitLength(parseDraft(chamferWidth, 'Chamfer width'), units);
+          const added = isModeledChamfer ? commitLength(parseDraft(additionalWidth, t('cam.operation.labelAdditionalChamferWidth')), units) : 0;
+          const width = isModeledChamfer ? 0 : commitLength(parseDraft(chamferWidth, t('cam.operation.labelChamferWidth')), units);
           let chains: CamChamferChainDto[];
           if (source !== 'manual' && multiChains) {
-            if (!resolvedChains || chainPick?.busy) throw new Error('Wait for all selected chains to resolve.');
+            if (!resolvedChains || chainPick?.busy) throw new Error(t('cam.operation.errorWaitChains'));
             chains = multiChains.flatMap((selection, i) => {
               if (!selection.keys.length) return [];
               const resolved = resolvedChains[i];
               if (resolved.error || !resolved.chain || (isModeledChamfer && !resolved.geometry)) {
-                throw new Error(`Chain ${i + 1}: ${resolved.error ?? 'Geometry is not ready.'}`);
+                throw new Error(t('cam.operation.errorChainGeometry').replace('{n}', String(i + 1)).replace('{message}', resolved.error ?? t('cam.operation.errorGeometryNotReady')));
               }
               const geometry = resolved.geometry;
               return [{
@@ -1316,7 +1314,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
                 wall_side: geometry?.wall_side ?? selection.wallSide ?? wallSide,
               }];
             });
-            if (!chains.length) throw new Error('Select at least one chamfer chain.');
+            if (!chains.length) throw new Error(t('cam.operation.errorSelectChamferChain'));
           } else {
             const geometry = resolveContourGeometry();
             chains = [{ ...geometry, chain_ref: null, modeled_chamfer: null, top_z: top, chamfer_width: width, wall_side: wallSide }];
@@ -1326,7 +1324,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             kind,
             ...chains[0],
             additional_chains: chains.slice(1),
-            tip_offset: commitLength(parseDraft(tipOffset, 'Tip offset'), units),
+            tip_offset: commitLength(parseDraft(tipOffset, t('cam.operation.labelTipOffset')), units),
             direction: millingDirection,
             cutting: cutting(),
           };
@@ -1348,24 +1346,24 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             bottom_z: bottomAbs(),
             cycle: drillCycle,
             peck_depth: pecking
-              ? commitLength(parseDraft(peckDepth, 'Peck depth'), units)
+              ? commitLength(parseDraft(peckDepth, t('cam.operation.labelPeckDepth')), units)
               : null,
             peck_retract:
               drillCycle === 'chip_breaking' && peckRetract.trim()
-                ? commitLength(parseDraft(peckRetract, 'Peck retract'), units)
+                ? commitLength(parseDraft(peckRetract, t('cam.operation.labelPeckRetract')), units)
                 : null,
             thread_pitch: tapping
-              ? commitLength(parseDraft(threadPitch, 'Thread pitch'), units)
+              ? commitLength(parseDraft(threadPitch, t('cam.operation.labelThreadPitch')), units)
               : null,
             floating_tap_holder: tapping && floatingTapHolder,
             feed_out:
               feedingOut && feedOut.trim()
-                ? commitFeed(parseDraft(feedOut, 'Feed out'), units)
+                ? commitFeed(parseDraft(feedOut, t('cam.operation.labelFeedOut')), units)
                 : null,
-            dwell_seconds: tapping ? 0 : parseDraft(dwell, 'Dwell'),
+            dwell_seconds: tapping ? 0 : parseDraft(dwell, t('cam.operation.labelDwell')),
             drill_tip_through: tipThroughOn,
             breakthrough_depth: tipThroughOn
-              ? commitLength(parseDraft(breakthrough, 'Break-through depth'), units)
+              ? commitLength(parseDraft(breakthrough, t('cam.operation.labelBreakThroughDepth')), units)
               : 0,
             cutting: cutting(),
           };
@@ -1384,7 +1382,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             preset.pitchMm,
             'internal',
           );
-          const passes = Math.max(1, Math.round(parseDraft(radialPasses, 'Radial passes')));
+          const passes = Math.max(1, Math.round(parseDraft(radialPasses, t('cam.operation.labelRadialPasses'))));
           operation = {
             ...base,
             kind,
@@ -1399,7 +1397,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             radial_passes: passes,
             step_over:
               passes > 1
-                ? commitLength(parseDraft(threadStepOver, 'Radial stepover'), units)
+                ? commitLength(parseDraft(threadStepOver, t('cam.operation.labelRadialStepover')), units)
                 : null,
             cutting: cutting(),
           };
@@ -1431,35 +1429,40 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
   const threadReadout = (): string => {
     const len = (mm: number) => displayLength(mm, units).toFixed(units === 'inches' ? 4 : 3);
     if (threadOp && !threadPresetTouched) {
-      return `Stored on this operation: pitch ${len(threadOp.pitch)} ${lu}/rev · major Ø${len(threadOp.major_diameter)} · minor Ø${len(threadOp.minor_diameter)} ${lu}. Picking a designation re-resolves these.`;
+      return t('cam.operation.threadStoredReadout')
+        .replace('{pitch}', `${len(threadOp.pitch)} ${lu}/rev`)
+        .replace('{major}', len(threadOp.major_diameter))
+        .replace('{minor}', `${len(threadOp.minor_diameter)} ${lu}`);
     }
     const preset =
       THREAD_PRESETS.find((candidate) => candidate.id === threadPresetId) ??
       defaultThreadPreset();
     const envelope = isoMetricGrade6Envelope(preset.nominalDiameterMm, preset.pitchMm, 'internal');
-    return `Pitch ${len(preset.pitchMm)} ${lu}/rev · major Ø${len(envelope.modeledMajor)} · minor Ø${len(envelope.modeledMinor)} ${lu}. Pre-machine the hole to the minor diameter.`;
+    return t('cam.operation.threadPresetReadout')
+      .replace('{pitch}', `${len(preset.pitchMm)} ${lu}/rev`)
+      .replace('{major}', len(envelope.modeledMajor))
+      .replace('{minor}', `${len(envelope.modeledMinor)} ${lu}`);
   };
 
   const geometrySection = () => {
     if (pages.geometry === 'holes') {
       const holes = holePick?.holes ?? [];
       return (
-        <DialogSection title="HOLES · PICKED IN VIEWPORT">
+        <DialogSection title={t('cam.operation.sectionHolesPickedInViewport')}>
           <p className="rounded border border-accent/30 bg-accent/5 p-2 text-[10px] leading-relaxed text-mute">
-            Click cylindrical hole faces in the viewport to toggle them as hole centers; only
-            faces whose axis is parallel to setup Z are pickable (fixed-axis planning).
+            {t('cam.operation.holesHelp')}
           </p>
           {unresolvedHoleRefs.length > 0 && (
             <div className="rounded border border-warn/50 bg-warn/10 p-2 text-[10px] leading-relaxed text-warn">
               <p>
-                {unresolvedHoleRefs.length} saved hole reference{unresolvedHoleRefs.length > 1 ? 's are' : ' is'} broken. Regeneration and Save are blocked so stale coordinates cannot be certified.
+                {(unresolvedHoleRefs.length > 1 ? t('cam.operation.savedHoleRefsBrokenMany') : t('cam.operation.savedHoleRefsBrokenOne')).replace('{count}', String(unresolvedHoleRefs.length))}
               </p>
               <button
                 type="button"
                 onClick={() => setUnresolvedHoleRefs([])}
                 className="mt-1 rounded border border-warn/50 px-2 py-1 font-semibold"
               >
-                Discard broken reference{unresolvedHoleRefs.length > 1 ? 's' : ''} and reselect
+                {unresolvedHoleRefs.length > 1 ? t('cam.operation.discardBrokenRefs') : t('cam.operation.discardBrokenRef')}
               </button>
             </div>
           )}
@@ -1474,7 +1477,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
                   </span>
                   <button
                     type="button"
-                    title="Remove this hole"
+                    title={t('cam.operation.removeThisHole')}
                     onClick={() => useAppStore.getState().toggleCamHolePickHole(hole)}
                     className="shrink-0 rounded p-0.5 text-mute hover:bg-edge hover:text-warn"
                   >
@@ -1485,7 +1488,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             </div>
           )}
           <label className="block">
-            <span className={CAM_DIALOG_LABEL}>Manual centers · one X,Y per line ({lu})</span>
+            <span className={CAM_DIALOG_LABEL}>{t('cam.operation.labelManualCenters').replace('{unit}', lu)}</span>
             <textarea
               value={manualPoints}
               onChange={(event) => setManualPoints(event.target.value)}
@@ -1498,10 +1501,10 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
     }
     if (pages.geometry === 'face') {
       return (
-        <DialogSection title="STOCK CONTOURS">
+        <DialogSection title={t('cam.operation.sectionStockContours')}>
           <div className="flex items-center gap-2">
-            <span className="flex-1 text-[10px] text-mute">Stock Selections</span>
-            <DeadButton label="Select" />
+            <span className="flex-1 text-[10px] text-mute">{t('cam.operation.stockSelections')}</span>
+            <DeadButton label={t('cam.operation.select')} />
           </div>
           <label className="flex items-center gap-2 text-[11px] text-ink">
             <input
@@ -1509,32 +1512,32 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
               checked={faceFromStock}
               onChange={(event) => setFaceFromStock(event.target.checked)}
             />
-            Face the whole stock top
+            {t('cam.operation.faceWholeStockTop')}
           </label>
           {!faceFromStock && (
             <div className="grid grid-cols-2 gap-2">
-              <DraftNumber label="Min X" value={faceMin.x} onChange={(v) => setFaceMin((c) => ({ ...c, x: v }))} unit={lu} />
-              <DraftNumber label="Min Y" value={faceMin.y} onChange={(v) => setFaceMin((c) => ({ ...c, y: v }))} unit={lu} />
-              <DraftNumber label="Max X" value={faceMax.x} onChange={(v) => setFaceMax((c) => ({ ...c, x: v }))} unit={lu} />
-              <DraftNumber label="Max Y" value={faceMax.y} onChange={(v) => setFaceMax((c) => ({ ...c, y: v }))} unit={lu} />
+              <DraftNumber label={t('cam.operation.labelMinX')} value={faceMin.x} onChange={(v) => setFaceMin((c) => ({ ...c, x: v }))} unit={lu} />
+              <DraftNumber label={t('cam.operation.labelMinY')} value={faceMin.y} onChange={(v) => setFaceMin((c) => ({ ...c, y: v }))} unit={lu} />
+              <DraftNumber label={t('cam.operation.labelMaxX')} value={faceMax.x} onChange={(v) => setFaceMax((c) => ({ ...c, x: v }))} unit={lu} />
+              <DraftNumber label={t('cam.operation.labelMaxY')} value={faceMax.y} onChange={(v) => setFaceMax((c) => ({ ...c, y: v }))} unit={lu} />
             </div>
           )}
         </DialogSection>
       );
     }
     return (
-      <DialogSection title={`${(pages.pathLabel ?? 'Path').toUpperCase()} · OPERATOR SELECTED`}>
+      <DialogSection title={t('cam.operation.sectionOperatorSelected').replace('{path}', (pages.pathLabel ?? t('cam.operation.path')).toUpperCase())}>
         <div className={`grid ${pages.pathChain ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5`}>
           {(
             pages.pathChain
               ? ([
-                  ['model', `Model edges (${modelEdges.length})`],
-                  ['sketch', `Sketch curves (${sketchCurves.length})`],
-                  ['manual', 'Manual points'],
+                  ['model', t('cam.operation.labelModelEdges').replace('{count}', String(modelEdges.length))],
+                  ['sketch', t('cam.operation.labelSketchCurves').replace('{count}', String(sketchCurves.length))],
+                  ['manual', t('cam.operation.labelManualPoints')],
                 ] as Array<[GeometrySource, string]>)
               : ([
-                  ['sketch', `Sketch loop (${loops.length})`],
-                  ['manual', 'Manual points'],
+                  ['sketch', t('cam.operation.labelSketchLoop').replace('{count}', String(loops.length))],
+                  ['manual', t('cam.operation.labelManualPoints')],
                 ] as Array<[GeometrySource, string]>)
           ).map(([value, label]) => (
             <button
@@ -1554,8 +1557,8 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
         {source !== 'manual' ? (
           pages.pathChain ? (
             <>
-              <div className="mt-2 flex gap-1.5" role="group" aria-label="Chain selection mode">
-                {([['closed', 'Closed loop'], ['manual', 'Manual edges']] as const).map(([mode, label]) => (
+              <div className="mt-2 flex gap-1.5" role="group" aria-label={t('cam.operation.chainSelectionMode')}>
+                {([['closed', t('cam.operation.chainModeClosedLoop')], ['manual', t('cam.operation.chainModeManualEdges')]] as const).map(([mode, label]) => (
                   <button key={mode} type="button" aria-pressed={chainPick?.mode === mode}
                     onClick={() => editCamChain({ mode })}
                     className={`h-8 flex-1 rounded border text-[11px] ${chainPick?.mode === mode ? 'border-accent/50 bg-accent/15 text-accent' : 'border-edge text-mute hover:text-ink'}`}>{label}</button>
@@ -1563,65 +1566,65 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
               </div>
               <p className="mt-2 rounded border border-accent/30 bg-accent/5 p-2 text-[10px] leading-relaxed text-mute">
                 {chainPick?.mode === 'closed'
-                  ? multiChains ? 'Click each perimeter or hole rim to add another chain. Selected chains stay highlighted. Click an existing chain to edit it; Option-click picks an individual edge.'
-                    : 'Hover an edge to preview its loop; click once to select the complete perimeter. Inner rims and outer boundaries stay separate. Option-click picks a single edge.'
-                  : 'Click individual connected edges to build an open or closed chain. Click again to remove an edge. No gaps, branches, or automatic closing segments are added.'}
+                  ? multiChains ? t('cam.operation.chainsHelpMulti')
+                    : t('cam.operation.chainsHelpSingle')
+                  : t('cam.operation.chainsHelpManual')}
               </p>
-              {multiChains && <div className="mt-2 space-y-1" aria-label="Chamfer chains">
+              {multiChains && <div className="mt-2 space-y-1" aria-label={t('cam.operation.chamferChains')}>
                 <div className="flex items-center justify-between text-[11px] text-mute">
-                  <span>{multiChains.filter(c => c.keys.length).length} chains selected</span>
+                  <span>{t('cam.operation.chainsSelected').replace('{count}', String(multiChains.filter(c => c.keys.length).length))}</span>
                   <button type="button" onClick={addCamChain} disabled={multiChains.length >= 64}
-                    className="rounded border border-edge px-2 py-1 hover:text-ink disabled:opacity-40">+ New chain</button>
+                    className="rounded border border-edge px-2 py-1 hover:text-ink disabled:opacity-40">{t('cam.operation.newChain')}</button>
                 </div>
                 <div className="max-h-32 overflow-y-auto rounded border border-edge">
                   {multiChains.map((selection, i) => <div key={i} className={`flex items-center ${i === activeChainIndex ? 'bg-accent/10' : ''}`}>
-                    <button type="button" aria-label={`Edit chain ${i + 1}`} aria-pressed={i === activeChainIndex}
+                    <button type="button" aria-label={t('cam.operation.editChain').replace('{n}', String(i + 1))} aria-pressed={i === activeChainIndex}
                       onClick={() => selectCamChain(i)} className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-[11px] hover:bg-header">
-                      Chain {i + 1} · {!selection.keys.length ? 'pick edges' : resolvedChains?.[i]?.error ? 'needs attention'
-                        : !resolvedChains ? 'resolving…' : resolvedChains[i].chain?.closed ? 'closed' : 'open'}
-                      {selection.reversed ? ' · reversed' : ''}
+                      {t('cam.operation.chainLabel').replace('{n}', String(i + 1))} · {!selection.keys.length ? t('cam.operation.chainPickEdges') : resolvedChains?.[i]?.error ? t('cam.operation.chainNeedsAttention')
+                        : !resolvedChains ? t('cam.operation.chainResolving') : resolvedChains[i].chain?.closed ? t('cam.operation.chainClosed') : t('cam.operation.chainOpen')}
+                      {selection.reversed ? ' ' + t('cam.operation.chainReversed') : ''}
                     </button>
-                    <button type="button" aria-label={`Remove chain ${i + 1}`} onClick={() => removeCamChain(i)} className="p-2 text-mute hover:text-ink"><X size={12} /></button>
+                    <button type="button" aria-label={t('cam.operation.removeChain').replace('{n}', String(i + 1))} onClick={() => removeCamChain(i)} className="p-2 text-mute hover:text-ink"><X size={12} /></button>
                   </div>)}
                 </div>
-                {resolvedChains?.some(r => r.error) && <p role="alert" className="text-[11px] text-amber-600">One or more chains need attention. Select the marked chain to inspect it; all chains must resolve before saving.</p>}
+                {resolvedChains?.some(r => r.error) && <p role="alert" className="text-[11px] text-amber-600">{t('cam.operation.chainsNeedAttention')}</p>}
               </div>}
               {chainPick && chainPick.entities.length === 0 && (
                 <p className="mt-1.5 text-[10px] italic text-mute">
-                  Nothing to pick for this source — switch to another one above.
+                  {t('cam.operation.nothingToPick')}
                 </p>
               )}
               <div className="mt-2 flex h-7 min-w-0 items-center gap-2 rounded border border-edge bg-header px-2 font-mono text-[10px] text-ink">
                 <span className="min-w-0 flex-1 truncate">
                   {chainPick && chainPick.selectedKeys.length > 0
-                    ? `${chainPick.selectedKeys.length} edge${chainPick.selectedKeys.length > 1 ? 's' : ''} · ${
-                        chainPending || chainPick.busy ? 'resolving…' : chainResolution?.chain
+                    ? `${chainPick.selectedKeys.length > 1 ? t('cam.operation.edgesCountMany').replace('{count}', String(chainPick.selectedKeys.length)) : t('cam.operation.edgesCountOne').replace('{count}', String(chainPick.selectedKeys.length))} · ${
+                        chainPending || chainPick.busy ? t('cam.operation.chainResolving') : chainResolution?.chain
                           ? chainResolution.chain.closed
-                            ? 'closed chain'
-                            : 'open chain'
-                          : 'broken chain'
+                            ? t('cam.operation.chainClosedStatus')
+                            : t('cam.operation.chainOpenStatus')
+                          : t('cam.operation.chainBrokenStatus')
                       }`
-                    : 'No edges picked yet'}
+                    : t('cam.operation.noEdgesPicked')}
                 </span>
                 <button
                   type="button"
                   disabled={!chainResolution?.chain}
-                  title="Reverse the selected chain; left/right sides are relative to its arrow. Milling direction still controls cutting travel."
+                  title={t('cam.operation.reverseChainTitle')}
                   onClick={() => setChainReversed(!chainReversed)}
                   className="shrink-0 rounded border border-edge px-1.5 py-0.5 text-[9px] font-semibold text-mute hover:border-accent/40 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  Reverse{chainReversed ? ' ✓' : ''}
+                  {t('cam.operation.reverse')}{chainReversed ? ' ✓' : ''}
                 </button>
-                <button type="button" title="Clear chain selection" aria-label="Clear chain selection"
+                <button type="button" title={t('cam.operation.clearChainSelection')} aria-label={t('cam.operation.clearChainSelection')}
                   onClick={() => editCamChain({ selectedKeys: [] })}
                   className="p-1 text-mute hover:text-ink"><X size={14} /></button>
               </div>
               {!!chainPick?.selectedKeys.length && (
-                <div className="mt-1 max-h-28 overflow-y-auto rounded border border-edge" aria-label="Selected chain edges">
+                <div className="mt-1 max-h-28 overflow-y-auto rounded border border-edge" aria-label={t('cam.operation.selectedChainEdges')}>
                   {chainPick.selectedKeys.map((key, index) => (
                     <div key={key} className="flex min-h-7 items-center gap-2 px-2 text-[10px] text-mute">
-                      <span className="flex-1 truncate" title={key}>Edge {index + 1} · {key}</span>
-                      <button type="button" aria-label={`Remove edge ${index + 1}`} onClick={() => void pickCamChain(key, true)} className="p-1 hover:text-ink"><X size={12} /></button>
+                      <span className="flex-1 truncate" title={key}>{t('cam.operation.edgeLabel').replace('{n}', String(index + 1))} · {key}</span>
+                      <button type="button" aria-label={t('cam.operation.removeEdge').replace('{n}', String(index + 1))} onClick={() => void pickCamChain(key, true)} className="p-1 hover:text-ink"><X size={12} /></button>
                     </div>
                   ))}
                 </div>
@@ -1634,34 +1637,37 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
               )}
               {kind === 'chamfer2d' && source === 'model' && (
                 <div className="mt-3 space-y-2 rounded border border-edge p-2">
-                  <label className="block"><span className={CAM_DIALOG_LABEL}>Chamfer geometry</span>
-                    <select aria-label="Chamfer geometry" className={CAM_DIALOG_INPUT} value={modeledChamfer ? 'modeled' : 'sharp'} onChange={e => setModeledChamfer(e.target.value === 'modeled')}>
-                      <option value="modeled">Modeled chamfer</option><option value="sharp">Sharp edge + width</option>
+                  <label className="block"><span className={CAM_DIALOG_LABEL}>{t('cam.operation.chamferGeometry')}</span>
+                    <select aria-label={t('cam.operation.chamferGeometry')} className={CAM_DIALOG_INPUT} value={modeledChamfer ? 'modeled' : 'sharp'} onChange={e => setModeledChamfer(e.target.value === 'modeled')}>
+                      <option value="modeled">{t('cam.operation.modeledChamfer')}</option><option value="sharp">{t('cam.operation.sharpEdgeWidth')}</option>
                     </select>
                   </label>
                   <p className="text-[10px] leading-relaxed text-mute">{modeledChamfer
-                    ? 'Select the upper or lower rim of a modeled 45° bevel. Width, top height and material side are measured from its adjacent faces. Use a 90° chamfer mill.'
-                    : 'Select the sharp edge and enter the required width on Passes. Top height can follow the selected edge plane.'}</p>
-                  {modeledChamfer && modeledGeometry && <p className="text-[11px] text-ink">Model width {displayLength(modeledGeometry.width, units).toFixed(3)} {lu} · top Z {displayLength(modeledGeometry.top_z, units).toFixed(3)} {lu} · material {modeledGeometry.wall_side}</p>}
-                  {modeledChamfer && modeledGeometry?.corner_transitions && <p role="status" className="text-[11px] text-amber-600">The bevel has separate corner transitions. This pass follows the upper rim and may leave material on those corners; inspect the simulated result before posting.</p>}
+                    ? t('cam.operation.chamferModeledHelp')
+                    : t('cam.operation.chamferSharpHelp')}</p>
+                  {modeledChamfer && modeledGeometry && <p className="text-[11px] text-ink">{t('cam.operation.chamferModelReadout')
+                    .replace('{width}', displayLength(modeledGeometry.width, units).toFixed(3))
+                    .replace('{top}', displayLength(modeledGeometry.top_z, units).toFixed(3))
+                    .replace('{unit}', lu)
+                    .replace('{side}', modeledGeometry.wall_side)}</p>}
+                  {modeledChamfer && modeledGeometry?.corner_transitions && <p role="status" className="text-[11px] text-amber-600">{t('cam.operation.chamferCornerTransitions')}</p>}
                   {modeledChamfer && chamferResolution?.error && <p role="alert" className="text-[11px] text-amber-600">{chamferResolution.error}</p>}
-                  {modeledChamfer && chainResolution?.chain && !chamferResolution && <p className="text-[10px] text-mute">Measuring adjacent bevel…</p>}
+                  {modeledChamfer && chainResolution?.chain && !chamferResolution && <p className="text-[10px] text-mute">{t('cam.operation.measuringBevel')}</p>}
                 </div>
               )}
             </>
           ) : loops.length > 0 ? (
             <>
               <p className="mt-2 rounded border border-accent/30 bg-accent/5 p-2 text-[10px] leading-relaxed text-mute">
-                Click a closed sketch loop in the viewport — hovering highlights it, clicking
-                makes it the operation's path. Clicking inside a profile works too.
+                {t('cam.operation.loopPickHelp')}
               </p>
               <div className="mt-2 flex h-7 min-w-0 items-center truncate rounded border border-edge bg-header px-2 font-mono text-[10px] text-ink">
-                {selectedLoop()?.label ?? 'No loop picked yet'}
+                {selectedLoop()?.label ?? t('cam.operation.noLoopPicked')}
               </div>
             </>
           ) : (
             <p className="mt-2 text-[10px] italic text-mute">
-              No closed sketch loops found. Sketch a closed profile first, or use manual points.
+              {t('cam.operation.noClosedLoops')}
             </p>
           )
         ) : (
@@ -1669,8 +1675,8 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             <label className="block">
               <span className={CAM_DIALOG_LABEL}>
                 {pages.pathChain
-                  ? `Path coordinates · one X,Y per line (${lu}, setup frame)`
-                  : `Closed path · one X,Y per line (${lu}, setup frame)`}
+                  ? t('cam.operation.labelPathCoordinates').replace('{unit}', lu)
+                  : t('cam.operation.labelClosedPathCoordinates').replace('{unit}', lu)}
               </span>
               <textarea
                 value={manualPoints}
@@ -1681,10 +1687,8 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             </label>
             {pages.pathChain && (
               <p className="mt-1.5 text-[9px] leading-relaxed text-mute/80">
-                Typed coordinates in the setup frame — the fallback when there is nothing to
-                pick in the viewport. Repeat the first point at the end for a closed path;
-                leave it open for an open chain.
-                {kind === 'chamfer2d' && ' This source saves one typed chain only. Switch back to Model edges or Sketch curves to use your picked chains.'}
+                {t('cam.operation.manualCoordinatesHelp')}
+                {kind === 'chamfer2d' && ` ${t('cam.operation.chamferManualChainHelp')}`}
               </p>
             )}
           </div>
@@ -1696,9 +1700,9 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
   /** THREAD · Geometry tab add-on: the designation resolves pitch and
    *  diameters through the standards table; the readout spells them out. */
   const threadGeometrySection = () => (
-    <DialogSection title="THREAD (INTERNAL)">
+    <DialogSection title={t('cam.operation.sectionThreadInternal')}>
       <label className="block">
-        <span className={CAM_DIALOG_LABEL}>Designation</span>
+        <span className={CAM_DIALOG_LABEL}>{t('cam.operation.designation')}</span>
         <select
           value={threadPresetId}
           onChange={(event) => {
@@ -1727,31 +1731,31 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
     const fu = feedUnit(units);
     return (
       <>
-        <DialogSection title="TOOL">
+        <DialogSection title={t('cam.operation.sectionTool')}>
           <div className="flex items-center gap-1.5">
             <div className="flex h-7 min-w-0 flex-1 items-center truncate rounded border border-edge bg-header px-2 font-mono text-[10px] text-ink">
               {selectedTool
                 ? `${selectedTool.number != null ? `T${selectedTool.number} · ` : ''}${selectedTool.name} · Ø${displayLength(selectedTool.diameter, units).toFixed(3)} ${lu}`
-                : 'No tool selected'}
+                : t('cam.operation.noToolSelected')}
             </div>
             <button
               type="button"
-              title="Pick from the Tool Library (central picks are copied into this project)"
+              title={t('cam.operation.pickToolLibraryTitle')}
               onClick={() => openCamToolPicker(kind, kind === 'drill' ? drillCycle : undefined)}
               className="h-7 shrink-0 rounded border border-accent/50 bg-accent/15 px-2 text-[10px] font-semibold text-accent hover:bg-accent/25"
             >
-              Select…
+              {t('cam.operation.selectEllipsis')}
             </button>
           </div>
         </DialogSection>
-        {selectedTool && !pickCompatible(selectedTool) && <p role="alert" className="text-xs text-warn">The assigned tool is incompatible. Choose a supported tool before generating this path.</p>}
-        <DialogSection title="FEED & SPEED">
+        {selectedTool && !pickCompatible(selectedTool) && <p role="alert" className="text-xs text-warn">{t('cam.operation.assignedToolIncompatible')}</p>}
+        <DialogSection title={t('cam.operation.sectionFeedSpeed')}>
           <div className="grid grid-cols-2 gap-2">
             {selectedTool && selectedTool.cutting_presets.length > 0 && (
               <label className="col-span-2 block">
-                <span className={CAM_DIALOG_LABEL}>Preset</span>
+                <span className={CAM_DIALOG_LABEL}>{t('cam.operation.preset')}</span>
                 <select
-                  aria-label="Cutting preset"
+                  aria-label={t('cam.operation.cuttingPreset')}
                   value={presetIndex}
                   onChange={(event) => {
                     const index = Number(event.target.value);
@@ -1761,7 +1765,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
                   }}
                   className={CAM_DIALOG_INPUT}
                 >
-                  <option value={0}>Default preset</option>
+                  <option value={0}>{t('cam.operation.defaultPreset')}</option>
                   {selectedTool.cutting_presets.map((preset, index) => (
                     <option key={index + 1} value={index + 1}>
                       {preset.name}
@@ -1773,33 +1777,33 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             <CamCuttingPair feeds={feeds} pair="speed" onEdit={() => setFeedsTouched(true)} />
             {!holemaking && <CamCuttingPair feeds={feeds} pair="cutting" onEdit={() => setFeedsTouched(true)} />}
             <CamCuttingPair feeds={feeds} pair="plunge" onEdit={() => setFeedsTouched(true)}
-              primaryLabel={holemaking ? 'Drilling feedrate' : 'Plunge feedrate'}
-              secondaryLabel={holemaking ? 'Feed per revolution' : 'Plunge feed per revolution'} />
+              primaryLabel={holemaking ? t('cam.operation.labelDrillingFeedrate') : t('cam.operation.labelPlungeFeedrate')}
+              secondaryLabel={holemaking ? t('cam.operation.labelFeedPerRevolution') : t('cam.operation.labelPlungeFeedPerRevolution')} />
             <CamCuttingHint />
-            <DraftNumber label="Ramp spindle speed" value={rpm} onChange={() => {}} unit="rpm" disabled />
+            <DraftNumber label={t('cam.operation.labelRampSpindleSpeed')} value={rpm} onChange={() => {}} unit="rpm" disabled />
             {!holemaking && (
               <>
                 {kind === 'chamfer2d' ? manualChamferLeads ? <>
-                  <DraftNumber label="Lead-in feedrate" value={String(linking.draft.lead_in_feed)} onChange={v => linking.change('lead_in_feed', v)} unit={fu} />
-                  <DraftNumber label="Lead-out feedrate" value={String(linking.draft.lead_out_feed)} onChange={v => linking.change('lead_out_feed', v)} unit={fu} />
-                </> : <p className="col-span-2 text-[10px] text-mute">Automatic leads use Cutting feedrate. Choose Manual in Linking to set separate lead feedrates and geometry.</p> : <>
-                  <DraftNumber label="Lead-in feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
-                  <DraftNumber label="Lead-out feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
+                  <DraftNumber label={t('cam.operation.labelLeadInFeedrate')} value={String(linking.draft.lead_in_feed)} onChange={v => linking.change('lead_in_feed', v)} unit={fu} />
+                  <DraftNumber label={t('cam.operation.labelLeadOutFeedrate')} value={String(linking.draft.lead_out_feed)} onChange={v => linking.change('lead_out_feed', v)} unit={fu} />
+                </> : <p className="col-span-2 text-[10px] text-mute">{t('cam.operation.automaticLeadsHelp')}</p> : <>
+                  <DraftNumber label={t('cam.operation.labelLeadInFeedrate')} value={feedXy} onChange={() => {}} unit={fu} disabled />
+                  <DraftNumber label={t('cam.operation.labelLeadOutFeedrate')} value={feedXy} onChange={() => {}} unit={fu} disabled />
                 </>}
-                <DraftNumber label="Transition feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
-                <DraftNumber label="Ramp feedrate" value={feedXy} onChange={() => {}} unit={fu} disabled />
+                <DraftNumber label={t('cam.operation.labelTransitionFeedrate')} value={feedXy} onChange={() => {}} unit={fu} disabled />
+                <DraftNumber label={t('cam.operation.labelRampFeedrate')} value={feedXy} onChange={() => {}} unit={fu} disabled />
               </>
             )}
             <label className="col-span-2 block">
-              <span className={CAM_DIALOG_LABEL}>Coolant</span>
+              <span className={CAM_DIALOG_LABEL}>{t('cam.operation.coolant')}</span>
               <select
                 value={coolant}
                 onChange={(event) => { setFeedsTouched(true); setCoolant(event.target.value as CamCoolantMode); }}
                 className={CAM_DIALOG_INPUT}
               >
-                <option value="off">Off</option>
-                <option value="mist">Mist</option>
-                <option value="flood">Flood</option>
+                <option value="off">{t('cam.operation.coolantOff')}</option>
+                <option value="mist">{t('cam.operation.coolantMist')}</option>
+                <option value="flood">{t('cam.operation.coolantFlood')}</option>
               </select>
             </label>
           </div>
@@ -1825,7 +1829,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
       drillCycle === 'drill' || drillCycle === 'chip_breaking' || drillCycle === 'deep_hole';
     return (
       <>
-        <DialogSection title="CLEARANCE HEIGHT">
+        <DialogSection title={t('cam.operation.sectionClearanceHeight')}>
           <HeightField
             from={clearanceFrom}
             offset={clearanceOff}
@@ -1837,7 +1841,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             holeRefsAvailable={holeRefs}
           />
         </DialogSection>
-        <DialogSection title="RETRACT HEIGHT">
+        <DialogSection title={t('cam.operation.sectionRetractHeight')}>
           <HeightField
             from={retractFrom}
             offset={retractOff}
@@ -1849,7 +1853,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             holeRefsAvailable={holeRefs}
           />
         </DialogSection>
-        <DialogSection title="FEED HEIGHT">
+        <DialogSection title={t('cam.operation.sectionFeedHeight')}>
           <HeightField
             from={feedFrom}
             offset={feedOff}
@@ -1861,8 +1865,8 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             holeRefsAvailable={holeRefs}
           />
         </DialogSection>
-        <DialogSection title="TOP HEIGHT">
-          {isModeledChamfer ? <p className="text-[11px] text-mute">Each chain follows its modeled bevel. Shared transfer heights reference the highest selected top: {highestModeledTop === undefined ? 'select a modeled chamfer' : `${displayLength(highestModeledTop, units).toFixed(3)} ${lu}`}. Switch to Sharp edge + width for an explicit top height.</p> : <HeightField
+        <DialogSection title={t('cam.operation.sectionTopHeight')}>
+          {isModeledChamfer ? <p className="text-[11px] text-mute">{t('cam.operation.modeledChamferTopNote').replace('{value}', highestModeledTop === undefined ? t('cam.operation.selectModeledChamfer') : `${displayLength(highestModeledTop, units).toFixed(3)} ${lu}`)}</p> : <HeightField
             from={topFrom}
             offset={topOff}
             onFrom={setTopFrom}
@@ -1874,7 +1878,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
           />}
         </DialogSection>
         {hasBottomRow && (
-          <DialogSection title="BOTTOM HEIGHT">
+          <DialogSection title={t('cam.operation.sectionBottomHeight')}>
             <HeightField
               from={bottomFrom}
               offset={bottomOff}
@@ -1887,13 +1891,13 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
           </DialogSection>
         )}
         {kind === 'drill' && (
-          <DialogSection title="DRILL TIP">
+          <DialogSection title={t('cam.operation.sectionDrillTip')}>
             <label
               className={`flex items-center gap-2 text-[11px] ${tipFamily ? 'text-ink' : 'text-mute'}`}
               title={
                 tipFamily
-                  ? 'Drive the drill point past the bottom plane so the full diameter clears the hole bottom'
-                  : 'Tip-through applies to the drilling family (drill, chip breaking, deep hole); tapping, reaming, and boring stop at the bottom plane'
+                  ? t('cam.operation.drillTipThroughTitle')
+                  : t('cam.operation.drillTipDisabledTitle')
               }
             >
               <input
@@ -1902,11 +1906,11 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
                 disabled={!tipFamily}
                 onChange={(event) => setTipThrough(event.target.checked)}
               />
-              Drill tip through bottom
+              {t('cam.operation.drillTipThrough')}
             </label>
             {(tipFamily && tipThrough) && (
               <DraftNumber
-                label="Break-through depth"
+                label={t('cam.operation.labelBreakThroughDepth')}
                 value={breakthrough}
                 onChange={setBreakthrough}
                 unit={lu}
@@ -1922,36 +1926,36 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
    *  and tool-side compensation go live per kind; the rest of the option set
    *  renders as placeholders so the contract is visible. */
   const millingPassesSection = () => (
-    <DialogSection title="PASSES">
+    <DialogSection title={t('cam.operation.sectionPasses')}>
       <div className="grid grid-cols-2 gap-2">
-        <DraftNumber label="Tolerance" value="0.01" onChange={() => {}} unit={lu} disabled />
-        <DraftNumber label="Pass direction" value="0" onChange={() => {}} unit="deg" disabled />
+        <DraftNumber label={t('cam.operation.labelTolerance')} value="0.01" onChange={() => {}} unit={lu} disabled />
+        <DraftNumber label={t('cam.operation.labelPassDirection')} value="0" onChange={() => {}} unit="deg" disabled />
         <div className="col-span-2 flex items-center gap-2">
-          <span className="flex-1 text-[10px] text-mute">Pass direction reference</span>
-          <DeadButton label="Select" />
+          <span className="flex-1 text-[10px] text-mute">{t('cam.operation.passDirectionReference')}</span>
+          <DeadButton label={t('cam.operation.select')} />
         </div>
-        <DraftNumber label="Pass extension" value="" onChange={() => {}} unit={lu} disabled placeholder="auto" />
-        <DraftNumber label="Stock offset" value="0" onChange={() => {}} unit={lu} disabled />
+        <DraftNumber label={t('cam.operation.labelPassExtension')} value="" onChange={() => {}} unit={lu} disabled placeholder={t('cam.operation.placeholderAuto')} />
+        <DraftNumber label={t('cam.operation.labelStockOffset')} value="0" onChange={() => {}} unit={lu} disabled />
         {pages.stepOver ? (
-          <DraftNumber label="Stepover" value={stepOver} onChange={setStepOver} unit={lu} />
+          <DraftNumber label={t('cam.operation.labelStepover')} value={stepOver} onChange={setStepOver} unit={lu} />
         ) : (
-          <DraftNumber label="Stepover" value="" onChange={() => {}} unit={lu} disabled />
+          <DraftNumber label={t('cam.operation.labelStepover')} value="" onChange={() => {}} unit={lu} disabled />
         )}
         {pages.compensation ? (
           <label className="block">
-            <span className={CAM_DIALOG_LABEL}>Tool side</span>
+            <span className={CAM_DIALOG_LABEL}>{t('cam.operation.toolSide')}</span>
             <select
               value={compensation}
               onChange={(event) => setCompensation(event.target.value as CamContourCompensation)}
               className={CAM_DIALOG_INPUT}
             >
               {(chainClosed === false
-                ? ([['on', 'On path'], ['left', 'Left of travel'], ['right', 'Right of travel']] as const)
+                ? ([['on', t('cam.operation.sideOnPath')], ['left', t('cam.operation.sideLeftOfTravel')], ['right', t('cam.operation.sideRightOfTravel')]] as const)
                 : chainClosed === true
-                  ? ([['outside', 'Outside'], ['inside', 'Inside'], ['on', 'On path']] as const)
+                  ? ([['outside', t('cam.operation.sideOutside')], ['inside', t('cam.operation.sideInside')], ['on', t('cam.operation.sideOnPath')]] as const)
                   // Manual entry: openness is only known at submit, so offer
                   // every side; submit validates the combination.
-                  : ([['outside', 'Outside'], ['inside', 'Inside'], ['on', 'On path'], ['left', 'Left of travel'], ['right', 'Right of travel']] as const)
+                  : ([['outside', t('cam.operation.sideOutside')], ['inside', t('cam.operation.sideInside')], ['on', t('cam.operation.sideOnPath')], ['left', t('cam.operation.sideLeftOfTravel')], ['right', t('cam.operation.sideRightOfTravel')]] as const)
               ).map(([value, label]) => (
                 <option key={value} value={value}>
                   {label}
@@ -1964,11 +1968,11 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             className="block"
             title={
               kind === 'face'
-                ? 'Row-to-row cutting direction; one-way rows reposition at the feed plane'
-                : 'Finishing-lap travel direction along the wall'
+                ? t('cam.operation.directionFaceTitle')
+                : t('cam.operation.directionMillingTitle')
             }
           >
-            <span className={CAM_DIALOG_LABEL}>Direction</span>
+            <span className={CAM_DIALOG_LABEL}>{t('cam.operation.direction')}</span>
             <select
               value={kind === 'face' ? faceDirection : millingDirection}
               onChange={(event) =>
@@ -1980,14 +1984,14 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             >
               {kind === 'face' ? (
                 <>
-                  <option value="both_ways">Both ways (zigzag)</option>
-                  <option value="climb">Climb (one way)</option>
-                  <option value="conventional">Conventional (one way)</option>
+                  <option value="both_ways">{t('cam.operation.directionBothWays')}</option>
+                  <option value="climb">{t('cam.operation.directionClimbOneWay')}</option>
+                  <option value="conventional">{t('cam.operation.directionConventionalOneWay')}</option>
                 </>
               ) : (
                 <>
-                  <option value="climb">Climb</option>
-                  <option value="conventional">Conventional</option>
+                  <option value="climb">{t('cam.operation.climb')}</option>
+                  <option value="conventional">{t('cam.operation.conventional')}</option>
                 </>
               )}
             </select>
@@ -1995,9 +1999,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
         )}
         {pages.compensation && chainClosed === false && (
           <p className="col-span-2 rounded border border-[#d69b45]/45 bg-[#2a2117]/80 p-1.5 text-[10px] leading-relaxed text-[#e8c589]">
-            Open chain — choose the side the MATERIAL is on (Left/Right of travel; flip travel
-            with Reverse on the Geometry tab). “On path” rides the tool center on the edge and
-            cuts one radius into BOTH sides of it.
+            {t('cam.operation.openChainMaterialNote')}
           </p>
         )}
         {pages.compensation && (
@@ -2005,18 +2007,18 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             className="block"
             title={
               compensation === 'on'
-                ? 'On path applies no radius offset in either mode'
-                : 'Who turns the contour into the tool-center path'
+                ? t('cam.operation.compensationOnTitle')
+                : t('cam.operation.compensationModeTitle')
             }
           >
-            <span className={CAM_DIALOG_LABEL}>Compensation mode</span>
+            <span className={CAM_DIALOG_LABEL}>{t('cam.operation.compensationMode')}</span>
             <select
               value={compensationMode}
               onChange={(event) => setCompensationMode(event.target.value as CamCompensationMode)}
               className={CAM_DIALOG_INPUT}
             >
-              <option value="in_control">In control — machine offsets (G41/G42)</option>
-              <option value="in_software">In software — pre-offset path</option>
+              <option value="in_control">{t('cam.operation.compensationInControl')}</option>
+              <option value="in_software">{t('cam.operation.compensationInSoftware')}</option>
             </select>
           </label>
         )}
@@ -2024,29 +2026,29 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             <p className="col-span-2 text-[10px] leading-relaxed text-mute">
               {setup?.machine
                 ? compensationGuidance(setup.machine.profile.post.dialect)
-                : 'Generic setup: choose a machine/controller before NC output. Actual XY engagement and cancellation moves will be checked for that target; arcs are optional.'}
-              {' '}The check uses generated move length, not just the lead distance field. In-control assumes the full project tool radius, not wear-only compensation.
+                : t('cam.operation.genericSetupMachine')}
+              {' '}{t('cam.operation.compensationCheckNote')}
             </p>
           )}
         {kind === 'contour2d' && (
-          <label className="block" title="Travel direction along the profile">
-            <span className={CAM_DIALOG_LABEL}>Milling direction</span>
+          <label className="block" title={t('cam.operation.travelDirectionTitle')}>
+            <span className={CAM_DIALOG_LABEL}>{t('cam.operation.millingDirection')}</span>
             <select
               value={millingDirection}
               onChange={(event) => setMillingDirection(event.target.value as CamMillingDirection)}
               className={CAM_DIALOG_INPUT}
             >
-              <option value="climb">Climb</option>
-              <option value="conventional">Conventional</option>
+              <option value="climb">{t('cam.operation.climb')}</option>
+              <option value="conventional">{t('cam.operation.conventional')}</option>
             </select>
           </label>
         )}
       </div>
       {kind === 'face' && (
         <div className="grid grid-cols-2 gap-x-2 gap-y-1">
-          <DeadCheck label="Order for shorter links" />
-          <DeadCheck label="From other side" />
-          <DeadCheck label="Use chip thinning" />
+          <DeadCheck label={t('cam.operation.orderShorterLinks')} />
+          <DeadCheck label={t('cam.operation.fromOtherSide')} />
+          <DeadCheck label={t('cam.operation.useChipThinning')} />
         </div>
       )}
       {pages.stepDown && (
@@ -2054,7 +2056,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
           // Contour slices by a plain maximum stepdown — no toggle; a value
           // past the full depth simply cuts in one pass.
           <div className="grid grid-cols-2 gap-2">
-            <DraftNumber label="Maximum stepdown" value={stepDown} onChange={setStepDown} unit={lu} />
+            <DraftNumber label={t('cam.operation.labelMaximumStepdown')} value={stepDown} onChange={setStepDown} unit={lu} />
           </div>
         ) : (
           <>
@@ -2064,11 +2066,11 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
                 checked={multipleDepths}
                 onChange={(event) => setMultipleDepths(event.target.checked)}
               />
-              Multiple depths
+              {t('cam.operation.multipleDepths')}
             </label>
             {multipleDepths && (
               <div className="grid grid-cols-2 gap-2">
-                <DraftNumber label="Maximum stepdown" value={stepDown} onChange={setStepDown} unit={lu} />
+                <DraftNumber label={t('cam.operation.labelMaximumStepdown')} value={stepDown} onChange={setStepDown} unit={lu} />
               </div>
             )}
           </>
@@ -2076,10 +2078,10 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
       )}
       {kind === 'face' && (
         <div className="grid grid-cols-2 gap-x-2 gap-y-1">
-          <DeadCheck label="Both sides" />
-          <DeadCheck label="Finishing step" />
-          <DeadCheck label="Use even stepdowns" />
-          <DeadCheck label="Stock to leave" />
+          <DeadCheck label={t('cam.operation.bothSides')} />
+          <DeadCheck label={t('cam.operation.finishingStep')} />
+          <DeadCheck label={t('cam.operation.useEvenStepdowns')} />
+          <DeadCheck label={t('cam.operation.stockToLeave')} />
         </div>
       )}
     </DialogSection>
@@ -2088,36 +2090,36 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
   /** DRILL · Passes tab: the cycle drives both the planner and tool
    *  compatibility; cycle-specific fields appear underneath. */
   const drillCycleSection = () => (
-    <DialogSection title="CYCLE">
+    <DialogSection title={t('cam.operation.sectionCycle')}>
       <label className="block">
-        <span className={CAM_DIALOG_LABEL}>Cycle</span>
+        <span className={CAM_DIALOG_LABEL}>{t('cam.operation.cycle')}</span>
         <select
           value={drillCycle}
           onChange={(event) => changeCycle(event.target.value as CamDrillCycle)}
           className={CAM_DIALOG_INPUT}
         >
-          <option value="drill">Drilling — rapid out</option>
-          <option value="chip_breaking">Chip breaking — partial retract</option>
-          <option value="deep_hole">Deep drilling — full retract</option>
-          <option value="tapping_right">Tapping — right hand</option>
-          <option value="tapping_left">Tapping — left hand</option>
-          <option value="reaming">Reaming — feed out</option>
-          <option value="boring">Boring — dwell and feed out</option>
+          <option value="drill">{t('cam.operation.cycleDrilling')}</option>
+          <option value="chip_breaking">{t('cam.operation.cycleChipBreaking')}</option>
+          <option value="deep_hole">{t('cam.operation.cycleDeepDrilling')}</option>
+          <option value="tapping_right">{t('cam.operation.cycleTappingRight')}</option>
+          <option value="tapping_left">{t('cam.operation.cycleTappingLeft')}</option>
+          <option value="reaming">{t('cam.operation.cycleReaming')}</option>
+          <option value="boring">{t('cam.operation.cycleBoring')}</option>
         </select>
       </label>
       <div className="grid grid-cols-2 gap-2">
         {(drillCycle === 'chip_breaking' || drillCycle === 'deep_hole') && (
-          <DraftNumber label="Peck depth" value={peckDepth} onChange={setPeckDepth} unit={lu} />
+          <DraftNumber label={t('cam.operation.labelPeckDepth')} value={peckDepth} onChange={setPeckDepth} unit={lu} />
         )}
         {drillCycle === 'chip_breaking' && (
-          <DraftNumber label="Peck retract (empty = auto)" value={peckRetract} onChange={setPeckRetract} unit={lu} />
+          <DraftNumber label={t('cam.operation.labelPeckRetractAuto')} value={peckRetract} onChange={setPeckRetract} unit={lu} />
         )}
         {(drillCycle === 'tapping_right' || drillCycle === 'tapping_left') && (
           <>
-            <DraftNumber label="Thread pitch" value={threadPitch} onChange={setThreadPitch} unit={`${lu}/rev`} />
+            <DraftNumber label={t('cam.operation.labelThreadPitch')} value={threadPitch} onChange={setThreadPitch} unit={`${lu}/rev`} />
             <label
               className="col-span-2 flex items-start gap-2 rounded border border-warning/40 bg-warning/5 p-2 text-[10px] text-ink"
-              title="Longhand tapping is not controller-synchronized rigid tapping"
+              title={t('cam.operation.longhandTappingTitle')}
             >
               <input
                 type="checkbox"
@@ -2125,16 +2127,16 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
                 onChange={(event) => setFloatingTapHolder(event.target.checked)}
               />
               <span>
-                Confirm a suitable floating tap holder. This operation uses feed/reverse longhand motion and is not rigid tapping.
+                {t('cam.operation.floatingTapNote')}
               </span>
             </label>
           </>
         )}
         {(drillCycle === 'reaming' || drillCycle === 'boring') && (
-          <DraftNumber label="Feed out (empty = plunge feed)" value={feedOut} onChange={setFeedOut} unit={feedUnit(units)} />
+          <DraftNumber label={t('cam.operation.labelFeedOutPlunge')} value={feedOut} onChange={setFeedOut} unit={feedUnit(units)} />
         )}
         {drillCycle !== 'tapping_right' && drillCycle !== 'tapping_left' && (
-          <DraftNumber label="Dwell at bottom" value={dwell} onChange={setDwell} unit="sec" />
+          <DraftNumber label={t('cam.operation.labelDwellAtBottom')} value={dwell} onChange={setDwell} unit="sec" />
         )}
       </div>
     </DialogSection>
@@ -2143,33 +2145,33 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
   /** THREAD · Passes tab: hand, milling direction, and the radial pass
    *  split for multi-pass threading. */
   const threadPassesSection = () => (
-    <DialogSection title="PASSES">
+    <DialogSection title={t('cam.operation.sectionPasses')}>
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
-          <span className={CAM_DIALOG_LABEL}>Hand</span>
+          <span className={CAM_DIALOG_LABEL}>{t('cam.operation.hand')}</span>
           <select
             value={threadHand}
             onChange={(event) => setThreadHand(event.target.value as CamThreadHand)}
             className={CAM_DIALOG_INPUT}
           >
-            <option value="right">Right hand</option>
-            <option value="left">Left hand</option>
+            <option value="right">{t('cam.operation.rightHand')}</option>
+            <option value="left">{t('cam.operation.leftHand')}</option>
           </select>
         </label>
         <label className="block">
-          <span className={CAM_DIALOG_LABEL}>Direction</span>
+          <span className={CAM_DIALOG_LABEL}>{t('cam.operation.direction')}</span>
           <select
             value={threadDirection}
             onChange={(event) => setThreadDirection(event.target.value as CamMillingDirection)}
             className={CAM_DIALOG_INPUT}
           >
-            <option value="climb">Climb</option>
-            <option value="conventional">Conventional</option>
+            <option value="climb">{t('cam.operation.climb')}</option>
+            <option value="conventional">{t('cam.operation.conventional')}</option>
           </select>
         </label>
-        <DraftNumber label="Radial passes" value={radialPasses} onChange={setRadialPasses} unit="passes" integer />
+        <DraftNumber label={t('cam.operation.labelRadialPasses')} value={radialPasses} onChange={setRadialPasses} unit={t('cam.operation.unitPasses')} integer />
         {Number(radialPasses) > 1 && (
-          <DraftNumber label="Radial stepover" value={threadStepOver} onChange={setThreadStepOver} unit={lu} />
+          <DraftNumber label={t('cam.operation.labelRadialStepover')} value={threadStepOver} onChange={setThreadStepOver} unit={lu} />
         )}
       </div>
     </DialogSection>
@@ -2178,38 +2180,38 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
   /** CHAMFER · Passes tab: chamfer width, tip offset, and which side of the
    *  path the material sits on. */
   const chamferSection = () => (
-    <DialogSection title="CHAMFER">
+    <DialogSection title={t('cam.operation.sectionChamfer')}>
       <div className="grid grid-cols-2 gap-2">
         {isModeledChamfer
-          ? <DraftNumber label="Additional width" value={additionalWidth} onChange={setAdditionalWidth} unit={lu} />
-          : <DraftNumber label="Chamfer width" value={chamferWidth} onChange={setChamferWidth} unit={lu} />}
-        <DraftNumber label="Tip offset" value={tipOffset} onChange={setTipOffset} unit={lu} />
+          ? <DraftNumber label={t('cam.operation.labelAdditionalWidth')} value={additionalWidth} onChange={setAdditionalWidth} unit={lu} />
+          : <DraftNumber label={t('cam.operation.labelChamferWidth')} value={chamferWidth} onChange={setChamferWidth} unit={lu} />}
+        <DraftNumber label={t('cam.operation.labelTipOffset')} value={tipOffset} onChange={setTipOffset} unit={lu} />
         <label className="block">
-          <span className={CAM_DIALOG_LABEL}>Material side</span>
+          <span className={CAM_DIALOG_LABEL}>{t('cam.operation.materialSide')}</span>
           <select
             value={modeledGeometry?.wall_side ?? activeWallSide}
             disabled={isModeledChamfer}
             onChange={(event) => changeWallSide(event.target.value as CamContourCompensation)}
             className={CAM_DIALOG_INPUT}
           >
-            {(modeledGeometry?.closed ?? chainClosed ?? true) ? <><option value="inside">Inside path (boss edge)</option><option value="outside">Outside path (hole edge)</option></>
-              : <><option value="left">Left of selected direction</option><option value="right">Right of selected direction</option></>}
+            {(modeledGeometry?.closed ?? chainClosed ?? true) ? <><option value="inside">{t('cam.operation.insidePathBossEdge')}</option><option value="outside">{t('cam.operation.outsidePathHoleEdge')}</option></>
+              : <><option value="left">{t('cam.operation.leftOfSelectedDirection')}</option><option value="right">{t('cam.operation.rightOfSelectedDirection')}</option></>}
           </select>
         </label>
-        <label className="block" title="Travel direction along the profile">
-          <span className={CAM_DIALOG_LABEL}>Milling direction</span>
+        <label className="block" title={t('cam.operation.travelDirectionTitle')}>
+          <span className={CAM_DIALOG_LABEL}>{t('cam.operation.millingDirection')}</span>
           <select
             value={millingDirection}
             onChange={(event) => setMillingDirection(event.target.value as CamMillingDirection)}
             className={CAM_DIALOG_INPUT}
           >
-            <option value="climb">Climb</option>
-            <option value="conventional">Conventional</option>
+            <option value="climb">{t('cam.operation.climb')}</option>
+            <option value="conventional">{t('cam.operation.conventional')}</option>
           </select>
         </label>
       </div>
-      {multiChains && <p className="mt-2 text-[10px] text-mute">Material side is for chain {activeChainIndex + 1}. Width allowance, tip offset and milling direction apply to all chains. Return to Geometry to edit another chain.</p>}
-      <p className="mt-2 text-[10px] leading-relaxed text-mute">{isModeledChamfer ? 'Additional width 0 follows the modeled bevel. ' : ''}Tip offset positions the cutting flank below the bevel root. Width + tip offset must fit within the cutter radius. Tangent entry/exit moves are clearance-checked.</p>
+      {multiChains && <p className="mt-2 text-[10px] text-mute">{t('cam.operation.chamferChainNote').replace('{n}', String(activeChainIndex + 1))}</p>}
+      <p className="mt-2 text-[10px] leading-relaxed text-mute">{isModeledChamfer ? `${t('cam.operation.additionalWidthZeroNote')} ` : ''}{t('cam.operation.chamferTipNote')}</p>
     </DialogSection>
   );
 
@@ -2218,11 +2220,11 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
    *  pass takes the wall to size (optionally at a reduced feed); a spring
    *  pass repeats the final lap so tool deflection relaxes. */
   const contourPassesSection = () => (
-    <DialogSection title="RADIAL PASSES">
+    <DialogSection title={t('cam.operation.sectionRadialPasses')}>
       <div className="grid grid-cols-2 gap-2">
-        <DraftNumber label="Roughing passes" value={roughingPasses} onChange={setRoughingPasses} unit="passes" integer />
+        <DraftNumber label={t('cam.operation.labelRoughingPasses')} value={roughingPasses} onChange={setRoughingPasses} unit={t('cam.operation.unitPasses')} integer />
         {Number(roughingPasses) > 1 && (
-          <DraftNumber label="Roughing stepover" value={roughingStepOver} onChange={setRoughingStepOver} unit={lu} />
+          <DraftNumber label={t('cam.operation.labelRoughingStepover')} value={roughingStepOver} onChange={setRoughingStepOver} unit={lu} />
         )}
       </div>
       <label className="flex items-center gap-2 text-[11px] font-semibold text-ink">
@@ -2236,29 +2238,28 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             }
           }}
         />
-        Separate finishing pass
+        {t('cam.operation.separateFinishingPass')}
       </label>
       {finishingPass && (
         <div className="grid grid-cols-2 gap-2">
-          <DraftNumber label="Finish allowance" value={finishAllowance} onChange={setFinishAllowance} unit={lu} />
-          <DraftNumber label="Finish feed (empty = cutting feed)" value={finishFeed} onChange={setFinishFeed} unit={feedUnit(units)} />
+          <DraftNumber label={t('cam.operation.labelFinishAllowance')} value={finishAllowance} onChange={setFinishAllowance} unit={lu} />
+          <DraftNumber label={t('cam.operation.labelFinishFeedCutting')} value={finishFeed} onChange={setFinishFeed} unit={feedUnit(units)} />
         </div>
       )}
       <label
         className="flex items-center gap-2 text-[11px] text-ink"
-        title="Repeat the final profile lap once so tool deflection relaxes (closed paths only)"
+        title={t('cam.operation.springPassTitle')}
       >
         <input
           type="checkbox"
           checked={springPass}
           onChange={(event) => setSpringPass(event.target.checked)}
         />
-        Spring pass (repeat the final lap)
+        {t('cam.operation.springPass')}
       </label>
       {compensation === 'on' && (Number(roughingPasses) > 1 || finishingPass) && (
         <p className="rounded border border-[#d69b45]/45 bg-[#2a2117]/80 p-1.5 text-[10px] leading-relaxed text-[#e8c589]">
-          On-path compensation has no wall offset to step — multi-pass roughing and a finishing
-          pass need Inside/Outside (or Left/Right on open chains).
+          {t('cam.operation.errorOnPathCompensation')}
         </p>
       )}
     </DialogSection>
@@ -2284,54 +2285,49 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
    *  otherwise look like active machining guarantees. */
   const linkingTab = () => (
     kind === 'chamfer2d' && setup ? <>
-      <DialogSection title="CHAMFER LEADS">
+      <DialogSection title={t('cam.operation.sectionChamferLeads')}>
         <label className="block">
-          <span className={CAM_DIALOG_LABEL}>Lead sizing</span>
-          <select aria-label="Lead sizing" className={CAM_DIALOG_INPUT} value={manualChamferLeads ? 'manual' : 'automatic'}
+          <span className={CAM_DIALOG_LABEL}>{t('cam.operation.leadSizing')}</span>
+          <select aria-label={t('cam.operation.leadSizing')} className={CAM_DIALOG_INPUT} value={manualChamferLeads ? 'manual' : 'automatic'}
             onChange={e => setManualChamferLeads(e.target.value === 'manual')}>
-            <option value="automatic">Automatic fitting</option>
-            <option value="manual">Manual</option>
+            <option value="automatic">{t('cam.operation.automaticFitting')}</option>
+            <option value="manual">{t('cam.operation.manual')}</option>
           </select>
         </label>
-        {!manualChamferLeads && <p className="mt-2 text-[10px] leading-relaxed text-mute">Fits a tangent entry and exit to each chain, reporting any reduction. Uses Cutting feedrate and the configured Heights. Choose Manual to specify radii, sweep angles, straight distances, vertical rounding and separate lead feedrates.</p>}
+        {!manualChamferLeads && <p className="mt-2 text-[10px] leading-relaxed text-mute">{t('cam.operation.chamferLeadsHelp')}</p>}
       </DialogSection>
       {manualChamferLeads && <CamLinkingFields value={linking} setup={setup} />}
     </> :
     (kind === 'face' || kind === 'contour2d') && setup ? <CamLinkingFields value={linking} setup={setup} /> :
     <>
-      <DialogSection title="LINKING">
+      <DialogSection title={t('cam.operation.sectionLinking')}>
         <p className="text-[10px] leading-relaxed text-mute">
-          XY rapid transfers lift to clearance first. One-way facing returns at clearance;
-          pocket clearing uses axial entry with a center-cutting tool. Reaming and boring
-          feed out. High-feed conversion and general keep-down controls are not implemented.
+          {t('cam.operation.linkingHelp')}
         </p>
           {pages.safeDistance && (
             <DraftNumber
-              label="Safe distance"
+              label={t('cam.operation.labelSafeDistance')}
               value={safeDistance}
               onChange={setSafeDistance}
               unit={lu}
             />
           )}
       </DialogSection>
-      <DialogSection title="LEADS & TRANSITIONS">
+      <DialogSection title={t('cam.operation.sectionLeadsTransitions')}>
         {pages.leads ? (
           <>
             <p className="rounded border border-accent/30 bg-accent/5 p-2 text-[10px] leading-relaxed text-mute">
-              Tangent leads are checked against the selected profile using the project's
-              cutter diameter, including controller-compensated entry and exit. This does
-              not certify neighboring bodies, fixtures, or a different machine offset.
-              Inside profiles start on a straight edge. Regenerate after changing geometry.
+              {t('cam.operation.leadsHelp')}
             </p>
             <div className="grid grid-cols-2 gap-2">
               <DraftNumber
-                label="Lead-in length"
+                label={t('cam.operation.labelLeadInLength')}
                 value={leadIn}
                 onChange={(v) => { setLeadsTouched(true); setLeadIn(v); }}
                 unit={lu}
               />
               <DraftNumber
-                label="Lead-out length"
+                label={t('cam.operation.labelLeadOutLength')}
                 value={leadOut}
                 onChange={(v) => { setLeadsTouched(true); setLeadOut(v); }}
                 unit={lu}
@@ -2339,7 +2335,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             </div>
             <div className="grid grid-cols-2 gap-2">
                 <DraftNumber
-                  label="Lead arc radius (empty = straight)"
+                  label={t('cam.operation.labelLeadArcRadius')}
                   value={leadArcRadius}
                   onChange={(v) => { setLeadsTouched(true); setLeadArcRadius(v); }}
                   unit={lu}
@@ -2348,8 +2344,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
           </>
         ) : (
           <p className="text-[10px] leading-relaxed text-mute">
-            Entry and exit follow this operation's generated policy. Independent vertical
-            lead radii, overlap, and transition-style controls are not implemented.
+            {t('cam.operation.entryExitPolicyNote')}
           </p>
         )}
       </DialogSection>
@@ -2368,7 +2363,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
           <CamToolIcon id={CAM_OPERATION_ICON[kind]} size={18} />
           <span className="flex-1 text-xs font-semibold text-ink">
-            {editing ? `Edit — ${editing.name}` : `New ${camOperationLabel(kind)} operation`}
+            {editing ? t('cam.operation.editOperationTitle').replace('{name}', editing.name) : t('cam.operation.newOperationTitle').replace('{name}', camOperationLabel(kind))}
           </span>
           <button type="button" disabled={saveBusy} onClick={close} className="rounded p-1 text-mute hover:bg-edge hover:text-ink disabled:opacity-40">
             <X size={14} />
@@ -2379,7 +2374,7 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] text-warn">{error}</p>
           )}
           <label className="block">
-            <span className={CAM_DIALOG_LABEL}>Operation name</span>
+            <span className={CAM_DIALOG_LABEL}>{t('cam.operation.operationName')}</span>
             <input value={name} onChange={(event) => setName(event.target.value)} className={CAM_DIALOG_INPUT} />
           </label>
 
@@ -2403,14 +2398,14 @@ export function CamOperationDialog({ kind, editing, insertion }: { kind: Operati
             onClick={close}
             className="h-7 rounded border border-edge px-3 text-[10px] font-semibold text-mute hover:text-ink"
           >
-            Cancel
+            {t('cam.operation.cancel')}
           </button>
           <button
             type="submit"
             disabled={saveBusy}
             className="h-7 rounded border border-accent/50 bg-accent/15 px-3 text-[10px] font-semibold text-accent hover:bg-accent/25"
           >
-            {editing ? 'Save changes' : 'Add operation'}
+            {editing ? t('cam.operation.saveChanges') : t('cam.operation.addOperation')}
           </button>
         </footer>
       </form>

@@ -1,29 +1,30 @@
 import type { CamHeightReferenceDto } from '../../engine/types';
+import { useTranslation } from '../../i18n';
 import { CamToolIcon, type CamIconId } from './CamToolIcon';
-import { CAM_DIALOG_INPUT, CAM_DIALOG_LABEL, NOT_APPLIED_YET } from './camFields';
+import { CAM_DIALOG_INPUT, CAM_DIALOG_LABEL, notAppliedYetTitle } from './camFields';
 
 export type HeightFrom = CamHeightReferenceDto;
 
-const HEIGHT_PLANES: Array<{ value: HeightFrom; label: string }> = [
-  { value: 'model_top', label: 'Model top' },
-  { value: 'model_bottom', label: 'Model bottom' },
-  { value: 'stock_top', label: 'Stock top' },
-  { value: 'stock_bottom', label: 'Stock bottom' },
-  { value: 'origin', label: 'Origin (absolute)' },
+const HEIGHT_PLANES: Array<{ value: HeightFrom; labelKey: string }> = [
+  { value: 'model_top', labelKey: 'cam.operation.heightModelTop' },
+  { value: 'model_bottom', labelKey: 'cam.operation.heightModelBottom' },
+  { value: 'stock_top', labelKey: 'cam.operation.heightStockTop' },
+  { value: 'stock_bottom', labelKey: 'cam.operation.heightStockBottom' },
+  { value: 'origin', labelKey: 'cam.operation.heightOriginAbsolute' },
 ];
 /** Chain references a height row may offer, per the fixed resolution order
  *  (a row only lists LOWER heights). */
-export const HEIGHT_CHAIN_LABELS: Partial<Record<HeightFrom, string>> = {
-  bottom: 'Bottom height',
-  top: 'Top height',
-  feed: 'Feed height',
-  retract: 'Retract height',
+export const HEIGHT_CHAIN_LABEL_KEYS: Partial<Record<HeightFrom, string>> = {
+  bottom: 'cam.operation.heightBottom',
+  top: 'cam.operation.heightTop',
+  feed: 'cam.operation.heightFeed',
+  retract: 'cam.operation.heightRetract',
 };
-const HEIGHT_FROM_DEAD = [
-  'Fixture top',
-  'Fixture bottom',
-  'Highest of…',
-  'Lowest of…',
+const HEIGHT_FROM_DEAD_KEYS = [
+  'cam.operation.heightFixtureTop',
+  'cam.operation.heightFixtureBottom',
+  'cam.operation.heightHighestOf',
+  'cam.operation.heightLowestOf',
 ];
 
 /** One height row: reference plane + signed offset. `chainBelow` lists the
@@ -41,7 +42,7 @@ export function HeightField({
   selectionAvailable = false,
   holeRefsAvailable = false,
   disabled = false,
-  disabledReason = NOT_APPLIED_YET,
+  disabledReason = notAppliedYetTitle(),
 }: {
   from: HeightFrom;
   offset: string;
@@ -54,15 +55,16 @@ export function HeightField({
   disabled?: boolean;
   disabledReason?: string;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       className={`grid grid-cols-2 gap-2 ${disabled ? 'opacity-45' : ''}`}
       title={disabled ? disabledReason : undefined}
     >
       <label className="block">
-        <span className={CAM_DIALOG_LABEL}>From</span>
+        <span className={CAM_DIALOG_LABEL}>{t('cam.operation.from')}</span>
         <select
-          aria-label="From"
+          aria-label={t('cam.operation.from')}
           value={from}
           disabled={disabled}
           onChange={(event) => onFrom(event.target.value as HeightFrom)}
@@ -70,20 +72,20 @@ export function HeightField({
         >
           {HEIGHT_PLANES.map((option) => (
             <option key={option.value} value={option.value}>
-              {option.label}
+              {t(option.labelKey)}
             </option>
           ))}
           {holeRefsAvailable && (
-            <optgroup label="Picked holes">
-              <option value="hole_top">Hole top</option>
-              <option value="hole_bottom">Hole bottom</option>
+            <optgroup label={t('cam.operation.pickedHoles')}>
+              <option value="hole_top">{t('cam.operation.holeTop')}</option>
+              <option value="hole_bottom">{t('cam.operation.holeBottom')}</option>
             </optgroup>
           )}
           {chainBelow.length > 0 && (
-            <optgroup label="Operation heights">
+            <optgroup label={t('cam.operation.operationHeights')}>
               {chainBelow.map((value) => (
                 <option key={value} value={value}>
-                  {HEIGHT_CHAIN_LABELS[value]}
+                  {t(HEIGHT_CHAIN_LABEL_KEYS[value]!)}
                 </option>
               ))}
             </optgroup>
@@ -93,26 +95,26 @@ export function HeightField({
             disabled={!selectionAvailable}
             title={
               selectionAvailable
-                ? 'The picked edge chain or sketch plane in setup Z'
-                : 'Pick coplanar edges or a sketch loop on Geometry first'
+                ? t('cam.operation.selectionRefTitle')
+                : t('cam.operation.selectionPickHint')
             }
           >
-            Selection (geometry plane)
+            {t('cam.operation.selectionGeometryPlane')}
           </option>
-          <optgroup label="Not applied yet">
-            {HEIGHT_FROM_DEAD.map((text) => (
+          <optgroup label={t('cam.operation.notAppliedYet')}>
+            {HEIGHT_FROM_DEAD_KEYS.map((text) => (
               <option key={text} disabled>
-                {text}
+                {t(text)}
               </option>
             ))}
           </optgroup>
         </select>
       </label>
       <label className="block">
-        <span className={CAM_DIALOG_LABEL}>Offset</span>
+        <span className={CAM_DIALOG_LABEL}>{t('cam.operation.offset')}</span>
         <span className="relative block">
           <input
-            aria-label="Offset"
+            aria-label={t('cam.operation.offset')}
             type="number"
             step="any"
             value={offset}
@@ -132,22 +134,23 @@ export function HeightField({
 
 export type OpTab = 'tool' | 'geometry' | 'heights' | 'passes' | 'linking';
 
-const OP_TABS: Array<{ id: OpTab; label: string; icon: CamIconId }> = [
-  { id: 'tool', label: 'Tool', icon: 'camTool' },
-  { id: 'geometry', label: 'Geometry', icon: 'camGeometry' },
-  { id: 'heights', label: 'Heights', icon: 'camHeights' },
-  { id: 'passes', label: 'Passes', icon: 'camPasses' },
-  { id: 'linking', label: 'Linking', icon: 'camLinking' },
+const OP_TABS: Array<{ id: OpTab; labelKey: string; icon: CamIconId }> = [
+  { id: 'tool', labelKey: 'cam.operation.tabTool', icon: 'camTool' },
+  { id: 'geometry', labelKey: 'cam.operation.tabGeometry', icon: 'camGeometry' },
+  { id: 'heights', labelKey: 'cam.operation.tabHeights', icon: 'camHeights' },
+  { id: 'passes', labelKey: 'cam.operation.tabPasses', icon: 'camPasses' },
+  { id: 'linking', labelKey: 'cam.operation.tabLinking', icon: 'camLinking' },
 ];
 
 
 export function CamOperationTabs({ value, onChange }: { value: OpTab; onChange: (tab: OpTab) => void }) {
+  const { t } = useTranslation();
   return (
-    <nav aria-label="Operation pages" className="grid grid-cols-5 gap-1 rounded border border-edge bg-header/40 p-1">
-      {OP_TABS.map(({ id, label, icon }) => (
-        <button key={id} type="button" title={label} aria-pressed={value === id} onClick={() => onChange(id)}
+    <nav aria-label={t('cam.operation.operationPages')} className="grid grid-cols-5 gap-1 rounded border border-edge bg-header/40 p-1">
+      {OP_TABS.map(({ id, labelKey, icon }) => (
+        <button key={id} type="button" title={t(labelKey)} aria-pressed={value === id} onClick={() => onChange(id)}
           className={'flex h-9 flex-col items-center justify-center gap-0.5 rounded text-[8px] font-semibold ' + (value === id ? 'bg-accent/15 text-accent' : 'text-mute hover:text-ink')}>
-          <CamToolIcon id={icon} size={18} />{label}
+          <CamToolIcon id={icon} size={18} />{t(labelKey)}
         </button>
       ))}
     </nav>
