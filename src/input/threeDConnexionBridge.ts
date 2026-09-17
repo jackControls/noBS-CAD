@@ -8,6 +8,7 @@
  * vendor's HTTPS endpoint only after the user explicitly requests a browser
  * connection. WebHID remains an offline/raw-device fallback.
  */
+import { translate } from '../i18n';
 
 export interface SixDofDriverView {
   focusElement(): HTMLElement | null;
@@ -88,7 +89,7 @@ function loadDriverLibrary(signal: AbortSignal): Promise<DriverConstructor> {
       ? DEFAULT_DRIVER_SCRIPT_URL
       : driverWindow.__sixDofDriverScriptUrl;
   if (!scriptUrl) {
-    return Promise.reject(new Error('The 3D mouse driver bridge is disabled.'));
+    return Promise.reject(new Error(translate('input.errorDriverBridgeDisabled')));
   }
   if (!driverLibraryPromise) {
     driverLibraryPromise = new Promise<DriverConstructor>((resolve, reject) => {
@@ -107,14 +108,14 @@ function loadDriverLibrary(signal: AbortSignal): Promise<DriverConstructor> {
         if (!error && constructor) resolve(constructor);
         else {
           driverLibraryPromise = null;
-          reject(error ?? new Error('The 3D mouse driver bridge did not initialize.'));
+          reject(error ?? new Error(translate('input.errorDriverBridgeNotInitialized')));
         }
       };
       const onLoad = () => finish();
       const onError = () =>
-        finish(new Error('Could not load the 3D mouse driver bridge.'));
+        finish(new Error(translate('input.errorDriverBridgeLoadFailed')));
       const timeout = window.setTimeout(
-        () => finish(new Error('Loading the 3D mouse driver bridge timed out.')),
+        () => finish(new Error(translate('input.errorDriverBridgeLoadTimeout'))),
         SCRIPT_LOAD_TIMEOUT_MS,
       );
       script.addEventListener('load', onLoad);
@@ -158,7 +159,7 @@ export async function openThreeDConnexionBridge(
   throwIfAborted(signal);
 
   const element = view.focusElement();
-  if (!element) throw new Error('The 3D viewport is not ready.');
+  if (!element) throw new Error(translate('input.errorViewportNotReady'));
   if (element.tabIndex < 0) element.tabIndex = 0;
 
   let driver: DriverInstance;
@@ -287,11 +288,11 @@ export async function openThreeDConnexionBridge(
     onDisconnect: (reason: unknown) => {
       stopMotion();
       if (!created) {
-        rejectCreated(new Error(`3D mouse driver connection failed (${String(reason)}).`));
+        rejectCreated(new Error(translate('input.errorDriverConnectionFailed').replace('{reason}', String(reason))));
       } else if (!disposed) {
         connectionLost = true;
         disposed = true;
-        onUnexpectedDisconnect('3D mouse driver connection was lost. Click to reconnect.');
+        onUnexpectedDisconnect(translate('input.errorDriverConnectionLostReconnect'));
       }
     },
   };
@@ -307,7 +308,7 @@ export async function openThreeDConnexionBridge(
   const timeout = window.setTimeout(() => {
     rejectCreated(
       new Error(
-        'The 3D mouse driver service did not respond. Start 3DxNLServer, then retry.',
+        translate('input.errorDriverServiceNoResponse'),
       ),
     );
   }, DRIVER_CONNECT_TIMEOUT_MS);
@@ -315,10 +316,10 @@ export async function openThreeDConnexionBridge(
   signal.addEventListener('abort', abort, { once: true });
 
   try {
-    if (!driver.connect()) throw new Error('Could not start the 3D mouse driver connection.');
+    if (!driver.connect()) throw new Error(translate('input.errorDriverStartFailed'));
     await createdPromise;
     throwIfAborted(signal);
-    if (connectionLost) throw new Error('The 3D mouse driver connection was lost.');
+    if (connectionLost) throw new Error(translate('input.errorDriverConnectionLost'));
   } catch (error) {
     disposed = true;
     stopMotion();

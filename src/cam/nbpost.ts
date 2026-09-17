@@ -1,6 +1,7 @@
 import { getEngine } from '../engine';
 import type { NbPostAnalysisDto } from '../engine/types';
 import { chooseOpenFile } from '../files/fileIO';
+import { translate } from '../i18n';
 
 const MAX_NBPOST_BYTES = 2 * 1024 * 1024;
 
@@ -16,14 +17,14 @@ export async function inspectNbPostFile(): Promise<NbPostAnalysisDto | null> {
   });
   if (!opened) return null;
   if (opened.bytes.byteLength > MAX_NBPOST_BYTES) {
-    throw new Error('The .nbpost file exceeds the 2 MiB analysis limit.');
+    throw new Error(translate('cam.errors.errorNbpostSizeLimit'));
   }
 
   let source: string;
   try {
     source = new TextDecoder('utf-8', { fatal: true }).decode(opened.bytes);
   } catch {
-    throw new Error('.nbpost files must be UTF-8 text.');
+    throw new Error(translate('cam.errors.errorNbpostUtf8'));
   }
 
   return (await getEngine()).camAnalyzeNbPost({

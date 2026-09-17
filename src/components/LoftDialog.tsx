@@ -191,8 +191,12 @@ export function LoftDialog() {
                   <ViewportSelectionField
                     testId="loft-sections-selection"
                     label={t('loft.sections')}
-                    status={sections.length > 0 ? `${sections.length} ${sections.length === 1 ? 'section' : 'sections'} selected` : 'Click closed profiles in the viewport'}
-                    hint="Select profiles in loft order. The viewport highlights and numbered badges show the current order."
+                    status={sections.length > 0
+                      ? (sections.length === 1
+                          ? t('loft.sectionSelected').replace('{count}', String(sections.length))
+                          : t('loft.sectionsSelected').replace('{count}', String(sections.length)))
+                      : t('loft.clickProfiles')}
+                    hint={t('loft.sectionsHint')}
                     active={modelingPickTarget === 'loft_sections'}
                     hasSelection={sections.length > 0}
                     onActivate={activateSections}
@@ -202,18 +206,22 @@ export function LoftDialog() {
                     }}
                   />
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-ink"><input type="checkbox" checked={ruled} onChange={(event) => setRuled(event.target.checked)} className="accent-accent" />{t('loft.ruled')}</label>
-                  <label><span className={LABEL_CLASS}>Section continuity</span><select data-testid="loft-continuity" value={continuity} onChange={(event) => setContinuity(event.target.value as LoftContinuity)} className={INPUT_CLASS}><option value="g0">G0 · Position</option><option value="g1">G1 · Tangent</option><option value="g2">G2 · Curvature</option></select></label>
+                  <label><span className={LABEL_CLASS}>{t('loft.sectionContinuity')}</span><select data-testid="loft-continuity" value={continuity} onChange={(event) => setContinuity(event.target.value as LoftContinuity)} className={INPUT_CLASS}><option value="g0">{t('loft.g0Position')}</option><option value="g1">{t('loft.g1Tangent')}</option><option value="g2">{t('loft.g2Curvature')}</option></select></label>
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-ink"><input data-testid="loft-centerline-enabled" type="checkbox" checked={centerlineEnabled} onChange={(event) => {
                     const enabled = event.target.checked;
                     setCenterlineEnabled(enabled);
                     if (enabled) activateCurvePicker('loft_centerline', centerlineSketch, centerlineIds);
                     else if (modelingPickTarget === 'loft_centerline') setModelingPickTarget('loft_sections');
-                  }} disabled={pathEntries.length === 0} className="accent-accent" />Use a centerline</label>
+                  }} disabled={pathEntries.length === 0} className="accent-accent" />{t('loft.useCenterline')}</label>
                   {centerlineEnabled && <>
                     <ViewportSelectionField
                       testId="loft-centerline-selection"
-                      label="Centerline"
-                      status={centerlineIds.length > 0 ? `${centerlineIds.length} centerline ${centerlineIds.length === 1 ? 'curve' : 'curves'} selected · ${centerlineSketch}` : 'Click a centerline in the viewport'}
+                      label={t('loft.centerline')}
+                      status={centerlineIds.length > 0
+                        ? (centerlineIds.length === 1
+                            ? t('loft.centerlineCurveSelected').replace('{count}', String(centerlineIds.length)).replace('{name}', centerlineSketch)
+                            : t('loft.centerlineCurvesSelected').replace('{count}', String(centerlineIds.length)).replace('{name}', centerlineSketch))
+                        : t('loft.clickCenterline')}
                       active={modelingPickTarget === 'loft_centerline'}
                       hasSelection={centerlineIds.length > 0}
                       onActivate={() => activateCurvePicker('loft_centerline', centerlineSketch, centerlineIds)}
@@ -229,12 +237,16 @@ export function LoftDialog() {
                     setGuideEnabled(enabled);
                     if (enabled) activateCurvePicker('loft_guide', guideSketch, guideIds);
                     else if (modelingPickTarget === 'loft_guide') setModelingPickTarget('loft_sections');
-                  }} disabled={pathEntries.length === 0} className="accent-accent" />Use a guide rail</label>
+                  }} disabled={pathEntries.length === 0} className="accent-accent" />{t('loft.useGuideRail')}</label>
                   {guideEnabled && <>
                     <ViewportSelectionField
                       testId="loft-guide-selection"
-                      label="Guide rail"
-                      status={guideIds.length > 0 ? `${guideIds.length} guide ${guideIds.length === 1 ? 'curve' : 'curves'} selected · ${guideSketch}` : 'Click a guide rail in the viewport'}
+                      label={t('loft.guideRail')}
+                      status={guideIds.length > 0
+                        ? (guideIds.length === 1
+                            ? t('loft.guideCurveSelected').replace('{count}', String(guideIds.length)).replace('{name}', guideSketch)
+                            : t('loft.guideCurvesSelected').replace('{count}', String(guideIds.length)).replace('{name}', guideSketch))
+                        : t('loft.clickGuide')}
                       active={modelingPickTarget === 'loft_guide'}
                       hasSelection={guideIds.length > 0}
                       onActivate={() => activateCurvePicker('loft_guide', guideSketch, guideIds)}

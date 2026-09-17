@@ -170,9 +170,13 @@ export function RibDialog() {
                 : <>
                   <ViewportSelectionField
                     testId="rib-centerline-selection"
-                    label="Centerline curves"
-                    status={lineIds.length > 0 ? `${lineIds.length} centerline ${lineIds.length === 1 ? 'curve' : 'curves'} selected · ${sketchName}` : 'Click centerline curves in the viewport'}
-                    hint="Click visible finished-sketch curves to add or remove them."
+                    label={t('rib.centerlineCurves')}
+                    status={lineIds.length > 0
+                      ? (lineIds.length === 1
+                          ? t('rib.centerlineCurveSelected').replace('{count}', String(lineIds.length)).replace('{name}', sketchName)
+                          : t('rib.centerlineCurvesSelected').replace('{count}', String(lineIds.length)).replace('{name}', sketchName))
+                      : t('rib.clickCenterlines')}
+                    hint={t('rib.centerlineHint')}
                     active={modelingPickTarget === 'rib_centerline'}
                     hasSelection={lineIds.length > 0}
                     onActivate={activateCenterline}
@@ -182,19 +186,19 @@ export function RibDialog() {
                       setModelingPickTarget('rib_centerline');
                     }}
                   />
-                  <label><span className={LABEL_CLASS}>Extent</span><select data-testid="rib-extent" value={extentType} onChange={(event) => {
+                  <label><span className={LABEL_CLASS}>{t('rib.extent')}</span><select data-testid="rib-extent" value={extentType} onChange={(event) => {
                     const next = event.target.value as RibExtent['type'];
                     setExtentType(next);
                     if (next === 'to_face') setModelingPickTarget('rib_to_face');
                     else if (modelingPickTarget === 'rib_to_face') setModelingPickTarget('rib_centerline');
-                  }} className={INPUT_CLASS}><option value="distance">Distance</option><option value="to_next">To Next</option><option value="to_face">Up to Face</option><option value="through_all">Through All</option></select></label>
-                  {extentType === 'to_next' && operation === 'new_body' && <p className="rounded border border-amber-500/30 bg-amber-500/10 p-2 text-[10px] leading-4 text-amber-200">To Next needs Add, Subtract, or Common so there is a target body to stop at.</p>}
+                  }} className={INPUT_CLASS}><option value="distance">{t('rib.distance')}</option><option value="to_next">{t('rib.toNext')}</option><option value="to_face">{t('rib.toFace')}</option><option value="through_all">{t('rib.throughAll')}</option></select></label>
+                  {extentType === 'to_next' && operation === 'new_body' && <p className="rounded border border-amber-500/30 bg-amber-500/10 p-2 text-[10px] leading-4 text-amber-200">{t('rib.toNextNeedsTarget')}</p>}
                   <div className="grid grid-cols-2 gap-2"><label><span className={LABEL_CLASS}>{t('rib.thickness')}</span><DimensionInput autoSelectKey={lineIds.length > 0 ? `${sketchName}:${lineIds.join(',')}` : null} data-testid="rib-thickness" min="0.000001" step="any" value={thickness} onValueChange={setThickness} /></label>{extentType === 'distance' && <label><span className={LABEL_CLASS}>{t('rib.depth')}</span><DimensionInput data-testid="rib-depth" min="0.000001" step="any" value={depth} onValueChange={setDepth} /></label>}</div>
                   {extentType === 'to_face' && <ViewportSelectionField
                     testId="rib-to-face-selection"
-                    label="Target planar face"
-                    status={targetFace ? `${targetFace.body.name} · planar face selected` : 'Click a planar face in the viewport'}
-                    hint="Only planar faces can terminate this rib."
+                    label={t('rib.targetFace')}
+                    status={targetFace ? t('rib.planarFaceSelected').replace('{body}', targetFace.body.name) : t('rib.clickPlanarFace')}
+                    hint={t('rib.targetFaceHint')}
                     active={modelingPickTarget === 'rib_to_face'}
                     hasSelection={targetFace !== undefined}
                     onActivate={() => setModelingPickTarget('rib_to_face')}

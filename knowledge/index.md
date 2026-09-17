@@ -38,6 +38,18 @@ or `../../mcp-server/` identify supporting paths in a checkout of the same sourc
 revision; they are not additional MCP resources. External HTTPS sources can be
 opened separately when network access is available.
 
+## Mechanical design guidance
+
+- [GD&T intro](machine-design/concepts/gdt-intro.md) - Function, datums and inspectable tolerances.
+- [Fits and clearances](machine-design/concepts/fits-clearances.md) - Worst-case limits and measured fit coupons.
+- [Design for manufacturing and assembly](machine-design/concepts/dfm-overview.md) - Process, material, hardware and assembly decisions.
+- [Manufacturing process checks](machine-design/concepts/dfm-process-guidelines.md) - Tool access, mold release, print orientation and qualification.
+- [Sources and attribution](machine-design/SOURCES.md) - References used by these pages.
+
+Use the listed resources for their stated scope, then consult the cited sources
+for more detail. The bundle is guidance for design decisions; it does not supply
+certified material allowables, standards tables or physical qualification.
+
 ## Hosted page
 
 GitHub Pages builds from this bundle (see `.github/workflows/pages-knowledge.yml`).

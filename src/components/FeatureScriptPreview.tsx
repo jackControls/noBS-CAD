@@ -1,6 +1,7 @@
 import { cloneElement, isValidElement, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { ensureScriptExamples, errorMessage, previewExample, showScriptExample, type ScriptExample, type ScriptPreviewFrame } from '../scripts/workspace';
+import { useTranslation } from '../i18n';
 import { ScriptPreview } from './ScriptPreview';
 
 /** The ribbon supplies its existing catalog operation; examples declare the
@@ -8,6 +9,7 @@ import { ScriptPreview } from './ScriptPreview';
 export function FeatureScriptPreview({ children, group, operation, label, disabled = false }: {
   children: ReactNode; group: string; operation: string; label: string; disabled?: boolean;
 }) {
+  const { t } = useTranslation();
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const [example, setExample] = useState<ScriptExample | null>(null);
   const [frames, setFrames] = useState<ScriptPreviewFrame[] | null>(null);
@@ -118,7 +120,7 @@ export function FeatureScriptPreview({ children, group, operation, label, disabl
         data-script-preview-pending={pendingOpen || undefined}
         className="inline-flex shrink-0"
         tabIndex={disabled && example ? 0 : undefined}
-        aria-label={disabled && example ? `${label} example` : undefined}
+        aria-label={disabled && example ? t('scripts.featurePreview.labelExample').replace('{label}', label) : undefined}
         aria-describedby={position ? id : undefined}
         onMouseEnter={() => scheduleOpen()}
         onMouseLeave={event => { if (!contains(document.activeElement)) scheduleClose(event.relatedTarget); }}
@@ -144,7 +146,7 @@ export function FeatureScriptPreview({ children, group, operation, label, disabl
           ref={card}
           id={id}
           role="dialog"
-          aria-label={`${label} example`}
+          aria-label={t('scripts.featurePreview.labelExample').replace('{label}', label)}
           data-feature-script-preview
           data-script-companion
           data-native-viewport-overlay
@@ -159,19 +161,19 @@ export function FeatureScriptPreview({ children, group, operation, label, disabl
         >
           <div className="mb-2 flex items-start gap-2">
             <div className="min-w-0 flex-1">
-              <p className="font-semibold">{example?.name ?? `${label} example`}</p>
-              <p className="mt-0.5 text-[10px] text-mute">Separate example · your model stays unchanged</p>
+              <p className="font-semibold">{example?.name ?? t('scripts.featurePreview.labelExample').replace('{label}', label)}</p>
+              <p className="mt-0.5 text-[10px] text-mute">{t('scripts.featurePreview.separate')}</p>
             </div>
-            <button type="button" aria-label="Close feature preview" title="Close (Escape)" className="rounded px-1.5 py-0.5 text-mute hover:bg-edge hover:text-ink" onClick={dismiss}>×</button>
+            <button type="button" aria-label={t('scripts.featurePreview.close')} title={t('scripts.featurePreview.closeTitle')} className="rounded px-1.5 py-0.5 text-mute hover:bg-edge hover:text-ink" onClick={dismiss}>×</button>
           </div>
-          {error ? <p role="status" className="py-4 leading-4 text-mute">{error}</p> : frames ? <ScriptPreview frames={frames} /> : <p role="status" className="flex h-44 items-center justify-center text-mute">Building the small example…</p>}
+          {error ? <p role="status" className="py-4 leading-4 text-mute">{error}</p> : frames ? <ScriptPreview frames={frames} /> : <p role="status" className="flex h-44 items-center justify-center text-mute">{t('scripts.featurePreview.building')}</p>}
           {example && <button type="button" className="mt-3 w-full rounded border border-edge px-2 py-1.5 text-left hover:bg-edge" onClick={() => {
             const transferFocus = card.current?.contains(document.activeElement);
             // Move into the opened workspace immediately. A delayed inspection
             // must never steal focus back after the user has moved elsewhere.
             flushSync(() => { void showScriptExample(example); close(); });
-            if (transferFocus) document.querySelector<HTMLButtonElement>('aside[aria-label="Scripts"] button[aria-label="Close scripts"]')?.focus();
-          }}>Open this script →</button>}
+            if (transferFocus) document.querySelector<HTMLButtonElement>(`aside[aria-label="${t('scripts.panel.title')}"] button[aria-label="${t('scripts.panel.close')}"]`)?.focus();
+          }}>{t('scripts.featurePreview.openScript')}</button>}
         </div>,
         document.body,
       )}

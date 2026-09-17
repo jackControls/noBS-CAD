@@ -256,7 +256,7 @@ export function ProjectMenuControls() {
               />
               <FileMenuItem
                 icon={<BookOpen size={14} />}
-                label="Open Script…"
+                label={t('topbar.openScript')}
                 onClick={() => { setMenuOpen(false); void openScriptFile(); }}
               />
               <FileMenuItem
@@ -534,10 +534,10 @@ export function ProjectTabBar() {
         })}
       </div>
       <PresentationReopen />
-      <button type="button" aria-label="Scripts" aria-expanded={scriptsOpen}
+      <button type="button" aria-label={t('topbar.scripts')} aria-expanded={scriptsOpen}
         data-interface-group="document/scripts" onClick={showScripts}
         className="flex shrink-0 items-center gap-1.5 border-l border-edge px-3 text-xs text-mute hover:bg-edge hover:text-ink">
-        <BookOpen size={13} /> Scripts
+        <BookOpen size={13} /> {t('topbar.scripts')}
       </button>
     </div>
   );

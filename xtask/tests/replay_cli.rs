@@ -9,14 +9,27 @@ use std::{
 struct TestDirectory(PathBuf);
 impl TestDirectory {
     fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("nbcad replay cli {} {nonce}", std::process::id()));
-        fs::create_dir(&path).unwrap();
-        Self(fs::canonicalize(path).unwrap())
+        // Parallel tests can observe the same clock tick. Never reuse another
+        // test's directory (including its cleanup responsibility).
+        for _ in 0..100 {
+            let path = std::env::temp_dir().join(format!(
+                "nbcad replay cli {} {nonce} {}",
+                std::process::id(),
+                SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self(fs::canonicalize(path).unwrap()),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("Create owned test directory: {error}"),
+            }
+        }
+        panic!("Could not allocate an owned test directory")
     }
 }
 impl Drop for TestDirectory {
@@ -72,6 +85,100 @@ fn succeeded(output: &Output) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn headless_save_reopens_the_archive_and_preserves_existing_files_on_failure() {
+    let temp = TestDirectory::new();
+    let fixture = temp
+        .0
+        .join(format!("MCP fixture{}", std::env::consts::EXE_SUFFIX));
+    succeeded(
+        &command(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+            .arg("--edition=2021")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/replay_server.rs"))
+            .arg("-o")
+            .arg(&fixture)
+            .output()
+            .unwrap(),
+    );
+    let save = temp.0.join("nested/bench.nbcad");
+    let requests = temp.0.join("requests.jsonl");
+    let out = temp.0.join("reports");
+    let run = |mode: &str, extra: &[&str]| {
+        command(env!("CARGO_BIN_EXE_xtask"))
+            .args(["run-script", "--recipe", "fixture", "--server"])
+            .arg(&fixture)
+            .arg("--save")
+            .arg(&save)
+            .arg("--out")
+            .arg(&out)
+            .args(extra)
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .env("NBCAD_FIXTURE_MODE", mode)
+            .env("NBCAD_FIXTURE_REQUESTS", &requests)
+            .output()
+            .unwrap()
+    };
+    succeeded(&run("", &["--server-arg", "--mcp"]));
+    let bytes = fs::read(&save).unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let model: serde_json::Value =
+        serde_json::from_reader(archive.by_name("model.json").unwrap()).unwrap();
+    assert_eq!(
+        model["document"]["name"], "headless fixture",
+        "Save must export the current model, not the script's dummy final_model"
+    );
+    assert_eq!(model["drawings"]["sheets"], serde_json::json!([1]));
+    let manifest: serde_json::Value =
+        serde_json::from_reader(archive.by_name("manifest.json").unwrap()).unwrap();
+    assert_eq!(
+        manifest["application_version"], "1",
+        "Version comes from the engine, not xtask"
+    );
+    let calls = fs::read_to_string(&requests).unwrap();
+    assert_eq!(calls.matches("\"method\":\"initialize\"").count(), 2);
+    assert!(calls.contains("cad_load_project_model"));
+    for forbidden in ["\"action\":\"launch\"", "\"action\":\"file\"", "cad_attach"] {
+        assert!(!calls.contains(forbidden), "Headless save used {forbidden}");
+    }
+    succeeded(&run("", &["--repeat", "2"]));
+    assert_eq!(
+        fs::read(&save).unwrap(),
+        bytes,
+        "Repeated exports must have identical bytes"
+    );
+    for (mode, expected) in [
+        ("invalid-model", "invalid project model"),
+        ("changed-model", "changed its model"),
+        ("broken-geometry", "geometry errors"),
+        ("missing-body", "changed its solid bodies"),
+        ("failed-reload", "Reopen generated project"),
+        ("failed-script", "cad_interface"),
+    ] {
+        let output = run(mode, &[]);
+        assert!(!output.status.success(), "{mode} unexpectedly passed");
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains(expected), "{mode}: {error}");
+        assert_eq!(
+            fs::read(&save).unwrap(),
+            bytes,
+            "{mode} overwrote an existing project"
+        );
+    }
+    // Live save still delegates to the selected desktop instead of forking it.
+    fs::remove_file(&requests).unwrap();
+    succeeded(&run("", &["--session", "chosen-document"]));
+    let calls = fs::read_to_string(&requests).unwrap();
+    assert!(calls.contains("cad_attach") && calls.contains("\"command\":\"save\""));
+    assert!(!calls.contains("cad_load_project_model"));
+    for flag in ["--new", "--present"] {
+        assert!(
+            !run("", &[flag]).status.success(),
+            "{flag} still needs a desktop"
+        );
+    }
 }
 
 #[test]

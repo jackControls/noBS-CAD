@@ -34,16 +34,16 @@ mod tests {
     #[test]
     fn mcp_version_keeps_the_full_revision_and_modified_marker() {
         let mut info = BuildInfo {
-            version: "0.1.0",
+            version: "0.2.0",
             revision: "abcdef0123456789abcdef0123456789abcdef01",
             channel: "preview",
             modified: false,
         };
-        assert_eq!(info.display_version(), format!("0.1.0+{}", info.revision));
+        assert_eq!(info.display_version(), format!("0.2.0+{}", info.revision));
         info.modified = true;
         assert_eq!(
             info.display_version(),
-            format!("0.1.0+{}.modified", info.revision)
+            format!("0.2.0+{}.modified", info.revision)
         );
     }
 }

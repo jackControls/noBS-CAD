@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { closeScriptPreview, errorMessage, openScriptPreview, renderScriptPreview, type ScriptPreviewFrame } from '../scripts/workspace';
+import { useTranslation } from '../i18n';
 
 const WIDTH = 300;
 const HEIGHT = 176;
@@ -13,6 +14,7 @@ type RenderView = { id: string | null; ready: Promise<string>; closed: boolean; 
 /** Bevy renders the immutable example; this component owns accessible controls
  * and one-shot sequencing, never model projection, shading or live CAD state. */
 export function ScriptPreview({ frames, autoPlay = true }: { frames: ScriptPreviewFrame[]; autoPlay?: boolean }) {
+  const { t } = useTranslation();
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [pose, setPose] = useState(HOME);
@@ -107,9 +109,9 @@ export function ScriptPreview({ frames, autoPlay = true }: { frames: ScriptPrevi
   return (
     <div data-script-preview className="min-w-0 text-[11px] text-ink">
       <div ref={model} role="img" tabIndex={0}
-        aria-label={frame ? `Example model: ${frame.caption}` : 'No preview geometry'}
+        aria-label={frame ? t('scripts.preview.modelCaption').replace('{caption}', frame.caption) : t('scripts.preview.noGeometry')}
         aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown Home"
-        title="Drag or use arrow keys to turn this example. Home fits the model. The open design is unchanged."
+        title={t('scripts.preview.turnHint')}
         className="relative flex w-full touch-none items-center justify-center overflow-hidden rounded border border-edge bg-viewport cursor-grab focus-visible:outline focus-visible:outline-accent active:cursor-grabbing"
         style={{ aspectRatio: `${WIDTH} / ${HEIGHT}` }}
         onKeyDown={event => {
@@ -133,17 +135,17 @@ export function ScriptPreview({ frames, autoPlay = true }: { frames: ScriptPrevi
         onLostPointerCapture={() => { drag.current = null; }}
       >
         {visibleImage ? <img src={visibleImage.url} alt="" draggable={false} className="block h-full w-full" />
-          : <span className="px-3 text-center text-mute">{error ?? 'Rendering native preview…'}</span>}
+          : <span className="px-3 text-center text-mute">{error ?? t('scripts.preview.rendering')}</span>}
       </div>
-      <p className="mt-2 min-h-8 leading-4" aria-live="polite">{error ?? frame?.caption ?? 'No preview is available.'}</p>
+      <p className="mt-2 min-h-8 leading-4" aria-live="polite">{error ?? frame?.caption ?? t('scripts.preview.unavailable')}</p>
       <div className="mt-2 flex items-center gap-1 text-[10px]">
-        <button type="button" className="rounded px-2 py-1 hover:bg-edge disabled:opacity-40" disabled={current === 0} onClick={event => choose(current - 1, event.currentTarget)} aria-label="Previous preview step">Previous</button>
+        <button type="button" className="rounded px-2 py-1 hover:bg-edge disabled:opacity-40" disabled={current === 0} onClick={event => choose(current - 1, event.currentTarget)} aria-label={t('scripts.preview.previousStep')}>{t('scripts.preview.previous')}</button>
         <span className="text-mute tabular-nums">{frames.length ? current + 1 : 0}/{frames.length}</span>
-        <button type="button" className="rounded px-2 py-1 hover:bg-edge disabled:opacity-40" disabled={current >= frames.length - 1} onClick={event => choose(current + 1, event.currentTarget)} aria-label="Next preview step">Next</button>
+        <button type="button" className="rounded px-2 py-1 hover:bg-edge disabled:opacity-40" disabled={current >= frames.length - 1} onClick={event => choose(current + 1, event.currentTarget)} aria-label={t('scripts.preview.nextStep')}>{t('scripts.preview.next')}</button>
         <button type="button" className="ml-auto rounded px-2 py-1 hover:bg-edge disabled:opacity-40" disabled={frames.length < 2} onClick={() => {
           setIndex(0); setPlaying(!reducedMotion.current);
-        }} aria-label="Replay feature preview">Replay</button>
-        <button type="button" className="rounded px-2 py-1 hover:bg-edge" onClick={fit} aria-label="Fit preview model">Fit</button>
+        }} aria-label={t('scripts.preview.replayPreview')}>{t('scripts.preview.replay')}</button>
+        <button type="button" className="rounded px-2 py-1 hover:bg-edge" onClick={fit} aria-label={t('scripts.preview.fitPreview')}>{t('scripts.preview.fit')}</button>
       </div>
     </div>
   );

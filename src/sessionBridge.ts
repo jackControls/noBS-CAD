@@ -18,6 +18,7 @@ import {currentHistoryProjectKey,dropApplicationHistory,recordDrawingHistory} fr
 import { listen } from '@tauri-apps/api/event';
 import { getEngine, isTauriRuntime } from './engine';
 import { applyLiveUiControl } from './liveUiBridge';
+import { translate } from './i18n';
 import { SerialPlayback, presentOperation, presentation, wakePlayback, type ScriptProgress } from './operationPlayback';
 import { getSessionCamera } from './components/viewport/cameraApi';
 import { captureSessionSnapshot, synchronizeSnapshotVisibility } from './sessionSnapshot';
@@ -154,7 +155,7 @@ export async function publishCurrentSession(transition?: ProjectTransitionReleas
     transitionPublicationOwed = false;
     const assertCurrent = () => {
       snapshot!.assertCurrent();
-      if (documentRevision !== presentation.documentVersion()) throw new Error('The document changed during publication');
+      if (documentRevision !== presentation.documentVersion()) throw new Error(translate('ui.errorDocumentChangedDuringPublication'));
     };
     const owned = async <T,>(operation: () => Promise<T>): Promise<T> => {
       assertCurrent();
@@ -406,7 +407,7 @@ export function startSessionBridge(): void {
         tickRequested = false;
         await applyLiveUiControl(async () => {
           if (publishTimer) { clearTimeout(publishTimer); publishTimer = null; }
-          if (!await publishNow()) throw new Error('UI changed, but its snapshot could not be published; inspect before retrying');
+          if (!await publishNow()) throw new Error(translate('ui.errorSnapshotNotPublished'));
         });
         await applyInboxNow();
       } while (tickRequested);
