@@ -100,9 +100,19 @@ jobs:
           restore-keys: |
             native-host-${{ runner.arch }}-
 
-      # `tauri.linux.conf.json` declares staged license notices as bundle
-      # resources, so `tauri-build` fails without them. Reuse the packaging
-      # script's staging step rather than duplicating the source paths.
+      # tauri.linux.conf.json declares bundle resources from both node_modules
+      # (`opencascade.js/LICENSE`) and the staged license notices, so tauri-build
+      # fails unless the frontend dependencies are installed and the packaging
+      # script's staging step has run.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci --ignore-scripts
+
       - name: Stage the Linux bundle license notices
         run: node scripts/bundle-linux.mjs --stage-licenses
 
