@@ -1,6 +1,6 @@
 [package]
 name = "nbcad-export"
-version = "0.2.0"
+version.workspace = true
 edition = "2021"
 description = "noBS CAD manufacturing mesh writers (STL, 3MF)"
 license = "LGPL-2.1-or-later"

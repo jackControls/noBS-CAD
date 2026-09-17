@@ -1,0 +1,37 @@
+name: Version guard
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: version-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version_guard:
+    name: VERSION matches every carrier
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out noBS CAD
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # No `npm ci`: the guard reads VERSION and the manifests directly, so it
+      # stays a fast, always-reporting gate for every pull request.
+      - name: Check every version carrier
+        run: node scripts/sync-version.mjs --check
+
+      - name: Unit-test the version carriers
+        run: node --test scripts/sync-version.test.mjs

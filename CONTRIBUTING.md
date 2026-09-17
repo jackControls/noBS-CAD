@@ -59,6 +59,12 @@ in a packaged Tauri app and inspect the actual Bevy surface before describing
 a desktop visual issue as fixed. Record the tested appearance mode and the
 visible result in the PR test plan.
 
+### Version numbers
+
+The product version lives in `VERSION`. Change it there, run
+`npm run version:sync`, and run `npm run version:check` before you push — do not
+edit the derived manifests by hand. See [docs/RELEASING.md](docs/RELEASING.md).
+
 ## 5. Follow through until merge-ready
 
 Stay with the PR until it is ready to merge:
