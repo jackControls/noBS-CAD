@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::constraint::Constraint;
+use crate::constraint::{ArcEndpoint, Constraint};
 use crate::dto::{
     BreakRequest, ChamferRequest, CircularPatternRequest, ExtendRequest, FilletPreviewDto,
     FilletRequest, MirrorRequest, MoveCopyRequest, OffsetPreviewDto, OffsetRequest, PolygonRequest,
@@ -54,6 +54,75 @@ fn sweep_contains(a0: f64, a1: f64, a: f64) -> bool {
 
 impl SketchSession {
     // --- Entity-model helpers ---
+
+    fn arc_endpoint_points(&self, arc: EntityId) -> Vec<EntityId> {
+        self.sketch
+            .constraints()
+            .filter_map(|(_, constraint)| match *constraint {
+                Constraint::ArcEndpointCoincident {
+                    point, arc: owner, ..
+                } if owner == arc => Some(point),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Trim/Break change the finite sweep. Keep original endpoint references
+    /// on the surviving pieces and give each cut a new point, shared across
+    /// adjacent pieces. Stale anchors must not pull the edited angles back.
+    fn rebind_arc_endpoints(&mut self, original: EntityId, parts: &[EntityId]) {
+        let bindings: Vec<_> = self
+            .sketch
+            .constraints()
+            .filter_map(|(id, c)| match *c {
+                Constraint::ArcEndpointCoincident { point, arc, .. } if arc == original => {
+                    Some((id, point))
+                }
+                _ => None,
+            })
+            .collect();
+        let mut points: Vec<_> = bindings
+            .iter()
+            .filter_map(|(_, point)| {
+                self.sketch
+                    .point_position(*point)
+                    .map(|position| (*point, position))
+            })
+            .collect();
+        for (id, _) in bindings {
+            self.sketch.remove_constraint(id);
+        }
+        for &arc in parts {
+            let Some(Entity::Arc {
+                center,
+                radius,
+                start_angle,
+                end_angle,
+            }) = self.sketch.entity(arc).cloned()
+            else {
+                continue;
+            };
+            let mut used = Vec::new();
+            for (end, angle) in [
+                (ArcEndpoint::Start, start_angle),
+                (ArcEndpoint::End, end_angle),
+            ] {
+                let position = center + Vec2::new(radius * angle.cos(), radius * angle.sin());
+                let point = points
+                    .iter()
+                    .find(|(point, p)| !used.contains(point) && p.distance(position) <= EPS)
+                    .map(|(point, _)| *point)
+                    .unwrap_or_else(|| {
+                        let point = self.sketch.add_entity(Entity::Point { position });
+                        points.push((point, position));
+                        point
+                    });
+                self.sketch
+                    .add_constraint(Constraint::ArcEndpointCoincident { point, arc, end });
+                used.push(point);
+            }
+        }
+    }
 
     fn line_seg(&self, id: EntityId) -> Result<fillet::LineSeg, SessionError> {
         let (a, b) = self
@@ -1043,6 +1112,7 @@ impl SketchSession {
                             end_angle: k1,
                         };
                     }
+                    s.rebind_arc_endpoints(entity, &[entity]);
                     Ok(())
                 }
                 Some(Entity::Arc { .. }) => {
@@ -1068,14 +1138,16 @@ impl SketchSession {
                         *start_angle = k0;
                         *end_angle = k1;
                     }
+                    let mut parts = vec![entity];
                     if let Some(&(start_angle, end_angle)) = trim.kept.get(1) {
-                        s.sketch.add_entity(Entity::Arc {
+                        parts.push(s.sketch.add_entity(Entity::Arc {
                             center,
                             radius,
                             start_angle,
                             end_angle,
-                        });
+                        }));
                     }
+                    s.rebind_arc_endpoints(entity, &parts);
                     Ok(())
                 }
                 _ => Err(SessionError::InvalidConstraint(
@@ -1263,6 +1335,7 @@ impl SketchSession {
                             end_angle: a + TAU,
                         };
                     }
+                    s.rebind_arc_endpoints(entity, &[entity]);
                     Ok(())
                 }
                 Some(Entity::Arc {
@@ -1287,12 +1360,13 @@ impl SketchSession {
                     if let Some(Entity::Arc { end_angle: e, .. }) = s.sketch.entity_mut(entity) {
                         *e = a;
                     }
-                    s.sketch.add_entity(Entity::Arc {
+                    let second = s.sketch.add_entity(Entity::Arc {
                         center,
                         radius,
                         start_angle: a,
                         end_angle,
                     });
+                    s.rebind_arc_endpoints(entity, &[entity, second]);
                     Ok(())
                 }
                 _ => Err(SessionError::InvalidConstraint(
@@ -1716,9 +1790,13 @@ impl SketchSession {
                             point_ids.insert(start);
                             point_ids.insert(end);
                         }
-                        Some(Entity::Circle { .. })
-                        | Some(Entity::Arc { .. })
-                        | Some(Entity::Spline { .. }) => direct_ids.push(id),
+                        Some(Entity::Arc { .. }) => {
+                            point_ids.extend(s.arc_endpoint_points(id));
+                            direct_ids.push(id);
+                        }
+                        Some(Entity::Circle { .. }) | Some(Entity::Spline { .. }) => {
+                            direct_ids.push(id);
+                        }
                         None => return Err(SessionError::EntityNotFound(id)),
                     }
                 }
@@ -1787,7 +1865,8 @@ impl SketchSession {
                         point_ids.push(start);
                         point_ids.push(end);
                     }
-                    Some(Entity::Circle { .. }) | Some(Entity::Arc { .. }) => {}
+                    Some(Entity::Arc { .. }) => point_ids.extend(s.arc_endpoint_points(*id)),
+                    Some(Entity::Circle { .. }) => {}
                     // Splines scale below via their fit points.
                     Some(Entity::Spline { .. }) => {}
                     None => return Err(SessionError::EntityNotFound(*id)),
@@ -1802,10 +1881,22 @@ impl SketchSession {
             }
             for id in &ids {
                 match s.sketch.entity_mut(*id) {
-                    Some(Entity::Circle { center, radius })
-                    | Some(Entity::Arc { center, radius, .. }) => {
+                    Some(Entity::Circle { center, radius }) => {
                         *center = origin + (*center - origin) * factor;
                         *radius *= factor.abs();
+                    }
+                    Some(Entity::Arc {
+                        center,
+                        radius,
+                        start_angle,
+                        end_angle,
+                    }) => {
+                        *center = origin + (*center - origin) * factor;
+                        *radius *= factor.abs();
+                        if factor < 0.0 {
+                            *start_angle += std::f64::consts::PI;
+                            *end_angle += std::f64::consts::PI;
+                        }
                     }
                     Some(Entity::Spline { points }) => {
                         for p in points.iter_mut() {
