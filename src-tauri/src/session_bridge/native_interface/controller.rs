@@ -267,10 +267,16 @@ fn update_inner(
             }
         }
         if matches!(event.event, WindowEvent::WindowCloseRequested(_)) {
-            if let Some(owner) = &event.context {
-                bridge.with_native_document_owner(engine, owner, || Ok(()))?;
-                request_close(state, bridge, engine)?;
-            }
+            // A title-bar close or Alt-F4 can arrive before the first interface
+            // frame is published, so the event carries no document context yet.
+            // Resolve the owner instead of silently dropping the request: a
+            // window that refuses to close is worse than a late one.
+            let owner = match event.context.clone() {
+                Some(owner) => owner,
+                None => bridge.native_document_context(&state.window_id, engine)?,
+            };
+            bridge.with_native_document_owner(engine, &owner, || Ok(()))?;
+            request_close(state, bridge, engine)?;
         }
         if !event.consumed {
             if let Err(error) = crate::native_editor::process_one(world, handle, services, &event) {
@@ -324,15 +330,23 @@ fn update_inner(
                 }
             }
             response["awaiting_input"] = json!(state.close_pending);
+            // Presentation may finish early, but never before it starts: a
+            // request whose remaining lifetime is under the 100 ms safety
+            // margin used to produce a deadline already in the past, so a
+            // freshly queued control reported layout/submission timeout
+            // without ever waiting for the frame it had just requested.
+            let now = now_ms();
+            let latest_useful = now.saturating_add(2_000);
+            let presentation_deadline = request["expires_ms"]
+                .as_u64()
+                .map(|expires| expires.saturating_sub(100))
+                .unwrap_or(latest_useful)
+                .min(latest_useful)
+                .max(now.saturating_add(1));
             state.pending = Some(PendingControl {
                 response,
                 owner: current,
-                presentation_deadline: now_ms().saturating_add(2_000).min(
-                    request["expires_ms"]
-                        .as_u64()
-                        .unwrap_or(0)
-                        .saturating_sub(100),
-                ),
+                presentation_deadline,
             });
         }
     }
