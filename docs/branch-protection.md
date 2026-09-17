@@ -2,14 +2,61 @@
 
 ## Verified repository policy
 
-As of 2026-09-08, jackControls/noBS-CAD uses the active **Protect main**
-ruleset. Main requires one approving review, dismissal of stale approvals,
-and resolution of review threads. Force pushes and branch deletion are blocked.
-The PR author cannot supply their own approval.
+As of 2026-09-17, jackControls/noBS-CAD uses the active **[Protect main](https://github.com/jackControls/noBS-CAD/rules/19790895)**
+ruleset (id `19790895`). Main requires one approving review, dismissal of stale
+approvals, and resolution of review threads. Force pushes and branch deletion are
+blocked. The PR author cannot supply their own approval.
 
 Required status checks are **not configured**. Passing CI is evidence for review,
 but GitHub does not yet enforce it as a merge requirement. Updating the ruleset
-requires repository administration; collaborator push access is insufficient.
+requires repository administration; collaborator push and triage access is
+insufficient. Until a maintainer applies the change below, inspect all applicable
+results on the exact PR head before merging — an approval alone does not establish
+that the code passed CI.
+
+Tracking: [#14](https://github.com/jackControls/noBS-CAD/issues/14) (parent
+[#9](https://github.com/jackControls/noBS-CAD/issues/9)).
+
+## Proposed required check names
+
+Use the Check Run `name` strings as shown in the PR Checks UI and Checks API, not
+only the workflow file titles. Reusable-workflow jobs include the caller job id as
+a prefix.
+
+### Lean set to require on `main`
+
+These four names are the intended first required-status-check list for #14. Prefer
+this lean set over the full desktop package matrix.
+
+| Check Run name | Workflow | Why |
+| --- | --- | --- |
+| `VERSION matches every carrier` | Version guard | Always runs on every PR and main push; cheapest always-reporting gate. |
+| `frontend_regressions / Frontend regression tests` | Desktop packages → Frontend | Always runs on every PR via the reusable Frontend workflow. Copy this prefixed name from the PR; the bare `Frontend regression tests` name is what appears on direct Frontend workflow runs (for example main pushes), not the PR check name. |
+| `MCP tests (Ubuntu)` | MCP server | Lean OCCT/MCP gate on Ubuntu. |
+| `Ubuntu host-neutral crates` | Linux engine tests | Workspace `cargo test --locked` without packaging cost. |
+
+Do **not** require Windows portable package jobs (`Windows x64 portable ZIP`,
+`Windows arm64 portable ZIP`) or the other Desktop packages matrix builds for #14.
+Keep them informative; the issue title calls for staying lean on Windows portable.
+Likewise leave Windows `mcp-tests`, pages-knowledge `build`/`deploy`, and
+`Classify desktop build inputs` optional.
+
+### Path-filter and skip pitfalls
+
+`MCP tests (Ubuntu)` and `Ubuntu host-neutral crates` only start when their
+workflows' path filters match. A docs-only or otherwise filtered PR never creates
+those check runs. If they are marked required in Protect main before they always
+report (success, failure, or an explicit always-on stub), that PR waits forever.
+
+Until those workflows gain an always-reporting gate, either:
+
+1. Require only the two always-on names above first, then add the MCP and
+   host-neutral names after always-report stubs land, or
+2. Add all four names only when a maintainer accepts that docs-only PRs must touch
+   a watched path or wait for a follow-up workflow change.
+
+Desktop package jobs that classify to skip are the same class of trap — do not
+require them.
 
 ## Validation responsibilities
 
@@ -55,15 +102,19 @@ npm run e2e
 
 ## Enabling required checks
 
-After the current jobs have passed on a PR, an administrator can add their exact
-check-run names to **Protect main**, preserving its review and deletion rules.
-Start with the frontend check, which runs for every PR. Reusable-workflow check
-names may include the caller job prefix; copy the name from the actual PR.
+After the current jobs have passed on a PR, an administrator (Jack) can add the
+exact Check Run names from the lean set above to **[Protect main](https://github.com/jackControls/noBS-CAD/rules/19790895)**,
+preserving its review and deletion rules. Start with the always-on names if path
+filters still skip MCP and host-neutral jobs. Reusable-workflow check names may
+include the caller job prefix; copy the name from the actual PR.
 
 Do not mark path-filtered engine or MCP workflows required until they have an
-always-reporting gate. A docs-only PR otherwise waits for a check that never runs.
-Keep platform packaging informative until its cost and reliability justify
-making it required. Do not disable failing checks just to permit a merge.
+always-reporting gate, unless the maintainer explicitly accepts the docs-only
+deadlock. Keep platform packaging informative until its cost and reliability
+justify making it required. Do not disable failing checks just to permit a merge.
+
+Documenting these names does not finish #14. Acceptance still needs the ruleset
+edit and a verify pass that a failing required check blocks merge.
 
 ## Repository ownership
 
