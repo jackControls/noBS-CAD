@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { mediaInputs, mediaAssets, stageMedia } from './stage-showcase-media.mjs';
+import { mediaInputs, mediaAssets, stageMedia, verifyMedia } from './stage-showcase-media.mjs';
 
 const tag = 'preview-2026-09-12.2';
 const sha = 'a'.repeat(40);
@@ -98,4 +98,17 @@ test('an unrelated stale media directory is preserved on refusal', async () => {
     await assert.rejects(stageMedia({ html, site, fetcher: () => assert.fail('must stay offline') }));
     assert.equal(await readFile(path.join(site, 'media', 'stale.txt'), 'utf8'), 'preserve');
   } finally { await rm(site, { recursive: true, force: true }); }
+});
+
+test('verification proves publication without downloading any media body', async () => {
+  const network = downloads();
+  const assets = await verifyMedia({ html, fetcher: network.fetcher });
+  assert.equal(assets.length, names.length);
+  assert.equal(network.requests.length, 3);
+  assert.ok(!network.requests.some(url => names.some(name => url === base + name)), 'verification must not fetch media');
+
+  // A draft release is exactly what broke the Pages deploy on main.
+  const draft = downloads({ unpublished: true });
+  await assert.rejects(verifyMedia({ html, fetcher: draft.fetcher }), /not public/);
+  assert.equal(draft.requests.length, 1);
 });
