@@ -126,7 +126,7 @@ pub enum Constraint {
         b: EntityId,
         axis: EntityId,
     },
-    /// Trim anchor (INTERNAL — created by fillet/slot, not panel-applicable):
+    /// Endpoint anchor (INTERNAL — created by arc/fillet/slot tools):
     /// a Point entity coincides with an arc's start/end point. Arc endpoints
     /// are implicit (center/radius/angles), so without this link a trimmed
     /// line endpoint is only glued by the infinite-line tangency — free to
