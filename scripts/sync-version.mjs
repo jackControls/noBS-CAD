@@ -354,7 +354,7 @@ export function versionCarriers(root = repositoryRoot) {
       path: '.github/workflows/desktop-packages.yml',
       description: 'artifact names derived from package.json',
       verify(text) {
-        const literals = text.match(/noBS(?:-CAD-|\.CAD_)\d+\.\d+\.\d+/g);
+        const literals = text.match(new RegExp(`noBS(?:-CAD-|\\.CAD_)${versionPattern}`, 'g'));
         if (literals) return `hard-codes ${[...new Set(literals)].join(', ')}`;
         return /require\('\.\/package\.json'\)\.version/.test(text)
           ? null

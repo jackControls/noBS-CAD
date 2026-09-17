@@ -36,6 +36,16 @@ const memberManifest = [
   '',
 ].join('\n');
 
+/** Copy `VERSION` and every carrier into `root`, the way a release bump rehearses it. */
+async function copyCarriers(root) {
+  await writeFile(path.join(root, versionFile), await readFile(path.join(repositoryRoot, versionFile), 'utf8'));
+  for (const carrier of versionCarriers(repositoryRoot)) {
+    const target = path.join(root, carrier.path);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, await readFile(path.join(repositoryRoot, carrier.path), 'utf8'));
+  }
+}
+
 test('VERSION must hold exactly one semver version', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'nbcad-version-'));
   try {
@@ -212,15 +222,20 @@ test('packaged file names keep a prerelease suffix and return to stable', () => 
     '`noBS-CAD-0.3.0-rc.1-windows-x64.zip`,',
     '`noBS-CAD-0.3.0-rc.1-windows-<architecture>.zip.sha256`,',
     '`noBS.CAD_0.3.0-rc.1_amd64.deb`,',
+    '`noBS.CAD_0.3.0-rc.1_aarch64.dmg`,',
   ].join(' ');
-  assert.deepEqual(documentedVersions(releaseCandidate), ['0.3.0-rc.1', '0.3.0-rc.1', '0.3.0-rc.1']);
+  assert.deepEqual(
+    documentedVersions(releaseCandidate),
+    ['0.3.0-rc.1', '0.3.0-rc.1', '0.3.0-rc.1', '0.3.0-rc.1'],
+  );
   assert.equal(withDocumentedVersions(releaseCandidate, '0.3.0-rc.1'), releaseCandidate);
 
   const stable = withDocumentedVersions(releaseCandidate, '0.3.0');
   assert.match(stable, /`noBS-CAD-0\.3\.0-windows-x64\.zip`/);
   assert.match(stable, /`noBS\.CAD_0\.3\.0_amd64\.deb`/);
+  assert.match(stable, /`noBS\.CAD_0\.3\.0_aarch64\.dmg`/);
   assert.doesNotMatch(stable, /rc\.1/);
-  assert.deepEqual(documentedVersions(stable), ['0.3.0', '0.3.0', '0.3.0']);
+  assert.deepEqual(documentedVersions(stable), ['0.3.0', '0.3.0', '0.3.0', '0.3.0']);
 
   // A hyphenated prerelease identifier must not swallow the platform segment.
   assert.deepEqual(documentedVersions('noBS-CAD-0.3.0-rc-1-windows-x64.zip'), ['0.3.0-rc-1']);
@@ -241,25 +256,21 @@ test('a packaged file name this script cannot read is reported, not skipped', ()
 test('the checked-in tree is in sync and re-syncs from VERSION', async () => {
   assert.deepEqual(collectDrift(repositoryRoot), []);
 
-  // The rehearsal must work whatever the repository currently says, including
-  // on the pull request that performs a real bump.
-  const current = readVersion(repositoryRoot);
-  const target = nextVersion(current);
-  assert.notEqual(target, current);
-
   const root = await mkdtemp(path.join(os.tmpdir(), 'nbcad-version-tree-'));
   try {
-    const carriers = versionCarriers(repositoryRoot);
-    for (const carrier of carriers) {
-      const file = path.join(root, carrier.path);
-      await mkdir(path.dirname(file), { recursive: true });
-      await writeFile(file, await readFile(path.join(repositoryRoot, carrier.path), 'utf8'));
-    }
-    await writeFile(path.join(root, versionFile), `${target}\n`);
+    await copyCarriers(root);
+    const repositoryVersion = readVersion(repositoryRoot);
+    // The rehearsal starts from a copy that agrees with the repository and bumps
+    // to a version that copy cannot already carry. A fixed target stopped
+    // creating drift as soon as the repository itself reached it, so a correct,
+    // fully synchronized release bump failed this test.
+    assert.deepEqual(collectDrift(root, repositoryVersion), []);
+    const rehearsal = repositoryVersion === '9.9.9' ? '9.9.8' : '9.9.9';
+    await writeFile(path.join(root, versionFile), `${rehearsal}\n`);
 
     // The copied carriers still quote the current version wherever it is
     // written out, so a bump reports drift until the sync rewrites each one.
-    const drift = collectDrift(root, target);
+    const drift = collectDrift(root, rehearsal);
     for (const file of [
       'Cargo.toml',
       'Cargo.lock',
@@ -272,38 +283,34 @@ test('the checked-in tree is in sync and re-syncs from VERSION', async () => {
       'src/files/nbcad.ts',
       'docs/INSTALL.md',
     ]) {
-      assert.ok(drift.some(problem => problem.startsWith(`${file}:`)), `${file} should report drift for ${target}`);
+      assert.ok(drift.some(problem => problem.startsWith(`${file}:`)), `${file} should report drift for ${rehearsal}`);
     }
     assert.ok(!drift.some(problem => problem.startsWith('.github/workflows/desktop-packages.yml:')));
 
-    const changed = syncAll(root, target);
+    const changed = syncAll(root, rehearsal);
     assert.ok(changed.includes('package.json'));
     assert.ok(changed.includes('Cargo.lock'));
     assert.ok(changed.includes('docs/INSTALL.md'));
     // Members already inherit the workspace version, so they need no rewrite.
     assert.ok(!changed.includes('crates/core/Cargo.toml'));
     assert.ok(!changed.includes('.github/workflows/desktop-packages.yml'));
-    assert.deepEqual(collectDrift(root, target), []);
+    assert.deepEqual(collectDrift(root, rehearsal), []);
     const lock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'));
-    assert.equal(lock.version, target);
-    assert.equal(lock.packages[''].version, target);
+    assert.equal(lock.version, rehearsal);
+    assert.equal(lock.packages[''].version, rehearsal);
     assert.match(await readFile(path.join(root, 'crates/core/Cargo.toml'), 'utf8'), /^version\.workspace = true$/m);
 
-    // A stale root record alone must fail the check, not just the header.
+    // A stale root record alone must fail the check, not just the header. The
+    // stale value must differ from the rehearsal, which is a synthetic version.
     const stalePath = path.join(root, 'package-lock.json');
-    lock.packages[''].version = '9.9.9';
+    const stale = rehearsal === '8.8.8' ? '8.8.7' : '8.8.8';
+    lock.packages[''].version = stale;
     await writeFile(stalePath, `${JSON.stringify(lock, null, 2)}\n`);
     assert.ok(
-      collectDrift(root, target).some(problem => problem.startsWith('package-lock.json:') && problem.includes('packages[""]')),
-      'a stale packages[""] version must report drift',
+      collectDrift(root, rehearsal).some(problem => problem.startsWith('package-lock.json:') && problem.includes('packages[""]')),
+      `a stale packages[""] version (${stale}) must report drift`,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
-
-// The next patch release, whatever the repository currently carries.
-function nextVersion(version) {
-  const [major, minor, patch] = version.split('-')[0].split('.').map(Number);
-  return `${major}.${minor}.${patch + 1}`;
-}
