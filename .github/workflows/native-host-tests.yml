@@ -100,6 +100,12 @@ jobs:
           restore-keys: |
             native-host-${{ runner.arch }}-
 
+      # `tauri.linux.conf.json` declares staged license notices as bundle
+      # resources, so `tauri-build` fails without them. Reuse the packaging
+      # script's staging step rather than duplicating the source paths.
+      - name: Stage the Linux bundle license notices
+        run: node scripts/bundle-linux.mjs --stage-licenses
+
       # The shipping configuration. This is the only check that compiles the
       # desktop shell's own unit tests at all.
       - name: Test the default desktop build
