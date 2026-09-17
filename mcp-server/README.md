@@ -4,8 +4,9 @@ The MCP server drives native sketches, solid features, assemblies and drawings
 through the same grouped product operations used by the application. It runs
 locally over **stdio** JSON-RPC (protocol `2025-06-18`).
 
-**No source build needed for a release install:** the desktop application starts
-this same server when launched with `--mcp`, without opening a window. See
+**No source build needed for a release install:** the application always exposes
+this same local stdio interface. A normal launch opens CAD; `--headless` suppresses
+the window for agent workers and automation. See
 [packaged MCP setup](../docs/INSTALL.md#connect-an-mcp-agent) for Windows, macOS
 and Ubuntu commands. The standalone binary and developer setup below remain
 available for source builds.
@@ -33,8 +34,10 @@ available offline, and read-only; rebuild after updating `knowledge/`.
 
 Follow [Install → Connect an MCP agent](../docs/INSTALL.md#connect-an-mcp-agent)
 for packaged executable paths, exact Cursor/VS Code configuration files and a
-first-part prompt. The installed application uses `--mcp`; a separately built
-`nbcad-mcp` executable starts directly as a server.
+first-part prompt. Use the installed application's `--headless` argument when the
+agent should start without an extra window. A separately built `nbcad-mcp`
+executable is always headless and needs no arguments. Closing stdin exits a
+headless worker; closing that input on a visible CAD app leaves it open.
 
 Developers should use the single [build and test guide](../docs/DEVELOPMENT.md)
 for OCCT runtime setup, sequential native tests and

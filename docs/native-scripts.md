@@ -79,7 +79,7 @@ to run that committed source. Exactly one source selector is accepted. The app
 uses the same collection; titles, chapters and actual operations are derived from
 the script. A selected recipe is not the legacy `cad_script` trace-export command.
 
-`cargo xtask run-script FILE --server CAD_EXECUTABLE --server-arg --mcp` uses a Rust
+`cargo xtask run-script FILE --server CAD_EXECUTABLE --server-arg --headless` uses a Rust
 MCP client to invoke the packaged server. A standalone `nbcad-mcp` needs no
 `--server-arg`; AppImage launch flags are also passed as separate server arguments.
 See [developer replay setup](DEVELOPMENT.md#replay-a-recipe) for complete examples
@@ -251,7 +251,7 @@ Golden examples should export `final_model`, `final_scene`, `final_solution` and
 and returned geometry references, never captured numeric entity IDs, cached solid
 snapshots or imported tessellation as a construction shortcut.
 
-Use `cargo xtask run-script FILE --server CAD_EXECUTABLE --server-arg --mcp --repeat 2 --out DIRECTORY` to compare
+Use `cargo xtask run-script FILE --server CAD_EXECUTABLE --server-arg --headless --repeat 2 --out DIRECTORY` to compare
 independent fresh processes. A later live run can add `--compare DIRECTORY/run-1.json`;
 the comparison excludes tool-disclosure hints, editing undo availability and
 regenerated midpoint snap candidates. It retains persisted sketch constraints and

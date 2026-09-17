@@ -534,6 +534,7 @@ version = "0.2.0"
 dependencies = [
  "base64",
  "jsonschema",
+ "libc",
  "nbcad-core",
  "nbcad-export",
  "nbcad-mcp-mutate",
