@@ -32,7 +32,7 @@ shaped arms and assembly joints stay editable.
 
 [Enlarge image](docs/assets/showcase/bench.png)
 · **[Watch in player](https://jackcontrols.github.io/noBS-CAD/showcase.html#garden-bench)**
-· [Download MP4](https://github.com/jackControls/noBS-CAD/releases/download/v0.2.0/bench-build-full.mp4)
+· [Download MP4](https://github.com/jackControls/noBS-CAD/releases/download/showcase-v0.2.0/bench-build-full.mp4)
 
 [Open editable recipe in CAD](https://jackcontrols.github.io/noBS-CAD/open.html#garden-bench)
 · [Recipe source](examples/scripts/garden-bench.nbcad.jsonc)
@@ -51,7 +51,7 @@ carriage drawing. 100 mm jaws, 90 mm travel; six printed parts plus standard har
 
 [Enlarge image](docs/assets/showcase/vise.png)
 · **[Watch in player](https://jackcontrols.github.io/noBS-CAD/showcase.html#d-screw-vise)**
-· [Download MP4](https://github.com/jackControls/noBS-CAD/releases/download/v0.2.0/vise-build-full.mp4)
+· [Download MP4](https://github.com/jackControls/noBS-CAD/releases/download/showcase-v0.2.0/vise-build-full.mp4)
 
 [Open editable recipe in CAD](https://jackcontrols.github.io/noBS-CAD/open.html#d-screw-vise)
 · [Recipe source](examples/scripts/d-screw-vise.nbcad.jsonc)
@@ -70,7 +70,7 @@ Two staggered Savonius stages sit on a bearing-supported shaft.
 
 [Enlarge image](docs/assets/showcase/turbine.png)
 · **[Watch in player](https://jackcontrols.github.io/noBS-CAD/showcase.html#vertical-axis-turbine)**
-· [Download MP4](https://github.com/jackControls/noBS-CAD/releases/download/v0.2.0/turbine-build-full.mp4)
+· [Download MP4](https://github.com/jackControls/noBS-CAD/releases/download/showcase-v0.2.0/turbine-build-full.mp4)
 
 [Open editable recipe in CAD](https://jackcontrols.github.io/noBS-CAD/open.html#vertical-axis-turbine)
 · [Recipe source](examples/scripts/vertical-axis-turbine.nbcad.jsonc)
