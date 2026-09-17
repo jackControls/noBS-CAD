@@ -114,6 +114,21 @@ cargo test --locked -p nbcad-occt --features native-occt
 cargo test --locked --manifest-path mcp-server/Cargo.toml -- --test-threads=1
 ```
 
+The desktop shell is its own Cargo workspace, so the root `--workspace` command
+above does not reach it. Run both of its configurations with the matching OCCT SDK
+available:
+
+```sh
+cargo test --locked --manifest-path src-tauri/Cargo.toml
+cargo test --locked --manifest-path src-tauri/Cargo.toml --features dev-bevy-host
+```
+
+`dev-bevy-host` is the temporary native host that is replacing the React shell. It
+is the only configuration that compiles the interface shell, the winit host, the
+native sketch editor and the native Extrude form, so the default run does not
+verify a change to any of them. The **Native desktop host tests** workflow runs
+both configurations in CI.
+
 The MCP suite includes complete recipe acceptance tests and can take a while.
 Run its native tests sequentially so heavy OCCT operations do not compete for
 memory and request deadlines. The **Desktop packages** workflow also checks the

@@ -103,10 +103,10 @@ jobs:
       # The shipping configuration. This is the only check that compiles the
       # desktop shell's own unit tests at all.
       - name: Test the default desktop build
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
 
       # The native host being built to replace the React shell. Without this
       # step none of the interface shell, winit host, native editor or native
       # Extrude form is compiled by any workflow.
       - name: Test the native Bevy host
-        run: cargo test --manifest-path src-tauri/Cargo.toml --features dev-bevy-host
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --features dev-bevy-host
