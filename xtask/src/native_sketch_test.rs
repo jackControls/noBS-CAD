@@ -112,6 +112,10 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     click(&mut client, [-30., -20.], false)?;
     click(&mut client, [30., 20.], false)?;
     control(&mut client, "Select", None)?;
+    ui(
+        &mut client,
+        json!({"action":"viewport","gesture":"move","world":[0.,-20.,0.]}),
+    )?;
     let original = sketch(&mut client)?;
     ensure!(
         original["entities"]
