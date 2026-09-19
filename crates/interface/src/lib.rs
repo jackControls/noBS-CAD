@@ -123,6 +123,7 @@ pub enum Key {
     ArrowLeft,
     ArrowRight,
     Home,
+    End,
     Delete,
     Backspace,
 }
@@ -157,6 +158,7 @@ impl From<Key> for KeyChord {
             Key::ArrowLeft => "ArrowLeft",
             Key::ArrowRight => "ArrowRight",
             Key::Home => "Home",
+            Key::End => "End",
             Key::Delete => "Delete",
             Key::Backspace => "Backspace",
         })

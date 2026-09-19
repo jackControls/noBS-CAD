@@ -83,8 +83,9 @@ impl SessionBridgeState {
             return Ok(available);
         }
         let document = engine.document_snapshot();
-        let undo =
-            native_history::undo_step(document.rollback_index, document.features.len())?.is_some();
+        let undo = project.native_history.peek_edit_undo(&before).is_some()
+            || native_history::undo_step(document.rollback_index, document.features.len())?
+                .is_some();
         let redo = project
             .native_history
             .redo_step(&before, document.rollback_index, document.features.len())?
@@ -164,6 +165,48 @@ impl SessionBridgeState {
                 if redo { "sketch_redo" } else { "sketch_undo" },
                 &json!({}),
             )?
+        } else if !redo
+            && publisher
+                .active_mut()
+                .native_history
+                .peek_edit_undo(&before)
+                .is_some()
+        {
+            let ticket = publisher
+                .active_mut()
+                .native_history
+                .peek_edit_undo(&before)
+                .unwrap();
+            let current = parse_engine_envelope(engine.engine_call("project_export_model", ""))?;
+            let current = current
+                .as_str()
+                .ok_or("Engine did not return an Undo snapshot")?;
+            let mut replacement = ProjectPublisher::new();
+            let after_owner = context(&expected.window_id, &expected.document_id, &replacement);
+            let mut history = publisher.active_mut().native_history.clone();
+            history.commit_edit_undo(
+                ticket.clone(),
+                current.to_owned(),
+                state(&after_owner, &replacement),
+            )?;
+            let (outcome, changed) = dispatch_project_replacement(
+                engine,
+                "cad_load_project_model",
+                &json!({"model_json":ticket.model_json()}),
+            );
+            if changed {
+                if outcome.is_ok() {
+                    replacement.native_history = history;
+                }
+                retire_project_publisher(
+                    publisher,
+                    &expected.window_id,
+                    &expected.document_id,
+                    &self.process_instance_id,
+                    replacement,
+                );
+            }
+            outcome?
         } else {
             let document = engine.document_snapshot();
             if redo {

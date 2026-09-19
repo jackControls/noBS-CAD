@@ -79,10 +79,20 @@ fn button(
     control.disabled = disabled;
     control.role = if key.starts_with("tab-") {
         "tab"
+    } else if key.starts_with("file-item-") {
+        "menuitem"
     } else {
         "button"
     }
     .into();
+    control.owned_keys = if control.role == "menuitem" {
+        ["ArrowUp", "ArrowDown", "Home", "End"]
+            .into_iter()
+            .map(nbcad_interface::KeyChord::plain)
+            .collect()
+    } else {
+        vec![]
+    };
     if world.get::<InterfaceControl>(entity) != Some(&control) {
         world.entity_mut(entity).insert(control);
     }

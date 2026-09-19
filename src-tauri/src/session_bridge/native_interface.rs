@@ -242,11 +242,37 @@ impl SessionBridgeState {
             }
             outcome?
         } else {
-            publisher
+            let next_revision = publisher
                 .active_mut()
                 .engine_revision
                 .checked_add(1)
                 .ok_or("Session engine revision exhausted")?;
+            let edit_history = if operation == "solid_delete_feature"
+                || operation == "solid_reorder_feature"
+                || operation.starts_with("solid_edit_")
+            {
+                let model =
+                    super::parse_engine_envelope(engine.engine_call("project_export_model", ""))?;
+                let model = model
+                    .as_str()
+                    .ok_or("Engine did not return a complete edit snapshot")?;
+                let before = super::native_history::HistoryState {
+                    context: expected.clone(),
+                    engine_revision: publisher.active_mut().engine_revision,
+                };
+                let mut history = publisher.active_mut().native_history.clone();
+                history.record_edit(
+                    &before,
+                    model.into(),
+                    super::native_history::HistoryState {
+                        context: expected.clone(),
+                        engine_revision: next_revision,
+                    },
+                )?;
+                Some(history)
+            } else {
+                None
+            };
             let value = dispatch_inbox_on_engine(engine, operation, &arguments)?;
             // Match the established UI mutation contract: a publication I/O
             // failure must not relabel an already committed operation failed
@@ -259,6 +285,9 @@ impl SessionBridgeState {
                 &self.process_instance_id,
             ) {
                 eprintln!("Native interface could not publish engine revision: {error}");
+            }
+            if let Some(history) = edit_history {
+                publisher.active_mut().native_history = history;
             }
             value
         };
@@ -275,7 +304,7 @@ impl SessionBridgeState {
 /// arguments used by MCP; there is no second switch over modeling tools here.
 /// Camera and selection presentation are the existing renderer DTOs, not a
 /// competing camera/selection implementation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum NativeCommand {
     #[cfg(feature = "dev-bevy-host")]
     Sketch(crate::native_editor::EditorCommand),
@@ -283,6 +312,8 @@ pub(crate) enum NativeCommand {
     File(controller::files::FileCommand),
     #[cfg(feature = "dev-bevy-host")]
     Browser(controller::browser::BrowserCommand),
+    #[cfg(feature = "dev-bevy-host")]
+    History(controller::history::HistoryCommand),
     Extrude(extrude::ExtrudeCommand),
     Mutation {
         operation: String,
@@ -403,6 +434,10 @@ pub(crate) fn reduce_action(
     if let NativeCommand::Browser(command) = &binding.command {
         return controller::browser::reduce(world, handle, engine, bridge, action, command);
     }
+    #[cfg(feature = "dev-bevy-host")]
+    if let NativeCommand::History(command) = &binding.command {
+        return controller::history::reduce(world, handle, engine, bridge, action, command);
+    }
     if !is_activation(&action.control.input) {
         return Err("This native button does not handle the requested input".into());
     }
@@ -413,6 +448,8 @@ pub(crate) fn reduce_action(
         NativeCommand::File(_)=>unreachable!("File fields are reduced before button activation"),
         #[cfg(feature="dev-bevy-host")]
         NativeCommand::Browser(_)=>unreachable!("Browser input is reduced before button activation"),
+        #[cfg(feature="dev-bevy-host")]
+        NativeCommand::History(_)=>unreachable!("History input is reduced before button activation"),
         NativeCommand::Extrude(_)=>unreachable!("Extrude fields are reduced before button activation"),
         NativeCommand::CancelClose | NativeCommand::DiscardAndClose => {
             bridge.with_native_document_owner(engine, &action.context, || {

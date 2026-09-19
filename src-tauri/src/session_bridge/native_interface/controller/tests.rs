@@ -25,6 +25,8 @@ fn minimized_native_window_keeps_a_valid_inspectable_viewport() {
     synchronize(app.world_mut(), &handle, &services, &mut state).unwrap();
     interface_shell::tests::publish_layout_once(app.world_mut(), handle.clone());
     let frame = handle.frame().unwrap();
+    assert_eq!(frame.client.width, 1360.);
+    assert_eq!(frame.client.height, 860.);
     let canvas = frame.canvases.first().unwrap();
     assert!(canvas.bounds.y + canvas.bounds.height <= frame.client.height);
     assert!(canvas.bounds.height > 0.);

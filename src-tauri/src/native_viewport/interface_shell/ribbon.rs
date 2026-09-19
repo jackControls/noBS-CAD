@@ -93,6 +93,10 @@ pub(crate) enum Icon {
     EyeOff,
     Pencil,
     Globe,
+    ArrowLeft,
+    ArrowRight,
+    ArrowLeftToLine,
+    ArrowRightToLine,
 }
 impl Icon {
     fn svg(self) -> &'static str {
@@ -133,6 +137,10 @@ impl Icon {
             Self::EyeOff => source!("eye-off"),
             Self::Pencil => source!("pencil"),
             Self::Globe => source!("globe"),
+            Self::ArrowLeft => source!("arrow-left"),
+            Self::ArrowRight => source!("arrow-right"),
+            Self::ArrowLeftToLine => source!("arrow-left-to-line"),
+            Self::ArrowRightToLine => source!("arrow-right-to-line"),
         }
     }
 }
@@ -305,6 +313,15 @@ pub(crate) fn compact_glyph(
 ) -> Entity {
     let theme = world.get::<InterfaceButtonStyle>(owner).unwrap().0;
     glyph(world, owner, icon, x, (24. - size) / 2., size, theme.mute)
+}
+
+pub(crate) fn replace_compact_glyph(world: &mut World, owner: Entity, icon: Icon) {
+    let mut glyphs = world.query::<&mut RibbonGlyph>();
+    for mut glyph in glyphs.iter_mut(world).filter(|glyph| glyph.owner == owner) {
+        if glyph.icon != icon {
+            glyph.icon = icon;
+        }
+    }
 }
 
 pub(crate) fn decoration(world: &mut World, camera: Entity, icon: Icon, ink: Color) -> Entity {

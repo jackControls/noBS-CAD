@@ -3791,7 +3791,7 @@ fn tool_specs() -> Vec<ToolSpec> {
             "Catalog returns shared product groups and typed operations. Execute runs an operation by group and name with identical arguments/results headlessly or live. Recipes lists committed native examples without running them. Open_recipe queues a built-in recipe in the live Scripts source editor, preserving edited source with Save/Discard/Cancel; it never runs commands or replaces the model. Script runs one versioned JSONC command file selected by recipe ID, source or an absolute .nbcad.jsonc path in the current blank document; Rust sequences every operation, stops on failure, and runs final checks by default. Mode fast has no presentation delays; present requires an attached desktop. Presentation provides configure/note/pause/resume/step/stop/status/finish/dismiss/show and speed controls shared with native playback. View supports timed orientation and focus on an active sketch, body, or component. Launch connects a new desktop. Inspect returns rendered controls with fresh opaque target IDs for click/set_value/key. Window close requests guarded application exit; the reply acknowledges the request, not process termination. No selectors or executable script evaluation.",
             object_schema(json!({
                 "session_id":{"type":"string"},
-                "action":{"type":"string","enum":["catalog","recipes","open_recipe","execute","script","presentation","launch","view","inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
+                "action":{"type":"string","enum":["catalog","recipes","open_recipe","execute","script","presentation","launch","view","inspect","capture","click","double_click","context_menu","set_value","key","window","file","viewport"]},
                 "recipe":{"type":"string","description":"Bundled recipe ID for script or open_recipe; mutually exclusive with source and path. List IDs with action recipes."},
                 "group":{"type":"string"},"operation":{"type":"string"},"arguments":{"type":"object"},
                 "executable":{"type":"string"},
@@ -3815,7 +3815,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "path":{"type":"string"},"name":{"type":"string"},
                 "overwrite":{"type":"boolean"},"discard_changes":{"type":"boolean"},
                 "target":{"type":"string","description":"Fresh inspect control ID, or active_sketch for view"},"value":{"type":"string"},
-                "key":{"type":"string","enum":["Enter","Escape","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Home","Delete","Backspace"]},
+                "key":{"type":"string","enum":["Enter","Escape","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Home","End","Delete","Backspace"]},
                 "mode":{"type":"string","enum":["foreground","background","inspect","close","fast","present"]},
                 "pace_ms":{"type":"integer","minimum":0,"maximum":2000}
             }), &[]),

@@ -273,15 +273,15 @@ fn button(
     disabled: bool,
 ) -> Result<(), String> {
     live.insert(key.clone());
-    // A changed icon is still the same semantic target. Replace its widget so
-    // retained glyphs cannot accumulate or expose the old eye/chevron state.
+    // Eye/chevron changes retain keyboard focus and semantic target identity.
     if state
         .widgets
         .get(&key)
         .is_some_and(|(_, _, prior)| *prior != glyph)
     {
-        let (entity, _, _) = state.widgets.remove(&key).unwrap();
-        world.despawn(entity);
+        let (entity, _, prior) = state.widgets.get_mut(&key).unwrap();
+        interface_shell::ribbon::replace_compact_glyph(world, *entity, glyph);
+        *prior = glyph;
     }
     let entity = if let Some((entity, _, _)) = state.widgets.get(&key) {
         *entity

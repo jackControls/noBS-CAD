@@ -3,6 +3,8 @@
 //! This ports controller.ts/applicationHistory.ts: latest-marker Undo deletes
 //! the last feature after exporting a complete model, and Redo loads that model
 //! through ordinary project replacement. Earlier timeline markers move by one.
+//! Destructive feature edits retain a bounded pre-edit snapshot, so Undo restores
+//! a deleted or edited feature instead of deleting an unrelated earlier feature.
 //! Sketch, assembly and drawing histories retain their own command boundaries.
 //!
 //! The publisher owner lock must cover planning, engine execution and commit.
@@ -48,6 +50,22 @@ pub(crate) struct UndoTicket(Ticket);
 #[derive(Clone, Debug)]
 pub(crate) struct RedoTicket(Ticket);
 
+#[derive(Clone, Debug)]
+pub(crate) struct EditUndoTicket(Ticket);
+impl EditUndoTicket {
+    pub(crate) fn model_json(&self) -> &str {
+        &self.0.model_json
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RedoEntry {
+    model: Arc<str>,
+    /// Destructive edits restore a snapshot in both directions. Feature-create
+    /// Undo retains its established delete-latest behavior.
+    edit_before: Option<Arc<str>>,
+}
+
 impl RedoTicket {
     pub(crate) fn model_json(&self) -> &str {
         &self.0.model_json
@@ -62,7 +80,8 @@ pub(crate) struct SolidHistory {
     identity: Arc<()>,
     serial: u64,
     authorized: Option<HistoryState>,
-    redo: Vec<Arc<str>>,
+    redo: Vec<RedoEntry>,
+    edits: Vec<Arc<str>>,
 }
 
 impl Default for SolidHistory {
@@ -72,6 +91,7 @@ impl Default for SolidHistory {
             serial: 0,
             authorized: None,
             redo: Vec::new(),
+            edits: Vec::new(),
         }
     }
 }
@@ -114,6 +134,7 @@ impl SolidHistory {
         }
         let serial = self.next_serial()?;
         self.redo.clear();
+        self.edits.clear();
         self.authorized = Some(state.clone());
         self.serial = serial;
         Ok(())
@@ -173,7 +194,10 @@ impl SolidHistory {
         if self.authorized.as_ref() != Some(&ticket.0.expected) {
             self.redo.clear();
         }
-        self.redo.push(ticket.0.model_json);
+        self.redo.push(RedoEntry {
+            model: ticket.0.model_json,
+            edit_before: None,
+        });
         if self.redo.len() > SOLID_REDO_LIMIT {
             self.redo.remove(0);
         }
@@ -191,7 +215,7 @@ impl SolidHistory {
             identity: self.identity.clone(),
             serial: self.serial,
             expected: state.clone(),
-            model_json: self.redo.last()?.clone(),
+            model_json: self.redo.last()?.model.clone(),
         }))
     }
 
@@ -207,7 +231,7 @@ impl SolidHistory {
             || !self
                 .redo
                 .last()
-                .is_some_and(|model| Arc::ptr_eq(model, &ticket.0.model_json))
+                .is_some_and(|entry| Arc::ptr_eq(&entry.model, &ticket.0.model_json))
         {
             return Err("Redo no longer belongs to the current model branch");
         }
@@ -220,7 +244,9 @@ impl SolidHistory {
             return Err("Redo must replace its owned document with a fresh incarnation");
         }
         let serial = self.next_serial()?;
-        self.redo.pop();
+        if let Some(model) = self.redo.pop().and_then(|entry| entry.edit_before) {
+            self.edits.push(model);
+        }
         self.authorized = Some(after);
         self.serial = serial;
         Ok(())
@@ -230,6 +256,76 @@ impl SolidHistory {
         if !Arc::ptr_eq(&self.identity, &ticket.identity) || self.serial != ticket.serial {
             return Err("Application history changed before the operation could commit");
         }
+        Ok(())
+    }
+
+    /// Plan on a clone before running the kernel, then adopt only after success.
+    pub(crate) fn record_edit(
+        &mut self,
+        before: &HistoryState,
+        model: String,
+        after: HistoryState,
+    ) -> Result<(), &'static str> {
+        if before.context != after.context
+            || after.engine_revision <= before.engine_revision
+            || model.is_empty()
+        {
+            return Err("Edit history requires a newer revision and a complete owned model");
+        }
+        self.observe(before)?;
+        let serial = self.next_serial()?;
+        self.edits.push(model.into());
+        if self.edits.len() > SOLID_REDO_LIMIT {
+            self.edits.remove(0);
+        }
+        self.redo.clear();
+        self.authorized = Some(after);
+        self.serial = serial;
+        Ok(())
+    }
+    pub(crate) fn peek_edit_undo(&self, state: &HistoryState) -> Option<EditUndoTicket> {
+        if self.authorized.as_ref() != Some(state) {
+            return None;
+        }
+        Some(EditUndoTicket(Ticket {
+            identity: self.identity.clone(),
+            serial: self.serial,
+            expected: state.clone(),
+            model_json: self.edits.last()?.clone(),
+        }))
+    }
+    pub(crate) fn commit_edit_undo(
+        &mut self,
+        ticket: EditUndoTicket,
+        current_model: String,
+        after: HistoryState,
+    ) -> Result<(), &'static str> {
+        self.check_ticket(&ticket.0)?;
+        let before = &ticket.0.expected.context;
+        if self.authorized.as_ref() != Some(&ticket.0.expected)
+            || !self
+                .edits
+                .last()
+                .is_some_and(|model| Arc::ptr_eq(model, &ticket.0.model_json))
+            || current_model.is_empty()
+            || before.window_id != after.context.window_id
+            || before.document_id != after.context.document_id
+            || before.epoch == after.context.epoch
+            || after.engine_revision == 0
+        {
+            return Err("Edit Undo must restore its owned document with a fresh incarnation");
+        }
+        let serial = self.next_serial()?;
+        self.edits.pop();
+        self.redo.push(RedoEntry {
+            model: current_model.into(),
+            edit_before: Some(ticket.0.model_json),
+        });
+        if self.redo.len() > SOLID_REDO_LIMIT {
+            self.redo.remove(0);
+        }
+        self.authorized = Some(after);
+        self.serial = serial;
         Ok(())
     }
 }

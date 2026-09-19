@@ -1,5 +1,42 @@
 use super::*;
 
+#[test]
+fn edit_snapshots_are_bounded_and_failed_or_stale_loads_do_not_pop_them() {
+    let mut history = SolidHistory::default();
+    for revision in 1..=40 {
+        history
+            .record_edit(
+                &state(1, revision),
+                format!("model-{revision}"),
+                state(1, revision + 1),
+            )
+            .unwrap();
+    }
+    assert_eq!(history.edits.len(), SOLID_REDO_LIMIT);
+    let ticket = history.peek_edit_undo(&state(1, 41)).unwrap();
+    assert!(history
+        .commit_edit_undo(ticket.clone(), String::new(), state(2, 1))
+        .is_err());
+    assert_eq!(
+        history.peek_edit_undo(&state(1, 41)).unwrap().model_json(),
+        "model-40"
+    );
+    history
+        .commit_edit_undo(ticket.clone(), "current".into(), state(2, 1))
+        .unwrap();
+    assert!(history
+        .commit_edit_undo(ticket, "current".into(), state(3, 1))
+        .is_err());
+    let redo = history.peek_redo(&state(2, 1)).unwrap();
+    history.commit_redo(redo, state(3, 1)).unwrap();
+    assert_eq!(
+        history.peek_edit_undo(&state(3, 1)).unwrap().model_json(),
+        "model-40"
+    );
+    history.observe(&state(3, 2)).unwrap();
+    assert!(history.peek_edit_undo(&state(3, 2)).is_none());
+}
+
 fn state(epoch: u64, engine_revision: u64) -> HistoryState {
     HistoryState {
         context: DocumentContext {
@@ -158,8 +195,8 @@ fn snapshot_bound_and_shared_storage_survive_repeated_undo_redo() {
     assert_eq!(history.redo.len(), SOLID_REDO_LIMIT);
     let copy = history.clone();
     assert!(Arc::ptr_eq(
-        history.redo.last().unwrap(),
-        copy.redo.last().unwrap()
+        &history.redo.last().unwrap().model,
+        &copy.redo.last().unwrap().model
     ));
     let mut current = state(1, 36);
     for index in (3..35).rev() {

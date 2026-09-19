@@ -699,6 +699,9 @@ impl NativeInterfaceHandle {
     }
 
     pub fn key(&self, key: KeyChord) -> Result<bool, String> {
+        if self.navigate_menu(&key)? {
+            return Ok(true);
+        }
         let mut shared = self
             .shared
             .lock()
@@ -778,6 +781,61 @@ impl NativeInterfaceHandle {
             (Some(index), true) => (index + keys.len() - 1) % keys.len(),
             (None, false) => 0,
             (None, true) => keys.len() - 1,
+        };
+        set_focus(&mut shared, Some(keys[next]))?;
+        shared.revision = shared.revision.wrapping_add(1);
+        drop(shared);
+        (self.wake)();
+        Ok(true)
+    }
+
+    /// Menus traverse their enabled entries, excluding the dismissal backdrop.
+    /// Called for physical keys and resolved MCP keys after the same owner guard.
+    pub(crate) fn navigate_menu(&self, key: &KeyChord) -> Result<bool, String> {
+        if key.ctrl
+            || key.meta
+            || key.alt
+            || key.shift
+            || !matches!(key.key.as_str(), "ArrowUp" | "ArrowDown" | "Home" | "End")
+        {
+            return Ok(false);
+        }
+        let mut shared = self
+            .shared
+            .lock()
+            .map_err(|_| "Native interface lock poisoned")?;
+        let Ok(context) = current_context(&shared) else {
+            return Ok(false);
+        };
+        let Some(scope) = shared.registry.frame().modal_stack.last() else {
+            return Ok(false);
+        };
+        let keys: Vec<_> = shared
+            .registry
+            .frame()
+            .controls
+            .iter()
+            .filter(|c| c.role == "menuitem" && c.modal_scope.as_ref() == Some(scope))
+            .filter(|c| {
+                shared
+                    .registry
+                    .resolve_key(c.key, ControlInput::Click, &context)
+                    .is_ok()
+            })
+            .map(|c| c.key)
+            .collect();
+        if keys.is_empty() {
+            return Ok(false);
+        }
+        let current = shared
+            .focused
+            .and_then(|key| keys.iter().position(|candidate| *candidate == key));
+        let next = match (key.key.as_str(), current) {
+            ("Home", _) | ("ArrowDown", None) => 0,
+            ("End", _) | ("ArrowUp", None) => keys.len() - 1,
+            ("ArrowDown", Some(index)) => (index + 1) % keys.len(),
+            ("ArrowUp", Some(index)) => (index + keys.len() - 1) % keys.len(),
+            _ => unreachable!(),
         };
         set_focus(&mut shared, Some(keys[next]))?;
         shared.revision = shared.revision.wrapping_add(1);
@@ -943,6 +1001,41 @@ pub(crate) fn compact_label(world: &mut World, entity: Entity, inset: f32) {
         },
     ));
     world.entity_mut(entity).insert(InterfaceFlat);
+}
+
+pub(crate) fn caption_size(world: &mut World, entity: Entity, size: f32) {
+    let size = bevy::text::FontSize::Px(size);
+    let label = world.get::<InterfaceLabel>(entity).unwrap().0;
+    if let Some(mut font) = world.get_mut::<TextFont>(label) {
+        if font.font_size != size {
+            font.font_size = size;
+        }
+    }
+}
+
+#[derive(Component)]
+struct DestructiveButton;
+
+pub(crate) fn destructive_button(world: &mut World, entity: Entity) {
+    if world.get::<DestructiveButton>(entity).is_some() {
+        return;
+    }
+    let mut theme = world.get::<InterfaceButtonStyle>(entity).unwrap().0;
+    theme.panel = Color::srgb_u8(220, 38, 38);
+    theme.hover = Color::srgb_u8(239, 68, 68);
+    theme.accent_soft = theme.panel;
+    theme.ink = Color::WHITE;
+    theme.accent = Color::WHITE;
+    theme.edge = theme.panel;
+    let label = world.get::<InterfaceLabel>(entity).unwrap().0;
+    let assets = world.resource::<ViewportUiAssets>().clone();
+    world
+        .entity_mut(label)
+        .insert(theme.text(&assets, 12., FontWeight::SEMIBOLD));
+    world
+        .entity_mut(entity)
+        .remove::<InterfaceFlat>()
+        .insert((InterfaceButtonStyle(theme), DestructiveButton));
 }
 
 pub(crate) fn spawn_button(

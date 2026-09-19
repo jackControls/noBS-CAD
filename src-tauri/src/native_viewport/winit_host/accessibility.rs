@@ -106,6 +106,7 @@ fn publish(world: &mut World) {
         let mut node = Node::new(match control.role.as_str() {
             "tab" => Role::Tab,
             "treeitem" => Role::TreeItem,
+            "menuitem" => Role::MenuItem,
             "checkbox" => Role::CheckBox,
             "slider" => Role::Slider,
             "textbox" => Role::TextInput,

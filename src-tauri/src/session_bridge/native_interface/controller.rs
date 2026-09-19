@@ -28,7 +28,10 @@ use std::{
 };
 
 pub(crate) mod browser;
+mod capture;
+mod chrome;
 pub(crate) mod files;
+pub(crate) mod history;
 pub(crate) mod worker;
 
 #[derive(Resource, Clone)]
@@ -70,6 +73,7 @@ struct Controller {
     controls: HashMap<String, Entity>,
     decoration: HashMap<String, Entity>,
     sidebar_scroll: f32,
+    logical_size: Vec2,
     pending: Option<PendingControl>,
     status: String,
     close_pending: bool,
@@ -100,6 +104,7 @@ impl Controller {
             controls: HashMap::new(),
             decoration: HashMap::new(),
             sidebar_scroll: 0.,
+            logical_size: Vec2::new(1360., 860.),
             pending: None,
             status: String::new(),
             close_pending: false,
@@ -711,6 +716,7 @@ fn process_modal_keys(
             match request.modal_scope.as_str() {
                 "close-document" => state.close_pending = false,
                 "file-menu" | "file-dialog" => files::escape(world),
+                "history-menu" | "delete-feature" => history::escape(world),
                 _ => {}
             }
         }
@@ -734,6 +740,28 @@ pub(crate) fn reduce_control_input(
         result?;
     }
     handle.prepare_activation(action)?;
+    if let ControlInput::Key(key) = &action.control.input {
+        bridge.with_native_document_owner(engine, &action.context, || {
+            handle.validate_action(action)
+        })?;
+        if handle.navigate_menu(key)? {
+            return Ok(json!({"handled":true,"menu_navigation":true}));
+        }
+        if key == &nbcad_interface::KeyChord::plain("Escape") {
+            if let Some(scope) = handle
+                .frame()
+                .and_then(|frame| frame.modal_stack.last().cloned())
+            {
+                match scope.as_str() {
+                    "file-menu" | "file-dialog" => files::escape(world),
+                    "history-menu" | "delete-feature" => history::escape(world),
+                    "close-document" => return Ok(json!({"close_decision":"cancel"})),
+                    _ => return Err("This dialog does not handle Escape".into()),
+                }
+                return Ok(json!({"cancelled":true}));
+            }
+        }
+    }
     fields::after_window_input(world, handle)?;
     let Some(adapted) = fields::adapt_control_input(world, handle, action)? else {
         return Ok(json!({"handled":true,"field_navigation":true}));
@@ -878,6 +906,7 @@ fn apply_control(
     };
     match ui["action"].as_str().unwrap_or("") {
         "inspect" => Ok(Value::Null),
+        "capture" => capture::begin(world, handle, services, owner, ui),
         "viewport" => crate::native_editor::mcp::drive(world, handle, services, owner, ui),
         "file" if ui["command"] == "exit" => {
             request_close(state, &services.bridge, &services.engine)?;
@@ -903,13 +932,11 @@ fn apply_control(
                 "inspect" => {}
                 "foreground" => {
                     window.visible = true;
+                    window.set_minimized(false);
                     window.focused = true;
                 }
                 "background" => {
-                    return Err(
-                        "Moving this native window behind other applications is not yet supported"
-                            .into(),
-                    );
+                    window.set_minimized(true);
                 }
                 "hide" => window.visible = false,
                 _ => return Err("Unknown native window action".into()),
@@ -918,7 +945,7 @@ fn apply_control(
             let focused = world
                 .get_resource::<crate::native_viewport::winit_host::NativeRenderAvailability>()
                 .is_some_and(|state| state.focused);
-            Ok(json!({"visible":visible,"focused":focused}))
+            Ok(json!({"visible":visible,"focused":focused,"window_transition":ui["mode"]}))
         }
         _ => {
             let request: ControlRequest = serde_json::from_value(ui.clone())
@@ -981,13 +1008,18 @@ fn synchronize(
     let window = windows
         .single(world)
         .map_err(|_| "Native window is unavailable")?;
-    let width = window.width().max(1.);
-    let height = window.height().max(1.);
+    // Windows reports a zero-size client on minimization. Keep the last real
+    // layout so background MCP control remains useful without claiming a render.
+    if window.width() > 0. && window.height() > 0. {
+        state.logical_size = Vec2::new(window.width(), window.height());
+    }
+    let width = state.logical_size.x;
+    let height = state.logical_size.y;
     let scale = window.resolution.scale_factor();
     let visible = window.visible;
     let side = 240_f32.min(width * 0.45);
     let top = 120_f32.min(height * 0.3);
-    let bottom = 26_f32.min(height * 0.1);
+    let bottom = 74_f32.min(height * 0.1);
     let canvas = Rect::from_corners(Vec2::new(side, top), Vec2::new(width, height - bottom));
     native_viewport::apply_interface_viewport(
         world,
@@ -1383,11 +1415,13 @@ fn synchronize(
         &mut state.sidebar_scroll,
     )?;
     let client = InterfaceRect {
+        // History is a retained footer outside the model canvas.
         x: 0.,
         y: 0.,
         width: width as f64,
         height: height as f64,
     };
+    history::synchronize(world, services, &owner, revision, width, height)?;
     let document = services.engine.document_snapshot();
     handle.present(InterfaceFrame {
         context: owner,
@@ -1442,11 +1476,19 @@ fn synchronize(
             name: "close-document".into(),
             text: Some("Unsaved changes".into()),
         }))
+        .chain(history::modal(world).map(|name| Surface {
+            name: name.into(),
+            text: None,
+        }))
         .collect(),
         modal_stack: if state.close_pending {
             vec!["close-document".into()]
         } else {
-            files::modal(world).into_iter().map(str::to_owned).collect()
+            files::modal(world)
+                .or_else(|| history::modal(world))
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
         },
         document_visible: visible,
     })?;
@@ -1536,12 +1578,37 @@ fn complete_control(world: &mut World) {
     let handle = world.resource::<NativeInterfaceHandle>().clone();
     world.resource_scope(|world, mut state: Mut<Controller>| {
         if let Some(mut pending) = state.pending.take() {
+            if pending.response["value"]["capture_pending"] == true {
+                match capture::poll(world) {
+                    None => {
+                        state.pending = Some(pending);
+                        handle.request_redraw();
+                        return;
+                    }
+                    Some(Ok(value)) => pending.response["value"] = value,
+                    Some(Err(error)) => {
+                        pending.response["status"] = json!("failed");
+                        pending.response["error"] = json!(error);
+                        pending.response["value"] = Value::Null;
+                    }
+                }
+            }
             pending.response["awaiting_input"] =
                 json!(state.close_pending || files::awaiting(world));
             let drawable = world
                 .get_resource::<crate::native_viewport::winit_host::NativeRenderAvailability>()
                 .is_some_and(|availability| availability.drawable);
             let deadline_elapsed = now_ms() >= pending.presentation_deadline;
+            let target_drawable = match pending.response["value"]["window_transition"].as_str() {
+                Some("foreground") => Some(true),
+                Some("background") => Some(false),
+                _ => None,
+            };
+            if target_drawable.is_some_and(|target| target != drawable) && !deadline_elapsed {
+                state.pending = Some(pending);
+                handle.request_redraw();
+                return;
+            }
             let mut presented = false;
             let mut render_status = "unavailable";
             let current = services

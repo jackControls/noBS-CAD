@@ -763,7 +763,12 @@ pub(super) fn shortcut(
         keyboard::{Key, KeyCode},
         ButtonState,
     };
-    if modal(world).is_some() || awaiting(world) {
+    if modal(world).is_some()
+        || awaiting(world)
+        || handle
+            .frame()
+            .is_some_and(|frame| !frame.modal_stack.is_empty())
+    {
         return Ok(None);
     }
     let WindowEvent::KeyboardInput(key) = &event.event else {

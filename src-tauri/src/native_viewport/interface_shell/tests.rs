@@ -167,6 +167,96 @@ fn request(handle: &NativeInterfaceHandle) -> ControlRequest {
 }
 
 #[test]
+fn menu_keys_skip_disabled_entries_and_backdrops_for_human_and_mcp() {
+    let (mut app, handle, _, _) = fixture();
+    let mut menu_frame = frame("document-a", 1);
+    menu_frame.surfaces.push(Surface {
+        name: "menu".into(),
+        text: None,
+    });
+    menu_frame.modal_stack.push("menu".into());
+    let mut items = Vec::new();
+    for index in 0..4 {
+        let mut control = InterfaceControl::button("menu", format!("Item {index}"));
+        control.modal_scope = Some("menu".into());
+        control.role = if index == 3 { "button" } else { "menuitem" }.into();
+        control.disabled = index == 1;
+        control.owned_keys = ["ArrowUp", "ArrowDown", "Home", "End"]
+            .into_iter()
+            .map(KeyChord::plain)
+            .collect();
+        items.push(
+            app.world_mut()
+                .spawn((
+                    control,
+                    ComputedNode {
+                        size: Vec2::new(80., 24.),
+                        inverse_scale_factor: 1.,
+                        ..default()
+                    },
+                    UiGlobalTransform::from_translation(Vec2::new(60., 82. + index as f32 * 30.)),
+                    ComputedStackIndex(10 + index),
+                    InheritedVisibility::VISIBLE,
+                ))
+                .id(),
+        );
+    }
+    handle.present(menu_frame.clone()).unwrap();
+    app.update();
+    for (key, index) in [
+        ("ArrowDown", 0),
+        ("ArrowDown", 2),
+        ("ArrowDown", 0),
+        ("ArrowUp", 2),
+        ("Home", 0),
+        ("End", 2),
+    ] {
+        assert!(handle.key(KeyChord::plain(key)).unwrap());
+        assert_eq!(
+            handle.shared.lock().unwrap().focused,
+            Some(ControlKey(items[index].to_bits()))
+        );
+        assert!(
+            handle.take_actions().unwrap().is_empty(),
+            "Navigation must not activate a command"
+        );
+    }
+    app.update();
+    let inspected = handle.inspect().unwrap();
+    let item = inspected["surfaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|surface| surface["controls"].as_array().unwrap())
+        .find(|c| c["label"] == "Item 0")
+        .unwrap();
+    let action = handle
+        .resolve(
+            &ControlRequest::Key {
+                target: item["id"].as_str().unwrap().into(),
+                key: nbcad_interface::Key::ArrowDown,
+            },
+            &menu_frame.context,
+        )
+        .unwrap();
+    handle.prepare_activation(&action).unwrap();
+    let ControlInput::Key(key) = &action.control.input else {
+        panic!("Expected key");
+    };
+    assert!(handle.navigate_menu(key).unwrap());
+    assert_eq!(
+        handle.shared.lock().unwrap().focused,
+        Some(ControlKey(items[2].to_bits()))
+    );
+    for item in items {
+        app.world_mut().despawn(item);
+    }
+    handle.present(frame("document-a", 1)).unwrap();
+    app.update();
+    assert!(!handle.navigate_menu(&KeyChord::plain("ArrowDown")).unwrap());
+}
+
+#[test]
 fn native_pointer_and_mcp_resolve_the_same_retained_control() {
     let (mut app, handle, entity, _) = fixture();
     let from_mcp = handle
