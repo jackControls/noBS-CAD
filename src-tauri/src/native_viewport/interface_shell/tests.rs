@@ -140,7 +140,7 @@ fn painted_panel_blocks_geometry_and_underlying_controls_but_not_its_children() 
         .id();
     app.update();
     assert!(handle.owns_pointer([140., 140.]));
-    assert!(handle.hit_key([140., 140.]).is_none());
+    assert!(hit(&handle.shared.lock().unwrap(), [140., 140.]).is_none());
     click(&handle).unwrap();
     assert!(handle.take_actions().unwrap().is_empty());
     // A real field/button painted above the panel still receives its input.
