@@ -88,6 +88,14 @@ supported platform checks pass. Dependency/build simplification follows the
 retirement of actual consumers; do not remove a dependency merely to improve
 the dependency count while its behavior is still needed.
 
+For lossless ribbon comparisons, set `NBCAD_RIBBON_LAB=1` and run
+`cargo run --manifest-path src-tauri/Cargo.toml --features dev-ui-lab --bin bevy-ui-lab -- <output.png>`.
+This renders the production widgets in normal, selected and disabled states
+through Bevy's GPU pipeline, without opening another CAD window. Compare with
+the original ribbon at the same display scale; keep the captures outside the
+repository. Shared SVG sources prevent geometry drift but do not prove visual
+parity: inspect typography, antialiasing, layout and interaction states too.
+
 This ADR records the implementation direction. It is not a statement that the
 conversion, screenshot inventory, platform coverage or performance validation
 has finished.

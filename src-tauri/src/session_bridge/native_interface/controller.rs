@@ -889,7 +889,7 @@ fn synchronize(
     let scale = window.resolution.scale_factor();
     let visible = window.visible;
     let side = (width * 0.22).clamp(140., 260.).min(width * 0.45);
-    let top = 112_f32.min(height * 0.3);
+    let top = 120_f32.min(height * 0.3);
     let bottom = 26_f32.min(height * 0.1);
     state.sidebar_scroll = state
         .sidebar_scroll
@@ -933,9 +933,9 @@ fn synchronize(
         services,
         &owner,
         InterfaceRect {
-            x: 112.,
-            y: 38.,
-            width: (width - 112.).max(1.) as f64,
+            x: if width <= 1400. { 60. } else { 112. },
+            y: 34.,
+            width: (width - if width <= 1400. { 60. } else { 112. }).max(1.) as f64,
             height: 72.,
         },
     )?;
@@ -1000,8 +1000,8 @@ fn synchronize(
             "Clear selection".to_owned(),
             NativeCommand::ClearSelection,
             false,
+            502.,
             0.,
-            38.,
             108.,
         ),
         (
@@ -1011,7 +1011,7 @@ fn synchronize(
             presentation.mode == native_viewport::ViewportMode::Sketch
                 || extrude::panel(world).is_some(),
             270.,
-            38.,
+            34.,
             48.,
         ),
     ];
@@ -1078,7 +1078,7 @@ fn synchronize(
         width,
         top,
         None,
-        Some(theme.header),
+        Some(theme.header.with_alpha(1.)),
         10,
     );
     decorate(

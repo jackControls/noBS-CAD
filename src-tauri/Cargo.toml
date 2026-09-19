@@ -45,6 +45,8 @@ tauri-plugin-deep-link = "2"
 tokio = { version = "1", features = ["time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
+# Render shared vector tool glyphs once; no SVG text/font or external-image support.
+resvg = { version = "0.45.1", default-features = false }
 sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 uuid = { version = "1", features = ["v4"] }
 nbcad-core = { path = "../crates/core" }

@@ -605,11 +605,11 @@ pub(crate) fn synchronize_controls(
             if editor.stamp.as_ref().is_some_and(|s| s.sketch.is_some()) {
                 let mut rows = [
                     CreateTool::Line,
+                    CreateTool::Arc3Point,
                     CreateTool::Rectangle(RectangleMode::TwoPoint),
                     CreateTool::Circle(CircleMode::CenterDiameter),
-                    CreateTool::Arc3Point,
-                    CreateTool::Slot(SlotMode::CenterToCenter),
                     CreateTool::Spline,
+                    CreateTool::Slot(SlotMode::CenterToCenter),
                     CreateTool::Point,
                     CreateTool::MidpointLine,
                     CreateTool::Rectangle(RectangleMode::Center),
@@ -661,14 +661,15 @@ pub(crate) fn synchronize_controls(
                 // Finish stays docked at the right, as in the original ribbon.
                 // Complete spline is a separate action immediately to its left.
                 ribbon::finish_node(
-                    (area.x + area.width
-                        - if matches!(command, EditorCommand::Complete) {
-                            296.
-                        } else {
-                            148.
-                        })
-                    .max(area.x) as f32,
-                    area.y as f32 + 20.,
+                    if matches!(command, EditorCommand::Complete) {
+                        156.
+                    } else if area.x + area.width <= 1400. {
+                        8.
+                    } else {
+                        12.
+                    },
+                    area.y as f32 + 23.5,
+                    area.x + area.width <= 1400.,
                 )
             } else {
                 ribbon::node(x, y, width)

@@ -125,10 +125,14 @@ The package copy is also available at `node_modules/lucide-react/LICENSE`
 after dependency installation.
 
 The native ribbon in `src-tauri/src/native_viewport/interface_shell/ribbon.rs`
-renders the migrated CAD diagrams with Bevy primitives on the same 24-unit
-grid. Its point and spline symbols retain the Lucide Crosshair and Spline
-geometry and the notices above. These are renderer ports, not new command
-identities. Visual parity remains part of the native-interface draft review.
+renders `src/assets/ribbon-icons/*.svg` through Rust/resvg into cached Bevy
+textures. React reads the same canonical CAD vectors; geometry is no longer
+recreated independently for each renderer. The sketch, point, spline, finish,
+cancel and chevron assets retain Lucide 0.474.0 PenLine, Crosshair, Spline,
+Check, X and ChevronDown geometry and the ISC notices above. These are
+renderer ports, not new command identities. The icon audit also checks these
+sources for external references and executable content. Visual parity remains
+part of the native-interface draft review.
 
 ## Contribution requirements
 

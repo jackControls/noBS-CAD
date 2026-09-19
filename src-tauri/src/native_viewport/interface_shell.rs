@@ -1015,6 +1015,12 @@ fn setup_camera(mut commands: Commands) {
     ));
 }
 
+#[cfg(feature = "dev-ui-lab")]
+pub(super) fn install_visual_lab(app: &mut App) {
+    app.insert_resource(NativeInterfaceHandle::new(|| {}))
+        .add_systems(Update, (update_controls, ribbon::update_glyphs));
+}
+
 fn update_controls(
     handle: Res<NativeInterfaceHandle>,
     mut controls: Query<(
@@ -1081,8 +1087,9 @@ fn update_controls(
             *border = edge;
         }
         if let Ok((mut text, mut color)) = labels.get_mut(label.0) {
-            if text.0 != control.label {
-                text.0.clone_from(&control.label);
+            let caption = ribbon.map_or(control.label.as_str(), |ribbon| ribbon.label());
+            if text.0 != caption {
+                text.0 = caption.to_owned();
             }
             let ink = if let Some(ribbon) = ribbon {
                 ribbon.ink(theme, control.disabled)

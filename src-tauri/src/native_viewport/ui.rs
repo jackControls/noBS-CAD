@@ -40,6 +40,7 @@ pub(crate) struct HudAxisLabel {
 #[derive(Resource, Clone, Default)]
 pub(crate) struct ViewportUiAssets {
     font: Option<Handle<Font>>,
+    semibold: Option<Handle<Font>>,
 }
 
 /// Prefer a system UI font with broad glyph coverage so native labels match
@@ -71,7 +72,13 @@ pub(crate) fn load_system_font(mut commands: Commands, mut fonts: ResMut<Assets<
         .into_iter()
         .find_map(|path| fs::read(path).ok())
         .map(|bytes| fonts.add(Font::from_bytes(bytes)));
-    commands.insert_resource(ViewportUiAssets { font });
+    #[cfg(target_os = "windows")]
+    let semibold = fs::read(r"C:\Windows\Fonts\seguisb.ttf")
+        .ok()
+        .map(|bytes| fonts.add(Font::from_bytes(bytes)));
+    #[cfg(not(target_os = "windows"))]
+    let semibold = None;
+    commands.insert_resource(ViewportUiAssets { font, semibold });
 }
 
 #[derive(Clone, Copy)]
@@ -109,7 +116,12 @@ impl ViewportUiTheme {
 
     pub(crate) fn text(self, assets: &ViewportUiAssets, size: f32, weight: FontWeight) -> TextFont {
         let mut text = TextFont::from_font_size(size).with_font_weight(weight);
-        if let Some(font) = &assets.font {
+        let face = if weight == FontWeight::SEMIBOLD {
+            assets.semibold.as_ref().or(assets.font.as_ref())
+        } else {
+            assets.font.as_ref()
+        };
+        if let Some(font) = face {
             text = text.with_font(font.clone());
         }
         text

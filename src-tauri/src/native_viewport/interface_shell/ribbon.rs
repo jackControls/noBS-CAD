@@ -1,51 +1,18 @@
-//! The existing ribbon's 48 × 52 command cells, rendered with Bevy UI.
-//! Geometry for the first migrated icons follows `src/components/icons.tsx`.
-//! This styles real controls; it does not add a parallel command registry.
+//! Original ribbon geometry and typography on retained native controls.
+//! Both renderers consume the same SVG sources. Rust rasterizes each vector
+//! once, then Bevy draws a cached texture; there is no webview here.
 use super::*;
-use bevy::ui::UiTransform;
+use bevy::{
+    asset::RenderAssetUsages,
+    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+    text::{LetterSpacing, LineHeight},
+};
+use std::collections::HashMap;
 
 #[derive(Component)]
 pub(crate) struct RibbonButton {
     pub finish: bool,
-}
-
-#[derive(Component)]
-pub(super) struct RibbonGlyph {
-    owner: Entity,
-    ink: Color,
-    filled: bool,
-}
-
-pub(super) fn update_glyphs(
-    controls: Query<&InterfaceControl>,
-    mut glyphs: Query<(
-        &RibbonGlyph,
-        Option<&mut BackgroundColor>,
-        Option<&mut BorderColor>,
-    )>,
-) {
-    for (glyph, fill, border) in &mut glyphs {
-        let Ok(control) = controls.get(glyph.owner) else {
-            continue;
-        };
-        let ink = if control.disabled {
-            glyph.ink.with_alpha(0.4)
-        } else {
-            glyph.ink
-        };
-        if let Some(mut fill) = fill {
-            let next = if glyph.filled { ink } else { Color::NONE };
-            if fill.0 != next {
-                fill.0 = next;
-            }
-        }
-        if let Some(mut border) = border {
-            let next = BorderColor::all(ink);
-            if *border != next {
-                *border = next;
-            }
-        }
-    }
+    display_label: String,
 }
 impl RibbonButton {
     pub(super) fn fill(
@@ -57,7 +24,7 @@ impl RibbonButton {
     ) -> Color {
         if self.finish {
             return if hover && !disabled {
-                Color::srgb_u8(97, 183, 101)
+                Color::srgb(88. / 255. * 1.1, 166. / 255. * 1.1, 92. / 255. * 1.1)
             } else {
                 Color::srgb_u8(88, 166, 92)
             };
@@ -65,28 +32,39 @@ impl RibbonButton {
         if disabled {
             Color::NONE
         } else if active {
-            theme.accent.with_alpha(if hover { 0.30 } else { 0.25 })
+            // CSS composites opacity in sRGB; leaving alpha for Bevy's linear
+            // framebuffer makes selected cells visibly brighter than the source.
+            css_mix(theme.accent, theme.header, if hover { 0.30 } else { 0.25 })
         } else if hover {
             theme.edge.with_alpha(1.)
         } else {
             Color::NONE
         }
     }
-    pub(super) fn ink(&self, theme: ViewportUiTheme, disabled: bool) -> Color {
-        let color = if self.finish {
+    pub(super) fn ink(&self, theme: ViewportUiTheme, _disabled: bool) -> Color {
+        // The original caption explicitly uses text-mute, including disabled cells.
+        if self.finish {
             Color::WHITE
         } else {
             theme.mute
-        };
-        if disabled {
-            color.with_alpha(0.4)
-        } else {
-            color
         }
+    }
+    pub(super) fn label(&self) -> &str {
+        &self.display_label
     }
 }
 
-#[derive(Clone, Copy)]
+fn css_mix(foreground: Color, background: Color, opacity: f32) -> Color {
+    let fg = foreground.to_srgba();
+    let bg = background.to_srgba();
+    Color::srgb(
+        fg.red * opacity + bg.red * (1. - opacity),
+        fg.green * opacity + bg.green * (1. - opacity),
+        fg.blue * opacity + bg.blue * (1. - opacity),
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Icon {
     Extrude,
     Sketch,
@@ -100,8 +78,123 @@ pub(crate) enum Icon {
     Spline,
     Finish,
     Cancel,
+    Chevron,
 }
+impl Icon {
+    fn svg(self) -> &'static str {
+        macro_rules! source {
+            ($name:literal) => {
+                include_str!(concat!(
+                    "../../../../src/assets/ribbon-icons/",
+                    $name,
+                    ".svg"
+                ))
+            };
+        }
+        match self {
+            Self::Extrude => source!("extrude"),
+            Self::Sketch => source!("sketch"),
+            Self::Line => source!("line"),
+            Self::MidpointLine => source!("midpointLine"),
+            Self::Rectangle => source!("rect"),
+            Self::Circle => source!("circle"),
+            Self::Arc => source!("arc"),
+            Self::Slot => source!("slot"),
+            Self::Point => source!("point"),
+            Self::Spline => source!("spline"),
+            Self::Finish => source!("finish"),
+            Self::Cancel => source!("cancel"),
+            Self::Chevron => source!("chevron"),
+        }
+    }
+}
+#[derive(Resource, Default)]
+pub(super) struct GlyphCache(HashMap<(Icon, u32), Handle<Image>>);
 
+/// Rasterize at the actual physical widget size. A large texture minified
+/// without mipmaps aliases fine strokes instead of improving their quality.
+/// Color belongs to the widget, not to a separate raster for every state.
+fn rasterize(icon: Icon, pixels: u32) -> Image {
+    let source = icon.svg().replace("currentColor", "white");
+    let tree = resvg::usvg::Tree::from_str(&source, &resvg::usvg::Options::default())
+        .expect("validated built-in ribbon SVG");
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(pixels, pixels).unwrap();
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(pixels as f32 / 24., pixels as f32 / 24.),
+        &mut pixmap.as_mut(),
+    );
+    let mut rgba = Vec::with_capacity((pixels * pixels * 4) as usize);
+    for pixel in pixmap.pixels() {
+        let pixel = pixel.demultiply();
+        rgba.extend_from_slice(&[pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()]);
+    }
+    Image::new(
+        Extent3d {
+            width: pixels,
+            height: pixels,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        rgba,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    )
+}
+fn image(world: &mut World, icon: Icon, pixels: u32) -> Handle<Image> {
+    world.init_resource::<Assets<Image>>();
+    world.init_resource::<GlyphCache>();
+    if let Some(image) = world.resource::<GlyphCache>().0.get(&(icon, pixels)) {
+        return image.clone();
+    }
+    let image = world
+        .resource_mut::<Assets<Image>>()
+        .add(rasterize(icon, pixels));
+    world
+        .resource_mut::<GlyphCache>()
+        .0
+        .insert((icon, pixels), image.clone());
+    image
+}
+#[derive(Component)]
+pub(super) struct RibbonGlyph {
+    owner: Entity,
+    icon: Icon,
+    ink: Color,
+    disabled_ink: Color,
+}
+pub(super) fn update_glyphs(
+    controls: Query<&InterfaceControl>,
+    mut glyphs: Query<(&RibbonGlyph, &mut ImageNode, Option<&ComputedNode>)>,
+    cache: Option<ResMut<GlyphCache>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let Some(mut cache) = cache else {
+        return;
+    };
+    for (glyph, mut image, node) in &mut glyphs {
+        if let Some(node) = node.filter(|node| node.size().x > 0.) {
+            let pixels = (node.size().x.round() as u32).clamp(1, 512);
+            let texture = cache
+                .0
+                .entry((glyph.icon, pixels))
+                .or_insert_with(|| images.add(rasterize(glyph.icon, pixels)));
+            if image.image != *texture {
+                image.image = texture.clone();
+            }
+        }
+        if let Ok(control) = controls.get(glyph.owner) {
+            let color = if control.disabled {
+                glyph.disabled_ink
+            } else {
+                glyph.ink
+            };
+            if image.color != color {
+                image.color = color;
+            }
+        }
+    }
+}
 pub(crate) fn node(x: f32, y: f32, width: f32) -> Node {
     Node {
         position_type: PositionType::Absolute,
@@ -111,19 +204,67 @@ pub(crate) fn node(x: f32, y: f32, width: f32) -> Node {
         height: px(52.),
         flex_direction: FlexDirection::Column,
         align_items: AlignItems::Center,
-        padding: UiRect::top(px(4.)),
         border_radius: BorderRadius::all(px(4.)),
         ..default()
     }
 }
-
-pub(crate) fn finish_node(x: f32, y: f32) -> Node {
+pub(crate) fn finish_node(right: f32, y: f32, compact: bool) -> Node {
     Node {
+        position_type: PositionType::Absolute,
+        right: px(right),
+        top: px(y),
         height: px(32.),
-        ..node(x, y, 140.)
+        flex_direction: FlexDirection::Row,
+        align_items: AlignItems::Center,
+        column_gap: px(6.),
+        padding: UiRect::horizontal(px(if compact { 8. } else { 12. })),
+        border_radius: BorderRadius::all(px(4.)),
+        ..default()
     }
 }
-
+fn glyph(
+    world: &mut World,
+    owner: Entity,
+    icon: Icon,
+    x: f32,
+    y: f32,
+    size: f32,
+    ink: Color,
+) -> Entity {
+    let image = image(world, icon, size.round() as u32);
+    let finish = world.get::<RibbonButton>(owner).unwrap().finish;
+    let theme = world.get::<InterfaceButtonStyle>(owner).unwrap().0;
+    let child = world
+        .spawn((
+            Node {
+                position_type: if finish {
+                    PositionType::Relative
+                } else {
+                    PositionType::Absolute
+                },
+                left: if finish { Val::Auto } else { px(x) },
+                top: if finish { Val::Auto } else { px(y) },
+                width: px(size),
+                height: px(size),
+                flex_shrink: 0.,
+                ..default()
+            },
+            ImageNode {
+                image,
+                color: ink,
+                ..default()
+            },
+            RibbonGlyph {
+                owner,
+                icon,
+                ink,
+                disabled_ink: css_mix(theme.mute, theme.header, 0.4),
+            },
+        ))
+        .id();
+    world.entity_mut(owner).add_child(child);
+    child
+}
 pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
     if world.get::<RibbonButton>(entity).is_some() {
         return;
@@ -131,9 +272,25 @@ pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
     let label = world.get::<InterfaceLabel>(entity).unwrap().0;
     let theme = world.get::<InterfaceButtonStyle>(entity).unwrap().0;
     let assets = world.resource::<ViewportUiAssets>().clone();
+    let semantic = &world.get::<InterfaceControl>(entity).unwrap().label;
+    let display_label = match semantic.as_str() {
+        "Three-point arc" => "Arc",
+        "Fit-point spline" => "Spline",
+        "Center-to-center slot" => "Slot",
+        "Sketch on XY" => "Create\nSketch",
+        "Finish sketch" => "FINISH SKETCH",
+        "Finish spline" => "FINISH SPLINE",
+        other => other,
+    }
+    .to_owned();
     let finish = matches!(icon, Icon::Finish);
-    world.entity_mut(entity).insert(RibbonButton { finish });
+    let lines = if display_label.contains('\n') || (!finish && display_label.len() > 11) {
+        2.
+    } else {
+        1.
+    };
     world.entity_mut(label).insert((
+        Text::new(&display_label),
         theme.text(
             &assets,
             if finish { 11. } else { 8. },
@@ -144,213 +301,91 @@ pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
             },
         ),
         TextLayout::justify(Justify::Center),
+        FontHinting::Enabled,
+        LineHeight::Px(if finish { 16.5 } else { 8. }),
+        LetterSpacing::Px(if finish { 0.275 } else { 0. }),
         Node {
-            position_type: PositionType::Absolute,
-            top: px(if finish { 8. } else { 28. }),
-            left: if finish { px(28.) } else { px(0.) },
-            width: if finish { px(104.) } else { percent(100.) },
-            height: px(if finish { 16. } else { 24. }),
+            position_type: if finish {
+                PositionType::Relative
+            } else {
+                PositionType::Absolute
+            },
+            top: if finish {
+                Val::Auto
+            } else {
+                px(40. - lines * 4.)
+            },
+            left: if finish { Val::Auto } else { px(0.) },
+            width: if finish { Val::Auto } else { percent(100.) },
+            flex_shrink: 0.,
             ..default()
         },
     ));
-    let canvas = world
-        .spawn(Node {
-            position_type: if finish {
-                PositionType::Absolute
-            } else {
-                PositionType::Relative
-            },
-            left: if finish { px(8.) } else { Val::Auto },
-            top: if finish { px(9.) } else { Val::Auto },
-            width: px(if finish { 14. } else { 22. }),
-            height: px(if finish { 14. } else { 24. }),
-            ..default()
-        })
-        .id();
-    world.entity_mut(entity).add_child(canvas);
-    let color = if finish { Color::WHITE } else { theme.ink };
-    // The source diagrams are 24 × 24; preserve their stroke width and radius.
-    let mut painter = Painter {
+    world.entity_mut(entity).insert(RibbonButton {
+        finish,
+        display_label,
+    });
+    let primary_glyph = glyph(
         world,
-        canvas,
-        color,
-        scale: if finish { 14. / 24. } else { 22. / 24. },
-        stroke: if finish { 2.5 } else { 1.6 },
-    };
-    match icon {
-        Icon::Extrude => {
-            painter.rect(3., 8., 6., 10., 0.8);
-            painter.rect(15., 5., 6., 10., 0.8);
-            for (a, b) in [
-                ([9., 8.], [15., 5.]),
-                ([9., 18.], [15., 15.]),
-                ([9., 13.], [15., 13.]),
-                ([12.5, 10.5], [15., 13.]),
-                ([15., 13.], [12.5, 15.5]),
-            ] {
-                painter.line(a, b);
-            }
-        }
-        Icon::Line => {
-            painter.line([4., 19.], [20., 5.]);
-            painter.circle(4., 19., 1.8);
-            painter.circle(20., 5., 1.8);
-        }
-        Icon::MidpointLine => {
-            painter.line([3., 18.], [21., 6.]);
-            painter.circle(3., 18., 1.6);
-            painter.circle(21., 6., 1.6);
-            painter.line([12., 9.], [14.2, 12.2]);
-            painter.line([14.2, 12.2], [9.8, 12.4]);
-            painter.line([9.8, 12.4], [12., 9.]);
-        }
-        Icon::Rectangle => {
-            painter.rect(4., 6., 16., 12., 1.);
-            painter.circle(4., 18., 1.2);
-            painter.circle(20., 6., 1.2);
-        }
-        Icon::Circle => {
-            painter.circle(12., 12., 8.);
-            painter.circle(12., 12., 1.3);
-            painter.line([12., 12.], [13.6, 10.7]);
-            painter.line([15.1, 9.5], [17., 8.]);
-        }
-        Icon::Arc => {
-            painter.curve([[4., 18.], [6., 7.], [15., 3.], [20., 12.]]);
-            painter.circle(4., 18., 1.5);
-            painter.circle(20., 12., 1.5);
-            painter.circle(12., 8., 1.2);
-        }
-        Icon::Slot => {
-            painter.rect(3., 7., 18., 10., 5.);
-            painter.line([8., 10.], [8., 14.]);
-            painter.line([16., 10.], [16., 14.]);
-        }
-        Icon::Point => {
-            painter.circle(12., 12., 10.);
-            painter.line([2., 12.], [6., 12.]);
-            painter.line([18., 12.], [22., 12.]);
-            painter.line([12., 2.], [12., 6.]);
-            painter.line([12., 18.], [12., 22.]);
-        }
-        Icon::Spline => {
-            painter.curve([[5., 17.], [5., 10.372583], [10.372583, 5.], [17., 5.]]);
-            painter.circle(5., 19., 2.);
-            painter.circle(19., 5., 2.);
-        }
-        Icon::Sketch => {
-            for (a, b) in [
-                ([3., 17.], [3., 21.]),
-                ([3., 21.], [7., 21.]),
-                ([7., 21.], [21., 7.]),
-                ([21., 7.], [17., 3.]),
-                ([17., 3.], [3., 17.]),
-                ([16., 5.], [19., 8.]),
-                ([9., 21.], [21., 21.]),
-            ] {
-                painter.line(a, b);
-            }
-        }
-        Icon::Finish => {
-            painter.line([5., 12.], [10., 17.]);
-            painter.line([10., 17.], [20., 7.]);
-        }
-        Icon::Cancel => {
-            painter.line([6., 6.], [18., 18.]);
-            painter.line([6., 18.], [18., 6.]);
-        }
-    }
-    let children: Vec<Entity> = world.get::<Children>(canvas).unwrap().iter().collect();
-    for child in children {
-        let filled = world
-            .get::<BackgroundColor>(child)
-            .is_some_and(|fill| fill.0 == color);
-        world.entity_mut(child).insert(RibbonGlyph {
-            owner: entity,
-            ink: color,
-            filled,
-        });
+        entity,
+        icon,
+        if finish { 8. } else { 13. },
+        if finish { 9. } else { 5. },
+        if finish { 14. } else { 22. },
+        if finish { Color::WHITE } else { theme.ink },
+    );
+    if finish {
+        world
+            .entity_mut(entity)
+            .insert_children(0, &[primary_glyph]);
+        glyph(
+            world,
+            entity,
+            Icon::Chevron,
+            121.,
+            10.5,
+            11.,
+            Color::WHITE.with_alpha(0.7),
+        );
     }
 }
-
-struct Painter<'a> {
-    world: &'a mut World,
-    canvas: Entity,
-    color: Color,
-    scale: f32,
-    stroke: f32,
-}
-impl Painter<'_> {
-    fn line(&mut self, a: [f32; 2], b: [f32; 2]) {
-        let scale = self.scale;
-        let a = Vec2::from(a) * scale;
-        let b = Vec2::from(b) * scale;
-        let delta = b - a;
-        let center = (a + b) * 0.5;
-        let thickness = self.stroke * scale;
-        let child = self
-            .world
-            .spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(center.x - delta.length() * 0.5),
-                    top: px(center.y - thickness * 0.5),
-                    width: px(delta.length()),
-                    height: px(thickness),
-                    border_radius: BorderRadius::MAX,
-                    ..default()
-                },
-                UiTransform::from_rotation(Rot2::radians(delta.y.atan2(delta.x))),
-                BackgroundColor(self.color),
-            ))
-            .id();
-        self.world.entity_mut(self.canvas).add_child(child);
-    }
-    fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, r: f32) {
-        let s = self.scale;
-        let child = self
-            .world
-            .spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px((x - 0.8) * s),
-                    top: px((y - 0.8) * s),
-                    width: px((w + 1.6) * s),
-                    height: px((h + 1.6) * s),
-                    border: UiRect::all(px(1.6 * s)),
-                    border_radius: BorderRadius::all(px((r + 0.8) * s)),
-                    ..default()
-                },
-                BorderColor::all(self.color),
-            ))
-            .id();
-        self.world.entity_mut(self.canvas).add_child(child);
-    }
-    fn circle(&mut self, x: f32, y: f32, r: f32) {
-        self.rect(x - r, y - r, r * 2., r * 2., r);
-    }
-    fn curve(&mut self, points: [[f32; 2]; 4]) {
-        let [a, b, c, d] = points.map(Vec2::from);
-        let mut previous = a;
-        for step in 1..=24 {
-            let t = step as f32 / 24.;
-            let u = 1. - t;
-            let next = a * u * u * u + b * 3. * u * u * t + c * 3. * u * t * t + d * t * t * t;
-            self.line(previous.to_array(), next.to_array());
-            previous = next;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn disabling_a_ribbon_control_dims_its_strokes_without_filling_its_open_geometry() {
+    fn shared_vectors_remain_open_and_transparent_when_tinted_or_disabled() {
+        for icon in [
+            Icon::Extrude,
+            Icon::Sketch,
+            Icon::Line,
+            Icon::MidpointLine,
+            Icon::Rectangle,
+            Icon::Circle,
+            Icon::Arc,
+            Icon::Slot,
+            Icon::Point,
+            Icon::Spline,
+            Icon::Finish,
+            Icon::Cancel,
+            Icon::Chevron,
+        ] {
+            let image = rasterize(icon, 96);
+            let data = image.data.unwrap();
+            assert_eq!(data[3], 0, "{icon:?} background must be transparent");
+            assert!(
+                data.chunks_exact(4).any(|p| p[3] > 0),
+                "{icon:?} must have visible strokes"
+            );
+        }
+        let rectangle = rasterize(Icon::Rectangle, 96).data.unwrap();
+        assert_eq!(
+            rectangle[(48 * 96 + 48) * 4 + 3],
+            0,
+            "Do not fill an outlined profile"
+        );
         let mut app = App::new();
-        let assets = ViewportUiAssets::default();
-        app.insert_resource(assets.clone())
+        app.init_resource::<Assets<Image>>()
+            .insert_resource(ViewportUiAssets::default())
             .add_systems(Update, update_glyphs);
         let theme =
             ViewportUiTheme::from_palette(&crate::native_viewport::ViewportPalette::default());
@@ -361,43 +396,32 @@ mod tests {
             node(0., 0., 48.),
             InterfaceControl::button("solid/build", "Extrude"),
             theme,
-            &assets,
+            &ViewportUiAssets::default(),
         );
         app.world_mut().flush();
         decorate(app.world_mut(), button, Icon::Extrude);
         let count = app.world().entities().len();
         decorate(app.world_mut(), button, Icon::Extrude);
-        assert_eq!(
-            app.world().entities().len(),
-            count,
-            "Synchronization cannot duplicate the glyph"
-        );
-        for disabled in [false, true, false] {
+        assert_eq!(app.world().entities().len(), count);
+        for disabled in [true, false] {
             app.world_mut()
                 .get_mut::<InterfaceControl>(button)
                 .unwrap()
                 .disabled = disabled;
             app.update();
-            let mut outlines = 0;
-            for (glyph, fill, border) in app
+            let image = app
                 .world_mut()
-                .query::<(&RibbonGlyph, &BackgroundColor, &BorderColor)>()
-                .iter(app.world())
-            {
-                if !glyph.filled {
-                    outlines += 1;
-                    assert_eq!(fill.0, Color::NONE);
-                    assert_eq!(
-                        *border,
-                        BorderColor::all(if disabled {
-                            theme.ink.with_alpha(0.4)
-                        } else {
-                            theme.ink
-                        })
-                    );
+                .query::<&ImageNode>()
+                .single(app.world())
+                .unwrap();
+            assert_eq!(
+                image.color,
+                if disabled {
+                    css_mix(theme.mute, theme.header, 0.4)
+                } else {
+                    theme.ink
                 }
-            }
-            assert_eq!(outlines, 2);
+            );
         }
     }
 }
