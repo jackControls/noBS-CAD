@@ -1,6 +1,6 @@
 [package]
 name = "nbcad-interface"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Shared product catalog and live control semantics"
 license = "LGPL-2.1-or-later"

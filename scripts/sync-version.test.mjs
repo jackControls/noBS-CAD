@@ -265,6 +265,14 @@ test('the checked-in tree is in sync and re-syncs from VERSION', async () => {
     // creating drift as soon as the repository itself reached it, so a correct,
     // fully synchronized release bump failed this test.
     assert.deepEqual(collectDrift(root, repositoryVersion), []);
+    // Windows checkouts commonly have CRLF. Validation and a release bump
+    // must preserve that formatting rather than reject otherwise valid files.
+    for (const carrier of versionCarriers(root)) {
+      const file = path.join(root, carrier.path);
+      const text = await readFile(file, 'utf8');
+      await writeFile(file, text.replace(/\r?\n/g, '\r\n'));
+    }
+    assert.deepEqual(collectDrift(root, repositoryVersion), []);
     const rehearsal = repositoryVersion === '9.9.9' ? '9.9.8' : '9.9.9';
     await writeFile(path.join(root, versionFile), `${rehearsal}\n`);
 
@@ -295,6 +303,8 @@ test('the checked-in tree is in sync and re-syncs from VERSION', async () => {
     assert.ok(!changed.includes('crates/core/Cargo.toml'));
     assert.ok(!changed.includes('.github/workflows/desktop-packages.yml'));
     assert.deepEqual(collectDrift(root, rehearsal), []);
+    assert.match(await readFile(path.join(root, 'package.json'), 'utf8'), /\r\n/);
+    assert.match(await readFile(path.join(root, 'Cargo.lock'), 'utf8'), /\r\n/);
     const lock = JSON.parse(await readFile(path.join(root, 'package-lock.json'), 'utf8'));
     assert.equal(lock.version, rehearsal);
     assert.equal(lock.packages[''].version, rehearsal);

@@ -3,7 +3,7 @@ name = "nbcad-build-info"
 # `BuildInfo::version` is `env!("CARGO_PKG_VERSION")`, so this is the version the
 # About dialog and the MCP `initialize` result report. It must track the product
 # version in package.json; `version_carriers` in src/lib.rs enforces that.
-version = "0.2.0"
+version.workspace = true
 edition = "2021"
 description = "Compiled application identity without invalidating the CAD engine dependency graph"
 license = "LGPL-2.1-or-later"
