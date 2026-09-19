@@ -99,3 +99,11 @@ parity: inspect typography, antialiasing, layout and interaction states too.
 This ADR records the implementation direction. It is not a statement that the
 conversion, screenshot inventory, platform coverage or performance validation
 has finished.
+
+The repeatable native sketch check is `cargo xtask test-mcp native-sketch
+--server <rebuilt-CAD-binary> --session <blank-native-document-UUID> --out
+<absolute-evidence-directory>`. It uses Rust and MCP to operate the rendered
+controls and canvas, checks nine modification forms and Undo, driving/reference
+dimensions, constraint deletion, Escape cancellation, capture and Save. It
+requires an explicitly selected blank document and fresh output filenames;
+it does not launch or close a desktop window, discard work or upload evidence.

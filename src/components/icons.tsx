@@ -17,19 +17,12 @@ import {
   Code2,
   Cuboid,
   Equal,
-  FlipHorizontal2,
   Lock,
-  MousePointer2,
   Move,
   Ruler,
-  Scissors,
   Type,
   type LucideIcon,
 } from 'lucide-react';
-import {
-  ConstraintIconContent,
-  TOOL_CONSTRAINT_ICON,
-} from '../sketch/constraintIcons';
 
 /* ------------------------------------------------------------------ */
 /* Product-owned CAD diagrams                                          */
@@ -87,18 +80,8 @@ const GLYPHS: Record<string, ReactNode> = {
       <path d="M12 6.5h3M12 17.5h3" />
     </>
   ),
-  fillet: (
-    <>
-      <path d="M4 20V9h7a9 9 0 0 1 9 9v2" />
-      <path d="M8 16a7 7 0 0 1 7-7" strokeDasharray="2 2" />
-    </>
-  ),
-  chamfer: (
-    <>
-      <path d="M4 20V9h7l9 9v2" />
-      <path d="M9 12l6 6" strokeDasharray="2 2" />
-    </>
-  ),
+  fillet: <SharedRibbonGlyph id="fillet" />,
+  chamfer: <SharedRibbonGlyph id="chamfer" />,
   shell: (
     <>
       <path d="M5 5h14v14H5V5z" />
@@ -127,33 +110,11 @@ const GLYPHS: Record<string, ReactNode> = {
       <path d="M8 8l-3-3M16 16l3 3" />
     </>
   ),
-  moveCopy: (
-    <>
-      <path d="M5 5h7v7H5z" />
-      <path d="M12 12h7v7h-7z" strokeDasharray="2 2" />
-      <path d="M13 5h6v6M19 5l-8 8" />
-    </>
-  ),
+  moveCopy: <SharedRibbonGlyph id="moveCopy" />,
 
   // Repetition and transforms.
-  rectPattern: (
-    <>
-      <rect x="3" y="4" width="5" height="5" rx="0.6" />
-      <rect x="11" y="4" width="5" height="5" rx="0.6" />
-      <rect x="3" y="12" width="5" height="5" rx="0.6" />
-      <rect x="11" y="12" width="5" height="5" rx="0.6" />
-      <path d="M18 8h3M19.5 6.5V9.5" />
-    </>
-  ),
-  circPattern: (
-    <>
-      <circle cx="12" cy="12" r="2" />
-      <rect x="10" y="3" width="4" height="4" rx="0.7" />
-      <rect x="16.5" y="13.5" width="4" height="4" rx="0.7" />
-      <rect x="3.5" y="13.5" width="4" height="4" rx="0.7" />
-      <path d="M7 7a7 7 0 0 1 10 0" strokeDasharray="2 2" />
-    </>
-  ),
+  rectPattern: <SharedRibbonGlyph id="rectPattern" />,
+  circPattern: <SharedRibbonGlyph id="circPattern" />,
   pathPattern: (
     <>
       <path d="M3 19c4-8 8-1 11-8 1.2-2.8 3-4.2 7-5" strokeDasharray="2 2" />
@@ -257,46 +218,23 @@ const GLYPHS: Record<string, ReactNode> = {
       <circle cx="20" cy="4" r="1.5" />
     </>
   ),
-  dimension: (
-    <>
-      <path d="M4 7v10M20 7v10M4 12h16" />
-      <path d="M4 12l3-2v4l-3-2zM20 12l-3-2v4l3-2z" />
-      <path d="M9 7l1.5-2h3L15 7" />
-    </>
-  ),
+  dimension: <SharedRibbonGlyph id="dimension" />,
   // Sketch editing.
-  offset: (
-    <>
-      <path d="M4 18V8h10" />
-      <path d="M9 21V13h10" />
-      <path d="M6.5 10.5l5 5" strokeDasharray="2 2" />
-    </>
-  ),
-  extend: (
-    <>
-      <path d="M4 19L13 10" />
-      <path d="M13 10l7-7" strokeDasharray="2 2" />
-      <path d="M15 3h5v5" />
-    </>
-  ),
-  break: (
-    <>
-      <path d="M4 19l6-6M14 10l6-6" />
-      <path d="M9 9l3 2-2 3M15 15l-3-2 2-3" />
-    </>
-  ),
+  offset: <SharedRibbonGlyph id="offset" />,
+  extend: <SharedRibbonGlyph id="extend" />,
+  break: <SharedRibbonGlyph id="break" />,
   // Constraints: geometric relation plus a small construction cue.
-  coincident: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.coincident} />,
-  midpointC: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.midpointC} />,
-  collinear: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.collinear} />,
-  hv: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.hv} />,
-  equal: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.equal} />,
-  parallel: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.parallel} />,
-  perpendicular: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.perpendicular} />,
-  tangent: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.tangent} />,
-  concentric: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.concentric} />,
-  symmetry: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.symmetry} />,
-  fix: <ConstraintIconContent kind={TOOL_CONSTRAINT_ICON.fix} />,
+  coincident: <SharedRibbonGlyph id="coincident" />,
+  midpointC: <SharedRibbonGlyph id="midpointC" />,
+  collinear: <SharedRibbonGlyph id="collinear" />,
+  hv: <SharedRibbonGlyph id="hv" />,
+  equal: <SharedRibbonGlyph id="equal" />,
+  parallel: <SharedRibbonGlyph id="parallel" />,
+  perpendicular: <SharedRibbonGlyph id="perpendicular" />,
+  tangent: <SharedRibbonGlyph id="tangent" />,
+  concentric: <SharedRibbonGlyph id="concentric" />,
+  symmetry: <SharedRibbonGlyph id="symmetry" />,
+  fix: <SharedRibbonGlyph id="fix" />,
   autoConstrain: (
     <>
       <path d="M4 19V7h10" />
@@ -321,12 +259,9 @@ export const CUSTOM_ICON_IDS: readonly string[] = Object.freeze([...Object.keys(
 
 const LUCIDE: Record<string, LucideIcon> = {
   text: Type,
-  mirror: FlipHorizontal2,
-  trim: Scissors,
   moveCopy: Move,
   equal: Equal,
   measure: Ruler,
-  select: MousePointer2,
   fixLucide: Lock,
   code: Code2,
   box: Cuboid,
@@ -385,7 +320,7 @@ export function ToolIcon({
     );
   }
 
-  if (id === 'sketch' || id === 'spline' || id === 'point') {
+  if (id === 'sketch' || id === 'spline' || id === 'point' || id === 'trim' || id === 'select' || id === 'mirror') {
     return <SharedRibbonIcon id={id} size={size} className={cxIcon(colorClass, className)} />;
   }
 
@@ -412,7 +347,6 @@ export function ToolIcon({
     </svg>
   );
 }
-
 function cxIcon(...classes: Array<string | undefined>): string | undefined {
   const joined = classes.filter(Boolean).join(' ');
   return joined || undefined;

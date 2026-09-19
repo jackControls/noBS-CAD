@@ -2249,6 +2249,9 @@ struct CameraResource {
 #[derive(Resource, Default)]
 struct PreviewResource {
     value: ViewportPreview,
+    /// Native sketch dimensions persist while transient creation/tool guides
+    /// change. They never replace or take ownership of a feature preview.
+    sketch_lines: Vec<super::ViewportLineLayer>,
     revision: u64,
     /// Changes only when GPU mesh content changes. Screen annotations and
     /// sketch gizmos may update at camera frequency without reallocating the
@@ -5089,7 +5092,7 @@ fn draw_cad_gizmos(
     // peck/retract cannot win a depth tie. Strokes are emitted once;
     // whole upcoming/completed segments skip the opposite traversal early.
     for completed_pass in [false, true] {
-        for layer in &preview.value.lines {
+        for layer in preview.value.lines.iter().chain(&preview.sketch_lines) {
             let playback = layer.playback.as_ref();
             // Presentation and preview arrive independently. Never attach the
             // new cutter's cursor to a still-visible previous timeline.
@@ -6251,6 +6254,7 @@ fn apply_render_command(
 
 fn apply_model_state(world: &mut World, next: &ViewportModel) {
     let mut resource = world.resource_mut::<ModelResource>();
+    let reset_sketch = resource.session_id != next.session_id || next.active_sketch.is_none();
     resource.session_id.clone_from(&next.session_id);
     resource.geometry_revision = next.geometry_revision;
     resource.scene.clone_from(&next.scene);
@@ -6270,6 +6274,11 @@ fn apply_model_state(world: &mut World, next: &ViewportModel) {
         .clone_from(&next.instance_body_poses);
     resource.revision = resource.revision.wrapping_add(1);
     drop(resource);
+    if reset_sketch {
+        if let Some(mut preview) = world.get_resource_mut::<PreviewResource>() {
+            preview.sketch_lines.clear();
+        }
+    }
     invalidate_interface_presentation(world);
 }
 
@@ -6334,6 +6343,20 @@ pub(crate) fn apply_interface_preview(
     }
     PlatformNativeViewport::validate_preview(&preview)?;
     apply_preview_state(world, preview);
+    Ok(())
+}
+
+#[cfg(feature = "dev-bevy-host")]
+pub(crate) fn apply_interface_sketch_lines(
+    world: &mut World,
+    session_id: &str,
+    lines: Vec<super::ViewportLineLayer>,
+) -> Result<(), String> {
+    if world.resource::<ModelResource>().session_id != session_id {
+        return Err("Sketch annotations belong to a retired document".into());
+    }
+    world.resource_mut::<PreviewResource>().sketch_lines = lines;
+    invalidate_interface_presentation(world);
     Ok(())
 }
 

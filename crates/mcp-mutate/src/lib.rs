@@ -241,6 +241,18 @@ pub static MUTATES: &[MutateSpec] = &[
         execution: ExecutionKind::Direct,
     },
     MutateSpec {
+        name: "sketch_delete_constraint",
+        engine_method: "delete_constraint",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "sketch_set_dimension_mode",
+        engine_method: "set_dimension_mode",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
         name: "sketch_add_dimension",
         engine_method: "add_dimension",
         payload: PayloadKind::Object,

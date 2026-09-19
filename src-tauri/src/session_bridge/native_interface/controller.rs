@@ -29,7 +29,7 @@ use std::{
 
 pub(crate) mod browser;
 mod capture;
-mod chrome;
+pub(crate) mod chrome;
 pub(crate) mod files;
 pub(crate) mod history;
 pub(crate) mod worker;
@@ -436,7 +436,13 @@ fn update_inner(
                 } else {
                     1.
                 };
-                if extrude::panel::scroll_panel(world, cursor.to_array(), wheel.y * factor) {
+                if extrude::panel::scroll_panel(world, cursor.to_array(), wheel.y * factor)
+                    || crate::native_editor::panel::scroll_panel(
+                        world,
+                        cursor.to_array(),
+                        wheel.y * factor,
+                    )
+                {
                     continue;
                 }
             }
@@ -717,6 +723,7 @@ fn process_modal_keys(
                 "close-document" => state.close_pending = false,
                 "file-menu" | "file-dialog" => files::escape(world),
                 "history-menu" | "delete-feature" => history::escape(world),
+                "sketch-menu" => crate::native_editor::panel::escape(world),
                 _ => {}
             }
         }
@@ -755,10 +762,28 @@ pub(crate) fn reduce_control_input(
                 match scope.as_str() {
                     "file-menu" | "file-dialog" => files::escape(world),
                     "history-menu" | "delete-feature" => history::escape(world),
+                    "sketch-menu" => crate::native_editor::panel::escape(world),
                     "close-document" => return Ok(json!({"close_decision":"cancel"})),
                     _ => return Err("This dialog does not handle Escape".into()),
                 }
                 return Ok(json!({"cancelled":true}));
+            }
+            if matches!(
+                world
+                    .get::<NativeCommandBinding>(Entity::from_bits(action.control.key.0))
+                    .map(|b| &b.command),
+                Some(NativeCommand::Sketch(_))
+            ) {
+                return crate::native_editor::execute(
+                    world,
+                    engine,
+                    bridge,
+                    &action.context,
+                    crate::native_editor::EditorCommand::Interaction(
+                        crate::native_editor::InteractionCommand::Select,
+                    ),
+                    || handle.validate_action(action),
+                );
             }
         }
     }
@@ -1060,6 +1085,12 @@ fn synchronize(
             y: 34.,
             width: (width - if width <= 1400. { 60. } else { 112. }).max(1.) as f64,
             height: 72.,
+        },
+        InterfaceRect {
+            x: canvas.min.x as f64,
+            y: canvas.min.y as f64,
+            width: canvas.width() as f64,
+            height: canvas.height() as f64,
         },
     )?;
     let (_, _, presentation, _) = native_viewport::interface_view_snapshot(world);
@@ -1462,10 +1493,6 @@ fn synchronize(
                 name: "sketch/draw".into(),
                 text: None,
             },
-            Surface {
-                name: "sketch/modify".into(),
-                text: None,
-            },
         ]
         .into_iter()
         .chain(files::modal(world).map(|name| Surface {
@@ -1480,12 +1507,19 @@ fn synchronize(
             name: name.into(),
             text: None,
         }))
+        .chain(
+            crate::native_editor::panel::modal(world).map(|name| Surface {
+                name: name.into(),
+                text: None,
+            }),
+        )
         .collect(),
         modal_stack: if state.close_pending {
             vec!["close-document".into()]
         } else {
             files::modal(world)
                 .or_else(|| history::modal(world))
+                .or_else(|| crate::native_editor::panel::modal(world))
                 .into_iter()
                 .map(str::to_owned)
                 .collect()

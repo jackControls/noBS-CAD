@@ -13,7 +13,31 @@ import finish from '../assets/ribbon-icons/finish.svg?raw';
 import cancel from '../assets/ribbon-icons/cancel.svg?raw';
 import chevron from '../assets/ribbon-icons/chevron.svg?raw';
 
-const sources = { extrude, line, midpointLine, rect, circle, arc, slot, sketch, spline, point, finish, cancel, chevron };
+import trim from '../assets/ribbon-icons/trim.svg?raw';
+import extend from '../assets/ribbon-icons/extend.svg?raw';
+import breakGlyph from '../assets/ribbon-icons/break.svg?raw';
+import offset from '../assets/ribbon-icons/offset.svg?raw';
+import fillet from '../assets/ribbon-icons/fillet.svg?raw';
+import chamfer from '../assets/ribbon-icons/chamfer.svg?raw';
+import moveCopy from '../assets/ribbon-icons/moveCopy.svg?raw';
+import mirror from '../assets/ribbon-icons/mirror.svg?raw';
+import select from '../assets/ribbon-icons/select.svg?raw';
+import rectPattern from '../assets/ribbon-icons/rectPattern.svg?raw';
+import circPattern from '../assets/ribbon-icons/circPattern.svg?raw';
+import hv from '../assets/ribbon-icons/hv.svg?raw';
+import fix from '../assets/ribbon-icons/fix.svg?raw';
+import midpointC from '../assets/ribbon-icons/midpointC.svg?raw';
+import coincident from '../assets/ribbon-icons/coincident.svg?raw';
+import tangent from '../assets/ribbon-icons/tangent.svg?raw';
+import equal from '../assets/ribbon-icons/equal.svg?raw';
+import parallel from '../assets/ribbon-icons/parallel.svg?raw';
+import perpendicular from '../assets/ribbon-icons/perpendicular.svg?raw';
+import concentric from '../assets/ribbon-icons/concentric.svg?raw';
+import collinear from '../assets/ribbon-icons/collinear.svg?raw';
+import symmetry from '../assets/ribbon-icons/symmetry.svg?raw';
+import dimension from '../assets/ribbon-icons/dim.svg?raw';
+
+const sources = { dimension, trim, extend, break: breakGlyph, offset, fillet, chamfer, moveCopy, mirror, select, rectPattern, circPattern, hv, fix, midpointC, coincident, tangent, equal, parallel, perpendicular, concentric, collinear, symmetry, extrude, line, midpointLine, rect, circle, arc, slot, sketch, spline, point, finish, cancel, chevron };
 const content = Object.fromEntries(Object.entries(sources).map(([id, svg]) => [id, svg.replace(/^<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '')]));
 const strokes = Object.fromEntries(Object.entries(sources).map(([id, svg]) => [id, Number(svg.match(/stroke-width="([\d.]+)"/)?.[1] ?? 1.6)]));
 

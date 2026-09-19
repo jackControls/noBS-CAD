@@ -427,6 +427,43 @@ pub(crate) fn reduce_action(
         );
     }
     #[cfg(feature = "dev-bevy-host")]
+    if let NativeCommand::Sketch(crate::native_editor::EditorCommand::Interaction(command)) =
+        &binding.command
+    {
+        use crate::native_editor::{EditorCommand, InteractionCommand};
+        if matches!(
+            command,
+            InteractionCommand::DimensionText(_) | InteractionCommand::FormValue { .. }
+        ) {
+            let text = match &action.control.input {
+                ControlInput::SetValue(value) => value.clone(),
+                ControlInput::Click => {
+                    return bridge.with_native_document_owner(engine, &action.context, || {
+                        handle.validate_action(action)?;
+                        Ok(json!({"focused":true}))
+                    })
+                }
+                _ => return Err("Use the expression field to enter a value".into()),
+            };
+            let command = match command {
+                InteractionCommand::FormValue { id, index, .. } => InteractionCommand::FormValue {
+                    id: *id,
+                    index: *index,
+                    text,
+                },
+                _ => InteractionCommand::DimensionText(text),
+            };
+            return crate::native_editor::execute(
+                world,
+                engine,
+                bridge,
+                &action.context,
+                EditorCommand::Interaction(command),
+                || handle.validate_action(action),
+            );
+        }
+    }
+    #[cfg(feature = "dev-bevy-host")]
     if let NativeCommand::File(command) = &binding.command {
         return controller::files::reduce(world, handle, engine, bridge, action, command);
     }
@@ -442,6 +479,8 @@ pub(crate) fn reduce_action(
         return Err("This native button does not handle the requested input".into());
     }
     match binding.command {
+        #[cfg(feature="dev-bevy-host")]
+        NativeCommand::ClearSelection if crate::native_editor::active(engine)?.is_some()=>crate::native_editor::execute(world,engine,bridge,&action.context,crate::native_editor::EditorCommand::Interaction(crate::native_editor::InteractionCommand::Select),||handle.validate_action(action)),
         #[cfg(feature="dev-bevy-host")]
         NativeCommand::Sketch(command)=>crate::native_editor::execute(world,engine,bridge,&action.context,command,||handle.validate_action(action)),
         #[cfg(feature="dev-bevy-host")]

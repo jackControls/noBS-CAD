@@ -1,8 +1,16 @@
 //! Native interaction state over the shared CAD engine. Unfinished gestures
 //! are scoped to one document incarnation, engine revision and active sketch.
 
+mod annotations;
+mod constraints;
+mod forms;
 pub(crate) mod mcp;
+mod selection;
 mod sketch;
+pub(crate) use forms::FormKind;
+mod interaction;
+pub(crate) mod panel;
+pub(crate) use interaction::{InteractionCommand, ModifyTool};
 
 use crate::{
     native_viewport::{
@@ -39,6 +47,7 @@ pub(crate) enum EditorCommand {
     Tool(CreateTool),
     Cancel,
     Complete,
+    Interaction(InteractionCommand),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -56,13 +65,15 @@ struct Editor {
     press: Option<(DocumentContext, Vec2)>,
     controls: HashMap<String, Entity>,
     error: String,
+    interaction: interaction::Interaction,
+    form_serial: u64,
 }
 
 fn initialize(world: &mut World) {
     world.init_resource::<Editor>();
 }
 
-fn active(engine: &AppState) -> Result<Option<SketchDto>, String> {
+pub(crate) fn active(engine: &AppState) -> Result<Option<SketchDto>, String> {
     let result: Value = serde_json::from_str(&engine.engine_call("active_sketch", ""))
         .map_err(|e| e.to_string())?;
     if result["ok"] != true {
@@ -102,6 +113,7 @@ fn synchronize_stamp(editor: &mut Editor, next: Stamp) -> bool {
     editor.draft.select(None);
     editor.press = None;
     editor.error.clear();
+    editor.interaction = Default::default();
     editor.stamp = Some(next);
     true
 }
@@ -113,7 +125,7 @@ pub(crate) fn status(world: &World) -> Option<String> {
     } else if editor.draft.tool.is_some() {
         Some(editor.draft.instruction().into())
     } else {
-        None
+        editor.interaction.instruction()
     }
 }
 
@@ -287,6 +299,7 @@ pub(crate) fn execute(
                     return Err("Start or edit a sketch to draw geometry".into());
                 }
                 editor.draft.select(Some(tool));
+                editor.interaction = Default::default();
                 editor.error.clear();
                 clear_preview(world, engine, bridge, owner)?;
                 Ok(json!({"active_tool":tool.label(),"instruction":editor.draft.instruction()}))
@@ -309,6 +322,9 @@ pub(crate) fn execute(
                     clear_preview(world, engine, bridge, owner)?;
                     Ok(json!({"complete":true}))
                 }
+            }
+            EditorCommand::Interaction(command) => {
+                interaction::execute(world, engine, bridge, owner, &mut editor, command, validate)
             }
         }
     })
@@ -342,6 +358,7 @@ enum Completion {
     Begin,
     Finish,
     Primitive,
+    Modify,
 }
 
 fn queue_mutation(
@@ -376,6 +393,19 @@ fn queue_mutation(
                         Completion::Primitive => editor.draft.accepted(&result.value),
                         Completion::Begin | Completion::Finish => {
                             editor.draft.select(None);
+                            editor.interaction = Default::default();
+                            Ok(())
+                        }
+                        Completion::Modify => {
+                            editor.interaction.selection.clear();
+                            editor.interaction.relation = None;
+                            editor.interaction.form = None;
+                            editor.interaction.dimension = None;
+                            editor.interaction.dimension_position = None;
+                            editor.interaction.dimension_id = None;
+                            editor.interaction.dimension_reference = false;
+                            editor.interaction.reposition_dimension = None;
+                            editor.interaction.constraint = None;
                             Ok(())
                         }
                     }
@@ -388,6 +418,7 @@ fn queue_mutation(
                 let followup = (|| {
                     accepted?;
                     editor.stamp = Some(stamp(engine, bridge, &owner, None)?);
+                    interaction::present(world,&owner,&editor.interaction)?;
                     if matches!(kind, Completion::Begin) {
                         look_at_sketch(world, engine, bridge, &owner)?;
                     }
@@ -501,6 +532,15 @@ pub(crate) fn process_one(
                     result = json!({"handled":true,"preview":true,"instruction":editor.draft.instruction()});
                 }
             }
+            WindowEvent::CursorMoved(moved) if editor.stamp.as_ref().is_some_and(|s|s.sketch.is_some()) => {
+                if let Some(canvas) = frame.canvases.iter().find(|c| c.name == "viewport") {
+                    let p = moved.position;
+                    let a = canvas.bounds;
+                    let inside = f64::from(p.x) >= a.x && f64::from(p.x) < a.x+a.width &&
+                        f64::from(p.y) >= a.y && f64::from(p.y) < a.y+a.height && !handle.owns_pointer([f64::from(p.x),f64::from(p.y)]);
+                    interaction::hover(world, services, &frame.context, &editor, inside.then_some(p), a)?;
+                }
+            }
             WindowEvent::KeyboardInput(key)
                 if key.state == ButtonState::Pressed
                     && !key.repeat
@@ -511,10 +551,15 @@ pub(crate) fn process_one(
                 match key.key_code {
                     KeyCode::Escape => {
                         editor.draft.escape();
+                        editor.interaction=Default::default();
+                        interaction::present(world,&frame.context,&editor.interaction)?;
                         editor.error.clear();
                         editor.press = None;
                         clear_preview(world, &services.engine, &services.bridge, &frame.context)?;
                         result = json!({"handled":true,"cancelled":true});
+                    }
+                    KeyCode::Delete | KeyCode::Backspace if !editor.interaction.selection.is_empty() => {
+                        return interaction::execute(world,&services.engine,&services.bridge,&frame.context,&mut editor,InteractionCommand::Delete,||Ok(()));
                     }
                     KeyCode::Enter | KeyCode::NumpadEnter => match editor.draft.complete() {
                         Ok(Some(command)) => {
@@ -558,9 +603,13 @@ pub(crate) fn process_one(
                     let Some((owner, start)) = editor.press.take() else {
                         return Ok(result);
                     };
-                    if owner != frame.context || !in_canvas || start.distance(cursor) > 3. {
+                    if owner != frame.context || !in_canvas {
                         return Ok(result);
                     }
+                    if editor.draft.tool.is_none() && editor.stamp.as_ref().is_some_and(|s|s.sketch.is_some()) {
+                        return interaction::pointer(world,services,&owner,&mut editor,start,cursor,canvas.bounds,event.modifiers.shift,event.modifiers.ctrl);
+                    }
+                    if start.distance(cursor)>3. {return Ok(result);}
                     if let Some(value) = crate::session_bridge::native_interface::extrude::handle_canvas_pick(
                         world, services, &owner,
                         [cursor.x-canvas.bounds.x as f32,cursor.y-canvas.bounds.y as f32],
@@ -619,6 +668,7 @@ pub(crate) fn synchronize_controls(
     services: &NativeServices,
     owner: &DocumentContext,
     area: InterfaceRect,
+    canvas: InterfaceRect,
 ) -> Result<(), String> {
     if worker::busy(world) {
         return Ok(());
@@ -638,6 +688,7 @@ pub(crate) fn synchronize_controls(
     let theme = ViewportUiTheme::from_palette(&ViewportPalette::default());
     world.resource_scope(|world, mut editor: Mut<Editor>| {
         synchronize_stamp(&mut editor, next);
+        interaction::present(world, owner, &editor.interaction)?;
         let rows: Vec<(String, EditorCommand)> =
             if editor.stamp.as_ref().is_some_and(|s| s.sketch.is_some()) {
                 let mut rows = [
@@ -647,17 +698,36 @@ pub(crate) fn synchronize_controls(
                     CreateTool::Circle(CircleMode::CenterDiameter),
                     CreateTool::Spline,
                     CreateTool::Slot(SlotMode::CenterToCenter),
-                    CreateTool::Point,
-                    CreateTool::MidpointLine,
-                    CreateTool::Rectangle(RectangleMode::Center),
-                    CreateTool::Circle(CircleMode::TwoPoint),
-                    CreateTool::ArcCenter,
-                    CreateTool::Slot(SlotMode::Overall),
-                    CreateTool::Slot(SlotMode::CenterPoint),
                 ]
                 .into_iter()
                 .map(|tool| (tool.label().to_owned(), EditorCommand::Tool(tool)))
                 .collect::<Vec<_>>();
+                for command in [
+                    InteractionCommand::Form(FormKind::MoveCopy),
+                    InteractionCommand::Modify(ModifyTool::Trim),
+                    InteractionCommand::Modify(ModifyTool::Extend),
+                    InteractionCommand::Form(FormKind::Offset),
+                    InteractionCommand::Form(FormKind::Fillet),
+                    InteractionCommand::Dimension,
+                    InteractionCommand::Form(FormKind::Mirror),
+                    InteractionCommand::Form(FormKind::RectangularPattern),
+                    InteractionCommand::Form(FormKind::CircularPattern),
+                    InteractionCommand::Relation(constraints::Relation::Coincident),
+                    InteractionCommand::Relation(constraints::Relation::Align),
+                    InteractionCommand::Relation(constraints::Relation::Tangent),
+                    InteractionCommand::Relation(constraints::Relation::Parallel),
+                    InteractionCommand::Relation(constraints::Relation::Perpendicular),
+                    InteractionCommand::Select,
+                ] {
+                    let label = match &command {
+                        InteractionCommand::Form(t) => t.label(),
+                        InteractionCommand::Modify(t) => t.label(),
+                        InteractionCommand::Relation(t) => t.label(),
+                        InteractionCommand::Dimension => "Sketch Dimension",
+                        _ => "Select",
+                    };
+                    rows.push((label.into(), EditorCommand::Interaction(command)));
+                }
                 rows.push(("Finish sketch".into(), EditorCommand::Finish));
                 if editor.draft.tool.is_some() {
                     rows.push(("Cancel tool".into(), EditorCommand::Cancel));
@@ -721,7 +791,7 @@ pub(crate) fn synchronize_controls(
                         &mut commands,
                         camera,
                         node.clone(),
-                        InterfaceControl::button("sketch/draw", &label),
+                        InterfaceControl::button(panel::group(&command), &label),
                         theme,
                         &assets,
                     )
@@ -731,6 +801,23 @@ pub(crate) fn synchronize_controls(
                     EditorCommand::Begin(_) | EditorCommand::Edit(_) => Icon::Sketch,
                     EditorCommand::Finish | EditorCommand::Complete => Icon::Finish,
                     EditorCommand::Cancel => Icon::Cancel,
+                    EditorCommand::Interaction(command) => match command {
+                        InteractionCommand::Modify(ModifyTool::Trim) => Icon::Trim,
+                        InteractionCommand::Modify(ModifyTool::Extend) => Icon::Extend,
+                        InteractionCommand::Modify(ModifyTool::Break) => Icon::Break,
+                        InteractionCommand::Relation(relation) => Icon::Relation(relation.icon()),
+                        InteractionCommand::Dimension => Icon::Dimension,
+                        InteractionCommand::Form(kind) => match kind {
+                            FormKind::MoveCopy => Icon::MoveCopy,
+                            FormKind::Offset => Icon::Offset,
+                            FormKind::Fillet => Icon::Fillet,
+                            FormKind::Mirror => Icon::Mirror,
+                            FormKind::RectangularPattern => Icon::RectangularPattern,
+                            FormKind::CircularPattern => Icon::CircularPattern,
+                            _ => Icon::Pencil,
+                        },
+                        _ => Icon::Select,
+                    },
                     EditorCommand::Tool(tool) => match tool {
                         CreateTool::Line => Icon::Line,
                         CreateTool::MidpointLine => Icon::MidpointLine,
@@ -756,13 +843,27 @@ pub(crate) fn synchronize_controls(
             control.visible = visible;
             control.selected = match command {
                 EditorCommand::Tool(tool) => Some(editor.draft.tool == Some(tool)),
+                EditorCommand::Interaction(InteractionCommand::Modify(tool)) => {
+                    Some(editor.interaction.modify == Some(tool))
+                }
+                EditorCommand::Interaction(InteractionCommand::Relation(relation)) => {
+                    Some(editor.interaction.relation == Some(relation))
+                }
+                EditorCommand::Interaction(InteractionCommand::Form(kind)) => Some(
+                    editor
+                        .interaction
+                        .form
+                        .as_ref()
+                        .is_some_and(|f| f.kind == kind),
+                ),
                 _ => None,
             };
             control.disabled =
                 matches!(command, EditorCommand::Complete) && editor.draft.points.len() < 2;
             x += width + 2.;
         }
-        Ok(())
+        panel::synchronize(world, camera, &mut editor, area)?;
+        annotations::synchronize(world, camera, services, owner, &editor, canvas)
     })
 }
 

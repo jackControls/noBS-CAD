@@ -2,6 +2,18 @@ use super::*;
 use crate::native_viewport::interface_shell::tests::fixture;
 
 #[test]
+fn cancelling_a_form_discards_its_buffer_without_blocking_the_next_action() {
+    let (mut app, handle, entity) = editor_fixture();
+    apply_edit(app.world_mut(), entity, TextEdit::Insert("invalid".into())).unwrap();
+    app.world_mut().despawn(entity);
+    app.update();
+    assert!(commit_active(app.world_mut(), &handle).unwrap().is_none());
+    after_window_input(app.world_mut(), &handle).unwrap();
+    assert!(app.world().resource::<EditorSession>().active.is_none());
+    assert!(handle.take_actions().unwrap().is_empty());
+}
+
+#[test]
 fn mcp_backspace_edits_the_same_visible_buffer_and_enter_does_not_revert_it() {
     let (mut app, handle, entity) = editor_fixture();
     let owner = handle.frame().unwrap().context;

@@ -9,12 +9,12 @@ use interface_shell::{
 use std::collections::HashSet;
 
 #[derive(Default)]
-pub(super) struct Widgets {
+pub(crate) struct Widgets {
     controls: HashMap<String, (Entity, NativeCommand, Option<Icon>)>,
     decoration: HashMap<String, Entity>,
     live: HashSet<String>,
 }
-pub(super) fn rect(x: f32, y: f32, w: f32, h: f32) -> Node {
+pub(crate) fn rect(x: f32, y: f32, w: f32, h: f32) -> Node {
     Node {
         position_type: PositionType::Absolute,
         left: px(x),
@@ -28,11 +28,24 @@ pub(super) fn rect(x: f32, y: f32, w: f32, h: f32) -> Node {
     }
 }
 impl Widgets {
-    pub(super) fn begin(&mut self) {
+    pub(crate) fn entity(&self, key: &str) -> Option<Entity> {
+        self.controls
+            .get(key)
+            .map(|(entity, _, _)| *entity)
+            .or_else(|| self.decoration.get(key).copied())
+    }
+    pub(crate) fn parent(&self, world: &mut World, key: &str, parent: Entity) {
+        if let Some(entity) = self.entity(key) {
+            if world.get::<ChildOf>(entity).map(ChildOf::parent) != Some(parent) {
+                world.entity_mut(entity).insert(ChildOf(parent));
+            }
+        }
+    }
+    pub(crate) fn begin(&mut self) {
         self.live.clear();
     }
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn button(
+    pub(crate) fn button(
         &mut self,
         world: &mut World,
         camera: Entity,
@@ -79,6 +92,11 @@ impl Widgets {
             entity
         };
         let entry = self.controls.get_mut(key).unwrap();
+        if bounds.border != UiRect::default() {
+            world
+                .entity_mut(entity)
+                .remove::<interface_shell::InterfaceFlat>();
+        }
         if entry.1 != command {
             bind_command(world, entity, command.clone())?;
             entry.1 = command;
@@ -105,7 +123,7 @@ impl Widgets {
         }
         Ok(entity)
     }
-    pub(super) fn backdrop(
+    pub(crate) fn backdrop(
         &mut self,
         world: &mut World,
         camera: Entity,
@@ -140,7 +158,7 @@ impl Widgets {
         }
         Ok(())
     }
-    pub(super) fn panel(
+    pub(crate) fn panel(
         &mut self,
         world: &mut World,
         camera: Entity,
@@ -166,7 +184,7 @@ impl Widgets {
         }
     }
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn text(
+    pub(crate) fn text(
         &mut self,
         world: &mut World,
         camera: Entity,
@@ -199,7 +217,7 @@ impl Widgets {
             world.entity_mut(entity).insert(ZIndex(z));
         }
     }
-    pub(super) fn finish(&mut self, world: &mut World) {
+    pub(crate) fn finish(&mut self, world: &mut World) {
         self.controls.retain(|key, (entity, _, _)| {
             if self.live.contains(key) {
                 true

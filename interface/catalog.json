@@ -1091,6 +1091,7 @@
             "sketch_edit_dimension",
             "sketch_move_dimension",
             "sketch_delete_dimension",
+            "sketch_set_dimension_mode",
             "sketch_eval_expression",
             "sketch_set_dimension_style"
           ]
@@ -1350,6 +1351,7 @@
           "operations": [
             "sketch_add_constraint",
             "sketch_add_constraints",
+            "sketch_delete_constraint",
             "sketch_toggle_fix"
           ]
         },

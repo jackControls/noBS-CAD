@@ -97,6 +97,18 @@ pub(crate) enum Icon {
     ArrowRight,
     ArrowLeftToLine,
     ArrowRightToLine,
+    Trim,
+    Extend,
+    Break,
+    Dimension,
+    Select,
+    Relation(&'static str),
+    Offset,
+    Fillet,
+    MoveCopy,
+    Mirror,
+    RectangularPattern,
+    CircularPattern,
 }
 impl Icon {
     fn svg(self) -> &'static str {
@@ -141,6 +153,31 @@ impl Icon {
             Self::ArrowRight => source!("arrow-right"),
             Self::ArrowLeftToLine => source!("arrow-left-to-line"),
             Self::ArrowRightToLine => source!("arrow-right-to-line"),
+            Self::Trim => source!("trim"),
+            Self::Extend => source!("extend"),
+            Self::Break => source!("break"),
+            Self::Dimension => source!("dim"),
+            Self::Select => source!("select"),
+            Self::Offset => source!("offset"),
+            Self::Fillet => source!("fillet"),
+            Self::MoveCopy => source!("moveCopy"),
+            Self::Mirror => source!("mirror"),
+            Self::RectangularPattern => source!("rectPattern"),
+            Self::CircularPattern => source!("circPattern"),
+            Self::Relation(name) => match name {
+                "hv" => source!("hv"),
+                "coincident" => source!("coincident"),
+                "tangent" => source!("tangent"),
+                "equal" => source!("equal"),
+                "parallel" => source!("parallel"),
+                "perpendicular" => source!("perpendicular"),
+                "fix" => source!("fix"),
+                "midpointC" => source!("midpointC"),
+                "concentric" => source!("concentric"),
+                "collinear" => source!("collinear"),
+                "symmetry" => source!("symmetry"),
+                _ => unreachable!("Known relation glyph"),
+            },
         }
     }
 }
@@ -411,7 +448,13 @@ pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
         if finish { 8. } else { 13. },
         if finish { 9. } else { 5. },
         if finish { 14. } else { 22. },
-        if finish { Color::WHITE } else { theme.ink },
+        if finish {
+            Color::WHITE
+        } else if matches!(icon, Icon::Relation(_)) {
+            Color::srgb_u8(224, 120, 120)
+        } else {
+            theme.ink
+        },
     );
     if finish {
         world

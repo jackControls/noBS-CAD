@@ -134,6 +134,18 @@ fn commit_active(
     let Some(action) = world.resource::<EditorSession>().active.clone() else {
         return Ok(None);
     };
+    // Cancel may retire the entire form between events. Its discarded buffer
+    // must not block the next valid button, nor resolve against a new field.
+    if world
+        .get::<NativeTextField>(active_entity(&action))
+        .is_none_or(|field| field.binding != action.control.binding())
+        || handle
+            .frame()
+            .is_none_or(|frame| frame.context != action.context)
+    {
+        world.resource_mut::<EditorSession>().active = None;
+        return Ok(None);
+    }
     if let Err(error) = validate_editor(world, handle, &action) {
         world.resource_mut::<EditorSession>().active = None;
         return Err(error);

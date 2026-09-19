@@ -266,6 +266,15 @@ fn edit_validation_does_not_replace_the_real_handler_or_its_focus_and_commit_eve
         registry.resolve(&set("Distance", "14"), &context()),
         Err(ControlError::ReadOnly)
     );
+    let snapshot = registry.inspect().unwrap();
+    let distance = snapshot["surfaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["controls"].as_array().unwrap())
+        .find(|c| c["label"] == "Distance")
+        .unwrap();
+    assert_eq!(distance["read_only"], true);
 }
 
 #[test]

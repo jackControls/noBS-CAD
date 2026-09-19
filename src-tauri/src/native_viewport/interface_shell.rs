@@ -1013,6 +1013,19 @@ pub(crate) fn caption_size(world: &mut World, entity: Entity, size: f32) {
     }
 }
 
+/// A dimension label remains a real inspectable button, painted in the same
+/// color as its extension lines. Field/dialog styles are unaffected.
+#[cfg(feature = "dev-bevy-host")]
+pub(crate) fn dimension_label(world: &mut World, entity: Entity, color: Color) {
+    let mut style = world.get_mut::<InterfaceButtonStyle>(entity).unwrap();
+    style.0.ink = color;
+    style.0.accent = color;
+    drop(style);
+    caption_size(world, entity, 12.);
+    let label = world.get::<InterfaceLabel>(entity).unwrap().0;
+    world.entity_mut(label).insert(Node::default());
+}
+
 #[derive(Component)]
 struct DestructiveButton;
 

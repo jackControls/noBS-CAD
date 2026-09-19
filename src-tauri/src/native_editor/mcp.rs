@@ -97,9 +97,6 @@ pub(crate) fn drive(
             return Err("A native control covers that canvas point".into());
         }
     }
-    if request.gesture == Gesture::Drag {
-        return Err("Native canvas drag interaction is not migrated yet".into());
-    }
     initialize(world);
     if request.gesture == Gesture::DoubleClick
         && world.resource::<Editor>().draft.tool != Some(CreateTool::Spline)
@@ -117,17 +114,34 @@ pub(crate) fn drive(
         delta: None,
     })];
     if request.gesture != Gesture::Move {
-        for state in [ButtonState::Pressed, ButtonState::Released] {
-            events.push(WindowEvent::MouseButtonInput(MouseButtonInput {
-                button: MouseButton::Left,
-                state,
+        events.push(WindowEvent::MouseButtonInput(MouseButtonInput {
+            button: MouseButton::Left,
+            state: ButtonState::Pressed,
+            window,
+        }));
+        if request.gesture == Gesture::Drag {
+            events.push(WindowEvent::CursorMoved(CursorMoved {
                 window,
+                position: Vec2::new(end[0] as f32, end[1] as f32),
+                delta: Some(Vec2::new(
+                    (end[0] - point[0]) as f32,
+                    (end[1] - point[1]) as f32,
+                )),
             }));
         }
+        events.push(WindowEvent::MouseButtonInput(MouseButtonInput {
+            button: MouseButton::Left,
+            state: ButtonState::Released,
+            window,
+        }));
     }
     let result = (|| {
         let mut result = json!({"handled":false});
+        let mut cursor = cursor;
         for event in events {
+            if let WindowEvent::CursorMoved(moved) = &event {
+                cursor = moved.position;
+            }
             let mut input = NativeHostInput {
                 context: Some(owner.clone()),
                 cursor: Some(cursor),

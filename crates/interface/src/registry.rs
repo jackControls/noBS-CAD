@@ -155,8 +155,9 @@ impl SurfaceRegistry {
                 Field::Text {
                     value: text,
                     selection,
-                    ..
+                    read_only,
                 } => {
+                    value["read_only"] = json!(read_only);
                     if let Some(selection) = selection {
                         value["selection"] = json!(selection);
                     }

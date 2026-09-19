@@ -22,8 +22,6 @@ pub mod interface_shell;
 mod profile_outline;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod ui;
-#[cfg(feature = "dev-bevy-host")]
-pub(crate) use platform::apply_interface_viewport;
 #[cfg(all(test, feature = "dev-bevy-host"))]
 pub(crate) use platform::interface_scene_fixture;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -32,6 +30,8 @@ pub(crate) use platform::{
     interface_pick, interface_preview_revision, interface_preview_snapshot, interface_sketch_point,
     interface_view_snapshot, interface_visible_occurrences, interface_world_point,
 };
+#[cfg(feature = "dev-bevy-host")]
+pub(crate) use platform::{apply_interface_sketch_lines, apply_interface_viewport};
 #[cfg(all(
     any(target_os = "macos", target_os = "windows", target_os = "linux"),
     feature = "dev-ui-lab"
