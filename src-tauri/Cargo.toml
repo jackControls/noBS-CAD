@@ -26,7 +26,7 @@ custom-protocol = ["tauri/custom-protocol"]
 dev-ui-lab = ["bevy/bevy_log"]
 # Temporary migration host for the existing binary. Remove this switch after
 # native surface parity; it is not an additional user-facing application mode.
-dev-bevy-host = ["bevy/bevy_winit", "bevy/bevy_input_focus", "bevy/system_clipboard", "bevy/x11", "bevy/wayland", "bevy/accesskit_unix", "dep:accesskit", "dep:time"]
+dev-bevy-host = ["bevy/bevy_winit", "bevy/bevy_input_focus", "bevy/system_clipboard", "bevy/system_font_discovery", "bevy/x11", "bevy/wayland", "bevy/accesskit_unix", "dep:accesskit", "dep:time"]
 
 [[bin]]
 name = "bevy-ui-lab"

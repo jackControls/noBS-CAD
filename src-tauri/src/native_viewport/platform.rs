@@ -6294,6 +6294,34 @@ pub(crate) fn interface_preview_snapshot(world: &World) -> ViewportPreview {
     world.resource::<PreviewResource>().value.clone()
 }
 
+pub(crate) fn interface_preview_revision(world: &World) -> u64 {
+    world.resource::<PreviewResource>().revision
+}
+
+pub(crate) fn interface_pick(
+    world: &World,
+    session_id: &str,
+    point: [f32; 2],
+    purpose: NativePickPurpose,
+) -> Result<Option<NativePick>, String> {
+    let model = world.resource::<ModelResource>();
+    if model.session_id != session_id {
+        return Err("Native viewport has not bound the requested document".into());
+    }
+    let size = world.resource::<ViewportSizeResource>();
+    Ok(pick_occt_scene(
+        &model.scene,
+        world.resource::<CameraResource>().camera,
+        (size.logical_width, size.logical_height),
+        point[0],
+        point[1],
+        &world.resource::<PresentationResource>().0.hidden_body_ids,
+        &model.body_poses,
+        &model.instance_body_poses,
+        purpose,
+    ))
+}
+
 /// Apply a transient layer only under its live document's owner guard. A stale
 /// form cannot clear or restore another document's in-progress presentation.
 pub(crate) fn apply_interface_preview(
@@ -6419,6 +6447,40 @@ pub(crate) fn interface_sketch_point(
         .iter()
         .all(|value| value.is_finite())
         .then(|| nbcad_sketch::Vec2::new(point[0], point[1])))
+}
+
+/// Project through the same camera basis used for CAD picking. Coordinates are
+/// viewport-local logical pixels; the host adds its actual canvas origin.
+pub(crate) fn interface_world_point(
+    world: &World,
+    session_id: &str,
+    point: [f64; 3],
+) -> Result<Option<[f32; 2]>, String> {
+    if world.resource::<ModelResource>().session_id != session_id {
+        return Err("Native viewport has not bound the requested document".into());
+    }
+    if point.iter().any(|value| !value.is_finite()) {
+        return Err("World point must be finite".into());
+    }
+    let size = world.resource::<ViewportSizeResource>();
+    let viewport = (size.logical_width, size.logical_height);
+    let camera = world.resource::<CameraResource>().camera;
+    let Some(basis) = camera_projection(camera, viewport) else {
+        return Ok(None);
+    };
+    let offset = bevy::math::DVec3::from_array(point) - basis.origin.as_dvec3();
+    let depth = offset.dot(basis.forward.as_dvec3());
+    if depth <= 0.0 || !depth.is_finite() {
+        return Ok(None);
+    }
+    let ndc_x =
+        offset.dot(basis.right.as_dvec3()) / (depth * f64::from(basis.tangent * basis.aspect));
+    let ndc_y = offset.dot(basis.up.as_dvec3()) / (depth * f64::from(basis.tangent));
+    let pixel = [
+        ((ndc_x + 1.0) * 0.5 * f64::from(viewport.0)) as f32,
+        ((1.0 - ndc_y) * 0.5 * f64::from(viewport.1)) as f32,
+    ];
+    Ok(pixel.iter().all(|value| value.is_finite()).then_some(pixel))
 }
 
 /// The full window renders UI while the CAD cameras/picker use its inner
@@ -6725,15 +6787,21 @@ fn render_frames(app: &mut bevy::app::App, count: usize, metrics: &Arc<Mutex<Met
     }
 }
 
-/// Geometry selection and sketch-plane interaction share this projection.
-fn camera_pick_ray(
+struct CameraProjectionBasis {
+    origin: Vec3,
+    forward: Vec3,
+    right: Vec3,
+    up: Vec3,
+    tangent: f32,
+    aspect: f32,
+}
+
+fn camera_projection(
     camera: ViewportCamera,
     viewport: (f32, f32),
-    x: f32,
-    y: f32,
-) -> Option<(Vec3, Vec3, f32)> {
+) -> Option<CameraProjectionBasis> {
     if validate_camera(camera).is_err()
-        || ![viewport.0, viewport.1, x, y]
+        || ![viewport.0, viewport.1]
             .iter()
             .all(|value| value.is_finite())
         || viewport.0 <= 1.0
@@ -6749,11 +6817,36 @@ fn camera_pick_ray(
     if forward == Vec3::ZERO || right == Vec3::ZERO || up == Vec3::ZERO {
         return None;
     }
+    Some(CameraProjectionBasis {
+        origin,
+        forward,
+        right,
+        up,
+        tangent: (camera.vertical_fov_degrees.to_radians() * 0.5).tan(),
+        aspect: viewport.0 / viewport.1,
+    })
+}
 
+/// Geometry selection, world projection and sketch interaction share one basis.
+fn camera_pick_ray(
+    camera: ViewportCamera,
+    viewport: (f32, f32),
+    x: f32,
+    y: f32,
+) -> Option<(Vec3, Vec3, f32)> {
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    let CameraProjectionBasis {
+        origin,
+        forward,
+        right,
+        up,
+        tangent,
+        aspect,
+    } = camera_projection(camera, viewport)?;
     let ndc_x = x / viewport.0 * 2.0 - 1.0;
     let ndc_y = 1.0 - y / viewport.1 * 2.0;
-    let tangent = (camera.vertical_fov_degrees.to_radians() * 0.5).tan();
-    let aspect = viewport.0 / viewport.1;
     let direction = (forward + right * ndc_x * tangent * aspect + up * ndc_y * tangent).normalize();
     let world_per_pixel_factor = 2.0 * tangent / viewport.1;
     direction
@@ -7206,6 +7299,47 @@ fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "dev-bevy-host")]
+    fn world_projection_round_trips_the_actual_pick_camera_and_rejects_retired_owners() {
+        let mut app = interface_scene_fixture();
+        app.world_mut().resource_mut::<ModelResource>().session_id = "owned".into();
+        let viewport = (1280.0, 720.0);
+        *app.world_mut().resource_mut::<ViewportSizeResource>() = ViewportSizeResource {
+            logical_width: viewport.0,
+            logical_height: viewport.1,
+        };
+        for fov in [0.5_f32, 45.0, 170.0] {
+            let camera = ViewportCamera {
+                vertical_fov_degrees: fov,
+                ..default()
+            };
+            app.world_mut().resource_mut::<CameraResource>().camera = camera;
+            for pixel in [[0.0, 0.0], [640.0, 360.0], [1250.0, 690.0]] {
+                let (origin, direction, _) =
+                    camera_pick_ray(camera, viewport, pixel[0], pixel[1]).unwrap();
+                let point = (origin.as_dvec3() + direction.as_dvec3() * 300.0).to_array();
+                let actual = interface_world_point(app.world(), "owned", point)
+                    .unwrap()
+                    .unwrap();
+                assert!(
+                    (actual[0] - pixel[0]).abs() < 0.03,
+                    "{actual:?} != {pixel:?}"
+                );
+                assert!(
+                    (actual[1] - pixel[1]).abs() < 0.03,
+                    "{actual:?} != {pixel:?}"
+                );
+                let behind = (origin.as_dvec3() - direction.as_dvec3() * 300.0).to_array();
+                assert!(interface_world_point(app.world(), "owned", behind)
+                    .unwrap()
+                    .is_none());
+            }
+        }
+        assert!(interface_world_point(app.world(), "retired", [0.0; 3]).is_err());
+        assert!(interface_world_point(app.world(), "owned", [f64::NAN; 3]).is_err());
+    }
 
     #[test]
     fn live_camera_projection_matches_the_accepted_view_at_small_and_large_scales() {

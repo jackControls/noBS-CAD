@@ -1,6 +1,7 @@
 //! Native interaction state over the shared CAD engine. Unfinished gestures
 //! are scoped to one document incarnation, engine revision and active sketch.
 
+pub(crate) mod mcp;
 mod sketch;
 
 use crate::{
@@ -13,14 +14,16 @@ use crate::{
     },
     session_bridge::{
         native_interface::{
-            bind_command, controller::NativeServices, finish_mutation, NativeCommand,
+            bind_command,
+            controller::{worker, NativeServices},
+            finish_mutation, NativeCommand,
         },
         SessionBridgeState,
     },
     state::AppState,
 };
 use bevy::{ecs::system::SystemState, input::ButtonState, prelude::*, window::WindowEvent};
-use nbcad_core::PlaneRef;
+use nbcad_core::{PlaneBasis, PlaneRef};
 use nbcad_interface::{DocumentContext, Rect as InterfaceRect};
 use nbcad_sketch::{CircleMode, RectangleMode, SketchDto, SlotMode, Vec2 as SketchPoint};
 use serde_json::{json, Value};
@@ -42,6 +45,7 @@ struct Stamp {
     owner: DocumentContext,
     revision: u64,
     sketch: Option<String>,
+    basis: Option<PlaneBasis>,
 }
 
 #[derive(Resource, Default)]
@@ -70,12 +74,20 @@ fn stamp(
     engine: &AppState,
     bridge: &SessionBridgeState,
     owner: &DocumentContext,
+    prior: Option<&Stamp>,
 ) -> Result<Stamp, String> {
     bridge.with_native_document_receipt(engine, owner, |revision| {
+        if let Some(prior) =
+            prior.filter(|prior| prior.owner == *owner && prior.revision == revision)
+        {
+            return Ok(prior.clone());
+        }
+        let sketch = active(engine)?;
         Ok(Stamp {
             owner: owner.clone(),
             revision,
-            sketch: active(engine)?.map(|sketch| sketch.name),
+            basis: sketch.as_ref().map(|sketch| sketch.basis),
+            sketch: sketch.map(|sketch| sketch.name),
         })
     })
 }
@@ -119,6 +131,60 @@ fn clear_preview(
     })
 }
 
+fn preview(
+    world: &mut World,
+    services: &NativeServices,
+    owner: &DocumentContext,
+    editor: &mut Editor,
+    raw: SketchPoint,
+    ctrl: bool,
+) -> Result<(), String> {
+    use native_viewport::{
+        ViewportLineLayer, ViewportPointLayer, ViewportSnapKind, ViewportSnapMarker,
+    };
+    let Some(basis) = editor.stamp.as_ref().and_then(|stamp| stamp.basis) else {
+        return Ok(());
+    };
+    services.bridge.with_native_document_owner(&services.engine, owner, || {
+        let mut cursor = raw;
+        let mut marker = None;
+        if editor.draft.tool == Some(CreateTool::Line) {
+            let value:Value = serde_json::from_str(&services.engine.engine_call("preview_segment", &json!({
+                "from":editor.draft.points.last().copied().unwrap_or(raw), "to_raw":raw,"ctrl_held":ctrl
+            }).to_string())).map_err(|e| e.to_string())?;
+            if value["ok"] != true { return Err(format!("Line preview: {}",value["error"])); }
+            let value:nbcad_sketch::PreviewDto = serde_json::from_value(value["value"].clone()).map_err(|e| e.to_string())?;
+            cursor = value.snapped_to;
+            use nbcad_sketch::SnapTarget;
+            let kind = match value.snap {
+                SnapTarget::None => None,
+                SnapTarget::Grid => Some(ViewportSnapKind::Grid),
+                SnapTarget::Origin => Some(ViewportSnapKind::Origin),
+                SnapTarget::Point { .. } => Some(ViewportSnapKind::Point),
+                SnapTarget::Midpoint { .. } => Some(ViewportSnapKind::Midpoint),
+                SnapTarget::ReferenceMidpoint { .. } => Some(ViewportSnapKind::ReferenceMidpoint),
+                SnapTarget::Curve { .. } | SnapTarget::Intersection { .. } => Some(ViewportSnapKind::Curve),
+            };
+            marker = kind.map(|kind| ViewportSnapMarker { position:basis.to_3d([cursor.x,cursor.y]).map(|v| v as f32), kind });
+        }
+        editor.draft.cursor = Some(cursor);
+        let color = ViewportPalette::default().preview;
+        let color = [color[0],color[1],color[2],1.];
+        let segments = editor.draft.outline(cursor).into_iter().flatten()
+            .flat_map(|point| basis.to_3d([point.x,point.y]).map(|v| v as f32)).collect();
+        let (_,camera,_,size) = native_viewport::interface_view_snapshot(world);
+        let distance = Vec3::from_array(camera.position).distance(Vec3::from_array(basis.to_3d([cursor.x,cursor.y]).map(|v| v as f32)));
+        let radius = (distance * (camera.vertical_fov_degrees.to_radians()*0.5).tan() * 4. / size[1].max(1.)).max(0.01);
+        let positions = editor.draft.points.iter().chain(std::iter::once(&cursor))
+            .flat_map(|p| basis.to_3d([p.x,p.y]).map(|v| v as f32)).collect();
+        native_viewport::apply_interface_preview(world, &owner.document_id, ViewportPreview {
+            lines:vec![ViewportLineLayer { color,width:2.,segments,..default() }],
+            points:vec![ViewportPointLayer { color,radius,hollow:true,positions }],
+            marker,..default()
+        })
+    })
+}
+
 fn committed_feedback(output: &mut Value, editor: &mut Editor, followup: Result<(), String>) {
     output["committed"] = json!(true);
     if let Err(error) = followup {
@@ -141,80 +207,60 @@ pub(crate) fn execute(
     command: EditorCommand,
     validate: impl FnOnce() -> Result<(), String>,
 ) -> Result<Value, String> {
+    if worker::busy(world) {
+        return Err("Wait for the current modeling operation to finish".into());
+    }
     initialize(world);
-    let next = stamp(engine, bridge, owner)?;
+    let next = stamp(
+        engine,
+        bridge,
+        owner,
+        world.resource::<Editor>().stamp.as_ref(),
+    )?;
     world.resource_scope(|world, mut editor: Mut<Editor>| {
         synchronize_stamp(&mut editor, next);
         match command {
             EditorCommand::Begin(plane) => {
-                if active(engine)?.is_some() {
+                if editor
+                    .stamp
+                    .as_ref()
+                    .is_some_and(|stamp| stamp.sketch.is_some())
+                {
                     return Err("Finish the current sketch before starting another".into());
                 }
-                let result = bridge.apply_native_mutation_at(
-                    engine,
-                    owner,
-                    editor.stamp.as_ref().unwrap().revision,
+                validate()?;
+                queue_mutation(
+                    world,
+                    editor.stamp.as_ref().unwrap().clone(),
                     "sketch_begin",
-                    &json!({"plane":plane}),
-                    validate,
-                )?;
-                let mut output = finish_mutation(engine, bridge, world, "sketch_begin", result);
-                editor.draft.select(None);
-                // Look directly at the resolved support plane (including
-                // face/datum planes), with the plane's v-axis upright.
-                let followup = (|| {
-                    editor.stamp = Some(stamp(engine, bridge, owner)?);
-                    bridge.with_native_document_owner(engine, owner, || {
-                        let Some(sketch) = active(engine)? else {
-                            return Err("The new sketch is no longer active".into());
-                        };
-                        let (_, camera, _, _) = native_viewport::interface_view_snapshot(world);
-                        let center = Vec3::from_array(sketch.basis.origin.map(|v| v as f32));
-                        let normal = Vec3::from_array(sketch.basis.normal.map(|v| v as f32));
-                        let distance = Vec3::from_array(camera.position)
-                            .distance(Vec3::from_array(camera.target))
-                            .max(100.);
-                        let camera = ViewportCamera {
-                            position: (center + normal * distance).to_array(),
-                            target: center.to_array(),
-                            up: sketch.basis.v.map(|v| v as f32),
-                            ..camera
-                        };
-                        native_viewport::apply_interface_view(
-                            world,
-                            &owner.document_id,
-                            Some(camera),
-                            None,
-                        )
-                    })
-                })();
-                committed_feedback(&mut output, &mut editor, followup);
-                Ok(output)
+                    json!({"plane":plane}),
+                    Completion::Begin,
+                )
             }
             EditorCommand::Finish => {
-                if active(engine)?.is_none() {
+                if editor
+                    .stamp
+                    .as_ref()
+                    .is_none_or(|stamp| stamp.sketch.is_none())
+                {
                     return Err("There is no sketch to finish".into());
                 }
-                let result = bridge.apply_native_mutation_at(
-                    engine,
-                    owner,
-                    editor.stamp.as_ref().unwrap().revision,
+                validate()?;
+                queue_mutation(
+                    world,
+                    editor.stamp.as_ref().unwrap().clone(),
                     "sketch_finish",
-                    &json!({}),
-                    validate,
-                )?;
-                let mut output = finish_mutation(engine, bridge, world, "sketch_finish", result);
-                editor.draft.select(None);
-                let followup = (|| {
-                    editor.stamp = Some(stamp(engine, bridge, owner)?);
-                    clear_preview(world, engine, bridge, owner)
-                })();
-                committed_feedback(&mut output, &mut editor, followup);
-                Ok(output)
+                    json!({}),
+                    Completion::Finish,
+                )
             }
             EditorCommand::Tool(tool) => {
                 bridge.with_native_document_owner(engine, owner, validate)?;
-                if active(engine)?.is_none() {
+                if editor
+                    .stamp
+                    .as_ref()
+                    .is_none_or(|stamp| stamp.sketch.is_none())
+                {
                     return Err("Start or edit a sketch to draw geometry".into());
                 }
                 editor.draft.select(Some(tool));
@@ -247,8 +293,8 @@ pub(crate) fn execute(
 
 fn commit(
     world: &mut World,
-    engine: &AppState,
-    bridge: &SessionBridgeState,
+    _engine: &AppState,
+    _bridge: &SessionBridgeState,
     editor: &mut Editor,
     command: Prepared,
     validate: impl FnOnce() -> Result<(), String>,
@@ -256,28 +302,105 @@ fn commit(
     let expected = editor
         .stamp
         .as_ref()
-        .ok_or("Sketch gesture has no document owner")?;
-    let result = bridge.apply_native_mutation_at(
-        engine,
-        &expected.owner,
-        expected.revision,
+        .ok_or("Sketch gesture has no document owner")?
+        .clone();
+    validate()?;
+    queue_mutation(
+        world,
+        expected,
         command.operation,
-        &command.arguments,
-        validate,
-    )?;
-    let owner = result.context.clone();
-    let accepted = editor.draft.accepted(&result.value);
-    let mut output = finish_mutation(engine, bridge, world, command.operation, result);
-    // The kernel has committed even if later renderer/publication work fails.
-    // Advance the gesture stamp before reporting such feedback; never repeat
-    // a committed operation merely because its presentation needs recovery.
-    let followup = (|| {
-        editor.stamp = Some(stamp(engine, bridge, &owner)?);
-        accepted?;
-        clear_preview(world, engine, bridge, &owner)
-    })();
-    committed_feedback(&mut output, editor, followup);
-    Ok(output)
+        command.arguments,
+        Completion::Primitive,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum Completion {
+    Begin,
+    Finish,
+    Primitive,
+}
+
+fn queue_mutation(
+    world: &mut World,
+    expected: Stamp,
+    operation: &'static str,
+    arguments: Value,
+    kind: Completion,
+) -> Result<Value, String> {
+    worker::enqueue_operation(
+        world,
+        expected.owner.clone(),
+        expected.revision,
+        operation.into(),
+        arguments,
+        move |world, services, result| {
+            let engine = &services.engine;
+            let bridge = &services.bridge;
+            world.resource_scope(|world, mut editor: Mut<Editor>| {
+                let result = match result {
+                    Ok(result) => result,
+                    Err(error) => {
+                        // A rejected primitive retains its original picks.
+                        editor.error = error.clone();
+                        return Err(error);
+                    }
+                };
+                let owner = result.context.clone();
+                let same_gesture = editor.stamp.as_ref() == Some(&expected);
+                let accepted = if same_gesture {
+                    match kind {
+                        Completion::Primitive => editor.draft.accepted(&result.value),
+                        Completion::Begin | Completion::Finish => {
+                            editor.draft.select(None);
+                            Ok(())
+                        }
+                    }
+                } else {
+                    Err("The sketch interaction changed while modeling finished".into())
+                };
+                let mut output = finish_mutation(engine, bridge, world, operation, result);
+                // Once geometry committed, follow-up failures are presentation
+                // feedback. They never become a failed mutation to retry.
+                let followup = (|| {
+                    accepted?;
+                    editor.stamp = Some(stamp(engine, bridge, &owner, None)?);
+                    if matches!(kind, Completion::Begin) {
+                        look_at_sketch(world, engine, bridge, &owner)?;
+                    }
+                    clear_preview(world, engine, bridge, &owner)
+                })();
+                committed_feedback(&mut output, &mut editor, followup);
+                Ok(output)
+            })
+        },
+    )
+}
+
+fn look_at_sketch(
+    world: &mut World,
+    engine: &AppState,
+    bridge: &SessionBridgeState,
+    owner: &DocumentContext,
+) -> Result<(), String> {
+    bridge.with_native_document_owner(engine, owner, || {
+        let Some(sketch) = active(engine)? else {
+            return Err("The new sketch is no longer active".into());
+        };
+        let (_, camera, _, _) = native_viewport::interface_view_snapshot(world);
+        let center = Vec3::from_array(sketch.basis.origin.map(|v| v as f32));
+        let normal = Vec3::from_array(sketch.basis.normal.map(|v| v as f32));
+        let distance = Vec3::from_array(camera.position)
+            .distance(Vec3::from_array(camera.target))
+            .max(100.);
+        let camera = ViewportCamera {
+            position: (center + normal * distance).to_array(),
+            target: center.to_array(),
+            up: sketch.basis.v.map(|v| v as f32),
+            ..camera
+        };
+        native_viewport::apply_interface_view(world, &owner.document_id, Some(camera), None)
+    })
 }
 
 /// Called by the central controller in original OS event order, interleaved
@@ -287,28 +410,54 @@ pub(crate) fn process_one(
     handle: &NativeInterfaceHandle,
     services: &NativeServices,
     event: &NativeHostInput,
-) -> Result<(), String> {
+) -> Result<Value, String> {
+    if worker::busy(world) {
+        return Err("Wait for the current modeling operation to finish".into());
+    }
     initialize(world);
     let Some(frame) = handle.frame() else {
-        return Ok(());
+        return Ok(json!({"handled":false}));
     };
-    let next = stamp(&services.engine, &services.bridge, &frame.context)?;
+    let next = stamp(
+        &services.engine,
+        &services.bridge,
+        &frame.context,
+        world.resource::<Editor>().stamp.as_ref(),
+    )?;
     world.resource_scope(|world, mut editor: Mut<Editor>| {
         synchronize_stamp(&mut editor, next);
+        let mut result = json!({"handled":false});
         if !frame.modal_stack.is_empty() {
             editor.press = None;
-            return Ok(());
+            return Ok(result);
         }
         if event.context.as_ref() != Some(&frame.context) {
             editor.press = None;
-            return Ok(());
+            return Ok(result);
         }
         match &event.event {
             WindowEvent::WindowFocused(event) if !event.focused => {
                 editor.press = None;
+                clear_preview(world, &services.engine, &services.bridge, &frame.context)?;
             }
             WindowEvent::CursorLeft(_) => {
                 editor.press = None;
+                clear_preview(world, &services.engine, &services.bridge, &frame.context)?;
+            }
+            WindowEvent::CursorMoved(event) if editor.draft.tool.is_some() => {
+                let Some(basis) = editor.stamp.as_ref().and_then(|stamp| stamp.basis) else { return Ok(result); };
+                let Some(canvas) = frame.canvases.iter().find(|canvas| canvas.name == "viewport") else { return Ok(result); };
+                let cursor = event.position;
+                if f64::from(cursor.x) < canvas.bounds.x || f64::from(cursor.x) >= canvas.bounds.x+canvas.bounds.width
+                    || f64::from(cursor.y) < canvas.bounds.y || f64::from(cursor.y) >= canvas.bounds.y+canvas.bounds.height {
+                    clear_preview(world, &services.engine, &services.bridge, &frame.context)?;
+                    return Ok(result);
+                }
+                if let Some(point) = native_viewport::interface_sketch_point(world, &frame.context.document_id,
+                    [cursor.x-canvas.bounds.x as f32,cursor.y-canvas.bounds.y as f32],basis)? {
+                    preview(world,services,&frame.context,&mut editor,point,event.modifiers.ctrl)?;
+                    result = json!({"handled":true,"preview":true,"instruction":editor.draft.instruction()});
+                }
             }
             WindowEvent::KeyboardInput(key)
                 if key.state == ButtonState::Pressed
@@ -323,10 +472,11 @@ pub(crate) fn process_one(
                         editor.error.clear();
                         editor.press = None;
                         clear_preview(world, &services.engine, &services.bridge, &frame.context)?;
+                        result = json!({"handled":true,"cancelled":true});
                     }
                     KeyCode::Enter | KeyCode::NumpadEnter => match editor.draft.complete() {
                         Ok(Some(command)) => {
-                            if let Err(error) = commit(
+                            match commit(
                                 world,
                                 &services.engine,
                                 &services.bridge,
@@ -334,10 +484,11 @@ pub(crate) fn process_one(
                                 command,
                                 || Ok(()),
                             ) {
-                                editor.error = error;
+                                Ok(value) => result = value,
+                                Err(error) => { editor.error = error.clone(); return Err(error); }
                             }
                         }
-                        Err(error) => editor.error = error,
+                        Err(error) => { editor.error = error.clone(); return Err(error); }
                         _ => {}
                     },
                     _ => {}
@@ -346,14 +497,14 @@ pub(crate) fn process_one(
             WindowEvent::MouseButtonInput(button) if button.button == MouseButton::Left => {
                 let Some(cursor) = event.cursor else {
                     editor.press = None;
-                    return Ok(());
+                    return Ok(result);
                 };
                 let Some(canvas) = frame
                     .canvases
                     .iter()
                     .find(|canvas| canvas.name == "viewport")
                 else {
-                    return Ok(());
+                    return Ok(result);
                 };
                 let in_canvas = f64::from(cursor.x) >= canvas.bounds.x
                     && f64::from(cursor.x) < canvas.bounds.x + canvas.bounds.width
@@ -363,14 +514,17 @@ pub(crate) fn process_one(
                     editor.press = in_canvas.then(|| (frame.context.clone(), cursor));
                 } else {
                     let Some((owner, start)) = editor.press.take() else {
-                        return Ok(());
+                        return Ok(result);
                     };
                     if owner != frame.context || !in_canvas || start.distance(cursor) > 3. {
-                        return Ok(());
+                        return Ok(result);
                     }
-                    let Some(sketch) = active(&services.engine)? else {
-                        return Ok(());
+                    let Some(basis) = editor.stamp.as_ref().and_then(|stamp| stamp.basis) else {
+                        return Ok(result);
                     };
+                    if editor.draft.tool.is_none() {
+                        return Ok(result);
+                    }
                     let point = native_viewport::interface_sketch_point(
                         world,
                         &owner.document_id,
@@ -378,12 +532,12 @@ pub(crate) fn process_one(
                             cursor.x - canvas.bounds.x as f32,
                             cursor.y - canvas.bounds.y as f32,
                         ],
-                        sketch.basis,
+                        basis,
                     )?;
                     if let Some(point) = point {
                         match editor.draft.prepare(point, event.modifiers.ctrl) {
                             Ok(Some(command)) => {
-                                if let Err(error) = commit(
+                                match commit(
                                     world,
                                     &services.engine,
                                     &services.bridge,
@@ -391,18 +545,23 @@ pub(crate) fn process_one(
                                     command,
                                     || Ok(()),
                                 ) {
-                                    editor.error = error;
+                                    Ok(value) => result = value,
+                                    Err(error) => { editor.error = error.clone(); return Err(error); }
                                 }
                             }
-                            Ok(None) => editor.error.clear(),
-                            Err(error) => editor.error = error,
+                            Ok(None) => {
+                                editor.error.clear();
+                                preview(world,services,&owner,&mut editor,point,event.modifiers.ctrl)?;
+                                result = json!({"handled":true,"picks":editor.draft.points.len(),"instruction":editor.draft.instruction()});
+                            }
+                            Err(error) => { editor.error = error.clone(); return Err(error); }
                         }
                     }
                 }
             }
             _ => {}
         }
-        Ok(())
+        Ok(result)
     })
 }
 
@@ -413,8 +572,16 @@ pub(crate) fn synchronize_controls(
     owner: &DocumentContext,
     area: InterfaceRect,
 ) -> Result<(), String> {
+    if worker::busy(world) {
+        return Ok(());
+    }
     initialize(world);
-    let next = stamp(&services.engine, &services.bridge, owner)?;
+    let next = stamp(
+        &services.engine,
+        &services.bridge,
+        owner,
+        world.resource::<Editor>().stamp.as_ref(),
+    )?;
     let mut cameras = world.query_filtered::<Entity, With<InterfaceCamera>>();
     let Ok(camera) = cameras.single(world) else {
         return Ok(());
@@ -541,6 +708,7 @@ mod tests {
             owner: owner.clone(),
             revision: 2,
             sketch: Some("Sketch1".into()),
+            basis: None,
         };
         synchronize_stamp(&mut editor, original.clone());
         editor.draft.select(Some(CreateTool::Line));

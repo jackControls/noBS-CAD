@@ -12,8 +12,12 @@ use bevy::{
     window::{Ime, PrimaryWindow, WindowEvent},
 };
 use nbcad_interface::{ControlInput, ControlKey, Field};
+use std::collections::VecDeque;
 
-use super::{InterfaceControl, InterfaceLayout, NativeInterfaceAction, NativeInterfaceHandle};
+use super::{
+    InterfaceControl, InterfaceLayout, InterfaceTextRevision, NativeInterfaceAction,
+    NativeInterfaceHandle,
+};
 use crate::native_viewport::{
     ui::{ViewportUiAssets, ViewportUiTheme},
     winit_host::Modifiers,
@@ -23,6 +27,8 @@ use crate::native_viewport::{
 pub(crate) struct NativeTextField {
     baseline: String,
     queued: Option<String>,
+    undo: VecDeque<String>,
+    redo: VecDeque<String>,
     binding: u64,
     theme: ViewportUiTheme,
 }
@@ -63,10 +69,13 @@ pub(crate) fn spawn_text_field(
             NativeTextField {
                 baseline: value.clone(),
                 queued: None,
+                undo: VecDeque::new(),
+                redo: VecDeque::new(),
                 binding: control.binding,
                 theme,
             },
             EditableText::new(value),
+            InterfaceTextRevision::default(),
             control,
             node,
             UiTargetCamera(camera),
@@ -102,6 +111,12 @@ fn flush_edits(world: &mut World) -> Result<(), String> {
     world
         .run_system_cached(bevy::text::apply_text_edits)
         .map_err(|error| format!("Native text edit failed: {error}"))
+}
+
+fn invalidate_text(world: &mut World, entity: Entity) {
+    if let Some(mut revision) = world.get_mut::<InterfaceTextRevision>(entity) {
+        revision.0 = revision.0.wrapping_add(1);
+    }
 }
 
 /// Flush before changing focus, including background clicks and Tab. This
@@ -175,6 +190,7 @@ pub(crate) fn acknowledge_control_input(
                     editor.queue_edit(TextEdit::TextEnd(false));
                 }
             }
+            invalidate_text(world, entity);
         }
     }
 }
@@ -196,16 +212,182 @@ pub(crate) fn prepare_control_input(
     }
     // A direct SetValue on the current field replaces its draft; committing
     // that old draft immediately before it would create an unnecessary edit.
-    if matches!(action.control.input, ControlInput::SetValue(_))
-        && world
-            .resource::<EditorSession>()
-            .active
-            .as_ref()
-            .is_some_and(|active| active.control.key == action.control.key)
+    if world
+        .resource::<EditorSession>()
+        .active
+        .as_ref()
+        .is_some_and(|active| active.control.key == action.control.key)
     {
         return Ok(Vec::new());
     }
     Ok(commit_active(world, handle)?.into_iter().collect())
+}
+
+/// Widget keys use the same edit operations regardless of their transport.
+/// Escape belongs to the owning form; arrows merely update caret/selection.
+pub(crate) fn adapt_control_input(
+    world: &mut World,
+    handle: &NativeInterfaceHandle,
+    action: &NativeInterfaceAction,
+) -> Result<Option<NativeInterfaceAction>, String> {
+    let entity = active_entity(action);
+    let ControlInput::Key(chord) = &action.control.input else {
+        return Ok(Some(action.clone()));
+    };
+    if world.get::<NativeTextField>(entity).is_none() || chord.key == "Escape" {
+        return Ok(Some(action.clone()));
+    }
+    validate_editor(world, handle, action)?;
+    if chord.key == "Enter" {
+        return commit_active(world, handle);
+    }
+    let logical_key = match chord.key.as_str() {
+        "ArrowLeft" => Key::ArrowLeft,
+        "ArrowRight" => Key::ArrowRight,
+        "ArrowUp" => Key::ArrowUp,
+        "ArrowDown" => Key::ArrowDown,
+        "Home" => Key::Home,
+        "End" => Key::End,
+        "Backspace" => Key::Backspace,
+        "Delete" => Key::Delete,
+        _ => return Ok(Some(action.clone())),
+    };
+    let modifiers = Modifiers {
+        ctrl: chord.ctrl,
+        meta: chord.meta,
+        alt: chord.alt,
+        shift: chord.shift,
+        alt_graph: false,
+    };
+    if let Some(edit) = logical_edit(&logical_key, None, modifiers) {
+        apply_edit(world, entity, edit)?;
+    }
+    handle.invalidate_presentation();
+    commit_active(world, handle)
+}
+
+fn changes_value(edit: &TextEdit) -> bool {
+    matches!(
+        edit,
+        TextEdit::Insert(_)
+            | TextEdit::Backspace
+            | TextEdit::BackspaceWord
+            | TextEdit::Delete
+            | TextEdit::DeleteWord
+            | TextEdit::Cut
+            | TextEdit::Paste
+            | TextEdit::ImeCommit { .. }
+    )
+}
+
+fn trim_history(field: &mut NativeTextField) {
+    const MAX_HISTORY_BYTES: usize = 8 * 1024 * 1024;
+    while field.undo.len() + field.redo.len() > 128
+        || field
+            .undo
+            .iter()
+            .chain(&field.redo)
+            .map(String::len)
+            .sum::<usize>()
+            > MAX_HISTORY_BYTES
+    {
+        if field.undo.pop_front().is_none() {
+            field.redo.pop_front();
+        }
+    }
+}
+
+fn apply_edit(world: &mut World, entity: Entity, edit: TextEdit) -> Result<(), String> {
+    let read_only = matches!(
+        world
+            .get::<InterfaceControl>(entity)
+            .map(|control| &control.field),
+        Some(Field::Text {
+            read_only: true,
+            ..
+        })
+    );
+    if read_only && changes_value(&edit) {
+        return Ok(());
+    }
+    let before = changes_value(&edit).then(|| {
+        world
+            .get::<EditableText>(entity)
+            .unwrap()
+            .value()
+            .to_string()
+    });
+    world
+        .get_mut::<EditableText>(entity)
+        .ok_or("Native text editor was removed")?
+        .queue_edit(edit);
+    flush_edits(world)?;
+    invalidate_text(world, entity);
+    if let Some(before) = before {
+        if world
+            .get::<EditableText>(entity)
+            .unwrap()
+            .value()
+            .to_string()
+            != before
+        {
+            let mut field = world
+                .get_mut::<NativeTextField>(entity)
+                .ok_or("Native text field was removed")?;
+            field.undo.push_back(before);
+            field.redo.clear();
+            trim_history(&mut field);
+        }
+    }
+    Ok(())
+}
+
+fn history_edit(world: &mut World, entity: Entity, redo: bool) -> Result<(), String> {
+    if matches!(
+        world
+            .get::<InterfaceControl>(entity)
+            .map(|control| &control.field),
+        Some(Field::Text {
+            read_only: true,
+            ..
+        })
+    ) {
+        return Ok(());
+    }
+    flush_edits(world)?;
+    let current = world
+        .get::<EditableText>(entity)
+        .ok_or("Native editor was removed")?
+        .value()
+        .to_string();
+    let mut field = world
+        .get_mut::<NativeTextField>(entity)
+        .ok_or("Native field was removed")?;
+    let Some(value) = (if redo {
+        &mut field.redo
+    } else {
+        &mut field.undo
+    })
+    .pop_back() else {
+        return Ok(());
+    };
+    if redo {
+        field.undo.push_back(current);
+    } else {
+        field.redo.push_back(current);
+    }
+    trim_history(&mut field);
+    drop(field);
+    let mut editor = world
+        .get_mut::<EditableText>(entity)
+        .ok_or("Native editor was removed")?;
+    editor.editor.set_text(&value);
+    editor.pending_edits.clear();
+    editor.queue_edit(TextEdit::TextEnd(false));
+    drop(editor);
+    flush_edits(world)?;
+    invalidate_text(world, entity);
+    Ok(())
 }
 
 /// Called for every original OS event before general UI/model routing. This
@@ -246,6 +428,28 @@ pub(crate) fn before_window_input(
         WindowEvent::KeyboardInput(input) if input.state == ButtonState::Pressed => {
             if composing {
                 return Ok(true);
+            }
+            let command = !modifiers.alt_graph
+                && !modifiers.alt
+                && if cfg!(target_os = "macos") {
+                    modifiers.meta
+                } else {
+                    modifiers.ctrl
+                };
+            if command {
+                if let Key::Character(key) = &input.logical_key {
+                    if key.eq_ignore_ascii_case("z")
+                        || (!cfg!(target_os = "macos") && key.eq_ignore_ascii_case("y"))
+                    {
+                        history_edit(
+                            world,
+                            entity,
+                            modifiers.shift || key.eq_ignore_ascii_case("y"),
+                        )?;
+                        handle.invalidate_presentation();
+                        return Ok(true);
+                    }
+                }
             }
             if input.logical_key == Key::Tab || input.logical_key == Key::Enter {
                 if let Some(commit) = commit_active(world, handle)? {
@@ -302,14 +506,10 @@ pub(crate) fn before_window_input(
                     | TextEdit::TextEnd(_)
             )
         {
-            world
-                .get_mut::<EditableText>(entity)
-                .ok_or("Native text editor was removed")?
-                .queue_edit(edit);
+            apply_edit(world, entity, edit)?;
             // IME composition state must be current before the next native
             // event in this same batch, especially Tab/Enter.
-            flush_edits(world)?;
-            handle.request_redraw();
+            handle.invalidate_presentation();
         }
         return Ok(true);
     }
@@ -398,22 +598,29 @@ pub(crate) fn after_pointer_input(
         .ok_or("Native text editor was removed")?
         .queue_edit(edit);
     flush_edits(world)?;
+    invalidate_text(world, entity);
     Ok(())
 }
 
 fn keyboard_edit(input: &KeyboardInput, modifiers: Modifiers) -> Option<TextEdit> {
-    let command = if cfg!(target_os = "macos") {
-        modifiers.meta
-    } else {
-        modifiers.ctrl
-    };
+    logical_edit(&input.logical_key, input.text.as_deref(), modifiers)
+}
+
+fn logical_edit(key: &Key, text: Option<&str>, modifiers: Modifiers) -> Option<TextEdit> {
+    let command = !modifiers.alt_graph
+        && !modifiers.alt
+        && if cfg!(target_os = "macos") {
+            modifiers.meta
+        } else {
+            modifiers.ctrl
+        };
     let word = if cfg!(target_os = "macos") {
         modifiers.alt
     } else {
         modifiers.ctrl
     };
     let shift = modifiers.shift;
-    match &input.logical_key {
+    match key {
         Key::Character(value) if command && value.eq_ignore_ascii_case("a") => {
             Some(TextEdit::SelectAll)
         }
@@ -435,12 +642,16 @@ fn keyboard_edit(input: &KeyboardInput, modifiers: Modifiers) -> Option<TextEdit
         } else {
             TextEdit::Delete
         }),
-        Key::ArrowLeft => Some(if word {
+        Key::ArrowLeft => Some(if cfg!(target_os = "macos") && command {
+            TextEdit::HardLineStart(shift)
+        } else if word {
             TextEdit::WordLeft(shift)
         } else {
             TextEdit::Left(shift)
         }),
-        Key::ArrowRight => Some(if word {
+        Key::ArrowRight => Some(if cfg!(target_os = "macos") && command {
+            TextEdit::HardLineEnd(shift)
+        } else if word {
             TextEdit::WordRight(shift)
         } else {
             TextEdit::Right(shift)
@@ -465,8 +676,13 @@ fn keyboard_edit(input: &KeyboardInput, modifiers: Modifiers) -> Option<TextEdit
         } else {
             TextEdit::LineEnd(shift)
         }),
-        Key::Character(_) | Key::Space if !modifiers.ctrl && !modifiers.meta && !modifiers.alt => {
-            input.text.clone().map(TextEdit::Insert)
+        Key::Character(_) | Key::Space
+            if modifiers.alt_graph
+                || (!modifiers.ctrl
+                    && !modifiers.meta
+                    && (!modifiers.alt || cfg!(target_os = "macos"))) =>
+        {
+            text.map(|value| TextEdit::Insert(value.into()))
         }
         _ => None,
     }
@@ -480,6 +696,7 @@ fn synchronize_fields(
         &InterfaceControl,
         &mut NativeTextField,
         &mut EditableText,
+        &mut InterfaceTextRevision,
         &mut Node,
         &mut BorderColor,
     )>,
@@ -494,7 +711,8 @@ fn synchronize_fields(
             bevy::input_focus::FocusCause::Navigated,
         );
     }
-    for (entity, control, mut field, mut editor, mut node, mut border) in &mut fields {
+    for (entity, control, mut field, mut editor, mut revision, mut node, mut border) in &mut fields
+    {
         let Field::Text { value, .. } = &control.field else {
             continue;
         };
@@ -505,6 +723,9 @@ fn synchronize_fields(
             field.baseline.clone_from(value);
             field.binding = control.binding;
             field.queued = None;
+            field.undo.clear();
+            field.redo.clear();
+            revision.0 = revision.0.wrapping_add(1);
         }
         let display = if control.visible {
             Display::Flex

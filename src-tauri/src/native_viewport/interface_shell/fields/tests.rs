@@ -1,6 +1,81 @@
 use super::*;
 use crate::native_viewport::interface_shell::tests::fixture;
 
+#[test]
+fn mcp_backspace_edits_the_same_visible_buffer_and_enter_does_not_revert_it() {
+    let (mut app, handle, entity) = editor_fixture();
+    let owner = handle.frame().unwrap().context;
+    let action = handle
+        .resolve_input(
+            ControlKey(entity.to_bits()),
+            ControlInput::Key(nbcad_interface::KeyChord::plain("Backspace")),
+            &owner,
+        )
+        .unwrap();
+    let normalized = adapt_control_input(app.world_mut(), &handle, &action)
+        .unwrap()
+        .unwrap();
+    assert_eq!(normalized.control.input, ControlInput::SetValue("1".into()));
+    acknowledge_control_input(app.world_mut(), &normalized, true);
+    let enter = handle
+        .resolve_input(
+            ControlKey(entity.to_bits()),
+            ControlInput::Key(nbcad_interface::KeyChord::plain("Enter")),
+            &owner,
+        )
+        .unwrap();
+    assert!(adapt_control_input(app.world_mut(), &handle, &enter)
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        app.world()
+            .get::<EditableText>(entity)
+            .unwrap()
+            .value()
+            .to_string(),
+        "1"
+    );
+}
+
+#[test]
+fn field_undo_redo_changes_only_its_draft_and_new_input_discards_redo() {
+    let (mut app, _handle, entity) = editor_fixture();
+    apply_edit(app.world_mut(), entity, TextEdit::Insert("3".into())).unwrap();
+    history_edit(app.world_mut(), entity, false).unwrap();
+    assert_eq!(
+        app.world()
+            .get::<EditableText>(entity)
+            .unwrap()
+            .value()
+            .to_string(),
+        "12"
+    );
+    history_edit(app.world_mut(), entity, true).unwrap();
+    assert_eq!(
+        app.world()
+            .get::<EditableText>(entity)
+            .unwrap()
+            .value()
+            .to_string(),
+        "123"
+    );
+    history_edit(app.world_mut(), entity, false).unwrap();
+    apply_edit(app.world_mut(), entity, TextEdit::Insert("4".into())).unwrap();
+    history_edit(app.world_mut(), entity, true).unwrap();
+    assert_eq!(
+        app.world()
+            .get::<EditableText>(entity)
+            .unwrap()
+            .value()
+            .to_string(),
+        "124"
+    );
+    assert_eq!(
+        app.world().get::<NativeTextField>(entity).unwrap().baseline,
+        "12"
+    );
+}
+
 fn editor_fixture() -> (App, NativeInterfaceHandle, Entity) {
     let (mut app, handle, entity, _) = fixture();
     app.add_plugins((
@@ -21,10 +96,13 @@ fn editor_fixture() -> (App, NativeInterfaceHandle, Entity) {
     drop(control);
     app.world_mut().entity_mut(entity).insert((
         EditableText::new(&value),
+        InterfaceTextRevision::default(),
         ComputedUiRenderTargetInfo::default(),
         NativeTextField {
             baseline: value,
             queued: None,
+            undo: VecDeque::new(),
+            redo: VecDeque::new(),
             binding: 1,
             theme: ViewportUiTheme::from_palette(&default()),
         },

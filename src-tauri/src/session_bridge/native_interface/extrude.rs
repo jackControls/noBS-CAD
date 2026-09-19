@@ -19,9 +19,16 @@ use crate::{
 
 pub(crate) use crate::native_forms::{ExtrudeField, ExtrudeFieldView};
 
+mod apply;
 mod preview;
+#[cfg(feature = "dev-bevy-host")]
+pub(crate) mod panel;
+#[cfg(feature = "dev-bevy-host")]
+mod picking;
+#[cfg(feature = "dev-bevy-host")]
+pub(crate) use picking::handle_canvas_pick;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ExtrudeCommand {
     Open {
         feature_id: Option<u64>,
@@ -32,11 +39,12 @@ pub(crate) enum ExtrudeCommand {
     },
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExtrudeControl {
     Field(ExtrudeField),
     Pick(ExtrudeField),
     Clear(ExtrudeField),
+    Choose { field: ExtrudeField, option: usize },
     Apply,
     Cancel,
 }
@@ -59,6 +67,7 @@ pub(crate) struct ExtrudePanel {
     pub error: Option<String>,
     pub preview_notice: Option<String>,
     pub pick_target: Option<ExtrudeField>,
+    pub choice_field: Option<ExtrudeField>,
 }
 
 struct Snapshot {
@@ -126,8 +135,10 @@ struct Editor {
     form: ExtrudeForm,
     snapshot: Snapshot,
     previous_preview: ViewportPreview,
+    preview_revision: u64,
     preview_notice: Option<String>,
     pick_target: Option<ExtrudeField>,
+    choice_field: Option<ExtrudeField>,
 }
 
 #[derive(Resource, Default)]
@@ -178,6 +189,7 @@ pub(crate) fn panel(world: &World) -> Option<ExtrudePanel> {
         error: editor.form.engine_error().map(str::to_owned),
         preview_notice: editor.preview_notice.clone(),
         pick_target: editor.pick_target,
+        choice_field: editor.choice_field,
     })
 }
 
@@ -196,12 +208,14 @@ pub(crate) fn synchronize(
             .as_ref()
             .is_some_and(|editor| editor.snapshot.receipt != receipt)
         {
-            state.editor = None;
-            native_viewport::apply_interface_preview(
-                world,
-                &owner.document_id,
-                ViewportPreview::default(),
-            )?;
+            let editor = state.editor.take().unwrap();
+            if native_viewport::interface_preview_revision(world) == editor.preview_revision {
+                native_viewport::apply_interface_preview(
+                    world,
+                    &owner.document_id,
+                    ViewportPreview::default(),
+                )?;
+            }
         }
         Ok(())
     });
@@ -222,6 +236,7 @@ fn update_preview(editor: &mut Editor, world: &mut World) -> Result<(), String> 
         Err(_) => (ViewportPreview::default(), None),
     };
     native_viewport::apply_interface_preview(world, &model.owner.document_id, next)?;
+    editor.preview_revision = native_viewport::interface_preview_revision(world);
     editor.preview_notice = notice;
     Ok(())
 }
@@ -320,6 +335,25 @@ pub(crate) fn reduce(
     input: &ControlInput,
     validate_control: impl FnOnce() -> Result<(), String>,
 ) -> Result<Value, String> {
+    if matches!(input, ControlInput::Key(key) if key.key == "Escape" && !key.ctrl && !key.meta && !key.alt && !key.shift)
+    {
+        if let ExtrudeCommand::Control { form_id, .. } = command {
+            // The focused field's original binding/owner still authorize
+            // this input; Escape closes that same form, not a later editor.
+            return reduce(
+                engine,
+                bridge,
+                world,
+                owner,
+                &ExtrudeCommand::Control {
+                    form_id: *form_id,
+                    action: ExtrudeControl::Cancel,
+                },
+                &ControlInput::Click,
+                validate_control,
+            );
+        }
+    }
     let field_edit = matches!(
         command,
         ExtrudeCommand::Control {
@@ -330,7 +364,7 @@ pub(crate) fn reduce(
     if (field_edit
         && !matches!(
             input,
-            ControlInput::SetValue(_) | ControlInput::Click | ControlInput::DoubleClick
+            ControlInput::SetValue(_) | ControlInput::Click | ControlInput::DoubleClick | ControlInput::Key(_)
         ))
         || (!field_edit && !super::is_activation(input))
     {
@@ -399,8 +433,10 @@ fn reduce_owned(
                 form,
                 snapshot,
                 previous_preview: native_viewport::interface_preview_snapshot(world),
+                preview_revision: native_viewport::interface_preview_revision(world),
                 preview_notice: None,
                 pick_target: Some(ExtrudeField::Source),
+                choice_field: None,
             };
             if feature_id.is_none() {
                 if let Some(pick) = selected_source(world)? {
@@ -416,71 +452,32 @@ fn reduce_owned(
     let ExtrudeCommand::Control { form_id, action } = command else {
         unreachable!()
     };
+    if matches!(action, ExtrudeControl::Apply) {
+        return apply::begin(
+            engine,
+            bridge,
+            world,
+            owner,
+            *form_id,
+            validate_control,
+            state,
+        );
+    }
     let editor = state
         .editor
         .as_mut()
         .filter(|editor| editor.id == *form_id)
         .ok_or("The Extrude form changed")?;
-    if matches!(action, ExtrudeControl::Apply) {
-        let ticket = with_receipt(bridge, engine, owner, |receipt| {
-            check_revision(editor, &receipt)?;
-            editor
-                .form
-                .prepare_apply(&editor.snapshot.model(editor.form.source()))
-        })?;
-        let applied = bridge.apply_native_mutation_at(
-            engine,
-            ticket.owner(),
-            ticket.model_revision(),
-            ticket.operation(),
-            ticket.arguments(),
-            validate_control,
-        );
-        return match applied {
-            Ok(result) => {
-                // The mutation has committed. Never report preview/publication
-                // failure as a retryable modeling failure or retain Apply.
-                let completion =
-                    editor
-                        .form
-                        .apply_succeeded(&ticket, &result.context, result.engine_revision);
-                state.editor = None;
-                let clear = bridge.with_native_document_owner(engine, &result.context, || {
-                    native_viewport::apply_interface_preview(
-                        world,
-                        &result.context.document_id,
-                        ViewportPreview::default(),
-                    )
-                });
-                let mut value = finish_mutation(engine, bridge, world, ticket.operation(), result);
-                value["preview_error"] = json!(clear.err());
-                value["form_error"] = json!(completion.err());
-                Ok(value)
-            }
-            Err(error) => {
-                let current = bridge.native_document_receipt(engine, owner);
-                if current
-                    .as_ref()
-                    .is_ok_and(|receipt| *receipt == editor.snapshot.receipt)
-                {
-                    editor.form.apply_failed(
-                        &ticket,
-                        &editor.snapshot.model(editor.form.source()),
-                        error.clone(),
-                    )?;
-                } else {
-                    // A replaced owner must never retain an applicable old form.
-                    state.editor = None;
-                }
-                Err(error)
-            }
-        };
+    if editor.form.is_busy() {
+        return Err("Extrude is still applying".into());
     }
     let mut close = false;
     let result = with_receipt(bridge, engine, owner, |receipt| {
         validate_control()?;
         if matches!(action, ExtrudeControl::Cancel) {
-            let can_restore = receipt == editor.snapshot.receipt;
+            let owns_preview =
+                native_viewport::interface_preview_revision(world) == editor.preview_revision;
+            let can_restore = receipt == editor.snapshot.receipt && owns_preview;
             let mut model = editor.snapshot.model(editor.form.source());
             model.owner = &receipt.owner;
             model.engine_revision = receipt.revision;
@@ -490,6 +487,12 @@ fn reduce_owned(
                     world,
                     &receipt.owner.document_id,
                     editor.previous_preview.clone(),
+                )
+            } else if owns_preview {
+                native_viewport::apply_interface_preview(
+                    world,
+                    &receipt.owner.document_id,
+                    ViewportPreview::default(),
                 )
             } else {
                 Ok(())
@@ -503,23 +506,51 @@ fn reduce_owned(
         let model = editor.snapshot.model(editor.form.source());
         match action {
             ExtrudeControl::Field(field) => {
-                let ControlInput::SetValue(value) = input else {
-                    // The native text adapter owns caret/focus. Clicking a
-                    // text field acknowledges that focus without rewriting
-                    // its draft, consuming a form generation or repainting.
-                    let text_field = editor.form.fields(&model).into_iter().any(|row| {
-                        row.field == *field
-                            && row.visible
-                            && row.enabled
-                            && matches!(row.value, nbcad_interface::Field::Text { .. })
-                    });
-                    return if text_field {
-                        Ok(json!({"form_id":form_id,"focused":true}))
-                    } else {
-                        Err("This field needs a value selection".into())
-                    };
-                };
-                editor.form.set_value(*field, value, &model)?;
+                let row = editor.form.fields(&model).into_iter()
+                    .find(|row| row.field == *field && row.visible && row.enabled)
+                    .ok_or("This Extrude field is not available")?;
+                match (input, row.value) {
+                    (ControlInput::SetValue(value), _) => {
+                        editor.form.set_value(*field, value, &model)?;
+                        editor.choice_field = None;
+                    }
+                    (input, nbcad_interface::Field::Text { .. }) if super::is_activation(input) => {
+                        return Ok(json!({"form_id":form_id,"focused":true}));
+                    }
+                    (input, nbcad_interface::Field::Toggle(value)) if super::is_activation(input) => {
+                        editor.form.set_value(*field, if value {"false"} else {"true"}, &model)?;
+                    }
+                    (input, nbcad_interface::Field::Choice { value, options }) => {
+                        if super::is_activation(input) {
+                            editor.choice_field = (editor.choice_field != Some(*field)).then_some(*field);
+                            return Ok(json!({"form_id":form_id,"choices_open":editor.choice_field.is_some()}));
+                        }
+                        let ControlInput::Key(key) = input else { return Err("Choose an available field value".into()); };
+                        if key.ctrl || key.meta || key.alt || key.shift { return Err("This field key is not supported".into()); }
+                        let options: Vec<_> = options.iter().filter(|option| !option.disabled).collect();
+                        let index = options.iter().position(|option| option.value == value).unwrap_or(0);
+                        let next = match key.key.as_str() {
+                            "ArrowDown" => index.saturating_add(1).min(options.len().saturating_sub(1)),
+                            "ArrowUp" => index.saturating_sub(1),
+                            "Home" => 0,
+                            "End" => options.len().saturating_sub(1),
+                            _ => return Err("This field key is not supported".into()),
+                        };
+                        let option = options.get(next).ok_or("This field has no available choices")?;
+                        editor.form.set_value(*field, &option.value, &model)?;
+                    }
+                    _ => return Err("This input does not match the Extrude field".into()),
+                }
+            }
+            ExtrudeControl::Choose { field, option } => {
+                if editor.choice_field != Some(*field) { return Err("This choice list is closed".into()); }
+                let row = editor.form.fields(&model).into_iter()
+                    .find(|row| row.field == *field && row.visible && row.enabled)
+                    .ok_or("This Extrude field is not available")?;
+                let nbcad_interface::Field::Choice { options, .. } = row.value else { return Err("This field has no choices".into()); };
+                let option = options.get(*option).filter(|option| !option.disabled).ok_or("This field choice is not available")?;
+                editor.form.set_value(*field, &option.value, &model)?;
+                editor.choice_field = None;
             }
             ExtrudeControl::Pick(field) => {
                 if !matches!(
@@ -529,6 +560,7 @@ fn reduce_owned(
                     return Err("This field is not a geometry reference".into());
                 }
                 editor.pick_target = Some(*field);
+                editor.choice_field = None;
             }
             ExtrudeControl::Clear(field) => match field {
                 ExtrudeField::Source => editor.form.set_source(ExtrudeSource::None, &model)?,

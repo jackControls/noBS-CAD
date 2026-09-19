@@ -250,3 +250,189 @@ fn close_guard_survives_same_tab_replacement_with_a_reset_revision() {
     assert!(!state.close_pending);
     assert!(!state.exit_after_receipt);
 }
+
+#[test]
+fn blocked_kernel_keeps_native_update_and_busy_replies_responsive_without_replaying_input() {
+    let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let (mut app, handle, entity) = prepare(&fixture);
+    app.init_resource::<Messages<NativeHostInput>>();
+    let services = app.world().resource::<NativeServices>().clone();
+    worker::install(app.world_mut(), services.clone(), handle.clone()).unwrap();
+    let receipt = fixture
+        .bridge
+        .native_document_receipt(&fixture.engine, &fixture.owner())
+        .unwrap();
+    let pending_path = pending(&fixture, &mut app, "20-1");
+    let session = fixture
+        .bridge
+        .session_id_for_window("main")
+        .unwrap()
+        .unwrap();
+    app.world_mut().resource_mut::<Controller>().cached_session = Some(session.clone());
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let timeout_flag = timed_out.clone();
+    worker::enqueue_transaction(
+        app.world_mut(),
+        "cad_set_document_name".into(),
+        move |services, guard| {
+            services.bridge.apply_native_mutation_at(
+                &services.engine,
+                &receipt.owner,
+                receipt.revision,
+                "cad_set_document_name",
+                &json!({"name":"Built without blocking the window"}),
+                || {
+                    guard.validate()?;
+                    started_tx.send(()).unwrap();
+                    if release_rx.recv_timeout(Duration::from_secs(5)).is_err() {
+                        timeout_flag.store(true, Ordering::Release);
+                        return Err("Native update waited on the blocked kernel".into());
+                    }
+                    Ok(())
+                },
+            )
+        },
+        |_, _, result| Ok(result?.value),
+    )
+    .unwrap();
+    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(matches!(
+        fixture.bridge.publishers.try_lock(),
+        Err(std::sync::TryLockError::WouldBlock)
+    ));
+    let controls = crate::session_bridge::session_root()
+        .join(&session)
+        .join("controls");
+    fs::write(
+        controls.join("20-2.request.json"),
+        json!({"id":"20-2","expires_ms":now_ms()+30_000,"ui":{"action":"inspect"}}).to_string(),
+    )
+    .unwrap();
+    app.world_mut().write_message(NativeHostInput {
+        context: handle.frame().map(|frame| frame.context),
+        cursor: None,
+        modifiers: crate::native_viewport::winit_host::Modifiers::default(),
+        event: WindowEvent::WindowCloseRequested(bevy::window::WindowCloseRequested {
+            window: Entity::PLACEHOLDER,
+        }),
+        consumed: false,
+        actions: vec![],
+    });
+    app.world_mut()
+        .resource_scope(|world, mut state: Mut<Controller>| {
+            update_inner(world, &handle, &services, &mut state).unwrap();
+            assert!(state.close_after_worker);
+            assert!(!state.exit_after_receipt);
+        });
+    complete_control(app.world_mut());
+    assert!(
+        !timed_out.load(Ordering::Acquire),
+        "Rendering must not wait for the engine/publisher fence"
+    );
+    assert!(
+        app.world()
+            .get::<InterfaceControl>(entity)
+            .unwrap()
+            .disabled
+    );
+    assert!(
+        !pending_path.exists(),
+        "The in-flight MCP request must wait for its real result"
+    );
+    assert!(controls.join("20-1.request.json").exists());
+    let rejected: Value =
+        serde_json::from_str(&fs::read_to_string(controls.join("20-2.result.json")).unwrap())
+            .unwrap();
+    assert_eq!(rejected["code"], "native_busy");
+    assert_eq!(rejected["mutation_applied"], false);
+    assert!(!controls.join("20-2.request.json").exists());
+    release_tx.send(()).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(outcome) = worker::poll(app.world_mut(), &services) {
+            outcome.value.unwrap();
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        fixture.engine.document_snapshot().name,
+        "Built without blocking the window"
+    );
+}
+
+#[test]
+fn worker_revalidates_a_queued_control_after_waiting_for_the_owner_fence() {
+    let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let (mut app, handle, entity) = prepare(&fixture);
+    let services = app.world().resource::<NativeServices>().clone();
+    worker::install(app.world_mut(), services.clone(), handle.clone()).unwrap();
+    let receipt = fixture
+        .bridge
+        .native_document_receipt(&fixture.engine, &fixture.owner())
+        .unwrap();
+    bind_command(
+        app.world_mut(),
+        entity,
+        NativeCommand::Mutation {
+            operation: "cad_set_document_name".into(),
+            arguments: json!({"name":"Old target"}),
+        },
+    )
+    .unwrap();
+    app.update();
+    let snapshot = handle.inspect().unwrap();
+    let request = ControlRequest::Click {
+        target: snapshot["surfaces"][0]["controls"][0]["id"]
+            .as_str()
+            .unwrap()
+            .into(),
+    };
+    let action = handle.resolve(&request, &fixture.owner()).unwrap();
+    app.world_mut()
+        .insert_resource(worker::ActiveControl(action));
+    let held = fixture.bridge.publishers.lock().unwrap();
+    worker::enqueue_operation(
+        app.world_mut(),
+        receipt.owner.clone(),
+        receipt.revision,
+        "cad_set_document_name".into(),
+        json!({"name":"Old target"}),
+        |_, _, result| Ok(result?.value),
+    )
+    .unwrap();
+    app.world_mut().remove_resource::<worker::ActiveControl>();
+    bind_command(
+        app.world_mut(),
+        entity,
+        NativeCommand::Mutation {
+            operation: "cad_set_document_name".into(),
+            arguments: json!({"name":"New target"}),
+        },
+    )
+    .unwrap();
+    app.update();
+    drop(held);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let error = loop {
+        if let Some(outcome) = worker::poll(app.world_mut(), &services) {
+            break outcome.value.unwrap_err();
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(error.contains("changed"), "{error}");
+    assert_eq!(fixture.engine.document_snapshot().name, "Untitled");
+    assert_eq!(
+        fixture
+            .bridge
+            .native_document_receipt(&fixture.engine, &fixture.owner())
+            .unwrap(),
+        receipt
+    );
+}

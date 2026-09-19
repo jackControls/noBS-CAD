@@ -379,3 +379,118 @@ fn stale_owner_revision_and_cancelled_activation_cannot_commit_or_repaint_old_wo
     .is_err());
     assert!(fixture.engine.document_snapshot().features.is_empty());
 }
+
+#[test]
+fn focused_escape_closes_its_form_without_overwriting_a_newer_preview() {
+    let _lock = super::super::super::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let owner = sketch(&fixture);
+    let before = exported(&fixture);
+    let mut app = scene(&fixture, &owner);
+    let id = open(&fixture, app.world_mut(), &owner, None);
+    let newer = ViewportPreview {
+        lines: vec![ViewportLineLayer {
+            color: [0., 1., 0., 1.],
+            width: 2.,
+            segments: vec![4., 5., 6., 7., 8., 9.],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    native_viewport::apply_interface_preview(app.world_mut(), &owner.document_id, newer.clone())
+        .unwrap();
+    let cancelled = action(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        ExtrudeControl::Field(ExtrudeField::Distance),
+        ControlInput::Key(nbcad_interface::KeyChord::plain("Escape")),
+    )
+    .unwrap();
+    assert_eq!(cancelled["cancelled"], true);
+    assert_eq!(cancelled["preview_restored"], false);
+    assert!(panel(app.world()).is_none());
+    assert_eq!(
+        native_viewport::interface_preview_snapshot(app.world()).lines[0].segments,
+        newer.lines[0].segments
+    );
+    assert_eq!(exported(&fixture), before);
+}
+
+#[test]
+fn native_apply_enqueues_once_and_completes_the_original_form_with_real_geometry() {
+    use crate::native_viewport::interface_shell::NativeInterfaceHandle;
+    use crate::session_bridge::native_interface::controller::{worker, NativeServices};
+    let _lock = super::super::super::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let owner = sketch(&fixture);
+    let mut app = scene(&fixture, &owner);
+    let services = NativeServices {
+        engine: fixture.engine.clone(),
+        bridge: fixture.bridge.clone(),
+    };
+    worker::install(
+        app.world_mut(),
+        services.clone(),
+        NativeInterfaceHandle::new(|| {}),
+    )
+    .unwrap();
+    let id = open(&fixture, app.world_mut(), &owner, None);
+    field(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        ExtrudeField::Distance,
+        "25 mm",
+    );
+    let pending = action(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        ExtrudeControl::Apply,
+        ControlInput::Click,
+    )
+    .unwrap();
+    assert_eq!(pending["mutation_pending"], true);
+    assert!(worker::busy(app.world()));
+    assert!(panel(app.world()).unwrap().busy);
+    assert!(!panel(app.world()).unwrap().can_apply);
+    assert!(action(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        ExtrudeControl::Apply,
+        ControlInput::Click
+    )
+    .unwrap_err()
+    .contains("still applying"));
+    // Pending work does not own the Bevy world. Cached presentation remains
+    // mutable while the engine thread recomputes, with no model lock here.
+    let (_, mut camera, _, _) = native_viewport::interface_view_snapshot(app.world());
+    camera.position[0] += 5.;
+    native_viewport::apply_interface_view(app.world_mut(), &owner.document_id, Some(camera), None)
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let outcome = loop {
+        if let Some(outcome) = worker::poll(app.world_mut(), &services) {
+            break outcome;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Native extrusion worker did not complete"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let completed = outcome.value.unwrap();
+    assert_eq!(completed["operation"], "solid_extrude");
+    assert!(completed["render_error"].is_null(), "{completed}");
+    assert!(!worker::busy(app.world()));
+    assert!(panel(app.world()).is_none());
+    assert_eq!(fixture.engine.document_snapshot().features.len(), 2);
+    assert_eq!(fixture.engine.viewport_snapshot().2.bodies.len(), 1);
+    assert!((maximum_z(&fixture) - 25.).abs() < 1e-4);
+}

@@ -29,8 +29,8 @@ pub(crate) use platform::interface_scene_fixture;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub(crate) use platform::{
     apply_interface_model, apply_interface_preview, apply_interface_view, interface_body_transform,
-    interface_preview_snapshot, interface_sketch_point, interface_view_snapshot,
-    interface_visible_occurrences,
+    interface_pick, interface_preview_revision, interface_preview_snapshot, interface_sketch_point,
+    interface_view_snapshot, interface_visible_occurrences, interface_world_point,
 };
 #[cfg(all(
     any(target_os = "macos", target_os = "windows", target_os = "linux"),

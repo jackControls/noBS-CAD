@@ -58,6 +58,7 @@ pub(crate) struct Modifiers {
     pub meta: bool,
     pub alt: bool,
     pub shift: bool,
+    pub alt_graph: bool,
 }
 
 #[derive(Resource, Default)]
@@ -65,6 +66,7 @@ struct HostInputState {
     cursor: Option<Vec2>,
     pressed: HashSet<KeyCode>,
     model_drag: HashSet<MouseButton>,
+    alt_graph: bool,
 }
 
 #[derive(Resource, Default)]
@@ -92,8 +94,18 @@ impl HostInputState {
                 || self.pressed.contains(&KeyCode::AltRight),
             shift: self.pressed.contains(&KeyCode::ShiftLeft)
                 || self.pressed.contains(&KeyCode::ShiftRight),
+            alt_graph: self.alt_graph,
         }
     }
+}
+
+/// Clear a completed/rejected atomic gesture without synthesizing a release
+/// that could activate a control under its last cursor position.
+pub(crate) fn cancel_native_pointer(world: &mut World, handle: &NativeInterfaceHandle) {
+    if let Some(mut state) = world.get_resource_mut::<HostInputState>() {
+        state.model_drag.clear();
+    }
+    handle.cancel_pointer();
 }
 
 /// Configure the controller before starting this one product's native runner.
@@ -211,6 +223,9 @@ fn route_window_input(world: &mut World) {
                 continue;
             }
             if let WindowEvent::KeyboardInput(input) = event {
+                if input.logical_key == Key::AltGraph {
+                    state.modifiers.alt_graph = input.state == ButtonState::Pressed;
+                }
                 if input.state == ButtonState::Pressed {
                     state.modifiers.pressed.insert(input.key_code);
                 } else {
@@ -227,9 +242,13 @@ fn route_window_input(world: &mut World) {
                 WindowEvent::CursorMoved(event) => state.cursor = Some(event.position),
                 WindowEvent::CursorLeft(_) => state.cursor = None,
                 WindowEvent::WindowFocused(event) if !event.focused => {
-                    state.modifiers.pressed.clear()
+                    state.modifiers.pressed.clear();
+                    state.modifiers.alt_graph = false;
                 }
-                WindowEvent::KeyboardFocusLost(_) => state.modifiers.pressed.clear(),
+                WindowEvent::KeyboardFocusLost(_) => {
+                    state.modifiers.pressed.clear();
+                    state.modifiers.alt_graph = false;
+                }
                 _ => (),
             }
             world.write_message(NativeHostInput {
@@ -263,6 +282,7 @@ pub(crate) fn prepare_native_input(
     }
     world.resource_scope(|world, mut state: Mut<HostInputState>| {
         state.cursor = input.cursor;
+        state.alt_graph = input.modifiers.alt_graph;
         state.pressed.clear();
         for (pressed, key) in [
             (input.modifiers.ctrl, KeyCode::ControlLeft),

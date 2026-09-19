@@ -99,6 +99,36 @@ impl SessionBridgeState {
         redo: bool,
         validate_control: impl FnOnce() -> Result<(), String>,
     ) -> Result<NativeMutationResult, String> {
+        self.apply_native_history_guarded(engine, expected, None, redo, validate_control)
+    }
+
+    /// A worker history intent is tied to the same exact revision captured
+    /// by its observed control. Check it under the existing mutation fence.
+    pub(crate) fn apply_native_history_at(
+        &self,
+        engine: &AppState,
+        expected: &DocumentContext,
+        expected_revision: u64,
+        redo: bool,
+        validate_control: impl FnOnce() -> Result<(), String>,
+    ) -> Result<NativeMutationResult, String> {
+        self.apply_native_history_guarded(
+            engine,
+            expected,
+            Some(expected_revision),
+            redo,
+            validate_control,
+        )
+    }
+
+    fn apply_native_history_guarded(
+        &self,
+        engine: &AppState,
+        expected: &DocumentContext,
+        expected_revision: Option<u64>,
+        redo: bool,
+        validate_control: impl FnOnce() -> Result<(), String>,
+    ) -> Result<NativeMutationResult, String> {
         let mut publishers = self
             .publishers
             .lock()
@@ -107,6 +137,11 @@ impl SessionBridgeState {
             .get_mut(&expected.window_id)
             .ok_or("Native interface window is no longer available")?;
         check_owner(publisher, engine, expected)?;
+        if expected_revision
+            .is_some_and(|revision| revision != publisher.active_mut().engine_revision)
+        {
+            return Err("The design changed before this history action could run".into());
+        }
         validate_control()?;
         let project = publisher.active_mut();
         let before = state(expected, project);

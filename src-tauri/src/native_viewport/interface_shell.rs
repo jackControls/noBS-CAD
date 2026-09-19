@@ -96,6 +96,11 @@ pub struct InterfaceControl {
     pub owned_keys: Vec<KeyChord>,
 }
 
+/// The text adapter changes this only for buffer/selection edits. Camera or
+/// font-layout updates must not clone long editor values into every frame.
+#[derive(Component, Default)]
+pub(crate) struct InterfaceTextRevision(pub u64);
+
 impl InterfaceControl {
     pub fn button(surface: impl Into<String>, label: impl Into<String>) -> Self {
         Self {
@@ -572,6 +577,20 @@ impl NativeInterfaceHandle {
         self.shared
             .lock()
             .is_ok_and(|shared| shared.capture.is_some())
+    }
+
+    /// Cancellation never activates the captured control, even while a newer
+    /// semantic frame is waiting for layout.
+    pub(crate) fn cancel_pointer(&self) {
+        if let Ok(mut shared) = self.shared.lock() {
+            let changed = shared.capture.take().is_some() || shared.hovered.is_some();
+            shared.hovered = None;
+            if changed {
+                shared.revision = shared.revision.wrapping_add(1);
+                drop(shared);
+                (self.wake)();
+            }
+        }
     }
 
     /// Returns true only when the native interface owns this gesture. A press
@@ -1057,6 +1076,8 @@ fn publish_layout(
         Ref<ComputedStackIndex>,
         Option<Ref<CalculatedClip>>,
         Option<Ref<InheritedVisibility>>,
+        Option<&bevy::text::EditableText>,
+        Option<Ref<InterfaceTextRevision>>,
     )>,
     mut removed: RemovedComponents<InterfaceControl>,
     mut removed_clips: RemovedComponents<CalculatedClip>,
@@ -1068,9 +1089,8 @@ fn publish_layout(
     let removed = removed.read().count() > 0 || removed_clips.read().count() > 0;
     if *last_revision == Some(shared.revision)
         && !removed
-        && !controls
-            .iter()
-            .any(|(_, control, node, transform, stack, clip, visibility)| {
+        && !controls.iter().any(
+            |(_, control, node, transform, stack, clip, visibility, _, text)| {
                 control.is_changed()
                     || node.is_changed()
                     || transform.is_changed()
@@ -1079,7 +1099,9 @@ fn publish_layout(
                     || visibility
                         .as_ref()
                         .is_some_and(|visibility| visibility.is_changed())
-            })
+                    || text.as_ref().is_some_and(|revision| revision.is_changed())
+            },
+        )
     {
         if shared.render_dirty {
             shared.receipt.laid_out_revision = shared.receipt.laid_out_revision.saturating_add(1);
@@ -1093,7 +1115,7 @@ fn publish_layout(
     let mut stacked: Vec<_> = controls
         .iter()
         .map(
-            |(entity, control, computed, transform, stack, clip, visibility)| {
+            |(entity, control, computed, transform, stack, clip, visibility, editor, _)| {
                 let scale = f64::from(computed.inverse_scale_factor());
                 let half = computed.size() * 0.5;
                 let corners = [
@@ -1149,7 +1171,28 @@ fn publish_layout(
                         disabled: control.disabled,
                         expanded: control.expanded,
                         selected: control.selected,
-                        field: control.field.clone(),
+                        field: match (&control.field, editor) {
+                            (Field::Text { read_only, .. }, Some(editor)) => {
+                                let value = editor.value().to_string();
+                                let range = editor.editor.raw_selection().text_range();
+                                let selection = if editor.is_composing() {
+                                    None
+                                } else {
+                                    value.get(..range.start).zip(value.get(..range.end)).map(
+                                        |(start, end)| nbcad_interface::TextSelection {
+                                            start: start.encode_utf16().count(),
+                                            end: end.encode_utf16().count(),
+                                        },
+                                    )
+                                };
+                                Field::Text {
+                                    value,
+                                    read_only: *read_only,
+                                    selection,
+                                }
+                            }
+                            _ => control.field.clone(),
+                        },
                         modal_scope: control.modal_scope.clone(),
                         text_editing: control.text_editing,
                         owned_keys: control.owned_keys.clone(),

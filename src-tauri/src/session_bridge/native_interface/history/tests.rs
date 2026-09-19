@@ -39,6 +39,45 @@ fn model(fixture: &Fixture) -> Value {
 }
 
 #[test]
+fn queued_history_requires_its_original_revision_and_does_not_undo_an_intervening_edit() {
+    let _lock = super::super::super::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let owner = part(&fixture);
+    let revision = fixture
+        .bridge
+        .engine_revision_for_window("main")
+        .unwrap()
+        .unwrap();
+    fixture.rename(&owner, "Intervening edit").unwrap();
+    let current = model(&fixture);
+    let mut validated = false;
+    assert!(fixture
+        .bridge
+        .apply_native_history_at(&fixture.engine, &owner, revision, false, || {
+            validated = true;
+            Ok(())
+        })
+        .unwrap_err()
+        .contains("design changed"));
+    assert!(
+        !validated,
+        "The stale revision is rejected before dispatch authorization"
+    );
+    assert_eq!(model(&fixture), current);
+    assert_eq!(fixture.engine.document_snapshot().features.len(), 2);
+    let revision = fixture
+        .bridge
+        .engine_revision_for_window("main")
+        .unwrap()
+        .unwrap();
+    fixture
+        .bridge
+        .apply_native_history_at(&fixture.engine, &owner, revision, false, || Ok(()))
+        .unwrap();
+    assert_eq!(fixture.engine.document_snapshot().features.len(), 1);
+}
+
+#[test]
 fn latest_undo_removes_features_and_redo_rebuilds_the_exact_editable_model_with_new_ownership() {
     let _lock = super::super::super::tests::TEST_LOCK.lock().unwrap();
     let fixture = Fixture::new();

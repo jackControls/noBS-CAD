@@ -24,9 +24,11 @@ use crate::{
 pub(crate) mod controller;
 pub(crate) mod extrude;
 mod history;
+mod prepared;
 mod publication;
 mod view;
 pub(crate) mod workspace;
+use prepared::{apply_prepared_scene, prepare_native_presentation, PreparedNativePresentation};
 pub(crate) use view::ViewDirection;
 
 #[derive(Debug)]
@@ -405,6 +407,14 @@ pub(crate) fn reduce_action(
         }
         NativeCommand::Undo | NativeCommand::Redo => {
             let redo = matches!(binding.command, NativeCommand::Redo);
+            #[cfg(feature="dev-bevy-host")]
+            if controller::worker::available(world) {
+                let receipt = bridge.native_document_receipt(engine, &action.context)?;
+                let operation = if redo { "redo" } else { "undo" };
+                return controller::worker::enqueue_transaction(world, operation.into(), move |services, guard| {
+                    services.bridge.apply_native_history_at(&services.engine, &receipt.owner, receipt.revision, redo, || guard.validate())
+                }, move |world, services, result| Ok(finish_mutation(&services.engine, &services.bridge, world, operation, result?)));
+            }
             let result = bridge.apply_native_history(engine, &action.context, redo, || handle.validate_action(action))?;
             Ok(finish_mutation(engine, bridge, world, if redo {"redo"} else {"undo"}, result))
         }
@@ -412,6 +422,14 @@ pub(crate) fn reduce_action(
             operation,
             arguments,
         } => {
+            #[cfg(feature="dev-bevy-host")]
+            if controller::worker::available(world) {
+                let receipt = bridge.native_document_receipt(engine, &action.context)?;
+                let completion_operation = operation.clone();
+                return controller::worker::enqueue_operation(world, receipt.owner, receipt.revision, operation, arguments, move |world, services, result| {
+                    Ok(finish_mutation(&services.engine, &services.bridge, world, &completion_operation, result?))
+                });
+            }
             let result = bridge.apply_native_mutation(
                 engine,
                 &action.context,
@@ -422,16 +440,15 @@ pub(crate) fn reduce_action(
             Ok(finish_mutation(engine, bridge, world, &operation, result))
         }
         NativeCommand::ToggleBodyVisibility(body_id) => {
+            #[cfg(feature="dev-bevy-host")]
+            if controller::worker::available(world) {
+                let receipt = bridge.native_document_receipt(engine, &action.context)?;
+                return controller::worker::enqueue_transaction(world, "project_set_visibility".into(), move |services, guard| {
+                    services.bridge.apply_native_mutation_guarded(&services.engine, &receipt.owner, Some(receipt.revision), "project_set_visibility", || toggle_visibility(&services.engine, body_id), || guard.validate())
+                }, |world, services, result| Ok(finish_mutation(&services.engine, &services.bridge, world, "project_set_visibility", result?)));
+            }
             let result = bridge.apply_native_mutation_with(engine, &action.context, "project_set_visibility", || {
-                if !engine.viewport_snapshot().2.bodies.iter().any(|body| body.id.0 == body_id) {
-                    return Err("The body no longer exists".into());
-                }
-                let mut visibility = super::parse_engine_envelope(engine.engine_call("project_visibility", ""))?;
-                let hidden = visibility["hidden_body_ids"].as_array_mut().ok_or("Native visibility is invalid")?;
-                if hidden.iter().any(|id| id.as_u64() == Some(body_id)) {
-                    hidden.retain(|id| id.as_u64() != Some(body_id));
-                } else { hidden.push(json!(body_id)); }
-                Ok(visibility)
+                toggle_visibility(engine, body_id)
             }, || handle.validate_action(action))?;
             Ok(finish_mutation(engine, bridge, world, "project_set_visibility", result))
         }
@@ -442,6 +459,29 @@ pub(crate) fn reduce_action(
             })
         }
     }
+}
+
+fn toggle_visibility(engine: &AppState, body_id: u64) -> Result<Value, String> {
+    if !engine
+        .viewport_snapshot()
+        .2
+        .bodies
+        .iter()
+        .any(|body| body.id.0 == body_id)
+    {
+        return Err("The body no longer exists".into());
+    }
+    let mut visibility =
+        super::parse_engine_envelope(engine.engine_call("project_visibility", ""))?;
+    let hidden = visibility["hidden_body_ids"]
+        .as_array_mut()
+        .ok_or("Native visibility is invalid")?;
+    if hidden.iter().any(|id| id.as_u64() == Some(body_id)) {
+        hidden.retain(|id| id.as_u64() != Some(body_id));
+    } else {
+        hidden.push(json!(body_id));
+    }
+    Ok(visibility)
 }
 
 pub(crate) fn model_snapshot(engine: &AppState) -> ViewportModel {
@@ -468,40 +508,12 @@ pub(crate) fn refresh_native_model(
     world: &mut World,
     reset_selection: bool,
 ) -> Result<Vec<(u64, String)>, String> {
-    let model = model_snapshot(engine);
-    let rows = model
-        .scene
-        .bodies
-        .iter()
-        .map(|body| (body.id.0, body.name.clone()))
-        .collect();
-    let (_, _, mut presentation, _) = native_viewport::interface_view_snapshot(world);
-    if reset_selection {
-        view::clear_selection(&mut presentation);
-    }
-    use crate::native_viewport::ViewportMode;
-    if model.active_sketch.is_some() {
-        presentation.mode = ViewportMode::Sketch;
-    } else if reset_selection || presentation.mode == ViewportMode::Sketch {
-        presentation.mode = ViewportMode::Solid;
-    }
-    presentation.body_poses.clone_from(&model.body_poses);
-    presentation
-        .instance_body_poses
-        .clone_from(&model.instance_body_poses);
-    let visibility = super::parse_engine_envelope(engine.engine_call("project_visibility", ""))?;
-    presentation.hidden_body_ids = serde_json::from_value(visibility["hidden_body_ids"].clone())
-        .map_err(|error| error.to_string())?;
-    presentation.hidden_datum_plane_ids =
-        serde_json::from_value(visibility["hidden_datum_plane_ids"].clone())
-            .map_err(|error| error.to_string())?;
-    presentation.hidden_sketch_names =
-        serde_json::from_value(visibility["hidden_sketch_names"].clone())
-            .map_err(|error| error.to_string())?;
-    let session = model.session_id.clone();
-    native_viewport::apply_interface_model(world, model)?;
-    native_viewport::apply_interface_view(world, &session, None, Some(presentation))?;
-    Ok(rows)
+    apply_prepared_scene(
+        world,
+        model_snapshot(engine),
+        prepared::read_visibility(engine)?,
+        reset_selection,
+    )
 }
 
 pub(crate) fn finish_mutation(
@@ -511,12 +523,23 @@ pub(crate) fn finish_mutation(
     operation: &str,
     result: NativeMutationResult,
 ) -> Value {
+    let prepared = world
+        .remove_resource::<PreparedNativePresentation>()
+        .filter(|prepared| {
+            prepared.owner == result.context && prepared.revision == result.engine_revision
+        });
+    let (prepared_scene, prepared_publication) = match prepared {
+        Some(prepared) => (Some(prepared.scene), Some(prepared.publication)),
+        None => (None, None),
+    };
     let refresh = bridge.with_native_document_owner(engine, &result.context, || {
-        let bodies = refresh_native_model(
-            engine,
-            world,
-            is_project_replacement(operation) || operation == "redo",
-        )?;
+        let reset = is_project_replacement(operation) || operation == "redo";
+        let bodies = if let Some(scene) = prepared_scene {
+            let (model, visibility) = scene?;
+            apply_prepared_scene(world, model, visibility, reset)?
+        } else {
+            refresh_native_model(engine, world, reset)?
+        };
         world.insert_resource(NativeRenderedDocument {
             owner: result.context.clone(),
             revision: result.engine_revision,
@@ -524,14 +547,16 @@ pub(crate) fn finish_mutation(
         });
         Ok(())
     });
-    let focus = if super::parse_engine_envelope(engine.engine_call("active_sketch", ""))
-        .is_ok_and(|value| !value.is_null())
-    {
-        "sketch"
-    } else {
-        "solid"
-    };
-    let publication = bridge.publish_native_document(engine, &result.context, focus);
+    let publication = prepared_publication.unwrap_or_else(|| {
+        let focus = if super::parse_engine_envelope(engine.engine_call("active_sketch", ""))
+            .is_ok_and(|value| !value.is_null())
+        {
+            "sketch"
+        } else {
+            "solid"
+        };
+        bridge.publish_native_document(engine, &result.context, focus)
+    });
     let (publication, publication_error) = match publication {
         Ok(value) => (Some(value), None),
         Err(error) => (None, Some(error)),

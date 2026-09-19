@@ -22,10 +22,12 @@ use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::Duration,
 };
+
+pub(crate) mod worker;
 
 #[derive(Resource, Clone)]
 pub(crate) struct NativeServices {
@@ -46,6 +48,11 @@ struct PendingControl {
     owner: DocumentContext,
     presentation_deadline: u64,
 }
+struct PolledControl {
+    owner: DocumentContext,
+    session: String,
+    id: String,
+}
 
 #[derive(Resource)]
 struct Controller {
@@ -64,6 +71,11 @@ struct Controller {
     status: String,
     close_pending: bool,
     exit_after_receipt: bool,
+    close_after_worker: bool,
+    busy_controls: Vec<(Entity, bool)>,
+    cached_session: Option<String>,
+    polled_control: Option<PolledControl>,
+    watch_session: Arc<Mutex<Option<String>>>,
     stop_watcher: Arc<AtomicBool>,
 }
 impl Controller {
@@ -88,6 +100,11 @@ impl Controller {
             status: String::new(),
             close_pending: false,
             exit_after_receipt: false,
+            close_after_worker: false,
+            busy_controls: Vec::new(),
+            cached_session: None,
+            polled_control: None,
+            watch_session: Arc::new(Mutex::new(None)),
             stop_watcher,
         }
     }
@@ -108,9 +125,19 @@ pub(crate) fn install(
     initial_model: Option<String>,
 ) {
     let stop = Arc::new(AtomicBool::new(false));
-    start_watcher(&services, &window_id, handle.clone(), stop.clone());
-    app.insert_resource(services)
-        .insert_resource(Controller::new(window_id, initial_model, stop));
+    let worker_error = worker::install(app.world_mut(), services.clone(), handle.clone()).err();
+    let controller = Controller::new(window_id.clone(), initial_model, stop.clone());
+    start_watcher(
+        &services,
+        &window_id,
+        handle.clone(),
+        stop,
+        controller.watch_session.clone(),
+    );
+    app.insert_resource(services).insert_resource(controller);
+    if let Some(error) = worker_error {
+        app.world_mut().resource_mut::<Controller>().status = error;
+    }
     interface_shell::install(app, handle, update);
     app.add_systems(PostUpdate, complete_control.after(InterfaceLayout));
 }
@@ -120,6 +147,7 @@ fn start_watcher(
     window_id: &str,
     handle: NativeInterfaceHandle,
     stop: Arc<AtomicBool>,
+    cached_session: Arc<Mutex<Option<String>>>,
 ) {
     let bridge = Arc::downgrade(&services.bridge);
     let window = window_id.to_owned();
@@ -127,6 +155,7 @@ fn start_watcher(
         .name("cad-native-inbox".into())
         .spawn(move || {
             let mut keepalive = now_ms();
+            let heartbeat_running = Arc::new(AtomicBool::new(false));
             while !stop.load(Ordering::Acquire) {
                 std::thread::sleep(Duration::from_millis(25));
                 if stop.load(Ordering::Acquire) {
@@ -137,9 +166,31 @@ fn start_watcher(
                 };
                 if now_ms().saturating_sub(keepalive) >= 10_000 {
                     keepalive = now_ms();
-                    let _ = bridge.heartbeat_for_window(&window);
+                    if !heartbeat_running.swap(true, Ordering::AcqRel) {
+                        let bridge = bridge.clone();
+                        let window = window.clone();
+                        let running = heartbeat_running.clone();
+                        let fallback = running.clone();
+                        if std::thread::Builder::new()
+                            .name("cad-session-heartbeat".into())
+                            .spawn(move || {
+                                let _ = bridge.heartbeat_for_window(&window);
+                                running.store(false, Ordering::Release);
+                            })
+                            .is_err()
+                        {
+                            fallback.store(false, Ordering::Release);
+                        }
+                    }
                 }
-                let Ok(Some(session)) = bridge.session_id_for_window(&window) else {
+                // Never wait for the publisher on the file-notification
+                // thread: a long kernel transaction must still wake native
+                // busy replies for new MCP requests.
+                let Some(session) = cached_session
+                    .lock()
+                    .ok()
+                    .and_then(|session| session.clone())
+                else {
                     continue;
                 };
                 let root = crate::session_bridge::session_root().join(session);
@@ -187,6 +238,66 @@ fn update_inner(
 ) -> Result<(), String> {
     let engine = &services.engine;
     let bridge = &services.bridge;
+    if let Some(outcome) = worker::poll(world, services) {
+        for (entity, disabled) in state.busy_controls.drain(..) {
+            if let Some(mut control) = world.get_mut::<InterfaceControl>(entity) {
+                control.disabled = disabled;
+            }
+        }
+        if let Some(pending) = state
+            .pending
+            .as_mut()
+            .filter(|pending| pending.response["value"]["mutation_id"].as_u64() == Some(outcome.id))
+        {
+            pending.owner = bridge.native_document_context(&state.window_id, engine)?;
+            match &outcome.value {
+                Ok(value) => {
+                    pending.response["status"] = json!("applied");
+                    pending.response["value"] = value.clone();
+                }
+                Err(error) => {
+                    pending.response["status"] = json!("failed");
+                    pending.response["error"] = json!(error);
+                    pending.response["value"] = Value::Null;
+                }
+            }
+            pending.presentation_deadline = now_ms().saturating_add(2_000);
+        }
+        if let Some(polled) = state.polled_control.take() {
+            match outcome.value {
+                Ok(value) => {
+                    let request = &value["control_request"];
+                    if request.get("id").is_some() {
+                        start_control(world, handle, services, state, &polled.owner, request)?;
+                    }
+                }
+                Err(error) => {
+                    crate::session_bridge::reject_native_control(
+                        &polled.session,
+                        &polled.id,
+                        "native_control_failed",
+                        &error,
+                    )?;
+                    state.status = error;
+                }
+            }
+        } else {
+            match outcome.value {
+                Ok(value) => {
+                    apply_host_result(state, &value);
+                    state.status = summary(&value);
+                }
+                Err(error) => state.status = format!("{}: {error}", outcome.operation),
+            }
+        }
+        if state.close_after_worker && !worker::busy(world) {
+            state.close_after_worker = false;
+            request_close(state, bridge, engine)?;
+        }
+    }
+    if worker::busy(world) {
+        return maintain_busy_window(world, handle, state);
+    }
     if !state.initialized {
         let owner = bridge.native_document_context(&state.window_id, engine)?;
         if let Some(model) = state.initial_model.take() {
@@ -218,6 +329,10 @@ fn update_inner(
         .cloned()
         .collect::<Vec<_>>();
     for mut event in events {
+        if worker::busy(world) {
+            retain_busy_intent(state, &event);
+            continue;
+        }
         if let Err(error) =
             crate::native_viewport::winit_host::prepare_native_input(world, handle, &mut event)
         {
@@ -226,11 +341,19 @@ fn update_inner(
         }
         let mut accepted = true;
         for action in std::mem::take(&mut event.actions) {
+            if worker::busy(world) {
+                state.status = "Modeling is in progress; later input was not applied".into();
+                accepted = false;
+                break;
+            }
             if let Err(error) = apply_queued_control(world, handle, services, state, &action) {
                 state.status = error;
                 accepted = false;
                 break;
             }
+        }
+        if worker::busy(world) {
+            continue;
         }
         process_modal_keys(handle, bridge, engine, state)?;
         if !accepted {
@@ -280,63 +403,215 @@ fn update_inner(
     }
 
     for action in handle.take_actions()? {
+        if worker::busy(world) {
+            state.status = "Modeling is in progress; later input was not applied".into();
+            break;
+        }
         if let Err(error) = apply_queued_control(world, handle, services, state, &action) {
             state.status = error;
         }
+    }
+    if worker::busy(world) {
+        return maintain_busy_window(world, handle, state);
     }
     process_modal_keys(handle, bridge, engine, state)?;
     // Serialize controls through their completed semantic frame. The native
     // apply function remains the sole inbox dispatcher and OCC gate.
     if state.pending.is_none() {
-        let reject = state
-            .close_pending
-            .then_some("A close confirmation is waiting for input");
-        let applied = apply_or_reject_one_inbox_op(bridge, &state.window_id, engine, reject, None)?;
-        if applied["applied"] == true {
-            let owner = bridge.native_document_context(&state.window_id, engine)?;
-            let result = NativeMutationResult {
-                context: owner,
-                engine_revision: bridge
-                    .engine_revision_for_window(&state.window_id)?
-                    .unwrap_or(1),
-                value: applied,
-            };
-            state.status = summary(&finish_mutation(engine, bridge, world, "inbox", result));
+        if let Some(session) = bridge.session_id_for_window(&state.window_id)? {
+            if !crate::session_bridge::pending_inbox_seqs(&session).is_empty() {
+                let owner = bridge.native_document_context(&state.window_id, engine)?;
+                let reject = state
+                    .close_pending
+                    .then_some("A close confirmation is waiting for input");
+                worker::enqueue_transaction(
+                    world,
+                    "inbox".into(),
+                    move |services, guard| {
+                        guard.validate()?;
+                        let applied = apply_or_reject_one_inbox_op(
+                            &services.bridge,
+                            &owner.window_id,
+                            &services.engine,
+                            reject,
+                            Some((&owner.document_id, &session)),
+                        )?;
+                        if applied.is_null() {
+                            return Err("The queued operation's document was replaced".into());
+                        }
+                        if applied["dead_lettered"] == true {
+                            return Err(applied["error"]
+                                .as_str()
+                                .unwrap_or("The queued operation was rejected")
+                                .into());
+                        }
+                        let current = services
+                            .bridge
+                            .native_document_context(&owner.window_id, &services.engine)?;
+                        let receipt = services
+                            .bridge
+                            .native_document_receipt(&services.engine, &current)?;
+                        Ok(NativeMutationResult {
+                            context: receipt.owner,
+                            engine_revision: receipt.revision,
+                            value: applied,
+                        })
+                    },
+                    |world, services, result| {
+                        let result = result?;
+                        if result.value["applied"] == true {
+                            Ok(finish_mutation(
+                                &services.engine,
+                                &services.bridge,
+                                world,
+                                "inbox",
+                                result,
+                            ))
+                        } else {
+                            Ok(result.value)
+                        }
+                    },
+                )?;
+                return maintain_busy_window(world, handle, state);
+            }
         }
     }
     if state.pending.is_none() {
         let owner = bridge.native_document_context(&state.window_id, engine)?;
-        let request = control_for_window(bridge, &state.window_id, engine, None)?;
-        if request.get("id").is_some() {
-            let mut response =
-                json!({"request_id":request["id"],"session_id":request["session_id"]});
-            let outcome = apply_control(world, handle, services, state, &owner, &request);
-            let current = bridge.native_document_context(&state.window_id, engine)?;
-            match outcome {
-                Ok(value) => {
-                    apply_host_result(state, &value);
-                    response["status"] = json!("applied");
-                    response["value"] = value;
-                }
-                Err(error) => {
-                    response["status"] = json!("failed");
-                    response["error"] = json!(error);
-                }
+        if let Some(session) = bridge.session_id_for_window(&state.window_id)? {
+            let dir = crate::session_bridge::session_root()
+                .join(&session)
+                .join("controls");
+            if let Some((_, request)) = crate::session_bridge::pending_control_requests(&dir)
+                .into_iter()
+                .next()
+            {
+                let id = request["id"]
+                    .as_str()
+                    .expect("validated control id")
+                    .to_owned();
+                worker::enqueue_control_poll(world, owner.clone(), id.clone())?;
+                state.polled_control = Some(PolledControl { owner, session, id });
+                return maintain_busy_window(world, handle, state);
             }
-            response["awaiting_input"] = json!(state.close_pending);
-            state.pending = Some(PendingControl {
-                response,
-                owner: current,
-                presentation_deadline: now_ms().saturating_add(2_000).min(
-                    request["expires_ms"]
-                        .as_u64()
-                        .unwrap_or(0)
-                        .saturating_sub(100),
-                ),
-            });
         }
     }
+    if worker::busy(world) {
+        return maintain_busy_window(world, handle, state);
+    }
     synchronize(world, handle, services, state)
+}
+
+fn start_control(
+    world: &mut World,
+    handle: &NativeInterfaceHandle,
+    services: &NativeServices,
+    state: &mut Controller,
+    owner: &DocumentContext,
+    request: &Value,
+) -> Result<(), String> {
+    let mut response = json!({"request_id":request["id"],"session_id":request["session_id"]});
+    let outcome = apply_control(world, handle, services, state, owner, request);
+    let current = if worker::busy(world) {
+        owner.clone()
+    } else {
+        services
+            .bridge
+            .native_document_context(&state.window_id, &services.engine)?
+    };
+    match outcome {
+        Ok(value) => {
+            apply_host_result(state, &value);
+            response["status"] = json!("applied");
+            response["value"] = value;
+        }
+        Err(error) => {
+            response["status"] = json!("failed");
+            response["error"] = json!(error);
+        }
+    }
+    response["awaiting_input"] = json!(state.close_pending);
+    state.pending = Some(PendingControl {
+        response,
+        owner: current,
+        presentation_deadline: now_ms().saturating_add(2_000).min(
+            request["expires_ms"]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_sub(100),
+        ),
+    });
+    Ok(())
+}
+
+fn retain_busy_intent(state: &mut Controller, event: &NativeHostInput) {
+    if matches!(event.event, WindowEvent::WindowCloseRequested(_)) {
+        state.close_after_worker = true;
+    }
+    // Pointer, tool and text events refer to the cached pre-mutation scene.
+    // Replaying them against newly built geometry could pick a different face.
+}
+
+fn maintain_busy_window(
+    world: &mut World,
+    handle: &NativeInterfaceHandle,
+    state: &mut Controller,
+) -> Result<(), String> {
+    if let Some(session) = state.cached_session.as_deref() {
+        let except = state
+            .pending
+            .as_ref()
+            .and_then(|pending| pending.response["request_id"].as_str())
+            .or_else(|| {
+                state
+                    .polled_control
+                    .as_ref()
+                    .map(|control| control.id.as_str())
+            });
+        crate::session_bridge::reject_busy_controls(session, except)?;
+    }
+    let events = state
+        .input
+        .read(world.resource::<Messages<NativeHostInput>>())
+        .cloned()
+        .collect::<Vec<_>>();
+    for event in events {
+        retain_busy_intent(state, &event);
+    }
+    let _ = handle.take_actions()?;
+    let _ = handle.take_modal_keys()?;
+    let message = if state.close_after_worker {
+        "Finishing the current modeling operation before closing…"
+    } else {
+        "Building the model… Controls resume when this operation finishes."
+    };
+    state.status = message.into();
+    if let Some(entity) = state.decoration.get("status") {
+        if let Some(mut text) = world.get_mut::<Text>(*entity) {
+            if text.0 != message {
+                text.0 = message.into();
+                handle.invalidate_presentation();
+            }
+        }
+    }
+    if worker::started(world) && state.busy_controls.is_empty() {
+        let mut query = world.query::<(Entity, &mut InterfaceControl)>();
+        for (entity, mut control) in query.iter_mut(world) {
+            state.busy_controls.push((entity, control.disabled));
+            control.disabled = true;
+        }
+        if let Some(mut frame) = handle.frame() {
+            if let Some(surface) = frame
+                .surfaces
+                .iter_mut()
+                .find(|surface| surface.name == "document/session")
+            {
+                surface.text = Some(message.into());
+            }
+            handle.present(frame)?;
+        }
+    }
+    Ok(())
 }
 
 fn process_modal_keys(
@@ -378,8 +653,14 @@ fn reduce_control_input(
         result?;
     }
     handle.prepare_activation(action)?;
-    let result = reduce_action(engine, bridge, world, handle, action);
-    fields::acknowledge_control_input(world, action, result.is_ok());
+    fields::after_window_input(world, handle)?;
+    let Some(adapted) = fields::adapt_control_input(world, handle, action)? else {
+        return Ok(json!({"handled":true,"field_navigation":true}));
+    };
+    world.insert_resource(worker::ActiveControl(adapted.clone()));
+    let result = reduce_action(engine, bridge, world, handle, &adapted);
+    world.remove_resource::<worker::ActiveControl>();
+    fields::acknowledge_control_input(world, &adapted, result.is_ok());
     // A committed operation must not be reported as failed if subsequent
     // editor focus synchronization fails: retrying it could duplicate a part.
     let focus = fields::after_window_input(world, handle);
@@ -481,6 +762,7 @@ fn apply_control(
     };
     match ui["action"].as_str().unwrap_or("") {
         "inspect" => Ok(Value::Null),
+        "viewport" => crate::native_editor::mcp::drive(world, handle, services, owner, ui),
         "file" if ui["command"] == "exit" => {
             request_close(state, &services.bridge, &services.engine)?;
             Ok(json!({"awaiting_input":state.close_pending}))
@@ -533,6 +815,10 @@ fn synchronize(
         .bridge
         .engine_revision_for_window(&state.window_id)?
         .unwrap_or(1);
+    state.cached_session = services.bridge.session_id_for_window(&state.window_id)?;
+    if let Ok(mut cached) = state.watch_session.lock() {
+        cached.clone_from(&state.cached_session);
+    }
     if state.synchronized.as_ref() != Some(&(owner.clone(), revision)) {
         if let Some(cached) = world
             .get_resource::<NativeRenderedDocument>()
@@ -1069,6 +1355,9 @@ fn command_group(command: &NativeCommand) -> &'static str {
 /// This runs after actual native layout. Merely queuing an action or updating
 /// a component cannot produce a completed inspection receipt.
 fn complete_control(world: &mut World) {
+    if worker::busy(world) {
+        return;
+    }
     let services = world.resource::<NativeServices>().clone();
     let handle = world.resource::<NativeInterfaceHandle>().clone();
     world.resource_scope(|world, mut state: Mut<Controller>| {
@@ -1128,7 +1417,9 @@ fn complete_control(world: &mut World) {
             // frame; it never claims physical display or GPU completion.
             pending.response["presented"] = json!(presented);
             pending.response["render_status"] = json!(render_status);
-            if pending.response["value"].get("focused").is_some() {
+            if pending.response["value"].get("focused").is_some()
+                && pending.response["value"].get("visible").is_some()
+            {
                 pending.response["value"]["focused"] = json!(world
                     .get_resource::<crate::native_viewport::winit_host::NativeRenderAvailability>()
                     .is_some_and(|availability| availability.focused));

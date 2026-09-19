@@ -1,6 +1,9 @@
 //! Ordered sketch creation gestures. The engine owns geometry, constraints,
 //! snapping and history; this state owns only the user's unfinished picks.
 
+#[path = "sketch_preview.rs"]
+mod preview;
+
 use nbcad_sketch::{
     Arc3PointRequest, ArcCenterRequest, CircleMode, CircleRequest, MidpointLineRequest,
     PointRequest, RectangleMode, RectangleRequest, SegmentRequest, SlotMode, SlotRequest,

@@ -1701,6 +1701,18 @@ fn control_for_window(
     engine: &AppState,
     response: Option<Value>,
 ) -> Result<Value, String> {
+    control_for_window_owned(state, window_label, engine, response, None)
+}
+
+/// The native worker captures a specific document incarnation and request
+/// before leaving the render thread. Validate both before consuming its file.
+fn control_for_window_owned(
+    state: &SessionBridgeState,
+    window_label: &str,
+    engine: &AppState,
+    response: Option<Value>,
+    expected: Option<(&nbcad_interface::DocumentContext, &str)>,
+) -> Result<Value, String> {
     // Use the established lease -> publisher order. A completed slow native
     // query must refresh both liveness files before its client sees the receipt.
     let mut lease_path = state
@@ -1714,6 +1726,18 @@ fn control_for_window(
     let Some(publisher) = publishers.get_mut(window_label) else {
         return Ok(Value::Null);
     };
+    if let Some((owner, _)) = expected {
+        if owner.window_id != window_label
+            || publisher.active_project_session_id.as_deref() != Some(&owner.document_id)
+            || engine.active_project_session_id() != owner.document_id
+            || !publisher
+                .by_project
+                .get(&owner.document_id)
+                .is_some_and(|project| project.native_interface_epoch == owner.epoch)
+        {
+            return Err("The control request's document was replaced before it could run".into());
+        }
+    }
     let session_id = if let Some(response) = response.as_ref() {
         let requested = response
             .get("session_id")
@@ -1768,47 +1792,8 @@ fn control_for_window(
         let _ = fs::remove_file(request);
         return Ok(Value::Null);
     }
-    let Ok(entries) = fs::read_dir(&dir) else {
-        return Ok(Value::Null);
-    };
-    let mut paths = entries
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .is_some_and(|n| n.to_string_lossy().ends_with(".request.json"))
-        })
-        .collect::<Vec<_>>();
-    paths.sort();
-    for path in paths {
-        let Ok(body) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(mut request) = serde_json::from_str::<Value>(&body) else {
-            continue;
-        };
-        if !request.is_object() {
-            let _ = fs::remove_file(path);
-            continue;
-        }
-        let valid_id = request.get("id").and_then(Value::as_str).is_some_and(|id| {
-            !id.is_empty()
-                && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
-                && path
-                    .file_name()
-                    .is_some_and(|name| name == format!("{id}.request.json").as_str())
-        });
-        if !valid_id {
-            let _ = fs::remove_file(path);
-            continue;
-        }
-        if request
-            .get("expires_ms")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            < now_ms()
-        {
-            let _ = fs::remove_file(path);
+    for (path, mut request) in pending_control_requests(&dir) {
+        if expected.is_some_and(|(_, id)| request["id"].as_str() != Some(id)) {
             continue;
         }
         request["session_id"] = json!(session_id);
@@ -1901,6 +1886,79 @@ fn control_for_window(
         return Ok(request);
     }
     Ok(Value::Null)
+}
+
+/// Filesystem-only discovery shared by normal control dispatch and native
+/// busy rejection. It performs no model operation or publisher lock access.
+fn pending_control_requests(dir: &Path) -> Vec<(PathBuf, Value)> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(".request.json"))
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            let request: Value = serde_json::from_str(&fs::read_to_string(&path).ok()?).ok()?;
+            let id = request["id"].as_str();
+            let valid = id.is_some_and(|id| {
+                !id.is_empty()
+                    && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+                    && path
+                        .file_name()
+                        .is_some_and(|name| name == format!("{id}.request.json").as_str())
+            });
+            if !valid || request["expires_ms"].as_u64().unwrap_or(0) < now_ms() {
+                let _ = fs::remove_file(&path);
+                return None;
+            }
+            if dir.join(format!("{}.result.json", id.unwrap())).exists() {
+                return None;
+            }
+            Some((path, request))
+        })
+        .collect()
+}
+
+#[cfg(feature = "dev-bevy-host")]
+fn reject_native_control(session: &str, id: &str, code: &str, reason: &str) -> Result<(), String> {
+    let dir = session_root().join(session).join("controls");
+    if let Some((path, _)) = pending_control_requests(&dir)
+        .into_iter()
+        .find(|(_, request)| request["id"].as_str() == Some(id))
+    {
+        atomic_write(
+            &dir.join(format!("{id}.result.json")),
+            &json!({"status":"failed", "code":code, "mutation_applied":false, "error":reason})
+                .to_string(),
+        )?;
+        let _ = fs::remove_file(path);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "dev-bevy-host")]
+fn reject_busy_controls(session: &str, except_id: Option<&str>) -> Result<(), String> {
+    let dir = session_root().join(session).join("controls");
+    for (path, request) in pending_control_requests(&dir) {
+        let id = request["id"].as_str().expect("validated control id");
+        if except_id == Some(id) {
+            continue;
+        }
+        atomic_write(&dir.join(format!("{id}.result.json")), &json!({
+            "status":"failed", "code":"native_busy", "mutation_applied":false,
+            "error":"A modeling operation is still running. This request was not applied; retry after it completes."
+        }).to_string())?;
+        let _ = fs::remove_file(path);
+    }
+    Ok(())
 }
 
 /// Refresh `heartbeat.json` only — no model export / generation bump.
