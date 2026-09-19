@@ -175,6 +175,55 @@ fn delayed_save_cannot_adopt_a_path_or_clean_a_same_tab_replacement() {
 }
 
 #[test]
+fn create_only_save_never_overwrites_a_file_that_appears_after_preparation() {
+    let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let mut workspace = DocumentWorkspace::default();
+    let receipt = observe(&mut workspace, &fixture);
+    let destination = path("create-only.nbcad");
+    let work = workspace
+        .prepare_save(
+            &fixture.bridge,
+            &fixture.engine,
+            &receipt,
+            destination.clone(),
+            false,
+            metadata(),
+        )
+        .unwrap();
+    workspace
+        .complete_save(&fixture.bridge, work.write())
+        .unwrap();
+    fixture.rename(&receipt.owner, "New unsaved edits").unwrap();
+    let changed = observe(&mut workspace, &fixture);
+    fs::remove_file(&destination).unwrap();
+    let work = workspace
+        .prepare_save(
+            &fixture.bridge,
+            &fixture.engine,
+            &changed,
+            destination.clone(),
+            false,
+            metadata(),
+        )
+        .unwrap();
+    fs::write(&destination, b"Created by someone else while Save waited").unwrap();
+    assert!(workspace
+        .complete_save(&fixture.bridge, work.write())
+        .is_err());
+    assert_eq!(
+        fs::read(&destination).unwrap(),
+        b"Created by someone else while Save waited"
+    );
+    assert!(
+        workspace
+            .summaries(&fixture.bridge, &changed.owner)
+            .unwrap()[0]
+            .dirty
+    );
+}
+
+#[test]
 fn new_tabs_retain_independent_engines_and_close_requires_the_exact_dirty_owner() {
     let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
     let fixture = Fixture::new();

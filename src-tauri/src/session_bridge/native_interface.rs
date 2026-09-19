@@ -279,6 +279,8 @@ impl SessionBridgeState {
 pub(crate) enum NativeCommand {
     #[cfg(feature = "dev-bevy-host")]
     Sketch(crate::native_editor::EditorCommand),
+    #[cfg(feature = "dev-bevy-host")]
+    File(controller::files::FileCommand),
     Extrude(extrude::ExtrudeCommand),
     Mutation {
         operation: String,
@@ -392,12 +394,18 @@ pub(crate) fn reduce_action(
             || handle.validate_action(action),
         );
     }
+    #[cfg(feature = "dev-bevy-host")]
+    if let NativeCommand::File(command) = &binding.command {
+        return controller::files::reduce(world, handle, engine, bridge, action, command);
+    }
     if !is_activation(&action.control.input) {
         return Err("This native button does not handle the requested input".into());
     }
     match binding.command {
         #[cfg(feature="dev-bevy-host")]
         NativeCommand::Sketch(command)=>crate::native_editor::execute(world,engine,bridge,&action.context,command,||handle.validate_action(action)),
+        #[cfg(feature="dev-bevy-host")]
+        NativeCommand::File(_)=>unreachable!("File fields are reduced before button activation"),
         NativeCommand::Extrude(_)=>unreachable!("Extrude fields are reduced before button activation"),
         NativeCommand::CancelClose | NativeCommand::DiscardAndClose => {
             bridge.with_native_document_owner(engine, &action.context, || {
@@ -533,7 +541,11 @@ pub(crate) fn finish_mutation(
         None => (None, None),
     };
     let refresh = bridge.with_native_document_owner(engine, &result.context, || {
-        let reset = is_project_replacement(operation) || operation == "redo";
+        let reset = is_project_replacement(operation)
+            || operation == "redo"
+            || world
+                .get_resource::<NativeRenderedDocument>()
+                .is_none_or(|rendered| rendered.owner != result.context);
         let bodies = if let Some(scene) = prepared_scene {
             let (model, visibility) = scene?;
             apply_prepared_scene(world, model, visibility, reset)?

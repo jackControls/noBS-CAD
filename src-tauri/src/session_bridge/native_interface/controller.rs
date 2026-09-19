@@ -27,6 +27,7 @@ use std::{
     time::Duration,
 };
 
+pub(crate) mod files;
 pub(crate) mod worker;
 
 #[derive(Resource, Clone)]
@@ -56,6 +57,7 @@ struct PolledControl {
 
 #[derive(Resource)]
 struct Controller {
+    workspace: Arc<Mutex<workspace::DocumentWorkspace>>,
     window_id: String,
     initial_model: Option<String>,
     initialized: bool,
@@ -85,6 +87,7 @@ impl Controller {
         stop_watcher: Arc<AtomicBool>,
     ) -> Self {
         Self {
+            workspace: Arc::new(Mutex::new(workspace::DocumentWorkspace::default())),
             window_id,
             initial_model,
             initialized: false,
@@ -225,6 +228,9 @@ fn update(world: &mut World, handle: &NativeInterfaceHandle) {
     world.resource_scope(|world, mut state: Mut<Controller>| {
         let result = update_inner(world, handle, &services, &mut state);
         if let Err(error) = result {
+            if world.contains_resource::<files::Files>() {
+                files::dialog_error(world, &error);
+            }
             state.status = error;
         }
     });
@@ -238,6 +244,7 @@ fn update_inner(
 ) -> Result<(), String> {
     let engine = &services.engine;
     let bridge = &services.bridge;
+    files::initialize(world, state.workspace.clone());
     if let Some(outcome) = worker::poll(world, services) {
         for (entity, disabled) in state.busy_controls.drain(..) {
             if let Some(mut control) = world.get_mut::<InterfaceControl>(entity) {
@@ -286,9 +293,15 @@ fn update_inner(
             match outcome.value {
                 Ok(value) => {
                     apply_host_result(state, &value);
+                    if value["request_exit"] == true {
+                        request_close(state, bridge, engine)?;
+                    }
                     state.status = summary(&value);
                 }
-                Err(error) => state.status = format!("{}: {error}", outcome.operation),
+                Err(error) => {
+                    files::dialog_error(world, &error);
+                    state.status = format!("{}: {error}", outcome.operation);
+                }
             }
         }
         if state.close_after_worker && !worker::busy(world) {
@@ -320,6 +333,21 @@ fn update_inner(
             .unwrap_or(1);
         state.initial_owner = Some(owner);
         state.initialized = true;
+        state
+            .workspace
+            .lock()
+            .map_err(|_| "Document workspace lock poisoned")?
+            .observe(bridge, engine, &state.window_id)?;
+    }
+
+    if !state.close_pending {
+        if let Err(error) = files::poll(world, services) {
+            files::dialog_error(world, &error);
+            state.status = error;
+        }
+        if worker::busy(world) {
+            return maintain_busy_window(world, handle, state);
+        }
     }
 
     // Raw OS events are already ordered and stamped by the Winit adapter.
@@ -330,6 +358,9 @@ fn update_inner(
         .cloned()
         .collect::<Vec<_>>();
     for mut event in events {
+        if state.exit_after_receipt {
+            continue;
+        }
         if worker::busy(world) {
             retain_busy_intent(state, &event);
             continue;
@@ -345,6 +376,19 @@ fn update_inner(
             }
             continue;
         }
+        if !state.close_pending {
+            match files::shortcut(world, handle, services, &event) {
+                Ok(Some(value)) => {
+                    state.status = summary(&value);
+                    continue;
+                }
+                Err(error) => {
+                    state.status = error;
+                    continue;
+                }
+                Ok(None) => {}
+            }
+        }
         if let Err(error) =
             crate::native_viewport::winit_host::prepare_native_input(world, handle, &mut event)
         {
@@ -359,6 +403,7 @@ fn update_inner(
                 break;
             }
             if let Err(error) = apply_queued_control(world, handle, services, state, &action) {
+                files::dialog_error(world, &error);
                 state.status = error;
                 accepted = false;
                 break;
@@ -367,7 +412,7 @@ fn update_inner(
         if worker::busy(world) {
             continue;
         }
-        process_modal_keys(handle, bridge, engine, state)?;
+        process_modal_keys(world, handle, bridge, engine, state)?;
         if !accepted {
             continue;
         }
@@ -382,7 +427,7 @@ fn update_inner(
                     continue;
                 }
             }
-            if !state.close_pending {
+            if !state.close_pending && files::modal(world).is_none() {
                 if let (Some(cursor), Some(frame)) = (event.cursor, handle.frame()) {
                     if event.context.as_ref() != Some(&frame.context) {
                         continue;
@@ -424,22 +469,22 @@ fn update_inner(
             break;
         }
         if let Err(error) = apply_queued_control(world, handle, services, state, &action) {
+            files::dialog_error(world, &error);
             state.status = error;
         }
     }
     if worker::busy(world) {
         return maintain_busy_window(world, handle, state);
     }
-    process_modal_keys(handle, bridge, engine, state)?;
+    process_modal_keys(world, handle, bridge, engine, state)?;
     // Serialize controls through their completed semantic frame. The native
     // apply function remains the sole inbox dispatcher and OCC gate.
     if state.pending.is_none() {
         if let Some(session) = bridge.session_id_for_window(&state.window_id)? {
             if !crate::session_bridge::pending_inbox_seqs(&session).is_empty() {
                 let owner = bridge.native_document_context(&state.window_id, engine)?;
-                let reject = state
-                    .close_pending
-                    .then_some("A close confirmation is waiting for input");
+                let reject = (state.close_pending || files::awaiting(world))
+                    .then_some("A document dialog is waiting for input");
                 worker::enqueue_transaction(
                     world,
                     "inbox".into(),
@@ -538,15 +583,19 @@ fn start_control(
     match outcome {
         Ok(value) => {
             apply_host_result(state, &value);
+            if value["request_exit"] == true {
+                request_close(state, &services.bridge, &services.engine)?;
+            }
             response["status"] = json!("applied");
             response["value"] = value;
         }
         Err(error) => {
+            files::dialog_error(world, &error);
             response["status"] = json!("failed");
             response["error"] = json!(error);
         }
     }
-    response["awaiting_input"] = json!(state.close_pending);
+    response["awaiting_input"] = json!(state.close_pending || files::awaiting(world));
     let now = now_ms();
     state.pending = Some(PendingControl {
         response,
@@ -635,6 +684,7 @@ fn maintain_busy_window(
 }
 
 fn process_modal_keys(
+    world: &mut World,
     handle: &NativeInterfaceHandle,
     bridge: &SessionBridgeState,
     engine: &AppState,
@@ -644,14 +694,17 @@ fn process_modal_keys(
         bridge.with_native_document_owner(engine, &request.context, || {
             handle.validate_modal_key(&request)
         })?;
-        if request.modal_scope == "close-document"
-            && request.key.key == "Escape"
+        if request.key.key == "Escape"
             && !request.key.ctrl
             && !request.key.meta
             && !request.key.alt
             && !request.key.shift
         {
-            state.close_pending = false;
+            match request.modal_scope.as_str() {
+                "close-document" => state.close_pending = false,
+                "file-menu" | "file-dialog" => files::escape(world),
+                _ => {}
+            }
         }
     }
     Ok(())
@@ -698,8 +751,14 @@ fn apply_queued_control(
     state: &mut Controller,
     action: &NativeInterfaceAction,
 ) -> Result<(), String> {
+    if state.exit_after_receipt {
+        return Err("The window is closing".into());
+    }
     let value = reduce_control_input(&services.engine, &services.bridge, world, handle, action)?;
     apply_host_result(state, &value);
+    if value["request_exit"] == true {
+        request_close(state, &services.bridge, &services.engine)?;
+    }
     state.status = summary(&value);
     Ok(())
 }
@@ -715,6 +774,9 @@ fn summary(value: &Value) -> String {
 }
 
 fn apply_host_result(state: &mut Controller, value: &Value) {
+    if value["saving_before_exit"] == true {
+        state.close_pending = false;
+    }
     match value["close_decision"].as_str() {
         Some("cancel") => state.close_pending = false,
         Some("discard") if state.close_pending => {
@@ -731,10 +793,19 @@ fn request_close(
     engine: &AppState,
 ) -> Result<(), String> {
     let owner = bridge.native_document_context(&state.window_id, engine)?;
-    let dirty = state.initial_owner.as_ref() != Some(&owner)
-        || bridge
-            .engine_revision_for_window(&state.window_id)?
-            .is_some_and(|revision| revision != state.initial_revision);
+    let tabs = state
+        .workspace
+        .lock()
+        .map_err(|_| "Document workspace lock poisoned")?
+        .summaries(bridge, &owner)?;
+    let dirty = if tabs.is_empty() {
+        state.initial_owner.as_ref() != Some(&owner)
+            || bridge
+                .engine_revision_for_window(&state.window_id)?
+                .is_some_and(|revision| revision != state.initial_revision)
+    } else {
+        tabs.iter().any(|tab| tab.dirty)
+    };
     if dirty {
         state.close_pending = true;
     } else {
@@ -763,6 +834,9 @@ fn apply_control(
     owner: &DocumentContext,
     request: &Value,
 ) -> Result<Value, String> {
+    if state.exit_after_receipt {
+        return Err("The window is closing".into());
+    }
     if request["expires_ms"].as_u64().unwrap_or(0) < now_ms() {
         return Err("Native control request expired".into());
     }
@@ -798,6 +872,13 @@ fn apply_control(
         "file" if ui["command"] == "exit" => {
             request_close(state, &services.bridge, &services.engine)?;
             Ok(json!({"awaiting_input":state.close_pending}))
+        }
+        "file" => {
+            if state.close_pending {
+                return Err("Finish the close confirmation first".into());
+            }
+            files::initialize(world, state.workspace.clone());
+            files::request(world, handle, services, owner, ui)
         }
         "window" => {
             if ui["mode"] == "close" {
@@ -844,6 +925,12 @@ fn synchronize(
     services: &NativeServices,
     state: &mut Controller,
 ) -> Result<(), String> {
+    files::initialize(world, state.workspace.clone());
+    state
+        .workspace
+        .lock()
+        .map_err(|_| "Document workspace lock poisoned")?
+        .observe(&services.bridge, &services.engine, &state.window_id)?;
     let owner = services
         .bridge
         .native_document_context(&state.window_id, &services.engine)?;
@@ -1063,6 +1150,15 @@ fn synchronize(
             height / 2.,
             220.,
         ));
+        rows.push((
+            "save-close".into(),
+            "Save all and close".into(),
+            NativeCommand::File(files::FileCommand::SaveAllAndExit),
+            false,
+            width / 2. - 100.,
+            height / 2. + 42.,
+            200.,
+        ));
     }
     let assets = world.resource::<ViewportUiAssets>().clone();
     let theme = ViewportUiTheme::from_palette(&ViewportPalette::default());
@@ -1130,7 +1226,7 @@ fn synchronize(
             height,
             None,
             Some(Color::srgba(0., 0., 0., 0.45)),
-            40,
+            80,
         );
         decorate(
             world,
@@ -1142,10 +1238,10 @@ fn synchronize(
             (width / 2. - 240.).max(0.),
             height / 2. - 80.,
             480_f32.min(width),
-            135.,
+            185.,
             None,
             Some(theme.panel),
-            41,
+            81,
         );
         decorate(
             world,
@@ -1158,9 +1254,9 @@ fn synchronize(
             height / 2. - 60.,
             440_f32.min(width),
             48.,
-            Some("Unsaved changes\nKeep working, or discard changes and close."),
+            Some("Unsaved changes in this window\nSave all documents, keep working, or discard all changes."),
             None,
-            42,
+            82,
         );
     } else {
         for key in ["close-shade", "close-panel", "close-message"] {
@@ -1168,6 +1264,12 @@ fn synchronize(
                 world.despawn(entity);
             }
         }
+    }
+    let nav_width = ((width - side - 16.) / 7.).clamp(1., 108.);
+    for (index, row) in rows.iter_mut().take(7).enumerate() {
+        row.4 = side + 8. + index as f32 * nav_width;
+        row.5 = (height - bottom - 38.).max(top);
+        row.6 = (nav_width - 2.).max(1.);
     }
     let live = rows
         .iter()
@@ -1259,7 +1361,9 @@ fn synchronize(
         }
         let scope = matches!(
             command,
-            NativeCommand::CancelClose | NativeCommand::DiscardAndClose
+            NativeCommand::CancelClose
+                | NativeCommand::DiscardAndClose
+                | NativeCommand::File(files::FileCommand::SaveAllAndExit)
         )
         .then(|| "close-document".to_owned());
         if control.modal_scope != scope {
@@ -1277,9 +1381,11 @@ fn synchronize(
         drop(control);
         let z = if matches!(
             command,
-            NativeCommand::CancelClose | NativeCommand::DiscardAndClose
+            NativeCommand::CancelClose
+                | NativeCommand::DiscardAndClose
+                | NativeCommand::File(files::FileCommand::SaveAllAndExit)
         ) {
-            50
+            90
         } else {
             30
         };
@@ -1287,6 +1393,7 @@ fn synchronize(
             world.entity_mut(entity).insert(ZIndex(z));
         }
     }
+    files::synchronize(world, services, &owner, width, height)?;
     let client = InterfaceRect {
         x: 0.,
         y: 0.,
@@ -1339,6 +1446,10 @@ fn synchronize(
             },
         ]
         .into_iter()
+        .chain(files::modal(world).map(|name| Surface {
+            name: name.into(),
+            text: None,
+        }))
         .chain(state.close_pending.then(|| Surface {
             name: "close-document".into(),
             text: Some("Unsaved changes".into()),
@@ -1347,7 +1458,7 @@ fn synchronize(
         modal_stack: if state.close_pending {
             vec!["close-document".into()]
         } else {
-            vec![]
+            files::modal(world).into_iter().map(str::to_owned).collect()
         },
         document_visible: visible,
     })?;
@@ -1441,6 +1552,8 @@ fn complete_control(world: &mut World) {
     let handle = world.resource::<NativeInterfaceHandle>().clone();
     world.resource_scope(|world, mut state: Mut<Controller>| {
         if let Some(mut pending) = state.pending.take() {
+            pending.response["awaiting_input"] =
+                json!(state.close_pending || files::awaiting(world));
             let drawable = world
                 .get_resource::<crate::native_viewport::winit_host::NativeRenderAvailability>()
                 .is_some_and(|availability| availability.drawable);
@@ -1456,7 +1569,10 @@ fn complete_control(world: &mut World) {
                     json!("Document changed before native presentation completed");
             } else {
                 let receipt = handle.render_receipt().unwrap_or_default();
-                if drawable && receipt.laid_out_revision > 0 {
+                let frame_matches = handle
+                    .frame()
+                    .is_some_and(|frame| frame.context == pending.owner);
+                if drawable && frame_matches && receipt.laid_out_revision > 0 {
                     presented = handle.wait_for_submission(receipt.laid_out_revision);
                     if !presented && !deadline_elapsed {
                         state.pending = Some(pending);
@@ -1468,7 +1584,11 @@ fn complete_control(world: &mut World) {
                         "submission_timeout"
                     };
                 }
-                match handle.inspect() {
+                match if frame_matches {
+                    handle.inspect()
+                } else {
+                    Err("The current document's interface has not been laid out".into())
+                } {
                     Ok(snapshot) => {
                         pending.response["ui"] = snapshot;
                     }

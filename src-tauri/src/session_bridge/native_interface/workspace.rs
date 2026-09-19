@@ -98,6 +98,7 @@ impl SessionBridgeState {
         engine: &AppState,
         expected: &DocumentReceipt,
         target: Option<&DocumentContext>,
+        validate: impl FnOnce() -> Result<(), String>,
         transition: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
         let mut publishers = self
@@ -122,6 +123,7 @@ impl SessionBridgeState {
                 return Err("The target document tab was replaced".into());
             }
         }
+        validate()?;
         let result = transition();
         // Even a partially failed transition must reflect actual engine
         // ownership, preserving the established transition contract.
@@ -140,6 +142,17 @@ impl DocumentWorkspace {
         engine: &AppState,
         window: &str,
     ) -> Result<DocumentReceipt, String> {
+        if self.tabs.is_empty()
+            && engine.active_project_session_id() == crate::state::BOOTSTRAP_SESSION_ID
+        {
+            // The web host normally assigns the first tab's identity. The
+            // native host must do so too, before retaining it: bootstrap is a
+            // one-time engine rename, never a second tab or an activatable ID.
+            let id = uuid::Uuid::new_v4().to_string();
+            parse_engine_envelope(bridge.with_project_session_transition(window, engine, || {
+                engine.bind_project_session(&id)
+            }))?;
+        }
         let owner = bridge.native_document_context(window, engine)?;
         let (receipt, name) = {
             let publishers = bridge
@@ -228,8 +241,18 @@ impl DocumentWorkspace {
         engine: &AppState,
         expected: &DocumentReceipt,
     ) -> Result<DocumentReceipt, String> {
+        self.new_tab_guarded(bridge, engine, expected, || Ok(()))
+    }
+
+    pub(crate) fn new_tab_guarded(
+        &mut self,
+        bridge: &SessionBridgeState,
+        engine: &AppState,
+        expected: &DocumentReceipt,
+        validate: impl FnOnce() -> Result<(), String>,
+    ) -> Result<DocumentReceipt, String> {
         let id = uuid::Uuid::new_v4().to_string();
-        bridge.native_transition(engine, expected, None, || {
+        bridge.native_transition(engine, expected, None, validate, || {
             parse_engine_envelope(engine.create_project_session(&id))
         })?;
         self.observe(bridge, engine, &expected.owner.window_id)
@@ -242,12 +265,23 @@ impl DocumentWorkspace {
         expected: &DocumentReceipt,
         target: &DocumentContext,
     ) -> Result<DocumentReceipt, String> {
+        self.activate_guarded(bridge, engine, expected, target, || Ok(()))
+    }
+
+    pub(crate) fn activate_guarded(
+        &mut self,
+        bridge: &SessionBridgeState,
+        engine: &AppState,
+        expected: &DocumentReceipt,
+        target: &DocumentContext,
+        validate: impl FnOnce() -> Result<(), String>,
+    ) -> Result<DocumentReceipt, String> {
         if expected.owner.window_id != target.window_id
             || !self.tabs.iter().any(|tab| &tab.owner == target)
         {
             return Err("The requested document tab was removed or replaced".into());
         }
-        bridge.native_transition(engine, expected, Some(target), || {
+        bridge.native_transition(engine, expected, Some(target), validate, || {
             if parse_engine_envelope(engine.activate_project_session(&target.document_id))? != true
             {
                 return Err("The document tab is no longer resident".into());
@@ -269,6 +303,21 @@ impl DocumentWorkspace {
         path: PathBuf,
         overwrite: bool,
         metadata: SaveMetadata<'_>,
+    ) -> Result<PreparedSave, String> {
+        self.prepare_save_guarded(bridge, engine, expected, path, overwrite, metadata, || {
+            Ok(())
+        })
+    }
+
+    pub(crate) fn prepare_save_guarded(
+        &mut self,
+        bridge: &SessionBridgeState,
+        engine: &AppState,
+        expected: &DocumentReceipt,
+        path: PathBuf,
+        overwrite: bool,
+        metadata: SaveMetadata<'_>,
+        validate: impl FnOnce() -> Result<(), String>,
     ) -> Result<PreparedSave, String> {
         validate_path(&path, false)?;
         let tab = self
@@ -293,6 +342,7 @@ impl DocumentWorkspace {
             {
                 return Err("The document changed before Save was prepared".into());
             }
+            validate()?;
             parse_engine_envelope(engine.engine_call("project_export_model", ""))?
                 .as_str()
                 .ok_or("Save requires a completed project model")?
@@ -315,9 +365,10 @@ impl DocumentWorkspace {
         };
         let lease = Arc::new(());
         tab.saving = Arc::downgrade(&lease);
-        // Saving the already-owned destination intentionally replaces it.
-        // Save As to another existing path requires explicit authorization.
-        let replace = overwrite || tab.path.as_ref() == Some(&path);
+        // The caller chooses replacement explicitly (ordinary Save passes
+        // true for its owned path). Preserve create-only semantics through
+        // the atomic write even if another file appears after preparation.
+        let replace = overwrite;
         Ok(PreparedSave {
             receipt: expected.clone(),
             path,
@@ -376,6 +427,18 @@ impl DocumentWorkspace {
         path: PathBuf,
         discard_changes: bool,
     ) -> Result<NativeMutationResult, String> {
+        self.open_guarded(bridge, engine, expected, path, discard_changes, || Ok(()))
+    }
+
+    pub(crate) fn open_guarded(
+        &mut self,
+        bridge: &SessionBridgeState,
+        engine: &AppState,
+        expected: &DocumentReceipt,
+        path: PathBuf,
+        discard_changes: bool,
+        validate: impl FnOnce() -> Result<(), String>,
+    ) -> Result<NativeMutationResult, String> {
         validate_path(&path, true)?;
         let tab = self
             .tabs
@@ -398,7 +461,7 @@ impl DocumentWorkspace {
             expected.revision,
             "cad_load_project_model",
             &json!({"model_json":archive.model_json()}),
-            || Ok(()),
+            validate,
         )?;
         self.observe(bridge, engine, &expected.owner.window_id)?;
         let tab = self
@@ -424,6 +487,17 @@ impl DocumentWorkspace {
         expected: &DocumentReceipt,
         discard_changes: bool,
     ) -> Result<DocumentReceipt, String> {
+        self.close_active_guarded(bridge, engine, expected, discard_changes, || Ok(()))
+    }
+
+    pub(crate) fn close_active_guarded(
+        &mut self,
+        bridge: &SessionBridgeState,
+        engine: &AppState,
+        expected: &DocumentReceipt,
+        discard_changes: bool,
+        validate: impl FnOnce() -> Result<(), String>,
+    ) -> Result<DocumentReceipt, String> {
         let tab = self
             .tabs
             .iter()
@@ -440,7 +514,7 @@ impl DocumentWorkspace {
             .iter()
             .find(|tab| tab.owner.document_id != expected.owner.document_id)
             .map(|tab| tab.owner.clone());
-        bridge.native_transition(engine, expected, next.as_ref(), || {
+        bridge.native_transition(engine, expected, next.as_ref(), validate, || {
             match next.as_ref() {
                 Some(ref next) => {
                     if parse_engine_envelope(engine.activate_project_session(&next.document_id))?

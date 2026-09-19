@@ -208,6 +208,24 @@ pub(crate) fn enqueue_control_poll(
     )
 }
 
+/// Saving an unchanged document requires no new mesh or presentation snapshot.
+pub(crate) fn enqueue_document_io(
+    world: &mut World,
+    operation: String,
+    transaction: impl FnOnce(&NativeServices, &DispatchGuard) -> Result<NativeMutationResult, String>
+        + Send
+        + 'static,
+    complete: impl FnOnce(
+            &mut World,
+            &NativeServices,
+            Result<NativeMutationResult, String>,
+        ) -> Result<Value, String>
+        + Send
+        + 'static,
+) -> Result<Value, String> {
+    enqueue(world, operation, transaction, complete, false)
+}
+
 fn enqueue(
     world: &mut World,
     operation: String,

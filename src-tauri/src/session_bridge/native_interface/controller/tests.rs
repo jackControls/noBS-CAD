@@ -272,6 +272,43 @@ fn delayed_receipt_cannot_inspect_or_invalidate_the_replacement_documents_contro
 }
 
 #[test]
+fn completed_tab_transition_never_certifies_the_previous_documents_frame() {
+    let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let (mut app, _, _) = prepare(&fixture);
+    let path = pending(&fixture, &mut app, "10-4");
+    fixture
+        .bridge
+        .apply_native_mutation(
+            &fixture.engine,
+            &fixture.owner(),
+            "cad_new_project",
+            &json!({}),
+            || Ok(()),
+        )
+        .unwrap();
+    {
+        let mut controller = app.world_mut().resource_mut::<Controller>();
+        let pending = controller.pending.as_mut().unwrap();
+        // The worker committed B, but layout is still showing A.
+        pending.owner = fixture.owner();
+        pending.presentation_deadline = 0;
+    }
+    complete_control(app.world_mut());
+    let response: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(
+        response["status"], "applied",
+        "Do not invite replay of a committed transition"
+    );
+    assert_eq!(response["presented"], false);
+    assert_eq!(response["presentation_pending"], true);
+    assert!(
+        response.get("ui").is_none(),
+        "Old controls must never accompany B's receipt"
+    );
+}
+
+#[test]
 fn queued_command_checks_live_binding_before_a_later_layout_can_publish_the_rebind() {
     let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
     let fixture = Fixture::new();

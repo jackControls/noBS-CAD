@@ -922,6 +922,9 @@ struct InterfaceButtonStyle(ViewportUiTheme);
 
 /// Create a genuine retained button; root attaches its typed native command to
 /// the returned entity. Updating `InterfaceControl` changes this same widget.
+#[derive(Component, PartialEq)]
+pub(crate) struct InterfaceCaption(pub String);
+
 pub(crate) fn spawn_button(
     commands: &mut Commands,
     camera: Entity,
@@ -1029,6 +1032,7 @@ fn update_controls(
         &InterfaceLabel,
         &InterfaceButtonStyle,
         Option<&ribbon::RibbonButton>,
+        Option<&InterfaceCaption>,
         &mut Node,
         &mut BackgroundColor,
         &mut BorderColor,
@@ -1046,7 +1050,7 @@ fn update_controls(
             camera.is_active = active;
         }
     }
-    for (entity, control, label, style, ribbon, mut node, mut background, mut border) in
+    for (entity, control, label, style, ribbon, caption, mut node, mut background, mut border) in
         &mut controls
     {
         let key = ControlKey(entity.to_bits());
@@ -1087,7 +1091,10 @@ fn update_controls(
             *border = edge;
         }
         if let Ok((mut text, mut color)) = labels.get_mut(label.0) {
-            let caption = ribbon.map_or(control.label.as_str(), |ribbon| ribbon.label());
+            let caption = ribbon.map_or_else(
+                || caption.map_or(control.label.as_str(), |caption| caption.0.as_str()),
+                |ribbon| ribbon.label(),
+            );
             if text.0 != caption {
                 text.0 = caption.to_owned();
             }
