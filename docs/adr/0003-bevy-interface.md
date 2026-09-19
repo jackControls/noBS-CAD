@@ -70,10 +70,11 @@ dependency graph is not evidence that these behaviors work.
 
 ## Parity and retirement
 
-The [baseline inventory](../development/ui-parity-baseline.md) and its linked
-full-window captures establish the reference. Capture failures are explicitly
-marked as defects to improve, rather than treated as successful parity. The
-original user document and application window remain untouched during capture.
+The local baseline inventory and full-window captures establish the working
+reference. They are temporary migration material, kept outside the repository
+and removed after parity validation. Capture failures are marked as defects to
+improve, rather than treated as successful parity. The original user document
+and application window remain untouched during capture.
 
 For each migrated area, validate its normal route, invalid-input route,
 Cancel/Undo, keyboard and MCP operation, persistence, and actual rendering.

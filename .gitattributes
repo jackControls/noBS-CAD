@@ -1,3 +1,0 @@
-# Historical live-interface evidence is generated data, not implementation.
-docs/development/ui-baseline/**/*.controls.json linguist-generated=true
-docs/development/ui-baseline/**/captures.json linguist-generated=true
