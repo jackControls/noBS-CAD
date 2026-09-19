@@ -1,5 +1,7 @@
 /** Semantic automation of the controls users actually see. No CSS selectors,
  * script evaluation, or per-dialog copies of business logic cross this API. */
+import { translate } from './i18n';
+
 export interface UiControl {
   id: string;
   surface: string;
@@ -148,13 +150,13 @@ export function operateUi(request: UiAction, context?: unknown): HTMLElement | n
   if (request.action === 'inspect') return null;
   const observed = request.target ? current.get(request.target) : null;
   const element = observed?.element;
-  if (inspectedContext !== context) throw new Error('Document changed; inspect the UI again');
-  if (!element || !visible(element)) throw new Error('Control is stale or unavailable; inspect the UI again');
-  if (observed.label !== label(element) || observed.surface !== surface(element)) throw new Error('Control changed; inspect the UI again');
-  if (element.matches(':disabled,[aria-disabled="true"]') || element.closest('[aria-disabled="true"]')) throw new Error('Control is disabled');
+  if (inspectedContext !== context) throw new Error(translate('ui.errorDocumentChanged'));
+  if (!element || !visible(element)) throw new Error(translate('ui.errorControlStale'));
+  if (observed.label !== label(element) || observed.surface !== surface(element)) throw new Error(translate('ui.errorControlChanged'));
+  if (element.matches(':disabled,[aria-disabled="true"]') || element.closest('[aria-disabled="true"]')) throw new Error(translate('ui.errorControlDisabled'));
   const modals = [...document.querySelectorAll<HTMLElement>('[aria-modal="true"]')].filter(visible);
   const modal = modals[modals.length - 1];
-  if (modal && !modal.contains(element)) throw new Error('A modal dialog blocks this control');
+  if (modal && !modal.contains(element)) throw new Error(translate('ui.errorModalBlocksControl'));
   element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   // HTMLElement.click() does not perform the browser's normal focus default.
   // Focus first so fields with onBlur commits behave like an actual UI click.
@@ -169,23 +171,23 @@ export function operateUi(request: UiAction, context?: unknown): HTMLElement | n
       detail: request.action === 'double_click' ? 2 : 1, clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2,
     }));
   } else if (request.action === 'set_value') {
-    if (typeof request.value !== 'string') throw new Error('set_value requires a string value');
-    if (element instanceof HTMLInputElement && ['file','password','checkbox','radio','button','submit'].includes(element.type)) throw new Error('This control does not accept text; use its appropriate UI action');
-    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement)) throw new Error('Control is not an editable field');
-    if ('readOnly' in element && element.readOnly) throw new Error('Field is read-only');
-    if (element instanceof HTMLSelectElement && ![...element.options].some(o => o.value === request.value && !o.disabled)) throw new Error('Option is unavailable');
+    if (typeof request.value !== 'string') throw new Error(translate('ui.errorSetValueRequiresString'));
+    if (element instanceof HTMLInputElement && ['file','password','checkbox','radio','button','submit'].includes(element.type)) throw new Error(translate('ui.errorControlNotText'));
+    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement)) throw new Error(translate('ui.errorControlNotEditable'));
+    if ('readOnly' in element && element.readOnly) throw new Error(translate('ui.errorFieldReadOnly'));
+    if (element instanceof HTMLSelectElement && ![...element.options].some(o => o.value === request.value && !o.disabled)) throw new Error(translate('ui.errorOptionUnavailable'));
     const prototype = element instanceof HTMLInputElement ? HTMLInputElement.prototype : element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLSelectElement.prototype;
     Object.getOwnPropertyDescriptor(prototype, 'value')!.set!.call(element, request.value);
     element.dispatchEvent(new Event('input', { bubbles: true }));
     element.dispatchEvent(new Event('change', { bubbles: true }));
   } else if (request.action === 'key') {
-    if (!['Enter','Escape','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','Delete','Backspace'].includes(request.key ?? '')) throw new Error('Unsupported key');
+    if (!['Enter','Escape','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','Delete','Backspace'].includes(request.key ?? '')) throw new Error(translate('ui.errorUnsupportedKey'));
     element.focus();
     const accepted = element.dispatchEvent(new KeyboardEvent('keydown', { key: request.key, bubbles: true, cancelable: true }));
     // Synthetic key events do not trigger the browser's native form default.
     if (accepted && request.key === 'Enter' && element instanceof HTMLInputElement) element.form?.requestSubmit();
     if (accepted && request.key === 'Enter' && disclosureDetails(element)) element.click();
     element.dispatchEvent(new KeyboardEvent('keyup', { key: request.key, bubbles: true }));
-  } else throw new Error('Unsupported UI action');
+  } else throw new Error(translate('ui.errorUnsupportedUiAction'));
   return element;
 }

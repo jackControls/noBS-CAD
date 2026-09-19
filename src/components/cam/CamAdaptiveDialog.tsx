@@ -8,6 +8,7 @@ import {
 import { commitLength, displayLength } from '../../cam/units';
 import { modelBottomZInSetup, modelTopZInSetup } from '../../cam/geometry';
 import type { CamCoolantMode, CamOperationDto, CamToolDto } from '../../engine/types';
+import { useTranslation } from '../../i18n';
 import { useAppStore } from '../../store/appStore';
 import type { CamOperationPlacement } from '../../cam/editing';
 import {
@@ -22,17 +23,26 @@ import { CamCuttingPair, CamCuttingHint, useCamCutting } from './camCuttingField
 type Adaptive = Extract<CamOperationDto, { kind: 'adaptive3d' }>;
 const compatible = (tool: CamToolDto) => camToolCompatible('adaptive3d', tool);
 type HeightKey = 'bottom' | 'top' | 'feed' | 'retract' | 'clearance';
-const HEIGHT_ROWS: Array<{ key: HeightKey; label: string; below: HeightFrom[] }> = [
-  { key: 'clearance', label: 'CLEARANCE HEIGHT', below: ['bottom', 'top', 'feed', 'retract'] },
-  { key: 'retract', label: 'RETRACT HEIGHT', below: ['bottom', 'top', 'feed'] },
-  { key: 'feed', label: 'FEED HEIGHT', below: ['bottom', 'top'] },
-  { key: 'top', label: 'TOP HEIGHT', below: ['bottom'] },
-  { key: 'bottom', label: 'BOTTOM HEIGHT', below: [] },
+/** Title-case height-plane labels used as the label prefix of height errors. */
+const HEIGHT_LABEL_KEYS: Record<HeightKey, string> = {
+  bottom: 'cam.operation.heightBottom',
+  top: 'cam.operation.heightTop',
+  feed: 'cam.operation.heightFeed',
+  retract: 'cam.operation.heightRetract',
+  clearance: 'cam.operation.heightClearance',
+};
+const HEIGHT_ROWS: Array<{ key: HeightKey; labelKey: string; below: HeightFrom[] }> = [
+  { key: 'clearance', labelKey: 'cam.operation.sectionClearanceHeight', below: ['bottom', 'top', 'feed', 'retract'] },
+  { key: 'retract', labelKey: 'cam.operation.sectionRetractHeight', below: ['bottom', 'top', 'feed'] },
+  { key: 'feed', labelKey: 'cam.operation.sectionFeedHeight', below: ['bottom', 'top'] },
+  { key: 'top', labelKey: 'cam.operation.sectionTopHeight', below: ['bottom'] },
+  { key: 'bottom', labelKey: 'cam.operation.sectionBottomHeight', below: [] },
 ];
 
 /** Only parameter editing lives here. Rust captures current target meshes,
  * resolves their conservative envelope, and computes every roughing move. */
 export function CamAdaptiveDialog({ editing, insertion }: { editing?: Adaptive; insertion?: CamOperationPlacement }) {
+  const { t } = useTranslation();
   const cam = useAppStore((state) => state.camDocument);
   const scene = useAppStore((state) => state.solidScene);
   const setup = editing
@@ -47,7 +57,7 @@ export function CamAdaptiveDialog({ editing, insertion }: { editing?: Adaptive; 
   const diameter = initialTool?.diameter ?? 6;
   const p = editing?.parameters;
   const [tab, setTab] = useState<OpTab>('tool');
-  const [name, setName] = useState(editing?.name ?? 'High Speed Roughing');
+  const [name, setName] = useState(editing?.name ?? t('cam.operation.defaultHighSpeedRoughingName'));
   const [toolId, setToolId] = useState<number | null>(initialTool?.id ?? null);
   const feeds = useCamCutting({ units, tool: cam.tools.find(t => t.id === toolId) }, editing?.cutting ?? initialTool?.cutting);
   const [operationId, setOperationId] = useState<number | null>(editing?.id ?? null);
@@ -86,14 +96,14 @@ export function CamAdaptiveDialog({ editing, insertion }: { editing?: Adaptive; 
     linkFeed: seed(p?.linking_feed ?? initialTool?.cutting.feed_xy ?? 0),
     stayDown: seed(p?.stay_down_distance ?? diameter * 5),
   });
-  const chooseTool = useCallback((t: CamToolDto) => {
-    setToolId(t.id);
-    setCoolant(t.cutting.coolant);
-    feeds.reset(t.cutting);
+  const chooseTool = useCallback((tool: CamToolDto) => {
+    setToolId(tool.id);
+    setCoolant(tool.cutting.coolant);
+    feeds.reset(tool.cutting);
     const display = (mm: number) => String(Number(displayLength(mm, units).toFixed(5)));
-    setDraft((d) => ({ ...d, rampFeed: display(t.cutting.feed_z), linkFeed: display(t.cutting.feed_xy),
-      load: display(t.diameter * 0.2), radius: display(t.diameter * 0.2),
-      stepdown: display(Math.min(t.diameter, t.flute_length / 2)), rampStep: display(Math.min(1, t.diameter / 4)),
+    setDraft((d) => ({ ...d, rampFeed: display(tool.cutting.feed_z), linkFeed: display(tool.cutting.feed_xy),
+      load: display(tool.diameter * 0.2), radius: display(tool.diameter * 0.2),
+      stepdown: display(Math.min(tool.diameter, tool.flute_length / 2)), rampStep: display(Math.min(1, tool.diameter / 4)),
     }));
   }, [units]);
   useCamToolPickResult(compatible, chooseTool);
@@ -109,15 +119,15 @@ export function CamAdaptiveDialog({ editing, insertion }: { editing?: Adaptive; 
     if (!setup || busy) return;
     setError(null);
     try {
-      if (!tool || !compatible(tool)) throw new Error('Choose a center-cutting flat or bull-nose end mill with a flat land. Drills and chamfer mills cannot rough.');
+      if (!tool || !compatible(tool)) throw new Error(t('cam.operation.errorAdaptiveTool'));
       const links = linking.read();
-      if (!setup.body_ids.length) throw new Error('Select target bodies in the setup first.');
-      if (setup.resolved_stock.shape === 'rest') throw new Error('This preview needs explicit setup stock; rest-from-setup is not supported yet.');
+      if (!setup.body_ids.length) throw new Error(t('cam.operation.errorSelectTargetBodies'));
+      if (setup.resolved_stock.shape === 'rest') throw new Error(t('cam.operation.errorAdaptiveStock'));
       const mm = (key: keyof typeof draft) => commitLength(parseDraft(draft[key], key), units);
       const resolved: Partial<Record<HeightKey, number>> = {};
       const heightExpression = (key: HeightKey) => ({
         reference: heightDrafts[key].from,
-        offset: commitLength(parseDraft(heightDrafts[key].offset, `${key} offset`), units),
+        offset: commitLength(parseDraft(heightDrafts[key].offset, t('cam.operation.labelOffset').replace('{label}', t(HEIGHT_LABEL_KEYS[key]))), units),
       });
       const heights: CamOperationHeightExpressionsInput = {
         top: heightExpression('top'), bottom: heightExpression('bottom'),
@@ -132,7 +142,7 @@ export function CamAdaptiveDialog({ editing, insertion }: { editing?: Adaptive; 
         const row = heightDrafts[key];
         const offset = heights[key]!.offset;
         const base = bases[row.from] ?? resolved[row.from as keyof typeof resolved];
-        if (base === undefined) throw new Error(`${key} height has an unavailable reference. Choose a model, stock, or lower operation height.`);
+        if (base === undefined) throw new Error(t('cam.operation.errorHeightUnavailableRef').replace('{key}', key));
         resolved[key] = base + offset;
       }
       const input: CamOperationInput = {
@@ -169,61 +179,61 @@ export function CamAdaptiveDialog({ editing, insertion }: { editing?: Adaptive; 
         className="feature-dialog pointer-events-auto absolute right-5 top-[160px] flex max-h-[calc(100vh-218px)] w-[340px] flex-col overflow-hidden rounded border border-edge bg-panel shadow-2xl">
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
           <CamToolIcon id="camAdaptive" size={18} />
-          <span className="flex-1 text-xs font-semibold text-ink">{editing ? `Edit — ${editing.name}` : 'New High Speed Roughing operation'}</span>
-          <button type="button" aria-label="Close operation" disabled={busy} onClick={close} className="rounded p-1 text-mute hover:bg-edge hover:text-ink"><X size={14} /></button>
+          <span className="flex-1 text-xs font-semibold text-ink">{editing ? t('cam.operation.editOperationTitle').replace('{name}', editing.name) : t('cam.operation.newOperationTitle').replace('{name}', t('cam.operation.defaultHighSpeedRoughingName'))}</span>
+          <button type="button" aria-label={t('cam.operation.closeOperation')} disabled={busy} onClick={close} className="rounded p-1 text-mute hover:bg-edge hover:text-ink"><X size={14} /></button>
         </header>
         <fieldset disabled={busy} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
           <p className="rounded border border-warn/40 bg-warn/10 p-2 text-[10px] text-warn">
-            Experimental roughing. Inspect CAM and NC simulation before use. Small corners and undercuts may remain; no holder or fixture checks.
+            {t('cam.operation.adaptiveExperimentalNote')}
           </p>
           {error && <p role="alert" className="text-xs text-warn">{error}</p>}
-          <label className="block"><span className={CAM_DIALOG_LABEL}>Operation name</span>
+          <label className="block"><span className={CAM_DIALOG_LABEL}>{t('cam.operation.operationName')}</span>
             <input className={CAM_DIALOG_INPUT} value={name} onChange={(e) => setName(e.target.value)} /></label>
           <CamOperationTabs value={tab} onChange={setTab} />
-          {tab === 'tool' && <DialogSection title="CUTTER & FEEDS">
-            <p className="text-xs text-ink">{tool?.name ?? 'No compatible tool selected'}</p>
-            <button type="button" onClick={() => openCamToolPicker('adaptive3d')} className="text-xs text-accent">Choose from tool library…</button>
-            <p className="text-[10px] text-mute">Center-cutting flat and bull-nose end mills, including radiused or chamfered corners. Check feeds for your tool and material.</p>
-            {tool && !compatible(tool) && <p role="alert" className="text-xs text-warn">The assigned tool is incompatible. Choose a supported end mill before generating this path.</p>}
+          {tab === 'tool' && <DialogSection title={t('cam.operation.sectionCutterFeeds')}>
+            <p className="text-xs text-ink">{tool?.name ?? t('cam.operation.noCompatibleToolSelected')}</p>
+            <button type="button" onClick={() => openCamToolPicker('adaptive3d')} className="text-xs text-accent">{t('cam.operation.chooseFromToolLibrary')}</button>
+            <p className="text-[10px] text-mute">{t('cam.operation.adaptiveToolHint')}</p>
+            {tool && !compatible(tool) && <p role="alert" className="text-xs text-warn">{t('cam.operation.assignedToolIncompatibleEndMill')}</p>}
             <div className="grid grid-cols-2 gap-2">
               <CamCuttingPair feeds={feeds} pair="speed" />
-              <CamCuttingPair feeds={feeds} pair="cutting" primaryLabel="Cutting feed" />
-              <CamCuttingPair feeds={feeds} pair="plunge" primaryLabel="Plunge feed" />
+              <CamCuttingPair feeds={feeds} pair="cutting" primaryLabel={t('cam.operation.labelCuttingFeed')} />
+              <CamCuttingPair feeds={feeds} pair="plunge" primaryLabel={t('cam.operation.labelPlungeFeed')} />
               <CamCuttingHint />
             </div>
-            <label className="block"><span className={CAM_DIALOG_LABEL}>Coolant</span>
+            <label className="block"><span className={CAM_DIALOG_LABEL}>{t('cam.operation.coolant')}</span>
               <select className={CAM_DIALOG_INPUT} value={coolant} onChange={(e) => setCoolant(e.target.value as CamCoolantMode)}>
-                <option value="off">Off</option><option value="flood">Flood</option><option value="mist">Mist</option>
+                <option value="off">{t('cam.operation.coolantOff')}</option><option value="flood">{t('cam.operation.coolantFlood')}</option><option value="mist">{t('cam.operation.coolantMist')}</option>
               </select></label>
           </DialogSection>}
-          {tab === 'geometry' && <DialogSection title="SETUP TARGET & STOCK">
-            <p className="text-xs text-ink">{setup.name} · {setup.body_ids.length} target {setup.body_ids.length === 1 ? 'body' : 'bodies'}</p>
-            <p className="text-[11px] text-mute">Uses all setup target bodies and the full setup stock. Current CAD geometry is captured on every regeneration. Edit Stock & WCS to change targets.</p>
-            <p className="text-[11px] text-mute">Upper-envelope protection supports changing 3D cross-sections, but cannot reach undercuts. Previous-operation and previous-setup rest stock are not used.</p>
+          {tab === 'geometry' && <DialogSection title={t('cam.operation.sectionSetupTargetStock')}>
+            <p className="text-xs text-ink">{(setup.body_ids.length === 1 ? t('cam.operation.setupTargetBody') : t('cam.operation.setupTargetBodies')).replace('{name}', setup.name).replace('{count}', String(setup.body_ids.length))}</p>
+            <p className="text-[11px] text-mute">{t('cam.operation.adaptiveGeometryNote1')}</p>
+            <p className="text-[11px] text-mute">{t('cam.operation.adaptiveGeometryNote2')}</p>
           </DialogSection>}
           {tab === 'heights' && <>
-            {HEIGHT_ROWS.map(({ key, label, below }) => <DialogSection key={key} title={label}>
+            {HEIGHT_ROWS.map(({ key, labelKey, below }) => <DialogSection key={key} title={t(labelKey)}>
               <HeightField from={heightDrafts[key].from} offset={heightDrafts[key].offset} unit={length} chainBelow={below}
                 onFrom={(from) => setHeightDrafts((all) => ({ ...all, [key]: { ...all[key], from } }))}
                 onOffset={(offset) => setHeightDrafts((all) => ({ ...all, [key]: { ...all[key], offset } }))} />
             </DialogSection>)}
-            <p className="text-[10px] text-mute">Top and Bottom define the depth range. A lower Top does not assume stock above it is gone: entry clearance, flute reach and the first stepdown are checked against known incoming stock.</p>
+            <p className="text-[10px] text-mute">{t('cam.operation.adaptiveHeightsNote')}</p>
           </>}
-          {tab === 'passes' && <DialogSection title="ENGAGEMENT & ALLOWANCES">
-            {field('load', 'Optimal radial load')}{field('stepdown', 'Maximum roughing stepdown')}
-            {field('radius', 'Minimum cutting radius')}{field('radial', 'Radial stock to leave')}{field('axial', 'Axial stock to leave')}
-            {field('tolerance', 'Target envelope cell width')}
-            <p className="text-[10px] text-mute">Envelope resolution adds a conservative safety margin. It is not a finished-part tolerance. Smaller values require more memory and planning time.</p>
+          {tab === 'passes' && <DialogSection title={t('cam.operation.sectionEngagementAllowances')}>
+            {field('load', t('cam.operation.labelOptimalRadialLoad'))}{field('stepdown', t('cam.operation.labelMaximumRoughingStepdown'))}
+            {field('radius', t('cam.operation.labelMinimumCuttingRadius'))}{field('radial', t('cam.operation.labelRadialStockToLeave'))}{field('axial', t('cam.operation.labelAxialStockToLeave'))}
+            {field('tolerance', t('cam.operation.labelTargetEnvelopeCellWidth'))}
+            <p className="text-[10px] text-mute">{t('cam.operation.adaptivePassesNote')}</p>
           </DialogSection>}
           {tab === 'linking' && <>
-            <label className="flex gap-2 text-xs text-ink"><input type="checkbox" checked={cavities} onChange={(e) => setCavities(e.target.checked)} />Machine enclosed cavities</label>
+            <label className="flex gap-2 text-xs text-ink"><input type="checkbox" checked={cavities} onChange={(e) => setCavities(e.target.checked)} />{t('cam.operation.machineEnclosedCavities')}</label>
             <CamLinkingFields value={linking} setup={setup} />
           </>}
         </fieldset>
         <footer className="flex h-11 shrink-0 items-center justify-end gap-2 border-t border-edge px-3">
-          <button type="button" disabled={busy} onClick={close} className="h-7 rounded border border-edge px-3 text-[10px] font-semibold text-mute hover:text-ink">Cancel</button>
+          <button type="button" disabled={busy} onClick={close} className="h-7 rounded border border-edge px-3 text-[10px] font-semibold text-mute hover:text-ink">{t('cam.operation.cancel')}</button>
           <button type="submit" disabled={busy} className="h-7 rounded border border-accent/50 bg-accent/15 px-3 text-[10px] font-semibold text-accent hover:bg-accent/25 disabled:opacity-50">
-            {busy ? 'Generating…' : 'Save & generate'}
+            {busy ? t('cam.operation.generating') : t('cam.operation.saveAndGenerate')}
           </button>
         </footer>
       </form>

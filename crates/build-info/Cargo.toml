@@ -1,6 +1,9 @@
 [package]
 name = "nbcad-build-info"
-version = "0.1.0"
+# `BuildInfo::version` is `env!("CARGO_PKG_VERSION")`, so this is the version the
+# About dialog and the MCP `initialize` result report. It must track the product
+# version in package.json; `version_carriers` in src/lib.rs enforces that.
+version = "0.2.0"
 edition = "2021"
 description = "Compiled application identity without invalidating the CAD engine dependency graph"
 license = "LGPL-2.1-or-later"
@@ -8,3 +11,6 @@ repository = "https://github.com/jackControls/noBS-CAD"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

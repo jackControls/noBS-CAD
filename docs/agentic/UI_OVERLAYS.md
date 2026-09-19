@@ -34,6 +34,32 @@ Do not work around the problem by removing a deliberate shell clip, adding an
 extreme `z-index`, hard-coding another shell-height offset, or expanding the
 native viewport mask to include an invisible/clipped element.
 
+## Flyouts that overflow their own surface (issue 127)
+
+A menu flyout is an `absolute` child that paints outside its menu's border
+box. On the desktop builds the native viewport is an opaque child above the
+webview, and it is cut open only around the rectangles collected from
+`[data-native-viewport-overlay]`, `.feature-dialog`, `[role="dialog"]` and
+`[data-ribbon-menu]` roots. A `getBoundingClientRect()` never includes an
+overflowing descendant, so a flyout could paint and hit-test correctly in the
+browser while remaining behind the native surface in the packaged app: the
+menu appeared, the submenu did not.
+
+Therefore:
+
+1. Give the flyout element its own `data-native-viewport-overlay` island so the
+   host cuts it out of the native viewport.
+2. Reveal it by mounting/unmounting it (or otherwise mutating the DOM). The
+   native mask is refreshed from DOM mutations; a CSS-only `:hover` reveal
+   never tells the compositor that a new island exists.
+3. Do not rely on `:hover` alone for reachability: the same state must open the
+   panel from a pointer press and from the keyboard.
+
+`cargo xtask test-mcp contracts` asserts the island rectangle covers a flyout
+interior point beyond the menu box, and `e2e-ribbon-submenu.mjs` drives the
+real DRAW flyout end to end. Neither substitutes for checking the packaged
+appearance mode on a desktop build.
+
 ## Required regression
 
 Test the windowed layout at minimum; also cover fullscreen when the shell

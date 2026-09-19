@@ -114,6 +114,21 @@ cargo test --locked -p nbcad-occt --features native-occt
 cargo test --locked --manifest-path mcp-server/Cargo.toml -- --test-threads=1
 ```
 
+The desktop shell is its own Cargo workspace, so the root `--workspace` command
+above does not reach it. Run both of its configurations with the matching OCCT SDK
+available:
+
+```sh
+cargo test --locked --manifest-path src-tauri/Cargo.toml
+cargo test --locked --manifest-path src-tauri/Cargo.toml --features dev-bevy-host
+```
+
+`dev-bevy-host` is the temporary native host that is replacing the React shell. It
+is the only configuration that compiles the interface shell, the winit host, the
+native sketch editor and the native Extrude form, so the default run does not
+verify a change to any of them. The **Native desktop host tests** workflow runs
+both configurations in CI.
+
 The MCP suite includes complete recipe acceptance tests and can take a while.
 Run its native tests sequentially so heavy OCCT operations do not compete for
 memory and request deadlines. The **Desktop packages** workflow also checks the
@@ -152,7 +167,7 @@ packaged paths. A standalone `nbcad-mcp` server needs no `--server-arg`.
 For an AppImage without FUSE, pass each argument explicitly:
 
 ```sh
-cargo xtask run-script --recipe fillet-basics --server /absolute/path/to/noBS.CAD_0.1.0_amd64.AppImage --server-arg --appimage-extract-and-run --server-arg --headless
+cargo xtask run-script --recipe fillet-basics --server /absolute/path/to/noBS.CAD_0.2.0_amd64.AppImage --server-arg --appimage-extract-and-run --server-arg --headless
 ```
 
 `--repeat 2` compares independent headless runs. To watch in an existing CAD
@@ -160,6 +175,36 @@ window instead, omit `--repeat` and add `--session UUID --new --present --speed 
 The session must identify the intended live document; `--new` preserves it and
 opens a blank design tab. Add `--save /absolute/path/result.nbcad` to save that
 live result. [Native scripts](native-scripts.md) describes the source and controls.
+
+### Headless editable projects (including CI)
+
+`--save` also works **without** `--desktop` or `--session`. It exports the native
+engine's complete project model into the normal `.nbcad` ZIP container, then
+reopens those bytes in an independent headless engine. A changed model, failed
+geometry recomputation or missing body fails the command before the destination
+is written. Existing live-session saves still use the desktop's normal Save.
+
+```sh
+cargo build --locked --release --manifest-path mcp-server/Cargo.toml
+cargo xtask run-script --recipe garden-bench --server ./mcp-server/target/release/nbcad-mcp --save ./target/demo-projects/bench.nbcad
+cargo xtask run-script --recipe d-screw-vise --server ./mcp-server/target/release/nbcad-mcp --save ./target/demo-projects/vise.nbcad
+cargo xtask run-script --recipe vertical-axis-turbine --server ./mcp-server/target/release/nbcad-mcp --save ./target/demo-projects/turbine.nbcad
+```
+
+Use `nbcad-mcp.exe` on Windows. No display server, browser, desktop session or
+virtual framebuffer is needed. Sketches, feature history, assemblies, drawings,
+appearances, visibility and CAM intent remain editable; these are not mesh
+exports. Generated archives use fixed epoch timestamps for reproducibility and
+the MCP engine's application version (which need not equal the xtask version).
+
+The **MCP server** workflow retains `bench.nbcad`, `vise.nbcad`, `turbine.nbcad`
+and `demo-projects.json` (source commit, version, sizes and SHA-256 hashes) in
+`noBS-CAD-demo-projects-<platform>-<commit>` artifacts after successful tests.
+It reuses the native vise/turbine acceptance exports and saves the bench during
+its existing replay check. The workflow runs for matching PR/main changes, version
+tags, and manual dispatch. These are **Actions artifacts**, not public release
+assets: release publication must upload the three files from the matching tagged
+commit. This workflow has no release-write permission and does not publish them.
 
 `--init-timeout-seconds` bounds only the MCP handshake (30 seconds by default,
 configurable from 1 to 600); long modeling and presentation runs keep their own
@@ -245,4 +290,3 @@ change needs a narrower check.
 See [architecture](proposed-architecture.md), [assemblies](ASSEMBLIES.md),
 [drawings](2D_DRAWINGS.md), [the MCP harness](mcp-harness.md), and
 [the knowledge library](../knowledge/index.md) for their contracts.
-

@@ -135,12 +135,12 @@ export function AppearanceDialog() {
         </header>
 
         <div className="min-h-0 overflow-y-auto p-4">
-          <section aria-label="About noBS CAD" className="mb-4 border-b border-edge pb-3">
-            <h3 className="text-xs font-semibold">About noBS CAD</h3>
+          <section aria-label={t('appearance.about')} className="mb-4 border-b border-edge pb-3">
+            <h3 className="text-xs font-semibold">{t('appearance.about')}</h3>
             <p className="mt-1 select-text break-all text-xs text-mute">{build
-              ? `${build.version} · ${build.channel} · ${build.revision}${build.modified ? ' (modified source)' : ''}`
-              : isTauriRuntime() ? buildError ? 'Build identity unavailable' : 'Reading build identity…' : 'Browser development workspace'}</p>
-            <p className="mt-1 text-[11px] text-mute">Free, open and local. Include this build identity when reporting a problem.</p>
+              ? `${build.version} · ${build.channel} · ${build.revision}${build.modified ? ` ${t('appearance.modifiedSource')}` : ''}`
+              : isTauriRuntime() ? buildError ? t('appearance.buildIdentityUnavailable') : t('appearance.readingBuildIdentity') : t('appearance.browserWorkspace')}</p>
+            <p className="mt-1 text-[11px] text-mute">{t('appearance.buildIdentityHint')}</p>
           </section>
           <div className="mb-2 text-[10px] font-semibold tracking-widest text-mute">
             {t('appearance.theme')}

@@ -1,14 +1,15 @@
 import type { CamDocumentDto } from '../engine/types';
+import { translate } from '../i18n';
 
 /** A drop is a permutation, never a move across WCS boundaries or a copy. */
 export function reorderByIds<T extends { id: number }>(items: T[], ids: number[]): T[] {
   if (ids.length !== items.length || new Set(ids).size !== items.length) {
-    throw new Error('The CAM list changed while dragging. Try again.');
+    throw new Error(translate('cam.errors.errorCamListChangedDragging'));
   }
   const byId = new Map(items.map((item) => [item.id, item]));
   return ids.map((id) => {
     const item = byId.get(id);
-    if (!item) throw new Error('The CAM list changed while dragging. Try again.');
+    if (!item) throw new Error(translate('cam.errors.errorCamListChangedDragging'));
     return item;
   });
 }
@@ -26,12 +27,12 @@ export function reorderedCamDocument(
       if (setup.resolved_stock.shape !== 'rest') continue;
       const source = positions.get(setup.resolved_stock.source_setup_id);
       if (source === undefined || source >= positions.get(setup.id)!) {
-        throw new Error(`“${setup.name}” must stay after the setup that produces its remaining stock.`);
+        throw new Error(translate('cam.errors.errorRestSetupOrder').replace('{name}', setup.name));
       }
     }
   } else {
     const setup = next.setups.find((item) => item.id === setupId);
-    if (!setup) throw new Error('The setup no longer exists.');
+    if (!setup) throw new Error(translate('cam.errors.errorSetupMissing'));
     setup.operations = reorderByIds(setup.operations, ids);
   }
   return next;

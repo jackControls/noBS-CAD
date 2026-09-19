@@ -6921,7 +6921,7 @@ export function Viewport() {
       store.getState().hideDynInput();
     };
 
-    const reportToolError = (error: unknown, fallback = 'Sketch operation failed') => {
+    const reportToolError = (error: unknown, fallback = t('view.errorSketchOperationFailed')) => {
       store.getState().setConstraintDialog({
         titleKey: 'constraints.invalidTitle',
         message: error instanceof Error ? error.message : fallback,
@@ -6951,7 +6951,7 @@ export function Viewport() {
             store.getState().setActiveSketch(result.sketch);
           }
         })
-        .catch((error) => reportToolError(error, 'Cannot begin point drag'));
+        .catch((error) => reportToolError(error, t('view.errorCannotBeginPointDrag')));
     };
 
     const pumpPointDragUpdates = () => {
@@ -6974,7 +6974,7 @@ export function Viewport() {
             }
           }
         })
-        .catch((error) => reportToolError(error, 'Cannot move point'))
+        .catch((error) => reportToolError(error, t('view.errorCannotMovePoint')))
         .finally(() => {
           dragPumpRunning = false;
           if (pendingDragUpdate) pumpPointDragUpdates();
@@ -7010,7 +7010,7 @@ export function Viewport() {
             store.getState().setActiveSketch(result.sketch);
           }
         })
-        .catch((error) => reportToolError(error, 'Cannot finish point drag'));
+        .catch((error) => reportToolError(error, t('view.errorCannotFinishPointDrag')));
     };
 
     /** Spline commit (Enter or double-click): needs ≥2 fit
@@ -7029,7 +7029,7 @@ export function Viewport() {
           store.getState().setActiveSketch(r.sketch);
           endToolRun();
         })
-        .catch((error) => reportToolError(error, 'Cannot create spline'));
+        .catch((error) => reportToolError(error, t('view.errorCannotCreateSpline')));
     };
 
     const applyPreview = (
@@ -7404,7 +7404,7 @@ export function Viewport() {
             .catch((error) => {
               run.committing = false;
               store.getState().setDynPending(false);
-              reportToolError(error, 'Cannot create line');
+              reportToolError(error, t('view.errorCannotCreateLine'));
             });
           break;
         }
@@ -7420,7 +7420,7 @@ export function Viewport() {
               store.getState().setActiveSketch(r.sketch);
               done();
             })
-            .catch((error) => reportToolError(error, 'Cannot create midpoint line'));
+            .catch((error) => reportToolError(error, t('view.errorCannotCreateMidpointLine')));
           break;
         }
         case 'rect2pt':
@@ -7441,7 +7441,7 @@ export function Viewport() {
               store.getState().setActiveSketch(r.sketch);
               done();
             })
-            .catch((error) => reportToolError(error, 'Cannot create rectangle'));
+            .catch((error) => reportToolError(error, t('view.errorCannotCreateRectangle')));
           break;
         }
         case 'circleCenter':
@@ -7460,7 +7460,7 @@ export function Viewport() {
               store.getState().setActiveSketch(r.sketch);
               done();
             })
-            .catch((error) => reportToolError(error, 'Cannot create circle'));
+            .catch((error) => reportToolError(error, t('view.errorCannotCreateCircle')));
           break;
         }
         case 'arc3pt': {
@@ -7476,7 +7476,7 @@ export function Viewport() {
               store.getState().setActiveSketch(r.sketch);
               done();
             })
-            .catch((error) => reportToolError(error, 'Cannot create three-point arc'));
+            .catch((error) => reportToolError(error, t('view.errorCannotCreateThreePointArc')));
           break;
         }
         case 'arcCenter': {
@@ -7492,7 +7492,7 @@ export function Viewport() {
               store.getState().setActiveSketch(r.sketch);
               done();
             })
-            .catch((error) => reportToolError(error, 'Cannot create center arc'));
+            .catch((error) => reportToolError(error, t('view.errorCannotCreateCenterArc')));
           break;
         }
         case 'slot': {
@@ -7518,7 +7518,7 @@ export function Viewport() {
             })
             .then((r) => store.getState().setActiveSketch(r.sketch))
             .then(() => done())
-            .catch((error) => reportToolError(error, 'Cannot create slot'));
+            .catch((error) => reportToolError(error, t('view.errorCannotCreateSlot')));
           break;
         }
         case 'splineFit': {
@@ -7553,7 +7553,7 @@ export function Viewport() {
             ctrl_held: inferenceOverride,
           })
           .then((result) => store.getState().setActiveSketch(result.sketch))
-          .catch((error) => reportToolError(error, 'Cannot create point'));
+          .catch((error) => reportToolError(error, t('view.errorCannotCreatePoint')));
         return;
       }
       startSnapPending = true;
@@ -7596,7 +7596,7 @@ export function Viewport() {
         })
         .catch((error) => {
           startSnapPending = false;
-          reportToolError(error, 'Cannot acquire sketch point');
+          reportToolError(error, t('view.errorCannotAcquireSketchPoint'));
         });
     };
 
@@ -7735,7 +7735,7 @@ export function Viewport() {
           if (index >= 0) current.setDynFocus(index);
         }
         current.setDynPending(false);
-        reportToolError(error, 'Cannot modify geometry');
+        reportToolError(error, t('view.errorCannotModifyGeometry'));
       };
       const after = (r: { sketch: SketchDto }) => {
         store.getState().setActiveSketch(r.sketch);
@@ -7798,7 +7798,7 @@ export function Viewport() {
           if (exitAfter) store.getState().setActiveTool(null);
           else endModTool();
         })
-        .catch((error) => reportToolError(error, 'Cannot scale selection'));
+        .catch((error) => reportToolError(error, t('view.errorCannotScaleSelection')));
     };
 
     /** Polygon commit (second click or Enter). */
@@ -7821,7 +7821,7 @@ export function Viewport() {
       void edgesValue
         .then((value) => {
           if (!Number.isInteger(value) || value < 3 || value > 64) {
-            throw new Error('Polygon edge count must be an integer from 3 to 64');
+            throw new Error(t('view.errorPolygonEdgeCount'));
           }
           return engine!.polygonCreate({
             center,
@@ -7836,7 +7836,7 @@ export function Viewport() {
           if (exitAfter) store.getState().setActiveTool(null);
           else endModTool();
         })
-        .catch((error) => reportToolError(error, 'Cannot create polygon'));
+        .catch((error) => reportToolError(error, t('view.errorCannotCreatePolygon')));
     };
 
     /** Modify-tool pointer move (hover previews + dyn live updates). */
@@ -9903,7 +9903,7 @@ export function Viewport() {
             void engine!
               .trimEntity({ entity: target.id, click: target.point })
               .then((r) => store.getState().setActiveSketch(r.sketch))
-              .catch((error) => reportToolError(error, 'Cannot trim curve'));
+              .catch((error) => reportToolError(error, t('view.errorCannotTrimCurve')));
             trimHover = null;
             clearGroup(dimPreviewGroup);
           }
@@ -9915,7 +9915,7 @@ export function Viewport() {
             void engine!
               .extendEntity({ entity: target.id, click: target.point })
               .then((r) => store.getState().setActiveSketch(r.sketch))
-              .catch((error) => reportToolError(error, 'Cannot extend line'));
+              .catch((error) => reportToolError(error, t('view.errorCannotExtendLine')));
           }
           return true;
         }
@@ -9925,7 +9925,7 @@ export function Viewport() {
             void engine!
               .breakCurve({ entity: target.id, at: target.point })
               .then((r) => store.getState().setActiveSketch(r.sketch))
-              .catch((error) => reportToolError(error, 'Cannot break curve'));
+              .catch((error) => reportToolError(error, t('view.errorCannotBreakCurve')));
           }
           return true;
         }
@@ -9937,7 +9937,7 @@ export function Viewport() {
             void engine!
               .mirrorEntities({ entity_ids: ids, axis_line: target.id })
               .then((r) => store.getState().setActiveSketch(r.sketch))
-              .catch((error) => reportToolError(error, 'Cannot mirror selection'));
+              .catch((error) => reportToolError(error, t('view.errorCannotMirrorSelection')));
           }
           return true;
         }
@@ -9966,7 +9966,7 @@ export function Viewport() {
               store.getState().setActiveSketch(r.sketch);
               endModTool();
             })
-            .catch((error) => reportToolError(error, 'Cannot scale selection'));
+            .catch((error) => reportToolError(error, t('view.errorCannotScaleSelection')));
           return true;
         }
         case 'polygon': {
@@ -11382,7 +11382,7 @@ export function Viewport() {
             .catch((err) => {
               store.getState().setConstraintDialog({
                 titleKey: 'constraints.invalidTitle',
-                message: err?.message ?? 'cannot create dimension',
+                message: err?.message ?? t('view.errorCannotCreateDimension'),
               });
             });
           endDimensionTool();
@@ -11568,7 +11568,7 @@ export function Viewport() {
             void engine
               .moveCopyEntities({ entity_ids: ids, dx, dy, copy: e.altKey })
               .then((r) => store.getState().setActiveSketch(r.sketch))
-              .catch((error) => reportToolError(error, 'Cannot move or copy selection'));
+              .catch((error) => reportToolError(error, t('view.errorCannotMoveOrCopySelection')));
           }
         }
         moveDrag = null;
@@ -11596,7 +11596,7 @@ export function Viewport() {
           void engine
             .moveDimension({ constraint_id: dimDragging.dimId, text_pos: p })
             .then((r) => store.getState().setActiveSketch(r.sketch))
-            .catch((error) => reportToolError(error, 'Cannot move dimension'));
+            .catch((error) => reportToolError(error, t('view.errorCannotMoveDimension')));
         }
         dimDragging = null;
         downInfo = null;
@@ -12190,7 +12190,7 @@ export function Viewport() {
         const bounds = new CAD.Box3();
         const highlightedBodies: number[] = [];
         if (target.target === 'active_sketch') {
-          if (!store.getState().activeSketch || !sketchGroup.visible) throw new Error('No active sketch to frame');
+          if (!store.getState().activeSketch || !sketchGroup.visible) throw new Error(t('view.errorNoActiveSketchToFrame'));
           bounds.setFromObject(entityGroup, true);
         } else if (target.body_id !== undefined || target.component_id !== undefined) {
           for (const object of solidGroup.children) {
@@ -12204,7 +12204,7 @@ export function Viewport() {
           bounds.union(getVisibleBounds());
         }
         if (bounds.isEmpty() && (target.target || target.body_id !== undefined || target.component_id !== undefined)) {
-          throw new Error('Requested geometry is not currently visible');
+          throw new Error(t('view.errorGeometryNotVisible'));
         }
         presentation.emphasize([...new Set(highlightedBodies)], target.target === 'active_sketch'
           ? store.getState().activeSketch!.entities.map(entity => entity.id) : []);

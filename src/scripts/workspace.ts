@@ -5,6 +5,7 @@ import { trackEngineOperation } from '../engine/activity';
 import { chooseOpenFile, chooseSaveTarget, writeSaveTarget } from '../files/fileIO';
 import { newProject } from '../files/projectFiles';
 import { requestUnsavedDecision } from '../files/unsavedChanges';
+import { translate } from '../i18n';
 import { presentation } from '../operationPlayback';
 import { publishCurrentSession } from '../sessionBridge';
 import { useAppStore } from '../store/appStore';
@@ -90,7 +91,7 @@ export function editScriptSource(source: string): void {
 }
 
 function requireDesktop(): void {
-  if (!isTauriRuntime()) throw new Error('Open scripts in the desktop application to run the native CAD engine.');
+  if (!isTauriRuntime()) throw new Error(translate('scripts.errors.errorDesktopRequired'));
 }
 async function inspect(source: string): Promise<ScriptInfo> {
   requireDesktop();
@@ -142,7 +143,7 @@ export async function loadScriptPath(): Promise<void> {
   const path = useScriptWorkspace.getState().path.trim();
   await load(async () => {
     requireDesktop();
-    if (!path) throw new Error('Choose a script file or enter its path.');
+    if (!path) throw new Error(translate('scripts.errors.errorChooseScriptFile'));
     acceptScript(await invoke<ScriptInfo>('native_script_inspect', { path }), null, path);
   }, true);
 }
@@ -177,7 +178,7 @@ export async function runLoadedScript(): Promise<void> {
   if (state.loading || state.running) return;
   const app = useAppStore.getState();
   if (app.activeSketch || app.historyEdit || app.projectBusy || app.solidBusy) {
-    useScriptWorkspace.setState({ error: 'Finish the current editing operation before starting a script.' });
+    useScriptWorkspace.setState({ error: translate('scripts.errors.errorFinishEditingBeforeScript') });
     return;
   }
   useScriptWorkspace.setState({ running: true, completed: false, error: null });
@@ -186,9 +187,9 @@ export async function runLoadedScript(): Promise<void> {
   const checkCancelled = () => {
     if (attempt.ownerRevision !== null && attempt.ownerRevision !== presentation.documentVersion()) {
       attempt.cancelled = true;
-      throw new Error('The document changed during script playback. The previous design is preserved.');
+      throw new Error(translate('scripts.errors.errorDocumentChangedPlayback'));
     }
-    if (attempt.cancelled) throw new Error('Script stopped.');
+    if (attempt.cancelled) throw new Error(translate('scripts.errors.errorScriptStopped'));
   };
   // Stop can arrive while the native worker is starting. Preserve that intent
   // when its initial configure message arrives, rather than clearing the stop.
@@ -214,12 +215,12 @@ export async function runLoadedScript(): Promise<void> {
       // design. Every replacement after it invalidates this run's ownership.
       const newDocumentRevision = presentation.documentVersion() + 1;
       attempt.ownerRevision = null;
-      if (!await newProject(operationOwner)) throw new Error('A new design could not be created.');
+      if (!await newProject(operationOwner)) throw new Error(translate('scripts.errors.errorNewDesignFailed'));
       attempt.ownerRevision = newDocumentRevision;
       checkCancelled();
       const owner = await publishCurrentSession();
       checkCancelled();
-      if (!owner?.documentId) throw new Error('The new design is not ready. Please try Run again.');
+      if (!owner?.documentId) throw new Error(translate('scripts.errors.errorNewDesignNotReady'));
       return owner;
     });
     checkCancelled();
@@ -250,11 +251,11 @@ export function stopScript(): void {
 
 /** Cached immutable geometry, computed in an unattached native engine. */
 export function previewExample(example: ScriptExample): Promise<ScriptPreviewFrame[]> {
-  if (!example.preview) return Promise.reject(new Error('This example has no short preview.'));
+  if (!example.preview) return Promise.reject(new Error(translate('scripts.errors.errorExampleNoPreview')));
   requireDesktop();
   const key = `${example.id}\n${example.source}`;
   if (!previews.has(key)) {
-    if (useScriptWorkspace.getState().running) return Promise.reject(new Error('A script is running. Preview it after playback finishes.'));
+    if (useScriptWorkspace.getState().running) return Promise.reject(new Error(translate('scripts.errors.errorScriptRunningPreview')));
     // Bound retained previews; failures can be retried after an active run ends.
     if (previews.size >= 8) {
       const oldest = previews.keys().next().value!;
@@ -266,7 +267,7 @@ export function previewExample(example: ScriptExample): Promise<ScriptPreviewFra
     previews.set(key, invoke<{ preview_id: string; captions: string[] }>(
       'native_script_preview', { source: example.source },
     ).then(report => {
-      if (!Array.isArray(report.captions) || !report.captions.length || !report.preview_id) throw new Error('The script did not provide preview frames.');
+      if (!Array.isArray(report.captions) || !report.captions.length || !report.preview_id) throw new Error(translate('scripts.errors.errorNoPreviewFrames'));
       const source = { key, example, previewId: report.preview_id };
       return report.captions.map((caption, frameIndex) => {
         const frame = { caption, previewId: report.preview_id, frameIndex };

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { CamUnits } from '../../engine/types';
 import { lengthUnitLabel, feedUnitLabel } from '../../cam/units';
+import { translate } from '../../i18n';
 
 export const CAM_DIALOG_INPUT =
   'h-7 w-full rounded border border-edge bg-header px-2 text-xs text-ink outline-none focus:border-accent';
@@ -21,6 +22,9 @@ export function DialogSection({ title, children }: { title: string; children: Re
 /** Title hint for fields rendered as placeholders: the option exists in the
  *  UI contract but the planner does not consume it yet. */
 export const NOT_APPLIED_YET = 'Not applied yet — planning support lands later';
+
+/** Resolved at render time so the tooltip follows the active locale. */
+export const notAppliedYetTitle = () => translate('cam.fields.notAppliedYet');
 
 /** Numeric draft field. Drafts stay strings in the document's display units;
  *  conversion to canonical mm happens once at submit. */
@@ -44,7 +48,7 @@ export function DraftNumber({
   return (
     <label
       className={`block ${disabled ? 'cursor-not-allowed opacity-45' : ''}`}
-      title={disabled ? NOT_APPLIED_YET : undefined}
+      title={disabled ? notAppliedYetTitle() : undefined}
     >
       <span className={CAM_DIALOG_LABEL}>{label}</span>
       <span className="relative block">
@@ -72,7 +76,7 @@ export function DraftNumber({
 export function parseDraft(value: string, label: string): number {
   const parsed = Number(value.trim());
   if (!value.trim() || !Number.isFinite(parsed)) {
-    throw new Error(`${label} needs a finite number.`);
+    throw new Error(translate('cam.fields.errorFiniteNumber').replace('{label}', label));
   }
   return parsed;
 }

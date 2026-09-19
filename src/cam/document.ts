@@ -14,6 +14,7 @@ import type {
   CamWcsOriginSpec,
   CamWorkOffset,
 } from '../engine/types';
+import { translate } from '../i18n';
 import { useAppStore } from '../store/appStore';
 import { reorderedCamDocument } from './reorder';
 import { duplicatedCamOperation, duplicatedCamSetup, insertCamOperation, type CamOperationPlacement } from './editing';
@@ -43,13 +44,13 @@ type MutableCamOperation = CamOperationDto;
 export function enterCamWorkspace(): Promise<void> {
   const state = useAppStore.getState();
   if (state.mode !== 'solid') {
-    return Promise.reject(new Error('Finish the active sketch before opening CAM.'));
+    return Promise.reject(new Error(translate('cam.errors.errorFinishSketchBeforeCam')));
   }
   if (state.solidScene.errors.length > 0) {
-    return Promise.reject(new Error('Resolve timeline errors before creating toolpaths.'));
+    return Promise.reject(new Error(translate('cam.errors.errorResolveTimelineErrors')));
   }
   if (state.solidScene.bodies.length === 0) {
-    return Promise.reject(new Error('Create or import a solid body before opening CAM.'));
+    return Promise.reject(new Error(translate('cam.errors.errorCreateBodyBeforeCam')));
   }
   const setup = activeCamSetup(state.camDocument);
   state.setSelectedCamSetupId(setup?.id ?? null);
@@ -93,11 +94,11 @@ export function setCamMachine(
 ): Promise<void> {
   return enqueueCamUpdate((cam) => {
     if (expectedDocument && cam !== expectedDocument) {
-      throw new Error('The CAM document changed while editing machine settings. Reopen the post dialog and review the current target.');
+      throw new Error(translate('cam.errors.errorCamDocumentChangedMachineSettings'));
     }
     const next = structuredClone(cam);
     const setup = next.setups.find(s => s.id === setupId);
-    if (!setup) throw new Error('The CAM setup no longer exists.');
+    if (!setup) throw new Error(translate('cam.errors.errorCamSetupMissing'));
     if (JSON.stringify(setup.machine ?? null) === JSON.stringify(machine)) return cam;
     setup.machine = structuredClone(machine);
     return next;
@@ -139,7 +140,7 @@ export async function addCamTool(draft: CamToolDraft): Promise<number> {
 export async function importCamToolFromCentral(toolId: number): Promise<void> {
   await enqueueCamUpdate(async (cam) => {
     const central = await centralLibraryTool(toolId);
-    if (!central) throw new Error('That tool is no longer in the central library.');
+    if (!central) throw new Error(translate('cam.errors.errorToolNotInCentralLibrary'));
     const next = structuredClone(cam);
     const index = next.tools.findIndex((candidate) => candidate.id === toolId);
     if (index >= 0) next.tools[index] = structuredClone(central);
@@ -164,7 +165,7 @@ export function deleteCamTool(toolId: number): Promise<void> {
       .flatMap((setup) => setup.operations)
       .some((operation) => operation.tool_id === toolId);
     if (referenced) {
-      throw new Error('This tool is used by an operation; reassign those operations first.');
+      throw new Error(translate('cam.errors.errorToolInUse'));
     }
     const next = structuredClone(cam);
     const before = next.tools.length;
@@ -222,7 +223,7 @@ export function createCamSetup(draft: CamSetupDraft): Promise<number> {
   let createdId = 0;
   return enqueueCamUpdate((cam, state) => {
     if (draft.body_ids.length === 0) {
-      throw new Error('A CAM setup needs at least one solid body.');
+      throw new Error(translate('cam.errors.errorSetupNeedsBody'));
     }
     const partBounds = modelBoundsOfBodies(state.solidScene, draft.body_ids);
     // Modeled-body stock is measured from the stock body's mesh, not the parts.
@@ -440,7 +441,7 @@ export function replaceCamOperation(
       if (index === -1) continue;
       const existing = setup.operations[index];
       if (existing.kind !== input.kind) {
-        throw new Error('Operation kind is fixed; delete and recreate to change it.');
+        throw new Error(translate('cam.errors.errorOperationKindFixed'));
       }
       setup.operations[index] = {
         ...input,
@@ -477,7 +478,7 @@ export function replaceCamOperation(
 export function replaceCamSetup(setupId: number, draft: CamSetupDraft): Promise<void> {
   return enqueueCamUpdate((cam, state) => {
     if (draft.body_ids.length === 0) {
-      throw new Error('A CAM setup needs at least one solid body.');
+      throw new Error(translate('cam.errors.errorSetupNeedsBody'));
     }
     const existing = cam.setups.find((candidate) => candidate.id === setupId);
     if (!existing) return cam;
@@ -485,7 +486,7 @@ export function replaceCamSetup(setupId: number, draft: CamSetupDraft): Promise<
       draft.stock_spec.mode === 'rest_from_setup' &&
       draft.stock_spec.setup_id === setupId
     ) {
-      throw new Error('A setup cannot rest-machine its own remaining stock.');
+      throw new Error(translate('cam.errors.errorSetupRestMachineSelf'));
     }
     const partBounds = modelBoundsOfBodies(state.solidScene, draft.body_ids);
     const stockBounds =
@@ -644,7 +645,7 @@ function enqueueCamUpdate(
   preserveSimulationInputs: boolean | 'metadata' = false,
   selection?: (document: CamDocumentDto) => Partial<CamSelection>,
 ): Promise<void> {
-  return enqueueCamMutation('Updating CAM…', async ({ engine, state, assertCurrent, publish }) => {
+  return enqueueCamMutation(translate('cam.errors.statusUpdatingCam'), async ({ engine, state, assertCurrent, publish }) => {
     const next = await mutate(state.camDocument, state);
     assertCurrent();
     if (next === state.camDocument) return;
@@ -658,7 +659,7 @@ function enqueueCamUpdate(
 function enqueueCamEngineMutation(
   mutate: (engine: Engine) => Promise<CamDocumentDto>,
 ): Promise<void> {
-  return enqueueCamMutation('Generating toolpaths…', async ({ engine, assertCurrent, publish }) => {
+  return enqueueCamMutation(translate('cam.errors.statusGeneratingToolpaths'), async ({ engine, assertCurrent, publish }) => {
     assertCurrent();
     const camDocument = await mutate(engine);
     // The engine has already validated and installed this exact document;

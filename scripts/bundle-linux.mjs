@@ -56,6 +56,14 @@ const lgpl21 = firstExisting(
 copyFileSync(occtCopyright, join(licenseRoot, 'OCCT-copyright.txt'));
 copyFileSync(lgpl21, join(licenseRoot, 'LGPL-2.1.txt'));
 
+// `src-tauri/tauri.linux.conf.json` declares these two staged files as bundle
+// resources, so `tauri-build` fails for any crate build that has not staged
+// them. Jobs that only need to compile or test the desktop shell stop here
+// instead of paying for a release bundle they will throw away.
+if (process.argv.includes('--stage-licenses')) {
+  process.exit(0);
+}
+
 execFileSync(
   'npx',
   [

@@ -1,4 +1,5 @@
 import type { CamDocumentDto, CamOperationDto, CamSetupDto } from '../engine/types';
+import { translate } from '../i18n';
 
 /** Capture the programming destination when the dialog opens. Viewport picks
  * and library navigation must not move a new path's eventual insertion point. */
@@ -24,17 +25,17 @@ export function insertCamOperation(
   placement?: CamOperationPlacement,
 ): CamSetupDto {
   const setup = cam.setups.find(s => s.id === (placement?.setupId ?? cam.active_setup_id));
-  if (!setup) throw new Error('The destination setup no longer exists. Reopen the toolpath dialog.');
+  if (!setup) throw new Error(translate('cam.errors.errorDestinationSetupMissing'));
   const before = placement?.beforeOperationId;
   const index = before == null ? setup.operations.length : setup.operations.findIndex(o => o.id === before);
-  if (index < 0) throw new Error('The selected insertion toolpath no longer exists. Reopen the toolpath dialog.');
+  if (index < 0) throw new Error(translate('cam.errors.errorInsertionToolpathMissing'));
   setup.operations.splice(index, 0, operation);
   return setup;
 }
 
 function nextId(counter: number, used: number[]): number {
   const id = used.reduce((next, value) => Math.max(next, value + 1), Math.max(1, counter));
-  if (!Number.isSafeInteger(id) || id >= Number.MAX_SAFE_INTEGER) throw new Error('CAM identity space is exhausted.');
+  if (!Number.isSafeInteger(id) || id >= Number.MAX_SAFE_INTEGER) throw new Error(translate('cam.errors.errorCamIdentityExhausted'));
   return id;
 }
 
@@ -61,7 +62,7 @@ function copyOperationRecords(next: CamDocumentDto, source: CamDocumentDto, ids:
 export function duplicatedCamOperation(cam: CamDocumentDto, operationId: number) {
   const next = structuredClone(cam);
   const setup = next.setups.find(s => s.operations.some(o => o.id === operationId));
-  if (!setup) throw new Error('The toolpath no longer exists.');
+  if (!setup) throw new Error(translate('cam.errors.errorToolpathMissing'));
   const index = setup.operations.findIndex(o => o.id === operationId);
   const operation = structuredClone(setup.operations[index]);
   operation.id = nextId(next.next_operation_id, next.setups.flatMap(s => s.operations.map(o => o.id)));
@@ -76,14 +77,14 @@ export function duplicatedCamOperation(cam: CamDocumentDto, operationId: number)
 export function duplicatedCamSetup(cam: CamDocumentDto, setupId: number) {
   const next = structuredClone(cam);
   const index = next.setups.findIndex(s => s.id === setupId);
-  if (index < 0) throw new Error('The setup no longer exists.');
+  if (index < 0) throw new Error(translate('cam.errors.errorSetupMissing'));
   const setup = structuredClone(next.setups[index]);
   setup.id = nextId(next.next_setup_id, next.setups.map(s => s.id));
   setup.name = copyName(setup.name, next.setups.map(s => s.name));
   const ids = new Map<number, number>();
   let id = nextId(next.next_operation_id, next.setups.flatMap(s => s.operations.map(o => o.id)));
   for (const operation of setup.operations) {
-    if (id >= Number.MAX_SAFE_INTEGER) throw new Error('CAM identity space is exhausted.');
+    if (id >= Number.MAX_SAFE_INTEGER) throw new Error(translate('cam.errors.errorCamIdentityExhausted'));
     ids.set(operation.id, id);
     operation.id = id++;
   }

@@ -51,6 +51,24 @@ mod tests {
     use std::{collections::BTreeMap, fs, path::Path};
 
     #[test]
+    fn knowledge_recipe_references_name_published_recipes() {
+        for (path, text) in DOCUMENTS {
+            let Some(references) = frontmatter(text, "related_recipes") else {
+                continue;
+            };
+            if references == "[]" {
+                continue;
+            }
+            for id in references.split(',').map(str::trim) {
+                assert!(
+                    nbcad_recipes::find(id).is_ok(),
+                    "knowledge article {path} refers to an unpublished recipe: {id}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn knowledge_resources_include_every_repository_markdown_file_unchanged() {
         fn collect(root: &Path, dir: &Path, result: &mut BTreeMap<String, String>) {
             for entry in fs::read_dir(dir).unwrap() {

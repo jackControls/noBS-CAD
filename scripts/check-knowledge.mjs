@@ -72,6 +72,36 @@ const conceptFiles = files.filter(
   (file) => file !== indexFile && file !== logFile,
 );
 
+// Authored machine-design references live in the bundle, not a second index.
+const sourcesFile = path.join(bundleRoot, 'machine-design', 'SOURCES.md');
+const sourceIds = new Set();
+for (const line of (await readFile(sourcesFile, 'utf8')).split(/\r?\n/)) {
+  if (!line.startsWith('| `')) continue;
+  const columns = line.split('|').map(column => column.trim());
+  const id = columns[1]?.match(/^`([a-z0-9]+(?:-[a-z0-9]+)*)`$/)?.[1];
+  if (!id) { fail(sourcesFile, 'invalid source id'); continue; }
+  if (sourceIds.has(id)) fail(sourcesFile, `duplicate source id: ${id}`);
+  sourceIds.add(id);
+  if (!/\[[^\]]+\]\(https:\/\/[^)]+\)/.test(columns[2] ?? '') ||
+      !columns[3] || !/\[[^\]]+\]\(https:\/\/[^)]+\)/.test(columns[4] ?? '')) {
+    fail(sourcesFile, `source ${id} requires a primary reference, author and license link`);
+  }
+}
+if (sourceIds.size === 0) fail(sourcesFile, 'source inventory is empty');
+const usedSources = new Set();
+
+function referenceIds(file, fields, key) {
+  const raw = fields.get(key) ?? '';
+  if (raw === '[]' || !raw) return [];
+  const ids = raw.split(',').map(value => value.trim());
+  if (ids.some(id => !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id))) {
+    fail(file, `${key} must contain comma-separated ids or []`);
+    return [];
+  }
+  if (new Set(ids).size !== ids.length) fail(file, `duplicate ${key} reference`);
+  return ids;
+}
+
 const indexContent = await readFile(indexFile, 'utf8');
 const indexFields = frontmatter(indexContent);
 if (!indexFields || indexFields.get('okf_version') !== '0.2') {
@@ -110,13 +140,29 @@ for (const file of conceptFiles) {
   if (status && !['draft', 'stable', 'deprecated'].includes(status)) {
     fail(file, `unsupported OKF lifecycle status: ${status}`);
   }
+  if (path.relative(bundleRoot, file).replaceAll('\\', '/').startsWith('machine-design/concepts/')) {
+    const sources = referenceIds(file, fields, 'sources');
+    if (sources.length === 0) fail(file, 'mechanical-design article requires sources');
+    for (const id of sources) {
+      if (!sourceIds.has(id)) fail(file, `unknown source id: ${id}`);
+      usedSources.add(id);
+    }
+  }
+  for (const id of referenceIds(file, fields, 'related_recipes')) {
+    if (!await exactFile(path.join(repositoryRoot, 'examples', 'scripts', `${id}.nbcad.jsonc`))) {
+      fail(file, `missing recipe: ${id}`);
+    }
+  }
+}
+for (const id of sourceIds) {
+  if (!usedSources.has(id)) fail(sourcesFile, `unused source id: ${id}`);
 }
 
 for (const file of files) {
   const content = await readFile(file, 'utf8');
   for (const target of localMarkdownLinks(content)) {
     const absolute = path.resolve(path.dirname(file), target);
-    if (!(await exists(absolute))) fail(file, `broken local link: ${target}`);
+    if (!(await exactFile(absolute))) fail(file, `missing or incorrectly cased local link: ${target}`);
   }
 }
 

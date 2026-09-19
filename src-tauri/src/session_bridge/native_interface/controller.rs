@@ -390,10 +390,16 @@ fn update_inner(
             }
         }
         if matches!(event.event, WindowEvent::WindowCloseRequested(_)) {
-            if let Some(owner) = &event.context {
-                bridge.with_native_document_owner(engine, owner, || Ok(()))?;
-                request_close(state, bridge, engine)?;
-            }
+            // A title-bar close or Alt-F4 can arrive before the first interface
+            // frame is published, so the event carries no document context yet.
+            // Resolve the owner instead of silently dropping the request: a
+            // window that refuses to close is worse than a late one.
+            let owner = match event.context.clone() {
+                Some(owner) => owner,
+                None => bridge.native_document_context(&state.window_id, engine)?,
+            };
+            bridge.with_native_document_owner(engine, &owner, || Ok(()))?;
+            request_close(state, bridge, engine)?;
         }
         if !event.consumed {
             if let Err(error) = crate::native_editor::process_one(world, handle, services, &event) {
@@ -531,15 +537,16 @@ fn start_control(
         }
     }
     response["awaiting_input"] = json!(state.close_pending);
+    let now = now_ms();
     state.pending = Some(PendingControl {
         response,
         owner: current,
-        presentation_deadline: now_ms().saturating_add(2_000).min(
+        presentation_deadline: now.saturating_add(2_000).min(
             request["expires_ms"]
                 .as_u64()
-                .unwrap_or(0)
+                .unwrap_or(now.saturating_add(2_000))
                 .saturating_sub(100),
-        ),
+        ).max(now.saturating_add(1)),
     });
     Ok(())
 }

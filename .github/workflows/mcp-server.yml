@@ -1,13 +1,17 @@
 name: MCP server
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
+    tags: ['v*']
     paths:
       - 'mcp-server/**'
       - 'knowledge/**'
       - 'interface/**'
       - 'crates/core/**'
+      - 'crates/build-info/**'
+      - 'crates/interface/**'
       - 'crates/sketch/**'
       - 'crates/solid/**'
       - 'crates/occt/**'
@@ -29,6 +33,8 @@ on:
       - 'knowledge/**'
       - 'interface/**'
       - 'crates/core/**'
+      - 'crates/build-info/**'
+      - 'crates/interface/**'
       - 'crates/sketch/**'
       - 'crates/solid/**'
       - 'crates/occt/**'
@@ -224,10 +230,49 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "MCP workshop failed" }
           cargo xtask test-mcp drawing --server ./mcp-server/target/debug/nbcad-mcp.exe --out ./target/mcp-workshop/drawing-report.json
           if ($LASTEXITCODE -ne 0) { throw "MCP drawing example failed" }
-          cargo xtask run-script --recipe garden-bench --repeat 2 --server ./mcp-server/target/debug/nbcad-mcp.exe --out ./target/mcp-workshop/garden-bench
+          cargo xtask run-script --recipe garden-bench --repeat 2 --server ./mcp-server/target/debug/nbcad-mcp.exe --out ./target/mcp-workshop/garden-bench --save ./target/mcp-recipe-evidence/garden-bench.nbcad
           if ($LASTEXITCODE -ne 0) { throw "Parametric garden bench failed" }
           cargo xtask run-script --recipe fillet-basics --repeat 2 --server ./mcp-server/target/debug/nbcad-mcp.exe --out ./target/mcp-workshop/fillet-basics
           if ($LASTEXITCODE -ne 0) { throw "Parametric fillet lesson failed" }
+
+      # Native acceptance already builds, reloads and checks the vise/turbine.
+      # Retain their successful project ZIPs instead of rerunning those costly
+      # recipes or depending on a desktop. The bench is saved headlessly above.
+      - &stage-demo-projects
+        name: Stage verified editable demo projects
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'target/mcp-recipe-evidence'
+          $destination = Join-Path $env:GITHUB_WORKSPACE 'target/demo-projects'
+          New-Item -ItemType Directory -Path $destination -Force | Out-Null
+          $projects = @(
+            @{ recipe = 'garden-bench'; asset = 'bench.nbcad' },
+            @{ recipe = 'd-screw-vise'; asset = 'vise.nbcad' },
+            @{ recipe = 'vertical-axis-turbine'; asset = 'turbine.nbcad' }
+          )
+          $assets = @($projects | ForEach-Object {
+            $inputFile = Join-Path $source "$($_.recipe).nbcad"
+            $outputFile = Join-Path $destination $_.asset
+            if (-not (Test-Path -LiteralPath $inputFile -PathType Leaf)) {
+              throw "Native acceptance did not produce $inputFile"
+            }
+            Copy-Item -LiteralPath $inputFile -Destination $outputFile
+            $size = (Get-Item -LiteralPath $outputFile).Length
+            if ($size -eq 0) { throw "Empty project: $outputFile" }
+            @{ name = $_.asset; recipe = $_.recipe; size = $size;
+               sha256 = (Get-FileHash -LiteralPath $outputFile -Algorithm SHA256).Hash.ToLowerInvariant() }
+          })
+          $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
+          @{ schema_version = 1; source_commit = $env:GITHUB_SHA; application_version = $version; assets = $assets } |
+            ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $destination 'demo-projects.json') -Encoding utf8
+
+      - name: Upload verified editable demo projects
+        uses: actions/upload-artifact@v4
+        with:
+          name: noBS-CAD-demo-projects-windows-${{ github.sha }}
+          path: target/demo-projects/
+          if-no-files-found: error
 
       - name: Upload MCP workshop evidence
         if: always()
@@ -318,8 +363,17 @@ jobs:
           cargo build --locked --manifest-path mcp-server/Cargo.toml
           cargo xtask test-mcp bench --server ./mcp-server/target/debug/nbcad-mcp --workshop all --out ./target/mcp-workshop
           cargo xtask test-mcp drawing --server ./mcp-server/target/debug/nbcad-mcp --out ./target/mcp-workshop/drawing-report.json
-          cargo xtask run-script --recipe garden-bench --repeat 2 --server ./mcp-server/target/debug/nbcad-mcp --out ./target/mcp-workshop/garden-bench
+          cargo xtask run-script --recipe garden-bench --repeat 2 --server ./mcp-server/target/debug/nbcad-mcp --out ./target/mcp-workshop/garden-bench --save ./target/mcp-recipe-evidence/garden-bench.nbcad
           cargo xtask run-script --recipe fillet-basics --repeat 2 --server ./mcp-server/target/debug/nbcad-mcp --out ./target/mcp-workshop/fillet-basics
+
+      - *stage-demo-projects
+
+      - name: Upload verified editable demo projects
+        uses: actions/upload-artifact@v4
+        with:
+          name: noBS-CAD-demo-projects-linux-${{ github.sha }}
+          path: target/demo-projects/
+          if-no-files-found: error
 
       - name: Upload MCP workshop evidence
         if: always()

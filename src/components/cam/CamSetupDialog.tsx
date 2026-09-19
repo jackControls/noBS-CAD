@@ -27,6 +27,7 @@ import type {
   CamWorkOffset,
 } from '../../engine/types';
 import { useAppStore, type CamPointPickCandidate } from '../../store/appStore';
+import { useTranslation } from '../../i18n';
 import { runCamAction } from './CamBrowser';
 import {
   CAM_DIALOG_INPUT,
@@ -41,20 +42,20 @@ type OriginMode = CamWcsOriginSpec['mode'];
 type StockMode = 'fixed' | 'from_model' | 'rest_from_setup';
 
 const ANCHOR_LABELS: Record<CamBoxAnchor, string> = {
-  min: 'Min',
-  center: 'Center',
-  max: 'Max',
+  min: 'cam.setup.anchorMin',
+  center: 'cam.setup.anchorCenter',
+  max: 'cam.setup.anchorMax',
 };
 
 const WORK_OFFSETS: CamWorkOffset[] = ['g54', 'g55', 'g56', 'g57', 'g58', 'g59'];
 
 const FACE_LABELS: Record<CamStockFace, string> = {
-  x_min: 'Model X min face',
-  x_max: 'Model X max face',
-  y_min: 'Model Y min face',
-  y_max: 'Model Y max face',
-  z_min: 'Model bottom (Z min)',
-  z_max: 'Model top (Z max)',
+  x_min: 'cam.setup.faceModelXMin',
+  x_max: 'cam.setup.faceModelXMax',
+  y_min: 'cam.setup.faceModelYMin',
+  y_max: 'cam.setup.faceModelYMax',
+  z_min: 'cam.setup.faceModelBottom',
+  z_max: 'cam.setup.faceModelTop',
 };
 
 /** Fully operator-driven setup creation: bodies, stock definition, WCS origin
@@ -63,6 +64,7 @@ const FACE_LABELS: Record<CamStockFace, string> = {
  *  Editing reuses this exact dialog: drafts seed from the stored setup and
  *  Save writes back through the same validation as Create. */
 export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
+  const { t } = useTranslation();
   const cam = useAppStore((state) => state.camDocument);
   const scene = useAppStore((state) => state.solidScene);
   const sketches = useAppStore((state) => state.finishedSketches);
@@ -103,7 +105,7 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
   // Rest machining must continue from a DIFFERENT setup than the one edited.
   const restCandidates = cam.setups.filter((setup) => setup.id !== editing?.id);
 
-  const [name, setName] = useState(editing?.name ?? `Setup ${cam.setups.length + 1}`);
+  const [name, setName] = useState(editing?.name ?? t('cam.setup.defaultName').replace('{number}', String(cam.setups.length + 1)));
   const [bodyIds, setBodyIds] = useState<number[]>(
     editing?.body_ids ?? scene.bodies.map((body) => body.id),
   );
@@ -202,7 +204,7 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
     try {
       if (stockShape === 'model_body') {
         const bodyId = Number(stockBodyId || scene.bodies[0]?.id);
-        if (!bodyId) throw new Error('Pick the modeled body used as stock.');
+        if (!bodyId) throw new Error(t('cam.setup.errorPickStockBody'));
         return { mode: 'model_body', body_id: bodyId };
       }
       if (stockMode === 'fixed') {
@@ -210,14 +212,14 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
           mode: 'fixed',
           shape: stockShape,
           size: {
-            x: commitLength(parseDraft(sizeX, stockShape === 'box' ? 'Size X' : stockShape === 'cylinder' ? 'Diameter' : 'Across flats'), units),
-            y: stockShape === 'box' ? commitLength(parseDraft(sizeY, 'Size Y'), units) : 0,
-            z: commitLength(parseDraft(sizeZ, 'Height'), units),
+            x: commitLength(parseDraft(sizeX, stockShape === 'box' ? t('cam.setup.sizeX') : stockShape === 'cylinder' ? t('cam.setup.diameter') : t('cam.setup.acrossFlats')), units),
+            y: stockShape === 'box' ? commitLength(parseDraft(sizeY, t('cam.setup.sizeY')), units) : 0,
+            z: commitLength(parseDraft(sizeZ, t('cam.setup.height')), units),
           },
           placement: {
             center: centered,
             face: centered ? null : face,
-            offset: centered ? 0 : commitLength(parseDraft(faceOffset, 'Face offset'), units),
+            offset: centered ? 0 : commitLength(parseDraft(faceOffset, t('cam.setup.faceOffset')), units),
           },
         };
       }
@@ -227,25 +229,25 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
         const offsets =
           stockShape === 'box'
             ? {
-                x_min: allowance(offXMin, 'X min allowance'),
-                x_max: allowance(offXMax, 'X max allowance'),
-                y_min: allowance(offYMin, 'Y min allowance'),
-                y_max: allowance(offYMax, 'Y max allowance'),
-                z_min: allowance(offZMin, 'Z min allowance'),
-                z_max: allowance(offZMax, 'Z max allowance'),
+                x_min: allowance(offXMin, t('cam.setup.allowanceXMin')),
+                x_max: allowance(offXMax, t('cam.setup.allowanceXMax')),
+                y_min: allowance(offYMin, t('cam.setup.allowanceYMin')),
+                y_max: allowance(offYMax, t('cam.setup.allowanceYMax')),
+                z_min: allowance(offZMin, t('cam.setup.allowanceZMin')),
+                z_max: allowance(offZMax, t('cam.setup.allowanceZMax')),
               }
             : {
-                x_min: allowance(radial, 'Radial allowance'),
-                x_max: allowance(radial, 'Radial allowance'),
-                y_min: allowance(radial, 'Radial allowance'),
-                y_max: allowance(radial, 'Radial allowance'),
-                z_min: allowance(offZMin, 'Z min allowance'),
-                z_max: allowance(offZMax, 'Z max allowance'),
+                x_min: allowance(radial, t('cam.setup.radialAllowance')),
+                x_max: allowance(radial, t('cam.setup.radialAllowance')),
+                y_min: allowance(radial, t('cam.setup.radialAllowance')),
+                y_max: allowance(radial, t('cam.setup.radialAllowance')),
+                z_min: allowance(offZMin, t('cam.setup.allowanceZMin')),
+                z_max: allowance(offZMax, t('cam.setup.allowanceZMax')),
               };
         return { mode: 'from_model', shape: stockShape, offsets };
       }
       const sourceId = Number(restSetupId || restCandidates[0]?.id);
-      if (!sourceId) throw new Error('Pick the earlier setup to continue from.');
+      if (!sourceId) throw new Error(t('cam.setup.errorPickEarlierSetup'));
       return { mode: 'rest_from_setup', setup_id: sourceId };
     } catch (cause) {
       if (lenient) return null;
@@ -309,9 +311,9 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
       const origin =
         originSpec.mode === 'explicit'
           ? {
-              x: commitLength(parseDraft(explicit.x, 'Origin X'), units),
-              y: commitLength(parseDraft(explicit.y, 'Origin Y'), units),
-              z: commitLength(parseDraft(explicit.z, 'Origin Z'), units),
+              x: commitLength(parseDraft(explicit.x, t('cam.setup.originX')), units),
+              y: commitLength(parseDraft(explicit.y, t('cam.setup.originY')), units),
+              z: commitLength(parseDraft(explicit.z, t('cam.setup.originZ')), units),
             }
           : resolveWcsOrigin(originSpec, stockPreview.modelBox, modelBounds, sketches);
       const wcs = wcsFromOrientation(origin, zDown, rotation);
@@ -344,7 +346,7 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
         label: entry.label,
         payload: { x: entry.x, y: entry.y, z: entry.z },
       })),
-      'Pick the WCS origin on the stock box',
+      t('cam.setup.pickStockBoxPoint'),
       (chosen) => {
         const anchors = chosen.payload as { x: CamBoxAnchor; y: CamBoxAnchor; z: CamBoxAnchor };
         setAnchorX(anchors.x);
@@ -362,7 +364,7 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
         label: entry.label,
         payload: { x: entry.x, y: entry.y, z: entry.z },
       })),
-      'Pick the WCS origin on the model box',
+      t('cam.setup.pickModelBoxPoint'),
       (chosen) => {
         const anchors = chosen.payload as { x: CamBoxAnchor; y: CamBoxAnchor; z: CamBoxAnchor };
         setAnchorX(anchors.x);
@@ -386,7 +388,7 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
             ]
           : [];
       }),
-      'Pick a sketch point as the WCS origin',
+      t('cam.setup.pickSketchPoint'),
       (chosen) => setSketchPointKey(chosen.payload as string),
     );
   };
@@ -395,16 +397,16 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
     event.preventDefault();
     setError(null);
     try {
-      if (bodyIds.length === 0) throw new Error('Select at least one body for this setup.');
+      if (bodyIds.length === 0) throw new Error(t('cam.setup.errorSelectBody'));
       const stockSpec = buildStockSpec(false);
-      if (!stockSpec) throw new Error('Complete the stock definition.');
+      if (!stockSpec) throw new Error(t('cam.setup.errorCompleteStock'));
       if (originSpec.mode === 'sketch_point' && !originSpec.sketch) {
-        throw new Error('Pick the sketch point used as the WCS origin.');
+        throw new Error(t('cam.setup.errorPickSketchPoint'));
       }
       const firstIndex = WORK_OFFSETS.indexOf(workOffset);
       const count = Math.max(
         1,
-        Math.min(WORK_OFFSETS.length - firstIndex, Math.round(parseDraft(partCount, 'Duplicate parts'))),
+        Math.min(WORK_OFFSETS.length - firstIndex, Math.round(parseDraft(partCount, t('cam.setup.duplicateParts')))),
       );
       const draft: CamSetupDraft = {
         name,
@@ -418,9 +420,9 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
         stock_spec: stockSpec,
         wcs_origin: originSpec,
         explicit_origin: {
-          x: commitLength(parseDraft(explicit.x, 'Origin X'), units),
-          y: commitLength(parseDraft(explicit.y, 'Origin Y'), units),
-          z: commitLength(parseDraft(explicit.z, 'Origin Z'), units),
+          x: commitLength(parseDraft(explicit.x, t('cam.setup.originX')), units),
+          y: commitLength(parseDraft(explicit.y, t('cam.setup.originY')), units),
+          z: commitLength(parseDraft(explicit.z, t('cam.setup.originZ')), units),
         },
         z_down: zDown,
         z_rotation_deg: rotation,
@@ -450,7 +452,7 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
       >
         {(Object.keys(ANCHOR_LABELS) as CamBoxAnchor[]).map((anchor) => (
           <option key={anchor} value={anchor}>
-            {ANCHOR_LABELS[anchor]}
+            {t(ANCHOR_LABELS[anchor])}
           </option>
         ))}
       </select>
@@ -476,7 +478,7 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-edge px-3">
           <CamToolIcon id={editing ? 'camSetup' : 'camNewSetup'} size={18} />
           <span className="flex-1 text-xs font-semibold text-ink">
-            {editing ? `Edit — ${editing.name}` : 'New CAM Setup'}
+            {editing ? t('cam.setup.editTitle').replace('{name}', editing.name) : t('cam.setup.newTitle')}
           </span>
           <button
             type="button"
@@ -493,17 +495,17 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
             </p>
           )}
           <label className="block">
-            <span className={CAM_DIALOG_LABEL}>Setup name</span>
+            <span className={CAM_DIALOG_LABEL}>{t('cam.setup.name')}</span>
             <input value={name} onChange={(event) => setName(event.target.value)} className={CAM_DIALOG_INPUT} />
           </label>
 
           <CamMachineFields machine={machine} onChange={setMachine} />
           <label className="flex items-center gap-2 text-[11px] text-ink">
             <input type="checkbox" checked={makeDefaultMachine} onChange={e => setMakeDefaultMachine(e.target.checked)} />
-            Use this target for new setups on this device
+            {t('cam.setup.useDefaultMachine')}
           </label>
 
-          <DialogSection title={`PART BODIES · ${bodyIds.length} SELECTED`}>
+          <DialogSection title={t('cam.setup.sectionPartBodies').replace('{count}', String(bodyIds.length))}>
             <div className="max-h-28 space-y-1 overflow-y-auto rounded border border-edge/70 p-1.5">
               {scene.bodies.map((body) => (
                 <label key={body.id} className="flex items-center gap-2 text-[11px] text-ink">
@@ -524,32 +526,32 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
             </div>
           </DialogSection>
 
-          <DialogSection title="STOCK">
+          <DialogSection title={t('cam.setup.sectionStock')}>
             <div className="grid grid-cols-2 gap-1.5">
               <label className="block">
-                <span className={CAM_DIALOG_LABEL}>Shape</span>
+                <span className={CAM_DIALOG_LABEL}>{t('cam.setup.shape')}</span>
                 <select
                   value={stockShape}
                   onChange={(event) => setStockShape(event.target.value as CamStockShape)}
                   className={CAM_DIALOG_INPUT}
                 >
-                  <option value="box">Box</option>
-                  <option value="cylinder">Cylinder</option>
-                  <option value="hex">Hex bar</option>
-                  <option value="model_body">Modeled body</option>
+                  <option value="box">{t('cam.setup.shapeBox')}</option>
+                  <option value="cylinder">{t('cam.setup.shapeCylinder')}</option>
+                  <option value="hex">{t('cam.setup.shapeHex')}</option>
+                  <option value="model_body">{t('cam.setup.shapeModelBody')}</option>
                 </select>
               </label>
               {stockShape !== 'model_body' && (
                 <label className="block">
-                  <span className={CAM_DIALOG_LABEL}>Definition</span>
+                  <span className={CAM_DIALOG_LABEL}>{t('cam.setup.definition')}</span>
                   <select
                     value={stockMode}
                     onChange={(event) => setStockMode(event.target.value as StockMode)}
                     className={CAM_DIALOG_INPUT}
                   >
-                    <option value="fixed">Fixed size</option>
-                    <option value="from_model">From model box</option>
-                    <option value="rest_from_setup">Remaining from setup</option>
+                    <option value="fixed">{t('cam.setup.defFixed')}</option>
+                    <option value="from_model">{t('cam.setup.defFromModel')}</option>
+                    <option value="rest_from_setup">{t('cam.setup.defRest')}</option>
                   </select>
                 </label>
               )}
@@ -559,15 +561,15 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
               <div className="mt-2 space-y-2">
                 <div className="grid grid-cols-3 gap-2">
                   <DraftNumber
-                    label={stockShape === 'box' ? 'Size X' : stockShape === 'cylinder' ? 'Diameter' : 'Across flats'}
+                    label={stockShape === 'box' ? t('cam.setup.sizeX') : stockShape === 'cylinder' ? t('cam.setup.diameter') : t('cam.setup.acrossFlats')}
                     value={sizeX}
                     onChange={setSizeX}
                     unit={lu}
                   />
                   {stockShape === 'box' && (
-                    <DraftNumber label="Size Y" value={sizeY} onChange={setSizeY} unit={lu} />
+                    <DraftNumber label={t('cam.setup.sizeY')} value={sizeY} onChange={setSizeY} unit={lu} />
                   )}
-                  <DraftNumber label="Height (Z)" value={sizeZ} onChange={setSizeZ} unit={lu} />
+                  <DraftNumber label={t('cam.setup.heightZ')} value={sizeZ} onChange={setSizeZ} unit={lu} />
                 </div>
                 <label className="flex items-center gap-2 text-[11px] text-ink">
                   <input
@@ -575,12 +577,12 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
                     checked={centered}
                     onChange={(event) => setCentered(event.target.checked)}
                   />
-                  Center the model in the stock
+                  {t('cam.setup.centerModel')}
                 </label>
                 {!centered && (
                   <div className="grid grid-cols-2 gap-2">
                     <label className="block">
-                      <span className={CAM_DIALOG_LABEL}>Park against</span>
+                      <span className={CAM_DIALOG_LABEL}>{t('cam.setup.parkAgainst')}</span>
                       <select
                         value={face}
                         onChange={(event) => setFace(event.target.value as CamStockFace)}
@@ -588,13 +590,13 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
                       >
                         {(Object.keys(FACE_LABELS) as CamStockFace[]).map((candidate) => (
                           <option key={candidate} value={candidate}>
-                            {FACE_LABELS[candidate]}
+                            {t(FACE_LABELS[candidate])}
                           </option>
                         ))}
                       </select>
                     </label>
                     <DraftNumber
-                      label="Gap to face"
+                      label={t('cam.setup.gapToFace')}
                       value={faceOffset}
                       onChange={setFaceOffset}
                       unit={lu}
@@ -608,23 +610,23 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
               <div className="mt-2">
                 {stockShape === 'box' ? (
                   <div className="grid grid-cols-3 gap-2">
-                    <DraftNumber label="X −" value={offXMin} onChange={setOffXMin} unit={lu} />
-                    <DraftNumber label="X +" value={offXMax} onChange={setOffXMax} unit={lu} />
-                    <DraftNumber label="Y −" value={offYMin} onChange={setOffYMin} unit={lu} />
-                    <DraftNumber label="Y +" value={offYMax} onChange={setOffYMax} unit={lu} />
-                    <DraftNumber label="Z −" value={offZMin} onChange={setOffZMin} unit={lu} />
-                    <DraftNumber label="Z +" value={offZMax} onChange={setOffZMax} unit={lu} />
+                    <DraftNumber label={t('cam.setup.xMinus')} value={offXMin} onChange={setOffXMin} unit={lu} />
+                    <DraftNumber label={t('cam.setup.xPlus')} value={offXMax} onChange={setOffXMax} unit={lu} />
+                    <DraftNumber label={t('cam.setup.yMinus')} value={offYMin} onChange={setOffYMin} unit={lu} />
+                    <DraftNumber label={t('cam.setup.yPlus')} value={offYMax} onChange={setOffYMax} unit={lu} />
+                    <DraftNumber label={t('cam.setup.zMinus')} value={offZMin} onChange={setOffZMin} unit={lu} />
+                    <DraftNumber label={t('cam.setup.zPlus')} value={offZMax} onChange={setOffZMax} unit={lu} />
                   </div>
                 ) : (
                   <div className="grid grid-cols-3 gap-2">
-                    <DraftNumber label="Radial" value={radial} onChange={setRadial} unit={lu} />
-                    <DraftNumber label="Z −" value={offZMin} onChange={setOffZMin} unit={lu} />
-                    <DraftNumber label="Z +" value={offZMax} onChange={setOffZMax} unit={lu} />
+                    <DraftNumber label={t('cam.setup.radial')} value={radial} onChange={setRadial} unit={lu} />
+                    <DraftNumber label={t('cam.setup.zMinus')} value={offZMin} onChange={setOffZMin} unit={lu} />
+                    <DraftNumber label={t('cam.setup.zPlus')} value={offZMax} onChange={setOffZMax} unit={lu} />
                   </div>
                 )}
                 <p className="mt-1.5 text-[9px] leading-relaxed text-mute">
-                  Allowances added to the part bounding box on each side.
-                  {isRoundStock && ' The round shape wraps the box corners.'}
+                  {t('cam.setup.allowanceHelp')}
+                  {isRoundStock && t('cam.setup.roundShapeHelp')}
                 </p>
               </div>
             )}
@@ -633,7 +635,7 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
               <div className="mt-2">
                 {restCandidates.length > 0 ? (
                   <label className="block">
-                    <span className={CAM_DIALOG_LABEL}>Continue from</span>
+                    <span className={CAM_DIALOG_LABEL}>{t('cam.setup.continueFrom')}</span>
                     <select
                       value={restSetupId || String(restCandidates[0]?.id ?? '')}
                       onChange={(event) => setRestSetupId(event.target.value)}
@@ -641,15 +643,14 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
                     >
                       {restCandidates.map((setup) => (
                         <option key={setup.id} value={setup.id}>
-                          {setup.name} (remaining stock)
+                          {setup.name}{t('cam.setup.remainingStockSuffix')}
                         </option>
                       ))}
                     </select>
                   </label>
                 ) : (
                   <p className="text-[10px] italic text-mute">
-                    No earlier setup exists yet — rest stock continues from a previous setup’s
-                    simulated remainder.
+                    {t('cam.setup.noEarlierSetup')}
                   </p>
                 )}
               </div>
@@ -658,7 +659,7 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
             {stockShape === 'model_body' && (
               <div className="mt-2">
                 <label className="block">
-                  <span className={CAM_DIALOG_LABEL}>Stock body</span>
+                  <span className={CAM_DIALOG_LABEL}>{t('cam.setup.stockBody')}</span>
                   <select
                     value={stockBodyId || String(scene.bodies[0]?.id ?? '')}
                     onChange={(event) => setStockBodyId(event.target.value)}
@@ -672,15 +673,14 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
                   </select>
                 </label>
                 <p className="mt-1.5 text-[9px] leading-relaxed text-mute">
-                  The body’s mesh is voxelized as the starting stock; keep it out of the part
-                  selection above if it is only stock.
+                  {t('cam.setup.stockBodyHelp')}
                 </p>
               </div>
             )}
 
             {stockPreview && (
               <div className="mt-2 rounded border border-edge/70 bg-header/40 p-2 font-mono text-[9px] leading-relaxed text-ink">
-                Stock box (model):{' '}
+                {t('cam.setup.stockBoxModel')}{' '}
                 {displayLength(stockPreview.modelBox.max.x - stockPreview.modelBox.min.x, units).toFixed(2)} ×{' '}
                 {displayLength(stockPreview.modelBox.max.y - stockPreview.modelBox.min.y, units).toFixed(2)} ×{' '}
                 {displayLength(stockPreview.modelBox.max.z - stockPreview.modelBox.min.z, units).toFixed(2)} {lu}
@@ -688,21 +688,20 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
             )}
           </DialogSection>
 
-          <DialogSection title="WCS ORIGIN">
+          <DialogSection title={t('cam.setup.sectionWcsOrigin')}>
             {inheritsWcs ? (
               <p className="text-[10px] leading-relaxed text-mute">
-                Rest machining inherits the WCS of “{restSource?.name}” — the remaining material
-                only makes sense in the same frame.
+                {t('cam.setup.restInheritsWcs').replace('{name}', restSource?.name ?? '')}
               </p>
             ) : (
               <>
                 <div className="grid grid-cols-2 gap-1.5">
                   {(
                     [
-                      ['stock_box_point', 'Stock box point'],
-                      ['model_box_point', 'Model box point'],
-                      ['sketch_point', 'Sketch point'],
-                      ['explicit', 'Explicit XYZ'],
+                      ['stock_box_point', t('cam.setup.originStockBoxPoint')],
+                      ['model_box_point', t('cam.setup.originModelBoxPoint')],
+                      ['sketch_point', t('cam.setup.originSketchPoint')],
+                      ['explicit', t('cam.setup.originExplicitXyz')],
                     ] as [OriginMode, string][]
                   ).map(([mode, label]) => (
                     <button
@@ -727,16 +726,16 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
                       onClick={pickStockBoxPoint}
                       className="flex h-7 w-full items-center justify-center gap-1.5 rounded border border-accent/40 bg-accent/10 text-[10px] font-semibold text-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      <MousePointer2 size={12} /> Pick on the stock box in the viewport
+                      <MousePointer2 size={12} /> {t('cam.setup.pickStockBoxButton')}
                     </button>
                     <div className="grid grid-cols-3 gap-2">
-                      {anchorSelect('X at', anchorX, setAnchorX)}
-                      {anchorSelect('Y at', anchorY, setAnchorY)}
-                      {anchorSelect('Z at', anchorZ, setAnchorZ)}
+                      {anchorSelect(t('cam.setup.xAt'), anchorX, setAnchorX)}
+                      {anchorSelect(t('cam.setup.yAt'), anchorY, setAnchorY)}
+                      {anchorSelect(t('cam.setup.zAt'), anchorZ, setAnchorZ)}
                     </div>
                     {!stockPreview && (
                       <p className="text-[9px] italic text-mute/80">
-                        Complete the stock definition above to enable viewport picking.
+                        {t('cam.setup.completeStockToPick')}
                       </p>
                     )}
                   </div>
@@ -749,12 +748,12 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
                       onClick={pickModelBoxPoint}
                       className="flex h-7 w-full items-center justify-center gap-1.5 rounded border border-accent/40 bg-accent/10 text-[10px] font-semibold text-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      <MousePointer2 size={12} /> Pick on the model box in the viewport
+                      <MousePointer2 size={12} /> {t('cam.setup.pickModelBoxButton')}
                     </button>
                     <div className="grid grid-cols-3 gap-2">
-                      {anchorSelect('X at', anchorX, setAnchorX)}
-                      {anchorSelect('Y at', anchorY, setAnchorY)}
-                      {anchorSelect('Z at', anchorZ, setAnchorZ)}
+                      {anchorSelect(t('cam.setup.xAt'), anchorX, setAnchorX)}
+                      {anchorSelect(t('cam.setup.yAt'), anchorY, setAnchorY)}
+                      {anchorSelect(t('cam.setup.zAt'), anchorZ, setAnchorZ)}
                     </div>
                   </div>
                 )}
@@ -766,7 +765,7 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
                       onClick={pickSketchPoint}
                       className="flex h-7 w-full items-center justify-center gap-1.5 rounded border border-accent/40 bg-accent/10 text-[10px] font-semibold text-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      <MousePointer2 size={12} /> Pick a sketch point in the viewport
+                      <MousePointer2 size={12} /> {t('cam.setup.pickSketchPointButton')}
                     </button>
                     {pointRefs.length > 0 ? (
                       <select
@@ -774,7 +773,7 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
                         onChange={(event) => setSketchPointKey(event.target.value)}
                         className={CAM_DIALOG_INPUT}
                       >
-                        <option value="">…or choose from the list</option>
+                        <option value="">{t('cam.setup.orChooseFromList')}</option>
                         {pointRefs.map((ref) => (
                           <option key={`${ref.sketch}:${ref.entityId}`} value={`${ref.sketch}:${ref.entityId}`}>
                             {ref.label}
@@ -783,7 +782,7 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
                       </select>
                     ) : (
                       <p className="text-[10px] italic text-mute">
-                        No sketch points yet. Draw a point in a sketch first, then select it here.
+                        {t('cam.setup.noSketchPoints')}
                       </p>
                     )}
                   </div>
@@ -797,18 +796,18 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
                 )}
                 <div className="mt-2 grid grid-cols-2 gap-2">
                   <label className="block">
-                    <span className={CAM_DIALOG_LABEL}>Z direction</span>
+                    <span className={CAM_DIALOG_LABEL}>{t('cam.setup.zDirection')}</span>
                     <select
                       value={zDown ? 'down' : 'up'}
                       onChange={(event) => setZDown(event.target.value === 'down')}
                       className={CAM_DIALOG_INPUT}
                     >
-                      <option value="up">Model +Z (spindle up)</option>
-                      <option value="down">Model −Z (flipped)</option>
+                      <option value="up">{t('cam.setup.zUp')}</option>
+                      <option value="down">{t('cam.setup.zDown')}</option>
                     </select>
                   </label>
                   <label className="block">
-                    <span className={CAM_DIALOG_LABEL}>Rotate about Z</span>
+                    <span className={CAM_DIALOG_LABEL}>{t('cam.setup.rotateAboutZ')}</span>
                     <select
                       value={rotation}
                       onChange={(event) => setRotation(Number(event.target.value) as 0 | 90 | 180 | 270)}
@@ -827,29 +826,29 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
             {preview ? (
               <div className="mt-2 rounded border border-accent/30 bg-accent/5 p-2 font-mono text-[9px] leading-relaxed text-ink">
                 <div>
-                  WCS origin (model): {displayLength(preview.origin.x, units).toFixed(3)},{' '}
+                  {t('cam.setup.wcsOriginModel')} {displayLength(preview.origin.x, units).toFixed(3)},{' '}
                   {displayLength(preview.origin.y, units).toFixed(3)},{' '}
                   {displayLength(preview.origin.z, units).toFixed(3)} {lu}
                 </div>
                 <div>
-                  Stock in setup:{' '}
+                  {t('cam.setup.stockInSetup')}{' '}
                   {displayLength(preview.stock.max.x - preview.stock.min.x, units).toFixed(2)} ×{' '}
                   {displayLength(preview.stock.max.y - preview.stock.min.y, units).toFixed(2)} ×{' '}
                   {displayLength(preview.stock.max.z - preview.stock.min.z, units).toFixed(2)} {lu}{' '}
-                  · top Z {displayLength(preview.stock.max.z, units).toFixed(3)} {lu}
+                  · {t('cam.setup.topZ')} {displayLength(preview.stock.max.z, units).toFixed(3)} {lu}
                 </div>
               </div>
             ) : (
               <p className="mt-2 text-[9px] italic text-mute/80">
-                Complete the stock definition and pick an origin to preview the resolved frame.
+                {t('cam.setup.completeForPreview')}
               </p>
             )}
           </DialogSection>
 
-          <DialogSection title="WORK OFFSETS">
+          <DialogSection title={t('cam.setup.sectionWorkOffsets')}>
             <div className="grid grid-cols-2 gap-2">
               <label className="block">
-                <span className={CAM_DIALOG_LABEL}>First offset</span>
+                <span className={CAM_DIALOG_LABEL}>{t('cam.setup.firstOffset')}</span>
                 <select
                   value={workOffset}
                   onChange={(event) => setWorkOffset(event.target.value as CamWorkOffset)}
@@ -863,7 +862,7 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
                 </select>
               </label>
               <DraftNumber
-                label="Duplicate parts"
+                label={t('cam.setup.duplicateParts')}
                 value={partCount}
                 onChange={setPartCount}
                 integer
@@ -871,9 +870,7 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
               />
             </div>
             <p className="text-[9px] leading-relaxed text-mute">
-              Posting one program repeats the toolpaths under that many consecutive offsets
-              starting at the first (e.g. 3 from G54 → G54, G55, G56). Safe heights live on each
-              operation; the post comes from this setup's machine/controller.
+              {t('cam.setup.workOffsetsHelp')}
             </p>
           </DialogSection>
         </div>
@@ -883,13 +880,13 @@ export function CamSetupDialog({ editing }: { editing?: CamSetupDto }) {
             onClick={close}
             className="h-7 rounded border border-edge px-3 text-[10px] font-semibold text-mute hover:text-ink"
           >
-            Cancel
+            {t('cam.setup.cancel')}
           </button>
           <button
             type="submit"
             className="h-7 rounded border border-accent/50 bg-accent/15 px-3 text-[10px] font-semibold text-accent hover:bg-accent/25"
           >
-            {editing ? 'Save changes' : 'Create empty setup'}
+            {editing ? t('cam.setup.saveChanges') : t('cam.setup.createEmptySetup')}
           </button>
         </footer>
       </form>

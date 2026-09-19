@@ -195,6 +195,11 @@ fn committed_feedback(output: &mut Value, editor: &mut Editor, followup: Result<
         editor.press = None;
         output["presentation_pending"] = json!(true);
         output["presentation_error"] = json!(error);
+    } else {
+        // A committed gesture adopts its own stamp, so `synchronize_stamp` will
+        // early-return and never clear an earlier rejection. Drop it here or a
+        // repaired shape keeps reporting the old failure after it commits.
+        editor.error.clear();
     }
 }
 
@@ -696,6 +701,36 @@ pub(crate) fn synchronize_controls(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_successful_commit_clears_a_stale_gesture_error() {
+        let owner = DocumentContext {
+            window_id: "main".into(),
+            document_id: "a".into(),
+            epoch: 1,
+        };
+        let mut editor = Editor::default();
+        let current = Stamp {
+            owner,
+            revision: 2,
+            sketch: Some("Sketch1".into()),
+        };
+        synchronize_stamp(&mut editor, current.clone());
+        // A rejected commit reports its failure without advancing the stamp,
+        // so the document still matches and synchronize_stamp cannot clear it.
+        editor.error = "This segment has no length".into();
+        assert!(!synchronize_stamp(&mut editor, current.clone()));
+        assert!(!editor.error.is_empty());
+
+        let mut output = json!({});
+        committed_feedback(&mut output, &mut editor, Ok(()));
+        assert_eq!(output["committed"], json!(true));
+        assert!(
+            editor.error.is_empty(),
+            "a committed gesture must not keep reporting an earlier failure"
+        );
+    }
+
     #[test]
     fn replacing_or_mutating_a_document_retires_unfinished_gestures() {
         let owner = DocumentContext {

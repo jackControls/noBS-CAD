@@ -45,6 +45,7 @@ import type {
 } from '../../engine/types';
 import { getEngine } from '../../engine';
 import { chooseSaveTarget, writeSaveTarget } from '../../files/fileIO';
+import { useTranslation } from '../../i18n';
 import { useAppStore } from '../../store/appStore';
 import { openBodyFeature } from '../../engine/controller';
 
@@ -57,6 +58,7 @@ interface MotionValues {
 }
 
 export function AssemblyBrowser() {
+  const { t } = useTranslation();
   const assembly = useAppStore((state) => state.assemblyDocument);
   const solution = useAppStore((state) => state.assemblySolution);
   const motionPreview = useAppStore((state) => state.jointMotionPreview);
@@ -262,16 +264,16 @@ export function AssemblyBrowser() {
       <header className="flex h-8 items-center justify-between border-b border-edge px-2.5 text-[10px] font-semibold tracking-[0.16em] text-mute">
         <button
           type="button"
-          title="Back to model browser"
+          title={t('assembly.browser.backToModelBrowser')}
           onClick={() => setSolidSidebarMode('model')}
           className="flex items-center gap-1 rounded py-1 pr-1 hover:bg-edge hover:text-ink"
         >
-          <ChevronLeft size={13} /> MODEL
+          <ChevronLeft size={13} /> {t('ribbon.tabs.model')}
         </button>
-        <span className="ml-auto mr-2">ASSEMBLY</span>
+        <span className="ml-auto mr-2">{t('ribbon.tabs.assembly')}</span>
         <button
           type="button"
-          title="Create joint"
+          title={t('assembly.browser.createJoint')}
           onClick={() => setJointDialogOpen(true)}
           className="rounded p-1 text-mute hover:bg-edge hover:text-ink"
         >
@@ -281,17 +283,17 @@ export function AssemblyBrowser() {
 
       <nav className="grid h-8 shrink-0 grid-cols-3 border-b border-edge bg-header/60 p-0.5 text-[9px]">
         {([
-          ['assembly', 'Structure'],
-          ['motion', 'Motion'],
-          ['inspect', 'Inspect'],
-        ] as const).map(([id, label]) => (
+          ['assembly', 'assembly.browser.structure'],
+          ['motion', 'assembly.browser.motion'],
+          ['inspect', 'assembly.browser.inspect'],
+        ] as const).map(([id, labelKey]) => (
           <button
             key={id}
             type="button"
             onClick={() => setPanel(id)}
             className={`rounded ${panel === id ? 'bg-accent/20 font-semibold text-accent' : 'text-mute hover:bg-edge hover:text-ink'}`}
           >
-            {label}
+            {t(labelKey)}
           </button>
         ))}
       </nav>
@@ -308,7 +310,7 @@ export function AssemblyBrowser() {
           className="flex h-8 w-full items-center gap-1.5 px-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-mute hover:bg-edge/40 hover:text-ink"
         >
           {componentsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          <Boxes size={13} className="text-accent" /> Components
+          <Boxes size={13} className="text-accent" /> {t('assembly.browser.components')}
           <span className="ml-auto rounded bg-header px-1.5 py-0.5 text-[8px] font-normal tracking-normal">
             {structure.occurrences.length}
           </span>
@@ -321,26 +323,26 @@ export function AssemblyBrowser() {
                 disabled={selectedBodies.length === 0}
                 onClick={() => void createSelectedComponent().catch(showAssemblyError)}
                 title={selectedBodies.length > 0
-                  ? `Group ${selectedBodies.length} selected bod${selectedBodies.length === 1 ? 'y' : 'ies'} into one reusable component`
-                  : 'Select one or more model bodies first'}
+                  ? t(selectedBodies.length === 1 ? 'assembly.browser.groupSelectedBody' : 'assembly.browser.groupSelectedBodies').replace('{count}', String(selectedBodies.length))
+                  : t('assembly.browser.selectBodiesFirst')}
                 className="flex h-7 items-center justify-center gap-1 rounded border border-edge bg-header px-1.5 text-[9px] text-ink hover:border-accent disabled:cursor-not-allowed disabled:opacity-35"
               >
-                <Box size={11} /> Make component
+                <Box size={11} /> {t('assembly.browser.makeComponent')}
               </button>
               <button
                 type="button"
                 onClick={() => void createSubassembly().catch(showAssemblyError)}
                 className="flex h-7 items-center justify-center gap-1 rounded border border-edge bg-header px-1.5 text-[9px] text-ink hover:border-accent"
-                title="Create an empty component that can own nested occurrences"
+                title={t('assembly.browser.subassemblyHint')}
               >
-                <FolderTree size={11} /> Subassembly
+                <FolderTree size={11} /> {t('assembly.browser.subassembly')}
               </button>
             </div>
 
             <div className="max-h-52 overflow-y-auto border-y border-edge/70 py-1">
               {structure.occurrences.length === 0 ? (
                 <p className="px-3 py-5 text-center text-[10px] leading-4 text-mute">
-                  Bodies become one-body components automatically. Select multiple bodies to make a rigid multi-body component.
+                  {t('assembly.browser.componentsEmptyHint')}
                 </p>
               ) : (
                 <OccurrenceTree
@@ -379,14 +381,14 @@ export function AssemblyBrowser() {
             {structure.definitions.length > 0 && (
               <div className="grid grid-cols-[1fr_auto_auto] gap-1.5 p-2">
                 <select
-                  aria-label="Reusable component definition"
+                  aria-label={t('assembly.browser.reusableComponentDefinition')}
                   value={instanceComponentId ?? ''}
                   onChange={(event) => setInstanceComponentId(Number(event.target.value))}
                   className="h-7 min-w-0 rounded border border-edge bg-header px-1.5 text-[9px] text-ink outline-none focus:border-accent"
                 >
                   {structure.definitions.map((definition) => (
                     <option key={definition.id} value={definition.id}>
-                      {definition.name} · {definition.body_ids.length} bod{definition.body_ids.length === 1 ? 'y' : 'ies'}
+                      {definition.name} · {t(definition.body_ids.length === 1 ? 'assembly.browser.bodyCount' : 'assembly.browser.bodyCountPlural').replace('{count}', String(definition.body_ids.length))}
                     </option>
                   ))}
                 </select>
@@ -394,18 +396,18 @@ export function AssemblyBrowser() {
                   type="button"
                   onClick={() => void addOccurrence(false).catch(showAssemblyError)}
                   className="h-7 rounded border border-edge bg-header px-2 text-[9px] text-ink hover:border-accent"
-                  title="Add a reusable root occurrence"
+                  title={t('assembly.browser.addRootHint')}
                 >
-                  + Root
+                  {t('assembly.browser.addRoot')}
                 </button>
                 <button
                   type="button"
                   disabled={!selectedOccurrence}
                   onClick={() => void addOccurrence(true).catch(showAssemblyError)}
                   className="h-7 rounded border border-edge bg-header px-2 text-[9px] text-ink hover:border-accent disabled:opacity-35"
-                  title="Add this component inside the selected subassembly occurrence"
+                  title={t('assembly.browser.addChildHint')}
                 >
-                  + Child
+                  {t('assembly.browser.addChild')}
                 </button>
               </div>
             )}
@@ -427,11 +429,13 @@ export function AssemblyBrowser() {
 
       {mechanismPreview && (
         <section data-testid="mechanism-position-capture" className="shrink-0 border-b border-accent/40 bg-accent/10 p-2">
-          <p className="text-[10px] font-semibold text-accent">Mechanism position preview</p>
+          <p className="text-[10px] font-semibold text-accent">{t('assembly.browser.mechanismPositionPreview')}</p>
           <p className="mt-0.5 text-[9px] leading-3 text-mute">
             {mechanismPreview.converged
-              ? `${mechanismPreview.joint_motions.length} joint(s) solved in ${mechanismPreview.iterations} iteration(s).`
-              : `Closest constrained position · ${mechanismPreview.position_error_mm.toFixed(2)} mm residual.`}
+              ? t('assembly.browser.mechanismSolved')
+                .replace('{joints}', String(mechanismPreview.joint_motions.length))
+                .replace('{iterations}', String(mechanismPreview.iterations))
+              : t('assembly.browser.mechanismClosest').replace('{error}', mechanismPreview.position_error_mm.toFixed(2))}
           </p>
           <div className="mt-2 flex gap-1.5">
             <button
@@ -439,18 +443,18 @@ export function AssemblyBrowser() {
               onClick={clearMechanismPreview}
               className="flex h-7 flex-1 items-center justify-center gap-1 rounded border border-edge bg-header text-[9px] text-ink hover:border-accent"
             >
-              <RotateCcw size={11} /> Revert
+              <RotateCcw size={11} /> {t('assembly.browser.revert')}
             </button>
             <button
               type="button"
               disabled={mechanismPreview.joint_motions.length === 0}
               title={mechanismPreview.converged
-                ? 'Save this solved mechanism position'
-                : 'The cursor target is unreachable; save the closest valid constrained position'}
+                ? t('assembly.browser.saveSolvedPositionHint')
+                : t('assembly.browser.saveClosestHint')}
               onClick={() => void captureMechanismPosition().catch(showAssemblyError)}
               className="flex h-7 flex-1 items-center justify-center gap-1 rounded bg-accent text-[9px] font-semibold text-white hover:brightness-110 disabled:opacity-40"
             >
-              <Save size={11} /> {mechanismPreview.converged ? 'Save position' : 'Save closest'}
+              <Save size={11} /> {mechanismPreview.converged ? t('assembly.browser.savePosition') : t('assembly.browser.saveClosest')}
             </button>
           </div>
         </section>
@@ -463,7 +467,7 @@ export function AssemblyBrowser() {
           className="flex h-8 shrink-0 items-center gap-1.5 border-b border-edge px-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-mute hover:bg-edge/40 hover:text-ink"
         >
           {jointsExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          <Link2 size={13} className="text-accent" /> Joints
+          <Link2 size={13} className="text-accent" /> {t('browser.joints')}
           <span className="ml-auto rounded bg-header px-1.5 py-0.5 text-[8px] font-normal tracking-normal">
             {activeJoints.length}
           </span>
@@ -473,16 +477,16 @@ export function AssemblyBrowser() {
           {activeJoints.length === 0 && (
           <div className="px-4 py-8 text-center">
             <Link2 className="mx-auto mb-2 text-mute/50" size={28} />
-            <p className="text-[11px] font-medium text-ink">No joints</p>
+            <p className="text-[11px] font-medium text-ink">{t('assembly.browser.noJoints')}</p>
             <p className="mt-1 text-[10px] leading-relaxed text-mute">
-              Connect exact faces, cylindrical axes, or circular openings on different components.
+              {t('assembly.browser.noJointsHint')}
             </p>
             <button
               type="button"
               onClick={() => setJointDialogOpen(true)}
               className="mt-3 rounded bg-accent px-3 py-1.5 text-[10px] font-semibold text-white hover:brightness-110"
             >
-              Create joint
+              {t('assembly.browser.createJoint')}
             </button>
           </div>
         )}
@@ -502,7 +506,7 @@ export function AssemblyBrowser() {
                 type="button"
                 onClick={() => selectJoint(joint.id)}
                 onDoubleClick={() => openJointEditor(joint.id)}
-                title={broken ? 'Broken topology reference — edit to repair' : joint.enabled ? undefined : 'Joint is suppressed'}
+                title={broken ? t('assembly.browser.brokenReference') : joint.enabled ? undefined : t('assembly.browser.jointSuppressed')}
                 className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left"
               >
                 <Link2
@@ -513,12 +517,12 @@ export function AssemblyBrowser() {
                   {joint.name}
                 </span>
                 <span className={`ml-auto text-[8px] uppercase ${broken ? 'text-warn' : 'opacity-55'}`}>
-                  {broken ? 'repair' : kindShortLabel(joint)}
+                  {broken ? t('assembly.browser.repairStatus') : kindShortLabel(joint)}
                 </span>
               </button>
               <button
                 type="button"
-                title={joint.enabled ? `Suppress ${joint.name}` : `Unsuppress ${joint.name}`}
+                title={joint.enabled ? t('assembly.browser.suppressJoint').replace('{name}', joint.name) : t('assembly.browser.unsuppressJoint').replace('{name}', joint.name)}
                 onClick={() => void setJointEnabled(joint.id, !joint.enabled).catch(showAssemblyError)}
                 className="invisible rounded p-1 text-mute hover:bg-edge hover:text-ink group-hover:visible"
               >
@@ -526,7 +530,7 @@ export function AssemblyBrowser() {
               </button>
               <button
                 type="button"
-                title={`Edit ${joint.name}`}
+                title={t('assembly.browser.editJoint').replace('{name}', joint.name)}
                 onClick={() => openJointEditor(joint.id)}
                 className="invisible rounded p-1 text-mute hover:bg-edge hover:text-ink group-hover:visible"
               >
@@ -534,7 +538,7 @@ export function AssemblyBrowser() {
               </button>
               <button
                 type="button"
-                title={`Delete ${joint.name}`}
+                title={t('assembly.browser.deleteJoint').replace('{name}', joint.name)}
                 onClick={() => void useAppStore.getState().deleteJoint(joint.id).catch(showAssemblyError)}
                 className="invisible rounded p-1 text-mute hover:bg-warn/15 hover:text-warn group-hover:visible"
               >
@@ -550,7 +554,7 @@ export function AssemblyBrowser() {
       {selectedJoint && (
         <section data-testid="joint-motion-panel" className="border-t border-edge p-2.5">
           <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-mute">
-            <Gauge size={13} className="text-accent" /> Motion
+            <Gauge size={13} className="text-accent" /> {t('assembly.browser.motion')}
           </div>
           <div className="mt-1 flex items-center gap-2">
             <p className="min-w-0 flex-1 truncate text-[11px] font-medium text-ink">{selectedJoint.name}</p>
@@ -558,15 +562,15 @@ export function AssemblyBrowser() {
               type="button"
               onClick={() => openJointEditor(selectedJoint.id)}
               className="rounded p-1 text-mute hover:bg-edge hover:text-ink"
-              title="Edit joint definition"
+              title={t('assembly.browser.editJointDefinition')}
             >
               <Pencil size={11} />
             </button>
           </div>
           {!selectedJoint.enabled ? (
-            <p className="mt-2 text-[10px] leading-4 text-mute">This joint is suppressed and does not constrain the mechanism.</p>
+            <p className="mt-2 text-[10px] leading-4 text-mute">{t('assembly.browser.suppressedNote')}</p>
           ) : selectedJoint.kind === 'rigid' ? (
-            <p className="mt-2 text-[10px] leading-4 text-mute">Rigid joints have no free motion.</p>
+            <p className="mt-2 text-[10px] leading-4 text-mute">{t('assembly.browser.rigidNoMotion')}</p>
           ) : (
             <>
               <div className="mt-2 flex items-center justify-between gap-2">
@@ -576,15 +580,15 @@ export function AssemblyBrowser() {
                   onClick={() => playMotionDemo(selectedJoint)}
                   className="flex items-center gap-1 rounded border border-edge bg-header px-2 py-1 text-[9px] text-ink hover:border-accent"
                 >
-                  <Play size={10} /> Demo motion
+                  <Play size={10} /> {t('assembly.browser.demoMotion')}
                 </button>
-                <span className="text-[9px] text-mute">Preview only</span>
+                <span className="text-[9px] text-mute">{t('assembly.browser.previewOnly')}</span>
               </div>
               {motionControls(selectedJoint).map((control) => (
                 <MotionControl
                   key={control.key}
                   testId={`joint-motion-${control.key}`}
-                  label={control.label}
+                  label={t(control.labelKey)}
                   unit={control.unit}
                   value={motionValues[control.key]}
                   minimum={control.limits?.min ?? control.fallback[0]}
@@ -597,7 +601,7 @@ export function AssemblyBrowser() {
                 />
               ))}
               <p className="mt-1 text-[9px] leading-3 text-mute">
-                With this joint selected, drag its component to drive only this joint. Clear the joint selection and drag any movable component to solve the whole mechanism from the exact point under the cursor.
+                {t('assembly.browser.dragHint')}
               </p>
               {selectedMotionPreview && !demoRunning && (
                 <div data-testid="joint-position-capture" className="mt-2 flex gap-1.5 border-t border-edge pt-2">
@@ -609,14 +613,14 @@ export function AssemblyBrowser() {
                     }}
                     className="flex h-7 flex-1 items-center justify-center gap-1 rounded border border-edge bg-header text-[9px] text-ink hover:border-accent"
                   >
-                    <RotateCcw size={11} /> Revert
+                    <RotateCcw size={11} /> {t('assembly.browser.revert')}
                   </button>
                   <button
                     type="button"
                     onClick={() => void captureJointPosition().catch(showAssemblyError)}
                     className="flex h-7 flex-1 items-center justify-center gap-1 rounded bg-accent text-[9px] font-semibold text-white hover:brightness-110"
                   >
-                    <Save size={11} /> Save position
+                    <Save size={11} /> {t('assembly.browser.savePosition')}
                   </button>
                 </div>
               )}
@@ -657,6 +661,7 @@ async function refreshAssemblyState(dirty = false) {
 }
 
 function MotionStudioPanel() {
+  const { t } = useTranslation();
   const assembly = useAppStore((state) => state.assemblyDocument);
   const preview = useAppStore((state) => state.motionStudyPreview);
   const [selectedStudyId, setSelectedStudyId] = useState<number | null>(
@@ -779,7 +784,7 @@ function MotionStudioPanel() {
   const addDriver = async () => {
     if (!selectedStudy) return;
     const joint = assembly.joints.find((candidate) => candidate.enabled && candidate.kind !== 'rigid');
-    if (!joint) throw new Error('Create an enabled motion joint before adding a driver.');
+    if (!joint) throw new Error(t('assembly.browser.errorNoMotionJoint'));
     const coordinate = coordinateOptions(joint)[0];
     const initial = motionCoordinateValue(joint, coordinate);
     const driver: MotionDriverDto = {
@@ -806,7 +811,7 @@ function MotionStudioPanel() {
   const exportPath = async () => {
     if (!selectedStudy) return;
     const target = await chooseSaveTarget(`${selectedStudy.name}-motion-path`, {
-      description: 'Motion path CSV',
+      description: t('assembly.browser.motionPathCsv'),
       extension: '.csv',
       mime: 'text/csv',
     });
@@ -825,18 +830,18 @@ function MotionStudioPanel() {
       <section className="border-b border-edge p-2.5">
         <div className="flex items-center justify-between">
           <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-mute">
-            <Save size={12} className="text-accent" /> Named positions
+            <Save size={12} className="text-accent" /> {t('assembly.browser.namedPositions')}
           </span>
           <button type="button" onClick={() => void createPosition().catch(showAssemblyError)} className="rounded bg-accent px-2 py-1 text-[9px] font-semibold text-white">
-            Capture
+            {t('assembly.browser.capture')}
           </button>
         </div>
         <div className="mt-2 space-y-1">
-          {assembly.positions.length === 0 && <p className="py-2 text-[9px] leading-4 text-mute">Capture named positions without overwriting the active joint design state.</p>}
+          {assembly.positions.length === 0 && <p className="py-2 text-[9px] leading-4 text-mute">{t('assembly.browser.namedPositionsHint')}</p>}
           {assembly.positions.map((position) => (
             <div key={position.id} className="flex items-center gap-1 rounded border border-edge bg-header p-1">
               <input
-                aria-label={`Position ${position.id} name`}
+                aria-label={t('assembly.browser.positionName').replace('{id}', String(position.id))}
                 defaultValue={position.name}
                 onBlur={(event) => {
                   const name = event.currentTarget.value.trim();
@@ -847,8 +852,8 @@ function MotionStudioPanel() {
                 }}
                 className="h-6 min-w-0 flex-1 bg-transparent px-1 text-[10px] text-ink outline-none focus:ring-1 focus:ring-accent"
               />
-              <button type="button" onClick={() => void applyPosition(position.id).catch(showAssemblyError)} className="rounded border border-edge px-1.5 py-1 text-[8px] text-ink hover:border-accent">Apply</button>
-              <button type="button" title="Delete position" onClick={() => void getEngine().then((engine) => engine.deleteAssemblyPosition(position.id)).then(() => refreshAssemblyState(true)).catch(showAssemblyError)} className="rounded p-1 text-mute hover:text-warn"><Trash2 size={10} /></button>
+              <button type="button" onClick={() => void applyPosition(position.id).catch(showAssemblyError)} className="rounded border border-edge px-1.5 py-1 text-[8px] text-ink hover:border-accent">{t('assembly.browser.apply')}</button>
+              <button type="button" title={t('assembly.browser.deletePosition')} onClick={() => void getEngine().then((engine) => engine.deleteAssemblyPosition(position.id)).then(() => refreshAssemblyState(true)).catch(showAssemblyError)} className="rounded p-1 text-mute hover:text-warn"><Trash2 size={10} /></button>
             </div>
           ))}
         </div>
@@ -856,26 +861,26 @@ function MotionStudioPanel() {
 
       <section className="border-b border-edge p-2.5">
         <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-mute">
-          <Activity size={12} className="text-accent" /> Motion study
+          <Activity size={12} className="text-accent" /> {t('assembly.browser.motionStudy')}
           <button
             type="button"
-            title="New motion study"
+            title={t('assembly.browser.newMotionStudy')}
             onClick={() => void getEngine().then((engine) => engine.createMotionStudy({ name: `Study ${assembly.next_motion_study_id}`, duration_seconds: 5 })).then(async (study) => { setSelectedStudyId(study.id); await refreshAssemblyState(true); }).catch(showAssemblyError)}
             className="ml-auto rounded p-1 hover:bg-edge hover:text-ink"
           ><Plus size={12} /></button>
         </div>
         {assembly.motion_studies.length === 0 ? (
-          <button type="button" onClick={() => void getEngine().then((engine) => engine.createMotionStudy({ name: 'Study 1', duration_seconds: 5 })).then(async (study) => { setSelectedStudyId(study.id); await refreshAssemblyState(true); }).catch(showAssemblyError)} className="mt-3 w-full rounded border border-dashed border-edge py-3 text-[10px] text-mute hover:border-accent hover:text-ink">Create a motion study</button>
+          <button type="button" onClick={() => void getEngine().then((engine) => engine.createMotionStudy({ name: 'Study 1', duration_seconds: 5 })).then(async (study) => { setSelectedStudyId(study.id); await refreshAssemblyState(true); }).catch(showAssemblyError)} className="mt-3 w-full rounded border border-dashed border-edge py-3 text-[10px] text-mute hover:border-accent hover:text-ink">{t('assembly.browser.createMotionStudy')}</button>
         ) : selectedStudy && (
           <div className="mt-2 space-y-2">
             <div className="flex gap-1">
               <select value={selectedStudy.id} onChange={(event) => { setSelectedStudyId(Number(event.target.value)); timeRef.current = 0; setTime(0); previousTimeRef.current = null; useAppStore.setState({ motionStudyPreview: null }); }} className="h-7 min-w-0 flex-1 rounded border border-edge bg-header px-2 text-[10px] text-ink">
                 {assembly.motion_studies.map((study) => <option key={study.id} value={study.id}>{study.name}</option>)}
               </select>
-              <button type="button" title="Delete motion study" onClick={() => void getEngine().then((engine) => engine.deleteMotionStudy(selectedStudy.id)).then(async () => { setPlaying(false); timeRef.current = 0; setTime(0); previousTimeRef.current = null; useAppStore.setState({ motionStudyPreview: null }); await refreshAssemblyState(true); }).catch(showAssemblyError)} className="h-7 w-7 rounded border border-edge text-mute hover:border-warn hover:text-warn"><Trash2 size={11} className="mx-auto" /></button>
+              <button type="button" title={t('assembly.browser.deleteMotionStudy')} onClick={() => void getEngine().then((engine) => engine.deleteMotionStudy(selectedStudy.id)).then(async () => { setPlaying(false); timeRef.current = 0; setTime(0); previousTimeRef.current = null; useAppStore.setState({ motionStudyPreview: null }); await refreshAssemblyState(true); }).catch(showAssemblyError)} className="h-7 w-7 rounded border border-edge text-mute hover:border-warn hover:text-warn"><Trash2 size={11} className="mx-auto" /></button>
             </div>
             <input
-              aria-label="Motion study name"
+              aria-label={t('assembly.browser.motionStudyName')}
               key={`${selectedStudy.id}-name-${selectedStudy.name}`}
               defaultValue={selectedStudy.name}
               onBlur={(event) => {
@@ -886,10 +891,10 @@ function MotionStudioPanel() {
               className="h-7 w-full rounded border border-edge bg-header px-2 text-[10px] text-ink"
             />
             <div className="grid grid-cols-2 gap-1.5">
-              <label className="text-[8px] uppercase text-mute">Duration (s)<input key={`${selectedStudy.id}-duration-${selectedStudy.duration_seconds}`} type="number" min={0.01} step={0.1} defaultValue={selectedStudy.duration_seconds} onBlur={(event) => { const duration = Number(event.currentTarget.value); if (Number.isFinite(duration) && duration > 0 && duration !== selectedStudy.duration_seconds) void updateStudy(resizeMotionStudy(selectedStudy, duration)).catch(showAssemblyError); else event.currentTarget.value = String(selectedStudy.duration_seconds); }} className="mt-0.5 h-7 w-full rounded border border-edge bg-header px-2 text-[10px] text-ink" /></label>
-              <label className="text-[8px] uppercase text-mute">Playback speed<input key={`${selectedStudy.id}-speed-${selectedStudy.playback_speed}`} type="number" min={0.05} step={0.25} defaultValue={selectedStudy.playback_speed} onBlur={(event) => { const speed = Number(event.currentTarget.value); if (Number.isFinite(speed) && speed > 0 && speed !== selectedStudy.playback_speed) void updateStudy({ ...selectedStudy, playback_speed: speed }).catch(showAssemblyError); else event.currentTarget.value = String(selectedStudy.playback_speed); }} className="mt-0.5 h-7 w-full rounded border border-edge bg-header px-2 text-[10px] text-ink" /></label>
+              <label className="text-[8px] uppercase text-mute">{t('assembly.browser.duration')}<input key={`${selectedStudy.id}-duration-${selectedStudy.duration_seconds}`} type="number" min={0.01} step={0.1} defaultValue={selectedStudy.duration_seconds} onBlur={(event) => { const duration = Number(event.currentTarget.value); if (Number.isFinite(duration) && duration > 0 && duration !== selectedStudy.duration_seconds) void updateStudy(resizeMotionStudy(selectedStudy, duration)).catch(showAssemblyError); else event.currentTarget.value = String(selectedStudy.duration_seconds); }} className="mt-0.5 h-7 w-full rounded border border-edge bg-header px-2 text-[10px] text-ink" /></label>
+              <label className="text-[8px] uppercase text-mute">{t('assembly.browser.playbackSpeed')}<input key={`${selectedStudy.id}-speed-${selectedStudy.playback_speed}`} type="number" min={0.05} step={0.25} defaultValue={selectedStudy.playback_speed} onBlur={(event) => { const speed = Number(event.currentTarget.value); if (Number.isFinite(speed) && speed > 0 && speed !== selectedStudy.playback_speed) void updateStudy({ ...selectedStudy, playback_speed: speed }).catch(showAssemblyError); else event.currentTarget.value = String(selectedStudy.playback_speed); }} className="mt-0.5 h-7 w-full rounded border border-edge bg-header px-2 text-[10px] text-ink" /></label>
             </div>
-            <label className="flex items-center gap-1.5 text-[9px] text-mute"><input type="checkbox" checked={selectedStudy.looped} onChange={(event) => void updateStudy({ ...selectedStudy, looped: event.target.checked }).catch(showAssemblyError)} /> Loop playback</label>
+            <label className="flex items-center gap-1.5 text-[9px] text-mute"><input type="checkbox" checked={selectedStudy.looped} onChange={(event) => void updateStudy({ ...selectedStudy, looped: event.target.checked }).catch(showAssemblyError)} /> {t('assembly.browser.loopPlayback')}</label>
             <div className="rounded border border-edge bg-header p-2">
               <div className="flex items-center gap-1.5">
                 <button type="button" onClick={() => { if (timeRef.current >= selectedStudy.duration_seconds) { timeRef.current = 0; setTime(0); previousTimeRef.current = null; } setPlaying((value) => !value); }} className="flex h-7 w-7 items-center justify-center rounded bg-accent text-white">{playing ? <Pause size={12} /> : <Play size={12} />}</button>
@@ -897,11 +902,11 @@ function MotionStudioPanel() {
                 <input type="range" min={0} max={selectedStudy.duration_seconds} step={0.001} value={time} onChange={(event) => { const next = Number(event.target.value); setPlaying(false); timeRef.current = next; setTime(next); void evaluate(selectedStudy, next); }} className="min-w-0 flex-1 accent-[var(--accent)]" />
                 <span className="w-12 text-right font-mono text-[9px] text-ink">{time.toFixed(2)}s</span>
               </div>
-              {preview?.stopped_by_contact != null && <p className="mt-1 text-[8px] text-warn">Stopped by contact set {preview.stopped_by_contact} at {preview.stop_time_seconds?.toFixed(4)} s</p>}
+              {preview?.stopped_by_contact != null && <p className="mt-1 text-[8px] text-warn">{t('assembly.browser.stoppedByContact').replace('{id}', String(preview.stopped_by_contact)).replace('{time}', String(preview.stop_time_seconds?.toFixed(4)))}</p>}
             </div>
             <div className="flex gap-1.5">
-              <button type="button" onClick={() => void addDriver().catch(showAssemblyError)} className="flex h-7 flex-1 items-center justify-center gap-1 rounded border border-edge bg-header text-[9px] text-ink hover:border-accent"><Plus size={10} /> Driver</button>
-              <button type="button" onClick={() => void exportPath().catch(showAssemblyError)} className="flex h-7 flex-1 items-center justify-center gap-1 rounded border border-edge bg-header text-[9px] text-ink hover:border-accent"><Download size={10} /> Path CSV</button>
+              <button type="button" onClick={() => void addDriver().catch(showAssemblyError)} className="flex h-7 flex-1 items-center justify-center gap-1 rounded border border-edge bg-header text-[9px] text-ink hover:border-accent"><Plus size={10} /> {t('assembly.browser.driver')}</button>
+              <button type="button" onClick={() => void exportPath().catch(showAssemblyError)} className="flex h-7 flex-1 items-center justify-center gap-1 rounded border border-edge bg-header text-[9px] text-ink hover:border-accent"><Download size={10} /> {t('assembly.browser.pathCsv')}</button>
             </div>
           </div>
         )}
@@ -932,13 +937,14 @@ function MotionDriverEditor({ driver, study, joints, onChange, onDelete }: {
   onChange: (driver: MotionDriverDto) => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation();
   const joint = joints.find((candidate) => candidate.id === driver.joint_id) ?? null;
   const options = joint ? coordinateOptions(joint) : [];
   return (
     <div className="rounded border border-edge bg-header p-2">
       <div className="flex items-center gap-1">
         <input key={`${driver.id}-name-${driver.name}`} defaultValue={driver.name} onBlur={(event) => { const name = event.currentTarget.value.trim(); if (name && name !== driver.name) onChange({ ...driver, name }); else event.currentTarget.value = driver.name; }} className="h-6 min-w-0 flex-1 bg-transparent text-[10px] font-medium text-ink outline-none" />
-        <label className="text-[8px] text-mute"><input type="checkbox" checked={driver.enabled} onChange={(event) => onChange({ ...driver, enabled: event.target.checked })} /> on</label>
+        <label className="text-[8px] text-mute"><input type="checkbox" checked={driver.enabled} onChange={(event) => onChange({ ...driver, enabled: event.target.checked })} /> {t('assembly.browser.driverOn')}</label>
         <button type="button" onClick={onDelete} className="p-1 text-mute hover:text-warn"><Trash2 size={10} /></button>
       </div>
       <div className="mt-1 grid grid-cols-2 gap-1">
@@ -949,32 +955,32 @@ function MotionDriverEditor({ driver, study, joints, onChange, onDelete }: {
           {joints.filter((candidate) => candidate.kind !== 'rigid').map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
         </select>
         <select value={driver.coordinate} onChange={(event) => onChange({ ...driver, coordinate: event.target.value as MotionCoordinateDto })} className="h-7 rounded border border-edge bg-panel px-1 text-[9px] text-ink">
-          {options.map((coordinate) => <option key={coordinate} value={coordinate}>{coordinateLabel(coordinate)}</option>)}
+          {options.map((coordinate) => <option key={coordinate} value={coordinate}>{t(COORDINATE_LABEL_KEYS[coordinate])}</option>)}
         </select>
       </div>
       <div className="mt-1 flex rounded border border-edge p-0.5 text-[8px]">
-        <button type="button" onClick={() => onChange({ ...driver, law: { kind: 'keyframes', keyframes: [{ time_seconds: 0, value: 0, interpolation: 'smooth' }, { time_seconds: study.duration_seconds, value: 0, interpolation: 'smooth' }] } })} className={`flex-1 rounded py-1 ${driver.law.kind === 'keyframes' ? 'bg-accent/20 text-accent' : 'text-mute'}`}>Keyframes</button>
-        <button type="button" onClick={() => onChange({ ...driver, law: { kind: 'motor', initial_value: 0, velocity_per_second: 1, acceleration_per_second2: 0 } })} className={`flex-1 rounded py-1 ${driver.law.kind === 'motor' ? 'bg-accent/20 text-accent' : 'text-mute'}`}>Motor</button>
+        <button type="button" onClick={() => onChange({ ...driver, law: { kind: 'keyframes', keyframes: [{ time_seconds: 0, value: 0, interpolation: 'smooth' }, { time_seconds: study.duration_seconds, value: 0, interpolation: 'smooth' }] } })} className={`flex-1 rounded py-1 ${driver.law.kind === 'keyframes' ? 'bg-accent/20 text-accent' : 'text-mute'}`}>{t('assembly.browser.keyframes')}</button>
+        <button type="button" onClick={() => onChange({ ...driver, law: { kind: 'motor', initial_value: 0, velocity_per_second: 1, acceleration_per_second2: 0 } })} className={`flex-1 rounded py-1 ${driver.law.kind === 'motor' ? 'bg-accent/20 text-accent' : 'text-mute'}`}>{t('assembly.browser.motor')}</button>
       </div>
       {driver.law.kind === 'motor' ? (
         <div className="mt-1 grid grid-cols-3 gap-1">
           {([
-            ['Start', 'initial_value'],
-            ['Speed/s', 'velocity_per_second'],
-            ['Accel/s²', 'acceleration_per_second2'],
-          ] as const).map(([label, key]) => <label key={key} className="text-[7px] uppercase text-mute">{label}<input key={`${driver.id}-${key}-${driver.law.kind === 'motor' ? driver.law[key] : 0}`} type="number" defaultValue={driver.law.kind === 'motor' ? driver.law[key] : 0} onBlur={(event) => { const value = Number(event.currentTarget.value); if (driver.law.kind === 'motor' && Number.isFinite(value) && value !== driver.law[key]) onChange({ ...driver, law: { ...driver.law, [key]: value } }); else if (driver.law.kind === 'motor') event.currentTarget.value = String(driver.law[key]); }} className="mt-0.5 h-6 w-full rounded border border-edge bg-panel px-1 text-[8px] text-ink" /></label>)}
+            ['assembly.browser.motorStart', 'initial_value'],
+            ['assembly.browser.motorSpeed', 'velocity_per_second'],
+            ['assembly.browser.motorAccel', 'acceleration_per_second2'],
+          ] as const).map(([labelKey, key]) => <label key={key} className="text-[7px] uppercase text-mute">{t(labelKey)}<input key={`${driver.id}-${key}-${driver.law.kind === 'motor' ? driver.law[key] : 0}`} type="number" defaultValue={driver.law.kind === 'motor' ? driver.law[key] : 0} onBlur={(event) => { const value = Number(event.currentTarget.value); if (driver.law.kind === 'motor' && Number.isFinite(value) && value !== driver.law[key]) onChange({ ...driver, law: { ...driver.law, [key]: value } }); else if (driver.law.kind === 'motor') event.currentTarget.value = String(driver.law[key]); }} className="mt-0.5 h-6 w-full rounded border border-edge bg-panel px-1 text-[8px] text-ink" /></label>)}
         </div>
       ) : (
         <div className="mt-1 space-y-1">
           {driver.law.keyframes.map((keyframe, index) => (
             <div key={`${driver.id}-${index}-${keyframe.time_seconds}-${keyframe.value}-${keyframe.interpolation}`} className="grid grid-cols-[0.8fr_0.8fr_1fr_auto] gap-1">
-              <input aria-label="Keyframe time" type="number" min={0} max={study.duration_seconds} step={0.1} defaultValue={keyframe.time_seconds} onBlur={(event) => { const value = Number(event.currentTarget.value); if (driver.law.kind === 'keyframes' && Number.isFinite(value) && value >= 0 && value <= study.duration_seconds && value !== keyframe.time_seconds) onChange({ ...driver, law: { ...driver.law, keyframes: driver.law.keyframes.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, time_seconds: value } : candidate).sort((a, b) => a.time_seconds - b.time_seconds) } }); else event.currentTarget.value = String(keyframe.time_seconds); }} className="h-6 rounded border border-edge bg-panel px-1 text-[8px] text-ink" />
-              <input aria-label="Keyframe value" type="number" step={0.5} defaultValue={keyframe.value} onBlur={(event) => { const value = Number(event.currentTarget.value); if (driver.law.kind === 'keyframes' && Number.isFinite(value) && value !== keyframe.value) onChange({ ...driver, law: { ...driver.law, keyframes: driver.law.keyframes.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, value } : candidate) } }); else event.currentTarget.value = String(keyframe.value); }} className="h-6 rounded border border-edge bg-panel px-1 text-[8px] text-ink" />
-              <select aria-label="Keyframe interpolation" value={keyframe.interpolation} onChange={(event) => driver.law.kind === 'keyframes' && onChange({ ...driver, law: { ...driver.law, keyframes: driver.law.keyframes.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, interpolation: event.target.value as 'step' | 'linear' | 'smooth' } : candidate) } })} className="h-6 rounded border border-edge bg-panel px-1 text-[8px] text-ink"><option value="step">Step</option><option value="linear">Linear</option><option value="smooth">Smooth</option></select>
+              <input aria-label={t('assembly.browser.keyframeTime')} type="number" min={0} max={study.duration_seconds} step={0.1} defaultValue={keyframe.time_seconds} onBlur={(event) => { const value = Number(event.currentTarget.value); if (driver.law.kind === 'keyframes' && Number.isFinite(value) && value >= 0 && value <= study.duration_seconds && value !== keyframe.time_seconds) onChange({ ...driver, law: { ...driver.law, keyframes: driver.law.keyframes.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, time_seconds: value } : candidate).sort((a, b) => a.time_seconds - b.time_seconds) } }); else event.currentTarget.value = String(keyframe.time_seconds); }} className="h-6 rounded border border-edge bg-panel px-1 text-[8px] text-ink" />
+              <input aria-label={t('assembly.browser.keyframeValue')} type="number" step={0.5} defaultValue={keyframe.value} onBlur={(event) => { const value = Number(event.currentTarget.value); if (driver.law.kind === 'keyframes' && Number.isFinite(value) && value !== keyframe.value) onChange({ ...driver, law: { ...driver.law, keyframes: driver.law.keyframes.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, value } : candidate) } }); else event.currentTarget.value = String(keyframe.value); }} className="h-6 rounded border border-edge bg-panel px-1 text-[8px] text-ink" />
+              <select aria-label={t('assembly.browser.keyframeInterpolation')} value={keyframe.interpolation} onChange={(event) => driver.law.kind === 'keyframes' && onChange({ ...driver, law: { ...driver.law, keyframes: driver.law.keyframes.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, interpolation: event.target.value as 'step' | 'linear' | 'smooth' } : candidate) } })} className="h-6 rounded border border-edge bg-panel px-1 text-[8px] text-ink"><option value="step">{t('assembly.browser.interpolationStep')}</option><option value="linear">{t('assembly.browser.interpolationLinear')}</option><option value="smooth">{t('assembly.browser.interpolationSmooth')}</option></select>
               <button type="button" disabled={driver.law.kind !== 'keyframes' || driver.law.keyframes.length <= 1} onClick={() => driver.law.kind === 'keyframes' && onChange({ ...driver, law: { ...driver.law, keyframes: driver.law.keyframes.filter((_, candidateIndex) => candidateIndex !== index) } })} className="p-1 text-mute hover:text-warn disabled:opacity-25"><Trash2 size={9} /></button>
             </div>
           ))}
-          <button type="button" onClick={() => driver.law.kind === 'keyframes' && onChange({ ...driver, law: { ...driver.law, keyframes: addMotionKeyframe(driver.law.keyframes, study.duration_seconds) } })} className="w-full rounded border border-dashed border-edge py-1 text-[8px] text-mute hover:border-accent">+ Keyframe</button>
+          <button type="button" onClick={() => driver.law.kind === 'keyframes' && onChange({ ...driver, law: { ...driver.law, keyframes: addMotionKeyframe(driver.law.keyframes, study.duration_seconds) } })} className="w-full rounded border border-dashed border-edge py-1 text-[8px] text-mute hover:border-accent">{t('assembly.browser.addKeyframe')}</button>
         </div>
       )}
     </div>
@@ -982,6 +988,7 @@ function MotionDriverEditor({ driver, study, joints, onChange, onDelete }: {
 }
 
 function InterferencePanel() {
+  const { t } = useTranslation();
   const assembly = useAppStore((state) => state.assemblyDocument);
   const solution = useAppStore((state) => state.motionStudyPreview?.sample.solution ?? state.assemblySolution);
   const [threshold, setThreshold] = useState(0);
@@ -1015,7 +1022,7 @@ function InterferencePanel() {
   };
   const runSwept = async () => {
     const study = assembly.motion_studies.find((candidate) => candidate.id === sweptStudyId);
-    if (!study) throw new Error('Create a motion study before running swept collision.');
+    if (!study) throw new Error(t('assembly.browser.errorNoMotionStudy'));
     const engine = await getEngine();
     setSwept(await engine.sweptCollisionCheck({
       study_id: study.id,
@@ -1027,7 +1034,7 @@ function InterferencePanel() {
   const createContact = async () => {
     const [occurrenceA, bodyA] = firstKey.split(':').map(Number);
     const [occurrenceB, bodyB] = secondKey.split(':').map(Number);
-    if (!occurrenceA || !bodyA || !occurrenceB || !bodyB) throw new Error('Choose two placed bodies.');
+    if (!occurrenceA || !bodyA || !occurrenceB || !bodyB) throw new Error(t('assembly.browser.errorChooseTwoBodies'));
     const engine = await getEngine();
     await engine.createContactSet({
       name: `Contact ${assembly.next_contact_set_id}`,
@@ -1048,36 +1055,36 @@ function InterferencePanel() {
 
   return (
     <div data-testid="interference-panel" data-interface-group="assembly/inspect" className="min-h-0 flex-1 overflow-y-auto p-2.5">
-      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-mute"><ShieldAlert size={12} className="text-accent" /> Interference & clearance</div>
+      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-mute"><ShieldAlert size={12} className="text-accent" /> {t('assembly.browser.interferenceClearance')}</div>
       <div className="mt-2 grid grid-cols-2 gap-1.5">
-        <label className="block text-[8px] uppercase text-mute">Clearance (mm)<input type="number" min={0} step={0.1} value={threshold} onChange={(event) => setThreshold(Number(event.target.value))} className="mt-0.5 h-7 w-full rounded border border-edge bg-header px-2 text-[10px] text-ink" /></label>
-        <label className="block text-[8px] uppercase text-mute">Samples / second<input type="number" min={1} max={240} step={1} value={sampleRate} onChange={(event) => setSampleRate(Math.max(1, Math.min(240, Number(event.target.value))))} className="mt-0.5 h-7 w-full rounded border border-edge bg-header px-2 text-[10px] text-ink" /></label>
+        <label className="block text-[8px] uppercase text-mute">{t('assembly.browser.clearance')}<input type="number" min={0} step={0.1} value={threshold} onChange={(event) => setThreshold(Number(event.target.value))} className="mt-0.5 h-7 w-full rounded border border-edge bg-header px-2 text-[10px] text-ink" /></label>
+        <label className="block text-[8px] uppercase text-mute">{t('assembly.browser.samplesPerSecond')}<input type="number" min={1} max={240} step={1} value={sampleRate} onChange={(event) => setSampleRate(Math.max(1, Math.min(240, Number(event.target.value))))} className="mt-0.5 h-7 w-full rounded border border-edge bg-header px-2 text-[10px] text-ink" /></label>
       </div>
-      {assembly.motion_studies.length > 0 && <div className="mt-1.5 flex items-center gap-1.5"><select aria-label="Swept collision motion study" value={sweptStudyId ?? ''} onChange={(event) => setSweptStudyId(Number(event.target.value))} className="h-7 min-w-0 flex-1 rounded border border-edge bg-header px-2 text-[9px] text-ink">{assembly.motion_studies.map((study) => <option key={study.id} value={study.id}>{study.name}</option>)}</select><label className="whitespace-nowrap text-[8px] text-mute"><input type="checkbox" checked={stopAtFirst} onChange={(event) => setStopAtFirst(event.target.checked)} /> stop at first</label></div>}
+      {assembly.motion_studies.length > 0 && <div className="mt-1.5 flex items-center gap-1.5"><select aria-label={t('assembly.browser.sweptStudy')} value={sweptStudyId ?? ''} onChange={(event) => setSweptStudyId(Number(event.target.value))} className="h-7 min-w-0 flex-1 rounded border border-edge bg-header px-2 text-[9px] text-ink">{assembly.motion_studies.map((study) => <option key={study.id} value={study.id}>{study.name}</option>)}</select><label className="whitespace-nowrap text-[8px] text-mute"><input type="checkbox" checked={stopAtFirst} onChange={(event) => setStopAtFirst(event.target.checked)} /> {t('assembly.browser.stopAtFirst')}</label></div>}
       <div className="mt-2 grid grid-cols-2 gap-1.5">
-        <button type="button" onClick={() => void check().catch(showAssemblyError)} className="h-7 rounded bg-accent text-[9px] font-semibold text-white">Check current</button>
-        <button type="button" onClick={() => void runSwept().catch(showAssemblyError)} className="h-7 rounded border border-edge bg-header text-[9px] text-ink hover:border-accent">Swept study</button>
+        <button type="button" onClick={() => void check().catch(showAssemblyError)} className="h-7 rounded bg-accent text-[9px] font-semibold text-white">{t('assembly.browser.checkCurrent')}</button>
+        <button type="button" onClick={() => void runSwept().catch(showAssemblyError)} className="h-7 rounded border border-edge bg-header text-[9px] text-ink hover:border-accent">{t('assembly.browser.sweptStudyButton')}</button>
       </div>
       {report && (
         <div className="mt-2 rounded border border-edge bg-header p-2 text-[9px]">
-          <div className="flex justify-between"><span className="font-semibold text-ink">Static result</span><span className={report.exact ? 'text-accent' : 'text-warn'}>{report.exact ? 'Exact OCCT' : 'Mesh fallback'}</span></div>
-          {report.pairs.filter((pair) => pair.interfering || pair.below_clearance).length === 0 ? <p className="mt-1 text-mute">No interference or clearance violations.</p> : report.pairs.filter((pair) => pair.interfering || pair.below_clearance).slice(0, 20).map((pair) => <p key={`${pair.occurrence_a}-${pair.body_a}-${pair.occurrence_b}-${pair.body_b}`} className="mt-1 leading-3 text-warn">O{pair.occurrence_a}/B{pair.body_a} ↔ O{pair.occurrence_b}/B{pair.body_b}: {pair.interfering ? `${pair.overlap_volume_mm3.toFixed(3)} mm³ overlap` : `${pair.minimum_clearance_mm.toFixed(3)} mm clearance`}</p>)}
+          <div className="flex justify-between"><span className="font-semibold text-ink">{t('assembly.browser.staticResult')}</span><span className={report.exact ? 'text-accent' : 'text-warn'}>{report.exact ? t('assembly.browser.exactOcct') : t('assembly.browser.meshFallback')}</span></div>
+          {report.pairs.filter((pair) => pair.interfering || pair.below_clearance).length === 0 ? <p className="mt-1 text-mute">{t('assembly.browser.noViolations')}</p> : report.pairs.filter((pair) => pair.interfering || pair.below_clearance).slice(0, 20).map((pair) => <p key={`${pair.occurrence_a}-${pair.body_a}-${pair.occurrence_b}-${pair.body_b}`} className="mt-1 leading-3 text-warn">O{pair.occurrence_a}/B{pair.body_a} ↔ O{pair.occurrence_b}/B{pair.body_b}: {pair.interfering ? t('assembly.browser.overlapVolume').replace('{volume}', pair.overlap_volume_mm3.toFixed(3)) : t('assembly.browser.minimumClearance').replace('{clearance}', pair.minimum_clearance_mm.toFixed(3))}</p>)}
         </div>
       )}
-      {swept && <div className="mt-2 rounded border border-edge bg-header p-2 text-[9px]"><div className="flex justify-between"><span className="font-semibold text-ink">Swept result</span><span className={swept.exact ? 'text-accent' : 'text-warn'}>{swept.sample_count} {swept.exact ? 'exact B-rep' : 'mesh fallback'} samples</span></div><p className="mt-1 text-mute">{swept.events.length === 0 ? 'No swept collisions.' : `${swept.events.length} pair(s) collide; first at ${Math.min(...swept.events.map((event) => event.first_time_seconds)).toFixed(4)} s.`}</p>{swept.events.slice(0, 8).map((event) => <p key={`${event.occurrence_a}-${event.body_a}-${event.occurrence_b}-${event.body_b}`} className="mt-1 text-[8px] text-warn">O{event.occurrence_a}/B{event.body_a} ↔ O{event.occurrence_b}/B{event.body_b}: {event.first_time_seconds.toFixed(4)}–{event.last_time_seconds.toFixed(4)} s</p>)}</div>}
+      {swept && <div className="mt-2 rounded border border-edge bg-header p-2 text-[9px]"><div className="flex justify-between"><span className="font-semibold text-ink">{t('assembly.browser.sweptResult')}</span><span className={swept.exact ? 'text-accent' : 'text-warn'}>{t(swept.exact ? 'assembly.browser.exactBrepSamples' : 'assembly.browser.meshFallbackSamples').replace('{count}', String(swept.sample_count))}</span></div><p className="mt-1 text-mute">{swept.events.length === 0 ? t('assembly.browser.noSweptCollisions') : t('assembly.browser.sweptCollisions').replace('{count}', String(swept.events.length)).replace('{time}', Math.min(...swept.events.map((event) => event.first_time_seconds)).toFixed(4))}</p>{swept.events.slice(0, 8).map((event) => <p key={`${event.occurrence_a}-${event.body_a}-${event.occurrence_b}-${event.body_b}`} className="mt-1 text-[8px] text-warn">O{event.occurrence_a}/B{event.body_a} ↔ O{event.occurrence_b}/B{event.body_b}: {event.first_time_seconds.toFixed(4)}–{event.last_time_seconds.toFixed(4)} s</p>)}</div>}
 
-      <div className="mt-4 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-mute"><TimerReset size={12} className="text-accent" /> Contact stops</div>
+      <div className="mt-4 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-mute"><TimerReset size={12} className="text-accent" /> {t('assembly.browser.contactStops')}</div>
       <div className="mt-2 space-y-1">
-        <select value={firstKey} onChange={(event) => setFirstKey(event.target.value)} className="h-7 w-full rounded border border-edge bg-header px-1 text-[9px] text-ink">{placed.map((pose) => <option key={placedKey(pose.occurrence_id, pose.body_id)} value={placedKey(pose.occurrence_id, pose.body_id)}>Occurrence {pose.occurrence_id} · Body {pose.body_id}</option>)}</select>
-        <select value={secondKey} onChange={(event) => setSecondKey(event.target.value)} className="h-7 w-full rounded border border-edge bg-header px-1 text-[9px] text-ink">{placed.map((pose) => <option key={placedKey(pose.occurrence_id, pose.body_id)} value={placedKey(pose.occurrence_id, pose.body_id)}>Occurrence {pose.occurrence_id} · Body {pose.body_id}</option>)}</select>
-        <button type="button" disabled={!firstKey || !secondKey || firstKey === secondKey} onClick={() => void createContact().catch(showAssemblyError)} className="h-7 w-full rounded border border-edge bg-header text-[9px] text-ink hover:border-accent disabled:opacity-35">Create physical stop</button>
+        <select value={firstKey} onChange={(event) => setFirstKey(event.target.value)} className="h-7 w-full rounded border border-edge bg-header px-1 text-[9px] text-ink">{placed.map((pose) => <option key={placedKey(pose.occurrence_id, pose.body_id)} value={placedKey(pose.occurrence_id, pose.body_id)}>{t('assembly.browser.occurrenceBodyLabel').replace('{occurrence}', String(pose.occurrence_id)).replace('{body}', String(pose.body_id))}</option>)}</select>
+        <select value={secondKey} onChange={(event) => setSecondKey(event.target.value)} className="h-7 w-full rounded border border-edge bg-header px-1 text-[9px] text-ink">{placed.map((pose) => <option key={placedKey(pose.occurrence_id, pose.body_id)} value={placedKey(pose.occurrence_id, pose.body_id)}>{t('assembly.browser.occurrenceBodyLabel').replace('{occurrence}', String(pose.occurrence_id)).replace('{body}', String(pose.body_id))}</option>)}</select>
+        <button type="button" disabled={!firstKey || !secondKey || firstKey === secondKey} onClick={() => void createContact().catch(showAssemblyError)} className="h-7 w-full rounded border border-edge bg-header text-[9px] text-ink hover:border-accent disabled:opacity-35">{t('assembly.browser.createPhysicalStop')}</button>
       </div>
       <div className="mt-2 space-y-1.5">
         {assembly.contact_sets.map((contact) => (
           <div key={contact.id} className="rounded border border-edge bg-header p-2 text-[9px]">
             <div className="flex items-center gap-1"><input key={`${contact.id}-name-${contact.name}`} defaultValue={contact.name} onBlur={(event) => { const name = event.currentTarget.value.trim(); if (name && name !== contact.name) void updateContact({ ...contact, name }).catch(showAssemblyError); else event.currentTarget.value = contact.name; }} className="min-w-0 flex-1 bg-transparent font-medium text-ink outline-none" /><button type="button" onClick={() => void getEngine().then((engine) => engine.deleteContactSet(contact.id)).then(() => refreshAssemblyState(true)).catch(showAssemblyError)} className="text-mute hover:text-warn"><Trash2 size={10} /></button></div>
             <p className="mt-1 text-[8px] text-mute">O{contact.occurrence_a}/B{contact.body_a} ↔ O{contact.occurrence_b}/B{contact.body_b}</p>
-            <div className="mt-1 flex items-center gap-2"><label className="text-[8px] text-mute"><input type="checkbox" checked={contact.enabled} onChange={(event) => void updateContact({ ...contact, enabled: event.target.checked }).catch(showAssemblyError)} /> enabled</label><label className="text-[8px] text-mute"><input type="checkbox" checked={contact.stop_motion} onChange={(event) => void updateContact({ ...contact, stop_motion: event.target.checked }).catch(showAssemblyError)} /> stop</label><input aria-label="Contact clearance" key={`${contact.id}-clearance-${contact.clearance_mm}`} type="number" min={0} step={0.1} defaultValue={contact.clearance_mm} onBlur={(event) => { const clearance = Number(event.currentTarget.value); if (Number.isFinite(clearance) && clearance >= 0 && clearance !== contact.clearance_mm) void updateContact({ ...contact, clearance_mm: clearance }).catch(showAssemblyError); else event.currentTarget.value = String(contact.clearance_mm); }} className="ml-auto h-6 w-16 rounded border border-edge bg-panel px-1 text-[8px] text-ink" /></div>
+            <div className="mt-1 flex items-center gap-2"><label className="text-[8px] text-mute"><input type="checkbox" checked={contact.enabled} onChange={(event) => void updateContact({ ...contact, enabled: event.target.checked }).catch(showAssemblyError)} /> {t('assembly.browser.enabled')}</label><label className="text-[8px] text-mute"><input type="checkbox" checked={contact.stop_motion} onChange={(event) => void updateContact({ ...contact, stop_motion: event.target.checked }).catch(showAssemblyError)} /> {t('assembly.browser.stop')}</label><input aria-label={t('assembly.browser.contactClearance')} key={`${contact.id}-clearance-${contact.clearance_mm}`} type="number" min={0} step={0.1} defaultValue={contact.clearance_mm} onBlur={(event) => { const clearance = Number(event.currentTarget.value); if (Number.isFinite(clearance) && clearance >= 0 && clearance !== contact.clearance_mm) void updateContact({ ...contact, clearance_mm: clearance }).catch(showAssemblyError); else event.currentTarget.value = String(contact.clearance_mm); }} className="ml-auto h-6 w-16 rounded border border-edge bg-panel px-1 text-[8px] text-ink" /></div>
           </div>
         ))}
       </div>
@@ -1147,12 +1154,13 @@ function addMotionKeyframe(
   }].sort((a, b) => a.time_seconds - b.time_seconds);
 }
 
-function coordinateLabel(coordinate: MotionCoordinateDto): string {
-  return ({
-    primary_angle: 'Primary angle', secondary_angle: 'Secondary angle', tertiary_angle: 'Tertiary angle',
-    primary_linear: 'Primary distance', secondary_linear: 'Secondary distance',
-  } as const)[coordinate];
-}
+const COORDINATE_LABEL_KEYS: Record<MotionCoordinateDto, string> = {
+  primary_angle: 'assembly.browser.coordinatePrimaryAngle',
+  secondary_angle: 'assembly.browser.coordinateSecondaryAngle',
+  tertiary_angle: 'assembly.browser.coordinateTertiaryAngle',
+  primary_linear: 'assembly.browser.coordinatePrimaryDistance',
+  secondary_linear: 'assembly.browser.coordinateSecondaryDistance',
+};
 
 function motionCoordinateValue(joint: JointDefinitionDto, coordinate: MotionCoordinateDto): number {
   switch (coordinate) {
@@ -1202,6 +1210,7 @@ function OccurrenceTree({
   onDuplicate: (occurrence: ComponentOccurrenceDto) => void;
   onMoveCopy: (occurrence: ComponentOccurrenceDto) => void;
 }) {
+  const { t } = useTranslation();
   const siblings = occurrences
     .filter((occurrence) => occurrence.parent_occurrence_id === parentId)
     .sort((a, b) => a.id - b.id);
@@ -1227,7 +1236,7 @@ function OccurrenceTree({
             >
               <button
                 type="button"
-                title="Move or create a linked copy of this component occurrence"
+                title={t('assembly.browser.moveCopyHint')}
                 onClick={() => onMoveCopy(occurrence)}
                 className="invisible rounded p-1 text-mute hover:bg-edge hover:text-accent group-hover:visible"
               >
@@ -1235,7 +1244,7 @@ function OccurrenceTree({
               </button>
               <button
                 type="button"
-                aria-label={isExpanded ? 'Collapse occurrence' : 'Expand occurrence'}
+                aria-label={isExpanded ? t('assembly.browser.collapseOccurrence') : t('assembly.browser.expandOccurrence')}
                 disabled={children.length === 0}
                 onClick={() => onToggleExpanded(occurrence.id)}
                 className="flex h-6 w-5 shrink-0 items-center justify-center rounded hover:bg-edge disabled:opacity-25"
@@ -1246,7 +1255,7 @@ function OccurrenceTree({
                 type="button"
                 onClick={() => onSelect(occurrence)}
                 className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
-                title={`${definition?.name ?? 'Missing definition'} · occurrence ${occurrence.id}`}
+                title={`${definition?.name ?? t('assembly.browser.missingDefinition')} · ${t('assembly.browser.occurrenceLabel').replace('{id}', String(occurrence.id))}`}
               >
                 {children.length > 0 || (definition?.body_ids.length ?? 0) === 0
                   ? <FolderTree size={13} className="shrink-0 text-accent" />
@@ -1259,7 +1268,7 @@ function OccurrenceTree({
               </button>
               <button
                 type="button"
-                title={occurrence.grounded ? 'Release this occurrence' : 'Ground this occurrence'}
+                title={occurrence.grounded ? t('assembly.browser.releaseOccurrence') : t('assembly.browser.groundOccurrence')}
                 onClick={() => onToggleGround(occurrence)}
                 className="invisible rounded p-1 text-mute hover:bg-edge hover:text-accent group-hover:visible"
               >
@@ -1267,7 +1276,7 @@ function OccurrenceTree({
               </button>
               <button
                 type="button"
-                title="Duplicate this occurrence and its nested subtree"
+                title={t('assembly.browser.duplicateHint')}
                 onClick={() => onDuplicate(occurrence)}
                 className="invisible rounded p-1 text-mute hover:bg-edge hover:text-ink group-hover:visible"
               >
@@ -1275,7 +1284,7 @@ function OccurrenceTree({
               </button>
               <button
                 type="button"
-                title={occurrence.visible ? 'Hide occurrence' : 'Show occurrence'}
+                title={occurrence.visible ? t('assembly.browser.hideOccurrence') : t('assembly.browser.showOccurrence')}
                 onClick={() => onToggleVisibility(occurrence)}
                 className="rounded p-1 text-mute hover:bg-edge hover:text-ink"
               >
@@ -1327,6 +1336,7 @@ function OccurrenceInspector({
   onSetPose: (pose: AssemblyTransformDto) => void;
   onUpdateComponent: (component: ComponentDefinitionDto) => void;
 }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(true);
   const [name, setName] = useState(occurrence.name);
   const [componentName, setComponentName] = useState(component.name);
@@ -1348,7 +1358,7 @@ function OccurrenceInspector({
   const excludedParents = descendantOccurrenceIds(occurrences, occurrence.id);
   excludedParents.add(occurrence.id);
   const bodyNames = component.body_ids.map((bodyId) => (
-    bodies.find((body) => body.id === bodyId)?.name ?? `Body ${bodyId}`
+    bodies.find((body) => body.id === bodyId)?.name ?? t('assembly.browser.bodyFallback').replace('{id}', String(bodyId))
   ));
 
   return (
@@ -1359,12 +1369,12 @@ function OccurrenceInspector({
         className="flex h-8 w-full items-center gap-1.5 px-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-mute hover:bg-edge/40 hover:text-ink"
       >
         {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <Box size={13} className="text-accent" /> Selected occurrence
+        <Box size={13} className="text-accent" /> {t('assembly.browser.selectedOccurrence')}
       </button>
       {expanded && (
         <div className="max-h-[42vh] overflow-y-auto border-t border-edge/70 p-2">
           <label className="block text-[8px] font-semibold uppercase tracking-wide text-mute">
-            Occurrence name
+            {t('assembly.browser.occurrenceName')}
             <span className="mt-1 flex gap-1">
               <input
                 value={name}
@@ -1382,13 +1392,13 @@ function OccurrenceInspector({
                 onClick={() => onUpdateOccurrence({ ...occurrence, name: name.trim() })}
                 className="rounded border border-edge bg-panel px-2 text-[9px] font-normal normal-case tracking-normal text-ink hover:border-accent disabled:opacity-30"
               >
-                Rename
+                {t('assembly.browser.rename')}
               </button>
             </span>
           </label>
 
           <label className="mt-2 block text-[8px] font-semibold uppercase tracking-wide text-mute">
-            Parent coordinate system
+            {t('assembly.browser.parentCoordinateSystem')}
             <select
               value={occurrence.parent_occurrence_id ?? ''}
               onChange={(event) => onUpdateOccurrence({
@@ -1397,7 +1407,7 @@ function OccurrenceInspector({
               })}
               className="mt-1 h-7 w-full rounded border border-edge bg-panel px-1.5 text-[10px] font-normal normal-case tracking-normal text-ink outline-none focus:border-accent"
             >
-              <option value="">Document root</option>
+              <option value="">{t('assembly.browser.documentRoot')}</option>
               {occurrences
                 .filter((candidate) => !excludedParents.has(candidate.id))
                 .map((candidate) => (
@@ -1407,19 +1417,19 @@ function OccurrenceInspector({
           </label>
 
           <TransformEditor
-            title="Occurrence placement"
+            title={t('assembly.browser.occurrencePlacement')}
             value={pose}
             onChange={setPose}
             onApply={() => onSetPose(transformFromDraft(pose))}
-            applyLabel="Apply placement"
+            applyLabel={t('assembly.browser.applyPlacement')}
           />
           <p className="mt-1 text-[8px] leading-3 text-mute">
-            This transform is parent-local assembly placement. It never edits the part feature history.
+            {t('assembly.browser.placementHint')}
           </p>
 
           <div className="my-2 border-t border-edge" />
           <label className="block text-[8px] font-semibold uppercase tracking-wide text-mute">
-            Reusable definition
+            {t('assembly.browser.reusableDefinition')}
             <span className="mt-1 flex gap-1">
               <input
                 value={componentName}
@@ -1432,25 +1442,25 @@ function OccurrenceInspector({
                 onClick={() => onUpdateComponent({ ...component, name: componentName.trim() })}
                 className="rounded border border-edge bg-panel px-2 text-[9px] font-normal normal-case tracking-normal text-ink hover:border-accent disabled:opacity-30"
               >
-                Rename
+                {t('assembly.browser.rename')}
               </button>
             </span>
           </label>
           <p className="mt-1 truncate text-[9px] text-mute" title={bodyNames.join(', ')}>
-            {bodyNames.length > 0 ? bodyNames.join(', ') : 'Subassembly container · no direct bodies'}
+            {bodyNames.length > 0 ? bodyNames.join(', ') : t('assembly.browser.subassemblyContainer')}
           </p>
           <TransformEditor
-            title="Component local coordinate system"
+            title={t('assembly.browser.componentCoordinateSystem')}
             value={coordinateSystem}
             onChange={setCoordinateSystem}
             onApply={() => onUpdateComponent({
               ...component,
               local_coordinate_system: transformFromDraft(coordinateSystem),
             })}
-            applyLabel="Apply component origin"
+            applyLabel={t('assembly.browser.applyComponentOrigin')}
           />
           <p className="mt-1 text-[8px] leading-3 text-mute">
-            All occurrences share this definition origin; each occurrence keeps its own placement.
+            {t('assembly.browser.definitionOriginHint')}
           </p>
         </div>
       )}
@@ -1471,6 +1481,7 @@ function TransformEditor({
   onApply: () => void;
   applyLabel: string;
 }) {
+  const { t } = useTranslation();
   const setTranslation = (axis: number, next: number) => {
     const translation = [...value.translation] as [number, number, number];
     translation[axis] = next;
@@ -1489,7 +1500,7 @@ function TransformEditor({
         {value.translation.map((entry, axis) => (
           <input
             key={`translation-${axis}`}
-            aria-label={`${title} ${'XYZ'[axis]} translation`}
+            aria-label={`${title} ${'XYZ'[axis]} ${t('assembly.browser.translation')}`}
             type="number"
             step="any"
             value={roundedInput(entry)}
@@ -1501,7 +1512,7 @@ function TransformEditor({
         {value.rotationDeg.map((entry, axis) => (
           <input
             key={`rotation-${axis}`}
-            aria-label={`${title} ${'XYZ'[axis]} rotation`}
+            aria-label={`${title} ${'XYZ'[axis]} ${t('assembly.browser.rotation')}`}
             type="number"
             step="any"
             value={roundedInput(entry)}
@@ -1642,7 +1653,7 @@ function motionForValues(joint: JointDefinitionDto, values: MotionValues): Joint
 
 function motionControls(joint: JointDefinitionDto): Array<{
   key: keyof MotionValues;
-  label: string;
+  labelKey: string;
   unit: '°' | 'mm';
   limits: JointLimitsDto | null;
   fallback: [number, number];
@@ -1652,19 +1663,19 @@ function motionControls(joint: JointDefinitionDto): Array<{
     ?? (joint.kind === 'revolute' || joint.kind === 'screw' ? joint.limits : null);
   const linearLimits = joint.linear_limits ?? (joint.kind === 'slider' ? joint.limits : null);
   if (['revolute', 'cylindrical', 'planar', 'ball', 'pin_slot', 'screw', 'universal'].includes(joint.kind)) {
-    controls.push({ key: 'angle', label: joint.kind === 'screw' ? 'Rotation / travel' : 'Primary rotation', unit: '°', limits: angleLimits, fallback: [-180, 180] });
+    controls.push({ key: 'angle', labelKey: joint.kind === 'screw' ? 'assembly.browser.rotationTravel' : 'assembly.browser.primaryRotation', unit: '°', limits: angleLimits, fallback: [-180, 180] });
   }
   if (['slider', 'cylindrical', 'planar', 'pin_slot'].includes(joint.kind)) {
-    controls.push({ key: 'linear', label: joint.kind === 'planar' || joint.kind === 'pin_slot' ? 'X slide' : 'Slide', unit: 'mm', limits: linearLimits, fallback: [-100, 100] });
+    controls.push({ key: 'linear', labelKey: joint.kind === 'planar' || joint.kind === 'pin_slot' ? 'assembly.browser.xSlide' : 'assembly.browser.slide', unit: 'mm', limits: linearLimits, fallback: [-100, 100] });
   }
   if (joint.kind === 'ball' || joint.kind === 'universal') {
-    controls.push({ key: 'secondaryAngle', label: 'Secondary rotation', unit: '°', limits: joint.advanced.secondary_angle_limits, fallback: [-180, 180] });
+    controls.push({ key: 'secondaryAngle', labelKey: 'assembly.browser.secondaryRotation', unit: '°', limits: joint.advanced.secondary_angle_limits, fallback: [-180, 180] });
   }
   if (joint.kind === 'ball') {
-    controls.push({ key: 'tertiaryAngle', label: 'Tertiary rotation', unit: '°', limits: joint.advanced.tertiary_angle_limits, fallback: [-180, 180] });
+    controls.push({ key: 'tertiaryAngle', labelKey: 'assembly.browser.tertiaryRotation', unit: '°', limits: joint.advanced.tertiary_angle_limits, fallback: [-180, 180] });
   }
   if (joint.kind === 'planar') {
-    controls.push({ key: 'secondaryLinear', label: 'Y slide', unit: 'mm', limits: joint.advanced.secondary_linear_limits, fallback: [-100, 100] });
+    controls.push({ key: 'secondaryLinear', labelKey: 'assembly.browser.ySlide', unit: 'mm', limits: joint.advanced.secondary_linear_limits, fallback: [-100, 100] });
   }
   return controls;
 }

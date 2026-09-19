@@ -17,26 +17,28 @@ import {
   drawingFormatsForStandard,
   drawingSheetSize,
 } from '../../drawing/sheet';
+import { useTranslation } from '../../i18n';
 import { useAppStore } from '../../store/appStore';
 import { showDrawingError } from './DrawingBrowser';
 
 const ISO_TOLERANCES: Array<[DrawingTolerancePreset, string]> = [
-  ['none', 'No general tolerance note'],
-  ['iso2768_fine', 'ISO 2768-f · Fine'],
-  ['iso2768_medium', 'ISO 2768-m · Medium'],
-  ['iso2768_coarse', 'ISO 2768-c · Coarse'],
-  ['iso2768_very_coarse', 'ISO 2768-v · Very coarse'],
-  ['custom', 'Custom note'],
+  ['none', 'drawing.sheetSetup.toleranceNone'],
+  ['iso2768_fine', 'drawing.sheetSetup.toleranceIso2768Fine'],
+  ['iso2768_medium', 'drawing.sheetSetup.toleranceIso2768Medium'],
+  ['iso2768_coarse', 'drawing.sheetSetup.toleranceIso2768Coarse'],
+  ['iso2768_very_coarse', 'drawing.sheetSetup.toleranceIso2768VeryCoarse'],
+  ['custom', 'drawing.sheetSetup.toleranceCustom'],
 ];
 
 const ANSI_TOLERANCES: Array<[DrawingTolerancePreset, string]> = [
-  ['none', 'No general tolerance note'],
-  ['ansi_decimal', 'ANSI decimal-place tolerances'],
-  ['custom', 'Custom note'],
+  ['none', 'drawing.sheetSetup.toleranceNone'],
+  ['ansi_decimal', 'drawing.sheetSetup.toleranceAnsiDecimal'],
+  ['custom', 'drawing.sheetSetup.toleranceCustom'],
 ];
 
 export function DrawingSheetSetup() {
-  const documentName = useAppStore((state) => state.document?.name ?? 'Untitled');
+  const { t } = useTranslation();
+  const documentName = useAppStore((state) => state.document?.name ?? t('app.untitledDocument'));
   const sheets = useAppStore((state) => state.drawingDocument.sheets);
   const setOpen = useAppStore((state) => state.setDrawingSheetSetupOpen);
   const lastStandard = sheets[sheets.length - 1]?.standard ?? 'iso';
@@ -88,11 +90,11 @@ export function DrawingSheetSetup() {
                 <FileText size={19} />
               </span>
               <div>
-                <h1 className="text-[15px] font-semibold text-ink">Create drawing sheet</h1>
-                <p className="text-[10px] text-mute">Choose the drafting standard and paper before placing views.</p>
+                <h1 className="text-[15px] font-semibold text-ink">{t('drawing.sheetSetup.title')}</h1>
+                <p className="text-[10px] text-mute">{t('drawing.sheetSetup.subtitle')}</p>
               </div>
             </div>
-            <button type="button" onClick={cancel} className="rounded p-1.5 text-mute hover:bg-edge hover:text-ink" title="Cancel">
+            <button type="button" onClick={cancel} className="rounded p-1.5 text-mute hover:bg-edge hover:text-ink" title={t('drawing.sheetSetup.cancel')}>
               <X size={17} />
             </button>
           </header>
@@ -101,7 +103,7 @@ export function DrawingSheetSetup() {
             <div className="flex items-center justify-center border-r border-edge bg-viewport/55 p-8 max-[900px]:border-b max-[900px]:border-r-0">
               <div className="w-full max-w-[430px]">
                 <div className="mb-4 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-mute">
-                  <LayoutTemplate size={14} /> Sheet preview
+                  <LayoutTemplate size={14} /> {t('drawing.sheetSetup.sheetPreview')}
                 </div>
                 <div className="flex aspect-[1.35] items-center justify-center rounded-lg border border-edge bg-viewport p-6">
                   <div
@@ -114,7 +116,7 @@ export function DrawingSheetSetup() {
                     <div className="absolute bottom-[4%] right-[4%] h-[19%] w-[52%] border border-slate-600">
                       <div className="absolute inset-x-0 top-[55%] border-t border-slate-500" />
                       <div className="absolute inset-y-0 left-[63%] border-l border-slate-500" />
-                      <span className="absolute left-[4%] top-[9%] text-[7px] font-semibold text-slate-700">{setup.title || 'UNTITLED'}</span>
+                      <span className="absolute left-[4%] top-[9%] text-[7px] font-semibold text-slate-700">{setup.title || t('drawing.sheetSetup.untitled')}</span>
                     </div>
                   </div>
                 </div>
@@ -123,67 +125,67 @@ export function DrawingSheetSetup() {
                   <span>{Math.round(paperWidth)} × {Math.round(paperHeight)} mm</span>
                 </div>
                 <div className="mt-5 rounded-lg border border-accent/25 bg-accent/8 p-3 text-[11px] leading-relaxed text-mute">
-                  This creates a blank framed sheet. Use <strong className="text-ink">Auto Layout</strong> afterward, or place each projected view manually. Related views stay aligned to their parent view.
+                  {t('drawing.sheetSetup.blankSheetHintPrefix')} <strong className="text-ink">{t('ribbon.drawing.autoLayout')}</strong> {t('drawing.sheetSetup.blankSheetHintSuffix')}
                 </div>
               </div>
             </div>
 
             <form className="p-6" onSubmit={(event) => { event.preventDefault(); submit(); }}>
-              <SetupGroup label="Drafting standard">
+              <SetupGroup label={t('drawing.sheetSetup.draftingStandard')}>
                 <div className="grid grid-cols-2 gap-2">
-                  <ChoiceButton active={setup.standard === 'iso'} title="ISO" detail="Metric paper · first-angle default" onClick={() => changeStandard('iso')} />
-                  <ChoiceButton active={setup.standard === 'ansi'} title="ANSI / ASME" detail="US paper · third-angle default" onClick={() => changeStandard('ansi')} />
+                  <ChoiceButton active={setup.standard === 'iso'} title="ISO" detail={t('drawing.sheetSetup.isoDetail')} onClick={() => changeStandard('iso')} />
+                  <ChoiceButton active={setup.standard === 'ansi'} title="ANSI / ASME" detail={t('drawing.sheetSetup.ansiDetail')} onClick={() => changeStandard('ansi')} />
                 </div>
               </SetupGroup>
 
               <div className="grid grid-cols-2 gap-3">
-                <SetupField label="Paper size">
+                <SetupField label={t('drawing.sheetSetup.paperSize')}>
                   <select className="drawing-input" value={setup.format} onChange={(event) => setSetup({ ...setup, format: event.target.value as DrawingSheetFormat })}>
                     {formats.map((format) => <option key={format} value={format}>{drawingFormatLabel(format)}</option>)}
                   </select>
                 </SetupField>
-                <SetupField label="Orientation">
+                <SetupField label={t('drawing.sheetSetup.orientation')}>
                   <select className="drawing-input" value={setup.orientation} onChange={(event) => setSetup({ ...setup, orientation: event.target.value as DrawingSheetOrientation })}>
-                    <option value="landscape">Landscape</option>
-                    <option value="portrait">Portrait</option>
+                    <option value="landscape">{t('drawing.sheetSetup.landscape')}</option>
+                    <option value="portrait">{t('drawing.sheetSetup.portrait')}</option>
                   </select>
                 </SetupField>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                <SetupField label="Projection convention">
+                <SetupField label={t('drawing.sheetSetup.projectionConvention')}>
                   <select className="drawing-input" value={setup.projection_method} onChange={(event) => setSetup({ ...setup, projection_method: event.target.value as DrawingProjectionMethod })}>
-                    <option value="first_angle">First-angle projection</option>
-                    <option value="third_angle">Third-angle projection</option>
+                    <option value="first_angle">{t('drawing.sheetSetup.firstAngleProjection')}</option>
+                    <option value="third_angle">{t('drawing.sheetSetup.thirdAngleProjection')}</option>
                   </select>
                 </SetupField>
-                <SetupField label="General tolerances">
+                <SetupField label={t('drawing.sheetSetup.generalTolerances')}>
                   <select className="drawing-input" value={setup.tolerance_note.preset} onChange={(event) => setSetup({ ...setup, tolerance_note: { ...setup.tolerance_note, preset: event.target.value as DrawingTolerancePreset } })}>
-                    {toleranceOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                    {toleranceOptions.map(([value, labelKey]) => <option key={value} value={value}>{t(labelKey)}</option>)}
                   </select>
                 </SetupField>
               </div>
 
               {setup.tolerance_note.preset === 'custom' && (
-                <SetupField label="Custom tolerance note">
+                <SetupField label={t('drawing.sheetSetup.customToleranceNote')}>
                   <textarea className="drawing-input min-h-16 resize-y py-2" value={setup.tolerance_note.custom} onChange={(event) => setSetup({ ...setup, tolerance_note: { ...setup.tolerance_note, custom: event.target.value } })} />
                 </SetupField>
               )}
 
-              <div className="mt-2 border-t border-edge pt-4 text-[10px] font-semibold uppercase tracking-[0.14em] text-mute">Title block</div>
-              <SetupField label="Drawing title">
+              <div className="mt-2 border-t border-edge pt-4 text-[10px] font-semibold uppercase tracking-[0.14em] text-mute">{t('drawing.sheetSetup.titleBlock')}</div>
+              <SetupField label={t('drawing.sheetSetup.drawingTitle')}>
                 <input className="drawing-input" value={setup.title} onChange={(event) => setSetup({ ...setup, title: event.target.value })} />
               </SetupField>
               <div className="grid grid-cols-3 gap-3">
-                <SetupField label="Drawing number"><input className="drawing-input" value={setup.drawing_number} onChange={(event) => setSetup({ ...setup, drawing_number: event.target.value })} /></SetupField>
-                <SetupField label="Revision"><input className="drawing-input" value={setup.revision} onChange={(event) => setSetup({ ...setup, revision: event.target.value })} /></SetupField>
-                <SetupField label="Author"><input className="drawing-input" value={setup.author} onChange={(event) => setSetup({ ...setup, author: event.target.value })} /></SetupField>
+                <SetupField label={t('drawing.sheetSetup.drawingNumber')}><input className="drawing-input" value={setup.drawing_number} onChange={(event) => setSetup({ ...setup, drawing_number: event.target.value })} /></SetupField>
+                <SetupField label={t('drawing.sheetSetup.revision')}><input className="drawing-input" value={setup.revision} onChange={(event) => setSetup({ ...setup, revision: event.target.value })} /></SetupField>
+                <SetupField label={t('drawing.sheetSetup.author')}><input className="drawing-input" value={setup.author} onChange={(event) => setSetup({ ...setup, author: event.target.value })} /></SetupField>
               </div>
 
               <div className="mt-5 flex justify-end gap-2 border-t border-edge pt-4">
-                <button type="button" onClick={cancel} className="h-9 rounded border border-edge px-4 text-[12px] text-ink hover:bg-edge">Cancel</button>
+                <button type="button" onClick={cancel} className="h-9 rounded border border-edge px-4 text-[12px] text-ink hover:bg-edge">{t('drawing.sheetSetup.cancel')}</button>
                 <button type="submit" disabled={busy || !setup.title.trim()} className="h-9 rounded bg-accent px-5 text-[12px] font-semibold text-white hover:brightness-110 disabled:opacity-45">
-                  {busy ? 'Creating…' : 'Create blank sheet'}
+                  {busy ? t('drawing.sheetSetup.creating') : t('drawing.sheetSetup.createBlankSheet')}
                 </button>
               </div>
             </form>

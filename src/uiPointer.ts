@@ -1,14 +1,15 @@
 import {waitForPlayback} from './operationPlayback';
+import {translate} from './i18n';
 
 export type UiGesture = 'move' | 'click' | 'double_click' | 'drag';
 /** Atomic gestures cannot leave a synthetic button held between MCP calls. */
 export async function drivePointer(surface: Element, action: UiGesture, point: [number, number], shift = false, to?: [number, number]): Promise<void> {
   const rect = surface.getBoundingClientRect();
   const validate = (p: [number, number]) => {
-    if (!p.every(Number.isFinite) || p[0] < rect.left || p[0] > rect.right || p[1] < rect.top || p[1] > rect.bottom) throw new Error('Point is outside the canvas');
+    if (!p.every(Number.isFinite) || p[0] < rect.left || p[0] > rect.right || p[1] < rect.top || p[1] > rect.bottom) throw new Error(translate('ui.errorPointOutsideCanvas'));
   };
   validate(point);
-  if (action === 'drag') { if (!to) throw new Error('drag requires an end point'); validate(to); }
+  if (action === 'drag') { if (!to) throw new Error(translate('ui.errorDragRequiresEndPoint')); validate(to); }
   const hit = document.elementFromPoint(...point);
   const target = hit && surface.contains(hit) ? hit : surface;
   const init = {pointerId: 1, pointerType: 'mouse', button: 0, shiftKey: shift, bubbles: true, cancelable: true, isPrimary: true};
