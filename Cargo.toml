@@ -6,6 +6,9 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/build-info",
+    "crates/interface",
+    "crates/project-file",
     "crates/core",
     "crates/assembly",
     "crates/cam",

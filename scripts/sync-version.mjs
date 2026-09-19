@@ -376,7 +376,7 @@ export function collectDrift(root = repositoryRoot, version = readVersion(root))
   for (const carrier of versionCarriers(root)) {
     let problem;
     try {
-      problem = carrier.verify(readFileSync(path.join(root, carrier.path), 'utf8'), version);
+      problem = carrier.verify(readFileSync(path.join(root, carrier.path), 'utf8').replace(/\r\n/g, '\n'), version);
     } catch (error) {
       problem = error.message;
     }
@@ -390,10 +390,11 @@ export function syncAll(root = repositoryRoot, version = readVersion(root)) {
   const changed = [];
   for (const carrier of versionCarriers(root)) {
     const file = path.join(root, carrier.path);
-    const text = readFileSync(file, 'utf8');
+    const original = readFileSync(file, 'utf8');
+    const text = original.replace(/\r\n/g, '\n');
     const next = carrier.sync(text, version);
     if (next === null || next === text) continue;
-    writeFileSync(file, next);
+    writeFileSync(file, original.includes('\r\n') ? next.replace(/\n/g, '\r\n') : next);
     changed.push(carrier.path);
   }
   return changed;

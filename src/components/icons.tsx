@@ -11,20 +11,18 @@
  * docs/ICON_PROVENANCE.md. Do not paste, trace, or adapt vendor icon paths here.
  */
 import type { ReactNode } from 'react';
+import { SharedRibbonGlyph, SharedRibbonIcon } from './ribbonGlyphs';
 import { CAM_ICON_IDS, CamToolIcon, isCamIcon } from './cam/CamToolIcon';
 import {
   Code2,
   Cuboid,
-  Crosshair,
   Equal,
   FlipHorizontal2,
   Lock,
   MousePointer2,
   Move,
-  PenLine,
   Ruler,
   Scissors,
-  Spline,
   Type,
   type LucideIcon,
 } from 'lucide-react';
@@ -39,14 +37,7 @@ import {
 
 const GLYPHS: Record<string, ReactNode> = {
   // Solid construction: a profile, transformation path, and result.
-  extrude: (
-    <>
-      <rect x="3" y="8" width="6" height="10" rx="0.8" />
-      <rect x="15" y="5" width="6" height="10" rx="0.8" />
-      <path d="M9 8l6-3M9 18l6-3M9 13h6" />
-      <path d="M12.5 10.5L15 13l-2.5 2.5" />
-    </>
-  ),
+  extrude: <SharedRibbonGlyph id="extrude" />,
   revolve: (
     <>
       <path d="M5 3v18" strokeDasharray="2 2" />
@@ -225,35 +216,10 @@ const GLYPHS: Record<string, ReactNode> = {
     </>
   ),
   // Sketch creation.
-  line: (
-    <>
-      <path d="M4 19L20 5" />
-      <circle cx="4" cy="19" r="1.8" />
-      <circle cx="20" cy="5" r="1.8" />
-    </>
-  ),
-  midpointLine: (
-    <>
-      <path d="M3 18L21 6" />
-      <circle cx="3" cy="18" r="1.6" />
-      <circle cx="21" cy="6" r="1.6" />
-      <path d="M12 9l2.2 3.2-4.4.2L12 9z" />
-    </>
-  ),
-  rect: (
-    <>
-      <rect x="4" y="6" width="16" height="12" rx="1" />
-      <circle cx="4" cy="18" r="1.2" />
-      <circle cx="20" cy="6" r="1.2" />
-    </>
-  ),
-  circle: (
-    <>
-      <circle cx="12" cy="12" r="8" />
-      <circle cx="12" cy="12" r="1.3" />
-      <path d="M12 12l5-4" strokeDasharray="2 2" />
-    </>
-  ),
+  line: <SharedRibbonGlyph id="line" />,
+  midpointLine: <SharedRibbonGlyph id="midpointLine" />,
+  rect: <SharedRibbonGlyph id="rect" />,
+  circle: <SharedRibbonGlyph id="circle" />,
   centerMark: (
     <>
       <circle cx="12" cy="12" r="5" />
@@ -267,14 +233,7 @@ const GLYPHS: Record<string, ReactNode> = {
       <path d="M1 12h22" strokeDasharray="6 2 1 2" />
     </>
   ),
-  arc: (
-    <>
-      <path d="M4 18C6 7 15 3 20 12" />
-      <circle cx="4" cy="18" r="1.5" />
-      <circle cx="20" cy="12" r="1.5" />
-      <circle cx="12" cy="8" r="1.2" />
-    </>
-  ),
+  arc: <SharedRibbonGlyph id="arc" />,
   polygon: (
     <>
       <path d="M12 3l8 6-3 10H7L4 9l8-6z" />
@@ -289,12 +248,7 @@ const GLYPHS: Record<string, ReactNode> = {
       <circle cx="17" cy="12" r="1.2" />
     </>
   ),
-  slot: (
-    <>
-      <path d="M8 7h8a5 5 0 0 1 0 10H8A5 5 0 0 1 8 7z" />
-      <path d="M8 10v4M16 10v4" strokeDasharray="2 2" />
-    </>
-  ),
+  slot: <SharedRibbonGlyph id="slot" />,
   conic: (
     <>
       <path d="M4 19C6 8 11 5 20 4" />
@@ -366,9 +320,6 @@ export const CUSTOM_ICON_IDS: readonly string[] = Object.freeze([...Object.keys(
 /* ------------------------------------------------------------------ */
 
 const LUCIDE: Record<string, LucideIcon> = {
-  sketch: PenLine,
-  spline: Spline,
-  point: Crosshair,
   text: Type,
   mirror: FlipHorizontal2,
   trim: Scissors,
@@ -432,6 +383,10 @@ export function ToolIcon({
         {GLYPHS[id]}
       </svg>
     );
+  }
+
+  if (id === 'sketch' || id === 'spline' || id === 'point') {
+    return <SharedRibbonIcon id={id} size={size} className={cxIcon(colorClass, className)} />;
   }
 
   const Lucide = id ? LUCIDE[id] : undefined;

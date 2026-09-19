@@ -285,6 +285,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nbcad-build-info"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nbcad-cam"
 version = "0.2.0"
 dependencies = [
@@ -313,6 +321,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nbcad-interface"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nbcad-mcp-mutate"
 version = "0.2.0"
 dependencies = [
@@ -333,6 +349,15 @@ dependencies = [
  "nbcad-solid",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "nbcad-project-file"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "zip",
 ]
 
 [[package]]

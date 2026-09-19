@@ -502,6 +502,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nbcad-build-info"
+version = "0.2.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "nbcad-cam"
 version = "0.2.0"
 dependencies = [
@@ -529,14 +536,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "nbcad-interface"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nbcad-mcp"
 version = "0.2.0"
 dependencies = [
  "base64",
  "jsonschema",
  "libc",
+ "nbcad-build-info",
  "nbcad-core",
  "nbcad-export",
+ "nbcad-interface",
  "nbcad-mcp-mutate",
  "nbcad-occt",
  "nbcad-recipes",

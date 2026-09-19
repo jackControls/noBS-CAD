@@ -1,0 +1,12 @@
+[package]
+name = "nbcad-project-file"
+version.workspace = true
+edition = "2021"
+description = "Host-neutral noBS CAD project archives and atomic file I/O"
+license = "LGPL-2.1-or-later"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }

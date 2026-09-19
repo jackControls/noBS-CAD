@@ -102,6 +102,7 @@ use {
     gtk::prelude::*,
 };
 
+use super::interface_shell::{self, NativeInterfaceHandle};
 use super::path_progress::{active_cursor, split_segment};
 use super::profile_outline::{base_curve_remainder, profile_outline_segments, BaseCurveRemainder};
 use super::ui::{
@@ -265,6 +266,9 @@ struct PickState {
     hidden_body_ids: Vec<u64>,
 }
 
+#[derive(Resource, Clone)]
+struct SharedPickState(Arc<Mutex<PickState>>);
+
 impl Default for PickState {
     fn default() -> Self {
         Self {
@@ -279,6 +283,7 @@ impl Default for PickState {
 }
 
 pub struct PlatformNativeViewport {
+    interface: NativeInterfaceHandle,
     app: tauri::AppHandle,
     runtime: Arc<AtomicUsize>,
     pending: Arc<Mutex<PendingRenderCommands>>,
@@ -307,6 +312,41 @@ impl PlatformNativeViewport {
         let suspended = Arc::new(AtomicBool::new(false));
         let pointers = Arc::new(NativePointers::default());
         let metrics = Arc::new(Mutex::new(MetricsState::default()));
+        let interface = NativeInterfaceHandle::new({
+            let app = app_handle.clone();
+            let pending = pending.clone();
+            let runtime = runtime.clone();
+            let metrics = metrics.clone();
+            move || {
+                let schedule = if let Ok(mut pending) = pending.lock() {
+                    pending.settle_frames = pending.settle_frames.max(2);
+                    if pending.scheduled {
+                        false
+                    } else {
+                        pending.scheduled = true;
+                        true
+                    }
+                } else {
+                    false
+                };
+                if schedule {
+                    if let Err(error) = schedule_render_drain(
+                        app.clone(),
+                        runtime.clone(),
+                        pending.clone(),
+                        metrics.clone(),
+                    ) {
+                        if let Ok(mut pending) = pending.lock() {
+                            pending.scheduled = false;
+                        }
+                        eprintln!("Native interface redraw failed: {error}");
+                    }
+                }
+            }
+        });
+        let install_interface = interface.clone();
+        let install_application = app_handle.clone();
+        let install_pick_state = pick_state.clone();
         let install_pointers = pointers.clone();
         let install_metrics = metrics.clone();
         let install_runtime = runtime.clone();
@@ -347,6 +387,7 @@ impl PlatformNativeViewport {
                                 webview_hwnd.0,
                                 install_pointers.clone(),
                                 core_webview,
+                                install_interface.clone(),
                             )
                         })
                 };
@@ -379,7 +420,13 @@ impl PlatformNativeViewport {
                 // alive and expose the real cause through metrics/CI instead of
                 // silently leaving an empty viewport.
                 let initialized = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    let bevy_app = build_bevy_app(view_handle, scale_factor as f32)?;
+                    let bevy_app = build_bevy_app(
+                        view_handle,
+                        scale_factor as f32,
+                        install_interface.clone(),
+                        install_application.clone(),
+                        install_pick_state.clone(),
+                    )?;
                     let render_runtime = Box::new(MainThreadRenderRuntime {
                         app: bevy_app,
                         model: ViewportModel {
@@ -455,6 +502,7 @@ impl PlatformNativeViewport {
             .map_err(|error| format!("could not access the native webview: {error}"))?;
 
         Ok(Self {
+            interface,
             app: app_handle,
             runtime,
             pending,
@@ -465,6 +513,33 @@ impl PlatformNativeViewport {
             pointers,
             metrics,
         })
+    }
+
+    pub fn interface(&self) -> NativeInterfaceHandle {
+        self.interface.clone()
+    }
+
+    pub fn update_interface(
+        &self,
+        update: impl FnOnce(&mut World) + Send + 'static,
+    ) -> Result<(), String> {
+        if self.runtime.load(Ordering::Acquire) == 0 {
+            return Err("Native renderer is not ready".into());
+        }
+        let runtime = self.runtime.clone();
+        let interface = self.interface.clone();
+        self.app
+            .run_on_main_thread(move || {
+                let pointer = runtime.load(Ordering::Acquire);
+                if pointer == 0 {
+                    return;
+                }
+                // Same native-thread/lifetime contract as drain_render_commands.
+                let runtime = unsafe { &mut *(pointer as *mut MainThreadRenderRuntime) };
+                update(runtime.app.world_mut());
+                interface.request_redraw();
+            })
+            .map_err(|error| format!("Could not update native interface: {error}"))
     }
 
     pub fn set_layout(&self, app: &tauri::AppHandle, layout: ViewportLayout) -> Result<(), String> {
@@ -599,6 +674,7 @@ impl PlatformNativeViewport {
     }
 
     pub fn set_camera(&self, camera: ViewportCamera) -> Result<(), String> {
+        validate_camera(camera)?;
         if let Ok(mut state) = self.pick_state.lock() {
             state.camera = camera;
         }
@@ -606,6 +682,11 @@ impl PlatformNativeViewport {
     }
 
     pub fn set_preview(&self, preview: ViewportPreview) -> Result<(), String> {
+        Self::validate_preview(&preview)?;
+        self.enqueue(RenderCommand::Preview(preview))
+    }
+
+    fn validate_preview(preview: &ViewportPreview) -> Result<(), String> {
         const MAX_LINE_FLOATS: usize = 6 * 65_536;
         const MAX_POINT_FLOATS: usize = 3 * 32_768;
         const MAX_TRIANGLE_FLOATS: usize = 9 * 65_536;
@@ -649,7 +730,7 @@ impl PlatformNativeViewport {
         }) {
             return Err("native timed path has invalid segment timing".to_string());
         }
-        self.enqueue(RenderCommand::Preview(preview))
+        Ok(())
     }
 
     pub fn set_cam_stock(&self, stock: Option<ViewportCamStock>) -> Result<(), String> {
@@ -1046,6 +1127,7 @@ const WINDOWS_INPUT_PREFIX: &str = "__nbcad_native_input__|";
 
 #[cfg(target_os = "windows")]
 struct WindowsInputBridge {
+    interface: NativeInterfaceHandle,
     webview: ICoreWebView2,
     tracking_mouse_leave: bool,
     last_x: i32,
@@ -1065,6 +1147,42 @@ impl WindowsInputBridge {
         buttons: u32,
         delta: i32,
     ) {
+        use super::interface_shell::{PointerButton, PointerPhase};
+        let phase = match kind {
+            'm' => Some(PointerPhase::Move),
+            'd' => Some(PointerPhase::Down),
+            'u' => Some(PointerPhase::Up),
+            'b' => Some(PointerPhase::DoubleClick),
+            'l' => Some(PointerPhase::Leave),
+            'c' => Some(PointerPhase::Cancel),
+            _ => None,
+        };
+        // Keep an existing CAD drag continuous when it crosses native chrome.
+        // Only a press owned by the interface may capture that gesture.
+        let model_drag = kind == 'm' && buttons != 0 && !self.interface.has_capture();
+        if button != 1 && !model_drag {
+            if let Some(phase) = phase {
+                if let Some(frame) = self.interface.frame() {
+                    if let Some(point) = frame
+                        .physical_to_window([x as f64, y as f64], [width as f64, height as f64])
+                    {
+                        let button = if button == 2 {
+                            PointerButton::Secondary
+                        } else {
+                            PointerButton::Primary
+                        };
+                        match self.interface.pointer(phase, point, button) {
+                            Ok(true) => return,
+                            Err(error) => {
+                                eprintln!("Native interface input rejected: {error}");
+                                return;
+                            }
+                            Ok(false) => (),
+                        }
+                    }
+                }
+            }
+        }
         let payload = format!(
             "{WINDOWS_INPUT_PREFIX}{kind}|{x}|{y}|{width}|{height}|{button}|{buttons}|{}|{delta}",
             windows_input_modifiers()
@@ -1345,6 +1463,7 @@ unsafe fn install_native_views(
     webview_pointer: *mut c_void,
     pointers: Arc<NativePointers>,
     core_webview: ICoreWebView2,
+    interface: NativeInterfaceHandle,
 ) -> Result<(NativeViewHandle, f64), String> {
     if webview_pointer.is_null() {
         return Err("WebView2 returned a null container HWND".to_string());
@@ -1386,6 +1505,7 @@ unsafe fn install_native_views(
         ));
     }
     let input_bridge = Box::new(WindowsInputBridge {
+        interface,
         webview: core_webview,
         tracking_mouse_leave: false,
         last_x: 0,
@@ -2319,7 +2439,7 @@ struct CadSketchPointOutlineGizmos;
 #[derive(Default, Reflect, GizmoConfigGroup)]
 struct CadSketchPointGizmos;
 
-fn cad_render_plugin() -> RenderPlugin {
+pub(super) fn cad_render_plugin() -> RenderPlugin {
     let render_plugin = RenderPlugin {
         // This renderer advances only in response to bridge commands. On
         // Windows, asynchronously compiled PBR/UI pipelines can otherwise
@@ -2351,6 +2471,9 @@ fn cad_render_plugin() -> RenderPlugin {
 fn build_bevy_app(
     view_handle: NativeViewHandle,
     scale_factor: f32,
+    interface: NativeInterfaceHandle,
+    application: tauri::AppHandle,
+    pick_state: Arc<Mutex<PickState>>,
 ) -> Result<bevy::app::App, String> {
     let mut app = bevy::app::App::new();
     #[cfg(target_os = "linux")]
@@ -2403,6 +2526,11 @@ fn build_bevy_app(
     app.world_mut().entity_mut(window_entity).insert(raw_handle);
 
     install_cad_scene(&mut app);
+    app.insert_resource(SharedPickState(pick_state));
+    // Script-preview worlds deliberately only install the CAD scene.
+    interface_shell::install(&mut app, interface, move |world, interface| {
+        crate::session_bridge::native_interface::drain_actions(&application, world, interface);
+    });
     app.finish();
     app.cleanup();
     Ok(app)
@@ -2410,7 +2538,7 @@ fn build_bevy_app(
 
 /// The embedded viewport and immutable script previews run these exact systems
 /// in separate worlds. A preview never replaces the live model or camera.
-fn install_cad_scene(app: &mut bevy::app::App) {
+pub(super) fn install_cad_scene(app: &mut bevy::app::App) {
     app.init_gizmo_group::<CadHighlightGizmos>()
         .init_gizmo_group::<CamUpcomingPathGizmos>()
         .init_gizmo_group::<CamCompletedPathGizmos>()
@@ -2459,7 +2587,8 @@ fn install_cad_scene(app: &mut bevy::app::App) {
                 update_native_hud_orientation,
                 draw_cad_gizmos,
             )
-                .chain(),
+                .chain()
+                .after(interface_shell::InterfaceReduction),
         );
 }
 
@@ -2784,16 +2913,17 @@ fn apply_camera(
     for (mut transform, mut projection) in &mut query {
         *transform = camera_transform(camera.camera);
         if let Projection::Perspective(perspective) = &mut *projection {
-            perspective.fov = camera
-                .camera
-                .vertical_fov_degrees
-                .clamp(1.0, 150.0)
-                .to_radians();
+            perspective.fov = camera.camera.vertical_fov_degrees.to_radians();
+            let distance = Vec3::from_array(camera.camera.position)
+                .distance(Vec3::from_array(camera.camera.target));
             if image_target.is_some() {
-                let distance = Vec3::from_array(camera.camera.position)
-                    .distance(Vec3::from_array(camera.camera.target));
                 perspective.near = (distance / 100_000.0).max(0.001);
                 perspective.far = (distance * 3.0).max(100.0);
+            } else {
+                // Fit/orientation use this exact camera, so the live frustum
+                // must reach a large assembly and permit close inspection.
+                perspective.near = (distance / 100_000.0).clamp(0.000001, 0.1);
+                perspective.far = (distance * 3.0).max(20_000.0);
             }
         }
     }
@@ -6062,24 +6192,7 @@ fn apply_render_command(
         RenderCommand::Model(mut next) => {
             next.session_id = canonical_model_session(&runtime.session_aliases, &next.session_id);
             runtime.model = next;
-            let mut resource = runtime.app.world_mut().resource_mut::<ModelResource>();
-            resource.session_id = runtime.model.session_id.clone();
-            resource.geometry_revision = runtime.model.geometry_revision;
-            resource.scene = runtime.model.scene.clone();
-            resource.active_sketch = runtime.model.active_sketch.clone();
-            resource.finished_sketches = runtime.model.finished_sketches.clone();
-            resource.datum_planes = runtime.model.datum_planes.clone();
-            resource.profile_catalog = runtime.model.profile_catalog.clone();
-            resource.body_appearances = runtime.model.body_appearances.clone();
-            resource.body_poses = runtime.model.body_poses.clone();
-            if !same_instance_layout(
-                &resource.instance_body_poses,
-                &runtime.model.instance_body_poses,
-            ) {
-                resource.instance_revision = resource.instance_revision.wrapping_add(1);
-            }
-            resource.instance_body_poses = runtime.model.instance_body_poses.clone();
-            resource.revision = resource.revision.wrapping_add(1);
+            apply_model_state(runtime.app.world_mut(), &runtime.model);
             if let Ok(mut current) = metrics.lock() {
                 current.body_count = runtime.model.scene.bodies.len();
                 current.triangle_count = runtime
@@ -6115,18 +6228,11 @@ fn apply_render_command(
         }
         RenderCommand::Camera(next) => {
             runtime.camera = next;
-            let mut resource = runtime.app.world_mut().resource_mut::<CameraResource>();
-            resource.camera = next;
-            resource.revision = resource.revision.wrapping_add(1);
+            apply_camera_state(runtime.app.world_mut(), next);
             *dirty = true;
         }
         RenderCommand::Preview(next) => {
-            let mut resource = runtime.app.world_mut().resource_mut::<PreviewResource>();
-            if preview_mesh_content_changed(&resource.value, &next) {
-                resource.mesh_revision = resource.mesh_revision.wrapping_add(1);
-            }
-            resource.value = next;
-            resource.revision = resource.revision.wrapping_add(1);
+            apply_preview_state(runtime.app.world_mut(), next);
             *dirty = true;
         }
         RenderCommand::CamStock(next) => {
@@ -6136,33 +6242,395 @@ fn apply_render_command(
             *dirty = true;
         }
         RenderCommand::Presentation(next) => {
-            if runtime.model.body_poses != next.body_poses
-                || runtime.model.instance_body_poses != next.instance_body_poses
-            {
-                let layout_changed = !same_instance_layout(
-                    &runtime.model.instance_body_poses,
-                    &next.instance_body_poses,
-                );
-                runtime.model.body_poses = next.body_poses.clone();
-                runtime.model.instance_body_poses = next.instance_body_poses.clone();
-                let mut model = runtime.app.world_mut().resource_mut::<ModelResource>();
-                model.body_poses = next.body_poses.clone();
-                model.instance_body_poses = next.instance_body_poses.clone();
-                if layout_changed {
-                    model.instance_revision = model.instance_revision.wrapping_add(1);
-                }
-                model.revision = model.revision.wrapping_add(1);
-            }
-            let mut resource = runtime
-                .app
-                .world_mut()
-                .resource_mut::<PresentationResource>();
-            if resource.0 != next {
-                resource.0 = next;
-                *dirty = true;
-            }
+            runtime.model.body_poses = next.body_poses.clone();
+            runtime.model.instance_body_poses = next.instance_body_poses.clone();
+            *dirty |= apply_presentation_state(runtime.app.world_mut(), next);
         }
     }
+}
+
+fn apply_model_state(world: &mut World, next: &ViewportModel) {
+    let mut resource = world.resource_mut::<ModelResource>();
+    resource.session_id.clone_from(&next.session_id);
+    resource.geometry_revision = next.geometry_revision;
+    resource.scene.clone_from(&next.scene);
+    resource.active_sketch.clone_from(&next.active_sketch);
+    resource
+        .finished_sketches
+        .clone_from(&next.finished_sketches);
+    resource.datum_planes.clone_from(&next.datum_planes);
+    resource.profile_catalog.clone_from(&next.profile_catalog);
+    resource.body_appearances.clone_from(&next.body_appearances);
+    resource.body_poses.clone_from(&next.body_poses);
+    if !same_instance_layout(&resource.instance_body_poses, &next.instance_body_poses) {
+        resource.instance_revision = resource.instance_revision.wrapping_add(1);
+    }
+    resource
+        .instance_body_poses
+        .clone_from(&next.instance_body_poses);
+    resource.revision = resource.revision.wrapping_add(1);
+    drop(resource);
+    invalidate_interface_presentation(world);
+}
+
+/// Install the same renderer/picker state for a Winit-owned window. The CAD
+/// systems and retained geometry cache are shared with the embedded host.
+#[cfg(feature = "dev-bevy-host")]
+pub(super) fn install_native_scene(app: &mut bevy::app::App) {
+    install_cad_scene(app);
+    app.insert_resource(SharedPickState(Arc::new(Mutex::new(PickState::default()))));
+}
+
+/// Production scene initialization without starting an OS window or renderer.
+/// Tests inspect the same authoritative resources used by both native hosts.
+#[cfg(all(test, feature = "dev-bevy-host"))]
+pub(crate) fn interface_scene_fixture() -> bevy::app::App {
+    let mut app = bevy::app::App::new();
+    install_native_scene(&mut app);
+    app
+}
+
+pub(crate) fn interface_preview_snapshot(world: &World) -> ViewportPreview {
+    world.resource::<PreviewResource>().value.clone()
+}
+
+pub(crate) fn interface_preview_revision(world: &World) -> u64 {
+    world.resource::<PreviewResource>().revision
+}
+
+pub(crate) fn interface_pick(
+    world: &World,
+    session_id: &str,
+    point: [f32; 2],
+    purpose: NativePickPurpose,
+) -> Result<Option<NativePick>, String> {
+    let model = world.resource::<ModelResource>();
+    if model.session_id != session_id {
+        return Err("Native viewport has not bound the requested document".into());
+    }
+    let size = world.resource::<ViewportSizeResource>();
+    Ok(pick_occt_scene(
+        &model.scene,
+        world.resource::<CameraResource>().camera,
+        (size.logical_width, size.logical_height),
+        point[0],
+        point[1],
+        &world.resource::<PresentationResource>().0.hidden_body_ids,
+        &model.body_poses,
+        &model.instance_body_poses,
+        purpose,
+    ))
+}
+
+/// Apply a transient layer only under its live document's owner guard. A stale
+/// form cannot clear or restore another document's in-progress presentation.
+pub(crate) fn apply_interface_preview(
+    world: &mut World,
+    session_id: &str,
+    preview: ViewportPreview,
+) -> Result<(), String> {
+    if world.resource::<ModelResource>().session_id != session_id {
+        return Err("Native viewport has not bound the requested document".into());
+    }
+    PlatformNativeViewport::validate_preview(&preview)?;
+    apply_preview_state(world, preview);
+    Ok(())
+}
+
+fn apply_preview_state(world: &mut World, preview: ViewportPreview) {
+    let mut resource = world.resource_mut::<PreviewResource>();
+    if preview_mesh_content_changed(&resource.value, &preview) {
+        resource.mesh_revision = resource.mesh_revision.wrapping_add(1);
+    }
+    resource.value = preview;
+    resource.revision = resource.revision.wrapping_add(1);
+    drop(resource);
+    invalidate_interface_presentation(world);
+}
+
+fn invalidate_interface_presentation(world: &World) {
+    if let Some(handle) = world.get_resource::<NativeInterfaceHandle>() {
+        handle.invalidate_presentation();
+    }
+}
+
+/// Called only while the native document publisher owns this exact update.
+/// Both renderer hosts share this state reducer; no second geometry path.
+pub(crate) fn apply_interface_model(world: &mut World, next: ViewportModel) -> Result<(), String> {
+    let picker = world
+        .get_resource::<SharedPickState>()
+        .ok_or("Native picker is unavailable")?
+        .0
+        .clone();
+    let mut picker = picker.lock().map_err(|_| "Native picker lock poisoned")?;
+    picker.scene.clone_from(&next.scene);
+    picker.body_poses.clone_from(&next.body_poses);
+    picker
+        .instance_body_poses
+        .clone_from(&next.instance_body_poses);
+    apply_model_state(world, &next);
+    Ok(())
+}
+
+pub(crate) fn interface_view_snapshot(
+    world: &World,
+) -> (String, ViewportCamera, ViewportPresentation, [f32; 2]) {
+    let size = world.resource::<ViewportSizeResource>();
+    (
+        world.resource::<ModelResource>().session_id.clone(),
+        world.resource::<CameraResource>().camera,
+        world.resource::<PresentationResource>().0.clone(),
+        [size.logical_width, size.logical_height],
+    )
+}
+
+pub(crate) fn interface_body_transform(
+    world: &World,
+    body_id: u64,
+    occurrence_id: Option<u64>,
+) -> Transform {
+    let model = world.resource::<ModelResource>();
+    instance_body_pose_transform(
+        &model.instance_body_poses,
+        &model.body_poses,
+        body_id,
+        occurrence_id,
+    )
+}
+
+pub(crate) fn interface_visible_occurrences(world: &World, body_id: u64) -> Vec<Option<u64>> {
+    visible_body_occurrences(world.resource::<ModelResource>(), body_id)
+}
+
+pub(crate) fn interface_sketch_point(
+    world: &World,
+    session_id: &str,
+    point: [f32; 2],
+    basis: PlaneBasis,
+) -> Result<Option<nbcad_sketch::Vec2>, String> {
+    if world.resource::<ModelResource>().session_id != session_id {
+        return Err("Native viewport has not bound the requested document".into());
+    }
+    if basis
+        .origin
+        .iter()
+        .chain(&basis.u)
+        .chain(&basis.v)
+        .chain(&basis.normal)
+        .any(|value| !value.is_finite())
+    {
+        return Err("Sketch plane must be finite".into());
+    }
+    let size = world.resource::<ViewportSizeResource>();
+    let camera = world.resource::<CameraResource>().camera;
+    let Some((origin, direction, _)) = camera_pick_ray(
+        camera,
+        (size.logical_width, size.logical_height),
+        point[0],
+        point[1],
+    ) else {
+        return Ok(None);
+    };
+    let normal = bevy::math::DVec3::from_array(basis.normal);
+    let origin = origin.as_dvec3();
+    let direction = direction.as_dvec3();
+    let denominator = normal.dot(direction);
+    if !denominator.is_finite() || denominator.abs() <= 1.0e-10 {
+        return Ok(None);
+    }
+    let distance = normal.dot(bevy::math::DVec3::from_array(basis.origin) - origin) / denominator;
+    if !distance.is_finite() || distance < 0.0 {
+        return Ok(None);
+    }
+    let point = basis.to_2d((origin + direction * distance).to_array());
+    Ok(point
+        .iter()
+        .all(|value| value.is_finite())
+        .then(|| nbcad_sketch::Vec2::new(point[0], point[1])))
+}
+
+/// Project through the same camera basis used for CAD picking. Coordinates are
+/// viewport-local logical pixels; the host adds its actual canvas origin.
+pub(crate) fn interface_world_point(
+    world: &World,
+    session_id: &str,
+    point: [f64; 3],
+) -> Result<Option<[f32; 2]>, String> {
+    if world.resource::<ModelResource>().session_id != session_id {
+        return Err("Native viewport has not bound the requested document".into());
+    }
+    if point.iter().any(|value| !value.is_finite()) {
+        return Err("World point must be finite".into());
+    }
+    let size = world.resource::<ViewportSizeResource>();
+    let viewport = (size.logical_width, size.logical_height);
+    let camera = world.resource::<CameraResource>().camera;
+    let Some(basis) = camera_projection(camera, viewport) else {
+        return Ok(None);
+    };
+    let offset = bevy::math::DVec3::from_array(point) - basis.origin.as_dvec3();
+    let depth = offset.dot(basis.forward.as_dvec3());
+    if depth <= 0.0 || !depth.is_finite() {
+        return Ok(None);
+    }
+    let ndc_x =
+        offset.dot(basis.right.as_dvec3()) / (depth * f64::from(basis.tangent * basis.aspect));
+    let ndc_y = offset.dot(basis.up.as_dvec3()) / (depth * f64::from(basis.tangent));
+    let pixel = [
+        ((ndc_x + 1.0) * 0.5 * f64::from(viewport.0)) as f32,
+        ((1.0 - ndc_y) * 0.5 * f64::from(viewport.1)) as f32,
+    ];
+    Ok(pixel.iter().all(|value| value.is_finite()).then_some(pixel))
+}
+
+/// The full window renders UI while the CAD cameras/picker use its inner
+/// logical canvas. Winit supplies the OS scale factor, not a webview estimate.
+#[cfg(feature = "dev-bevy-host")]
+pub(crate) fn apply_interface_viewport(
+    world: &mut World,
+    rect: nbcad_interface::Rect,
+    scale_factor: f32,
+) -> Result<(), String> {
+    if [rect.x, rect.y, rect.width, rect.height]
+        .iter()
+        .any(|v| !v.is_finite())
+        || rect.x < 0.0
+        || rect.y < 0.0
+        || rect.width <= 0.0
+        || rect.height <= 0.0
+        || !scale_factor.is_finite()
+        || scale_factor <= 0.0
+    {
+        return Err("Native CAD canvas needs finite positive bounds and scale".into());
+    }
+    let viewport = bevy::camera::Viewport {
+        physical_position: UVec2::new(
+            (rect.x * f64::from(scale_factor)).round() as u32,
+            (rect.y * f64::from(scale_factor)).round() as u32,
+        ),
+        physical_size: UVec2::new(
+            (rect.width * f64::from(scale_factor)).round().max(1.0) as u32,
+            (rect.height * f64::from(scale_factor)).round().max(1.0) as u32,
+        ),
+        ..default()
+    };
+    for mut camera in world
+        .query_filtered::<&mut Camera, With<NativeViewportCamera>>()
+        .iter_mut(world)
+    {
+        if !camera.viewport.as_ref().is_some_and(|current| {
+            current.physical_position == viewport.physical_position
+                && current.physical_size == viewport.physical_size
+        }) {
+            camera.viewport = Some(viewport.clone());
+        }
+    }
+    let mut size = world.resource_mut::<ViewportSizeResource>();
+    size.logical_width = rect.width as f32;
+    size.logical_height = rect.height as f32;
+    let picker = world.resource::<SharedPickState>().0.clone();
+    let mut picker = picker.lock().map_err(|_| "Native picker lock poisoned")?;
+    picker.logical_size = (rect.width as f32, rect.height as f32);
+    configure_viewport_line_widths(
+        &mut world.resource_mut::<GizmoConfigStore>(),
+        rect.width as f32,
+        rect.height as f32,
+        scale_factor,
+    );
+    Ok(())
+}
+
+fn apply_camera_state(world: &mut World, camera: ViewportCamera) {
+    let mut resource = world.resource_mut::<CameraResource>();
+    resource.camera = camera;
+    resource.revision = resource.revision.wrapping_add(1);
+    drop(resource);
+    invalidate_interface_presentation(world);
+}
+
+fn apply_presentation_state(world: &mut World, next: ViewportPresentation) -> bool {
+    let mut model = world.resource_mut::<ModelResource>();
+    if model.body_poses != next.body_poses || model.instance_body_poses != next.instance_body_poses
+    {
+        if !same_instance_layout(&model.instance_body_poses, &next.instance_body_poses) {
+            model.instance_revision = model.instance_revision.wrapping_add(1);
+        }
+        model.body_poses = next.body_poses.clone();
+        model.instance_body_poses = next.instance_body_poses.clone();
+        model.revision = model.revision.wrapping_add(1);
+    }
+    let mut resource = world.resource_mut::<PresentationResource>();
+    if resource.0 == next {
+        false
+    } else {
+        resource.0 = next;
+        drop(resource);
+        invalidate_interface_presentation(world);
+        true
+    }
+}
+
+/// Called synchronously inside the native reducer's document-owner guard.
+/// The existing renderer and picker are updated together; no unowned view
+/// command can arrive after a tab switch and affect its replacement.
+pub(crate) fn apply_interface_view(
+    world: &mut World,
+    session_id: &str,
+    camera: Option<ViewportCamera>,
+    presentation: Option<ViewportPresentation>,
+) -> Result<(), String> {
+    if let Some(camera) = camera {
+        validate_camera(camera)?;
+    }
+    if world.resource::<ModelResource>().session_id != session_id {
+        return Err("Native viewport has not bound the requested document".into());
+    }
+    let picker = world
+        .get_resource::<SharedPickState>()
+        .ok_or("Native picker is unavailable")?
+        .0
+        .clone();
+    let mut picker = picker.lock().map_err(|_| "Native picker lock poisoned")?;
+    if let Some(camera) = camera {
+        picker.camera = camera;
+        apply_camera_state(world, camera);
+    }
+    if let Some(presentation) = presentation {
+        picker.hidden_body_ids = presentation.hidden_body_ids.clone();
+        picker.body_poses = presentation.body_poses.clone();
+        picker.instance_body_poses = presentation.instance_body_poses.clone();
+        apply_presentation_state(world, presentation);
+    }
+    Ok(())
+}
+
+fn validate_camera(camera: ViewportCamera) -> Result<(), String> {
+    if camera
+        .position
+        .iter()
+        .chain(camera.target.iter())
+        .chain(camera.up.iter())
+        .any(|v| !v.is_finite())
+        || !camera.vertical_fov_degrees.is_finite()
+        || camera.vertical_fov_degrees <= 0.0
+        || camera.vertical_fov_degrees >= 180.0
+    {
+        return Err("Native camera must be finite with a valid field of view".into());
+    }
+    let direction = Vec3::from_array(camera.target) - Vec3::from_array(camera.position);
+    let forward = direction.try_normalize();
+    let up = Vec3::from_array(camera.up).try_normalize();
+    if !direction.length().is_finite()
+        || direction.length() > f32::MAX / 3.0
+        || !forward
+            .zip(up)
+            .is_some_and(|(forward, up)| forward.cross(up).length_squared() > 1.0e-8)
+    {
+        return Err(
+            "Native camera needs a finite nonzero view direction and independent up axis".into(),
+        );
+    }
+    Ok(())
 }
 
 fn preview_mesh_content_changed(current: &ViewportPreview, next: &ViewportPreview) -> bool {
@@ -6281,6 +6749,11 @@ fn render_frames(app: &mut bevy::app::App, count: usize, metrics: &Arc<Mutex<Met
     for _ in 0..count {
         let started = Instant::now();
         app.update();
+        if let Some(interface) = app.world().get_resource::<NativeInterfaceHandle>() {
+            if let Err(error) = interface.submitted() {
+                eprintln!("Native interface submission failed: {error}");
+            }
+        }
         #[cfg(target_os = "linux")]
         if std::env::var_os("NBCAD_VIEWPORT_PROBE_FILE").is_some() {
             if let Some(render_app) = app.get_sub_app(bevy::render::RenderApp) {
@@ -6314,6 +6787,73 @@ fn render_frames(app: &mut bevy::app::App, count: usize, metrics: &Arc<Mutex<Met
     }
 }
 
+struct CameraProjectionBasis {
+    origin: Vec3,
+    forward: Vec3,
+    right: Vec3,
+    up: Vec3,
+    tangent: f32,
+    aspect: f32,
+}
+
+fn camera_projection(
+    camera: ViewportCamera,
+    viewport: (f32, f32),
+) -> Option<CameraProjectionBasis> {
+    if validate_camera(camera).is_err()
+        || ![viewport.0, viewport.1]
+            .iter()
+            .all(|value| value.is_finite())
+        || viewport.0 <= 1.0
+        || viewport.1 <= 1.0
+    {
+        return None;
+    }
+    let origin = Vec3::from_array(camera.position);
+    let forward = (Vec3::from_array(camera.target) - origin).normalize_or_zero();
+    let up_hint = Vec3::from_array(camera.up).normalize_or_zero();
+    let right = forward.cross(up_hint).normalize_or_zero();
+    let up = right.cross(forward).normalize_or_zero();
+    if forward == Vec3::ZERO || right == Vec3::ZERO || up == Vec3::ZERO {
+        return None;
+    }
+    Some(CameraProjectionBasis {
+        origin,
+        forward,
+        right,
+        up,
+        tangent: (camera.vertical_fov_degrees.to_radians() * 0.5).tan(),
+        aspect: viewport.0 / viewport.1,
+    })
+}
+
+/// Geometry selection, world projection and sketch interaction share one basis.
+fn camera_pick_ray(
+    camera: ViewportCamera,
+    viewport: (f32, f32),
+    x: f32,
+    y: f32,
+) -> Option<(Vec3, Vec3, f32)> {
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    let CameraProjectionBasis {
+        origin,
+        forward,
+        right,
+        up,
+        tangent,
+        aspect,
+    } = camera_projection(camera, viewport)?;
+    let ndc_x = x / viewport.0 * 2.0 - 1.0;
+    let ndc_y = 1.0 - y / viewport.1 * 2.0;
+    let direction = (forward + right * ndc_x * tangent * aspect + up * ndc_y * tangent).normalize();
+    let world_per_pixel_factor = 2.0 * tangent / viewport.1;
+    direction
+        .is_finite()
+        .then_some((origin, direction, world_per_pixel_factor))
+}
+
 fn pick_occt_scene(
     scene: &SolidSceneDto,
     camera: ViewportCamera,
@@ -6325,25 +6865,7 @@ fn pick_occt_scene(
     instance_body_poses: &[InstanceBodyPoseDto],
     purpose: NativePickPurpose,
 ) -> Option<NativePick> {
-    if viewport.0 <= 1.0 || viewport.1 <= 1.0 {
-        return None;
-    }
-    let origin = Vec3::from_array(camera.position);
-    let forward = (Vec3::from_array(camera.target) - origin).normalize_or_zero();
-    let up_hint = Vec3::from_array(camera.up).normalize_or_zero();
-    let right = forward.cross(up_hint).normalize_or_zero();
-    let up = right.cross(forward).normalize_or_zero();
-    if forward == Vec3::ZERO || right == Vec3::ZERO || up == Vec3::ZERO {
-        return None;
-    }
-
-    let ndc_x = x / viewport.0 * 2.0 - 1.0;
-    let ndc_y = 1.0 - y / viewport.1 * 2.0;
-    let tangent = (camera.vertical_fov_degrees.to_radians() * 0.5).tan();
-    let aspect = viewport.0 / viewport.1;
-    let direction = (forward + right * ndc_x * tangent * aspect + up * ndc_y * tangent).normalize();
-    let world_per_pixel_factor = 2.0 * tangent / viewport.1;
-
+    let (origin, direction, world_per_pixel_factor) = camera_pick_ray(camera, viewport, x, y)?;
     let mut best: Option<NativePick> = None;
     for body in &scene.bodies {
         if hidden_body_ids.contains(&body.id.0) {
@@ -6777,6 +7299,97 @@ fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "dev-bevy-host")]
+    fn world_projection_round_trips_the_actual_pick_camera_and_rejects_retired_owners() {
+        let mut app = interface_scene_fixture();
+        app.world_mut().resource_mut::<ModelResource>().session_id = "owned".into();
+        let viewport = (1280.0, 720.0);
+        *app.world_mut().resource_mut::<ViewportSizeResource>() = ViewportSizeResource {
+            logical_width: viewport.0,
+            logical_height: viewport.1,
+        };
+        for fov in [0.5_f32, 45.0, 170.0] {
+            let camera = ViewportCamera {
+                vertical_fov_degrees: fov,
+                ..default()
+            };
+            app.world_mut().resource_mut::<CameraResource>().camera = camera;
+            for pixel in [[0.0, 0.0], [640.0, 360.0], [1250.0, 690.0]] {
+                let (origin, direction, _) =
+                    camera_pick_ray(camera, viewport, pixel[0], pixel[1]).unwrap();
+                let point = (origin.as_dvec3() + direction.as_dvec3() * 300.0).to_array();
+                let actual = interface_world_point(app.world(), "owned", point)
+                    .unwrap()
+                    .unwrap();
+                assert!(
+                    (actual[0] - pixel[0]).abs() < 0.03,
+                    "{actual:?} != {pixel:?}"
+                );
+                assert!(
+                    (actual[1] - pixel[1]).abs() < 0.03,
+                    "{actual:?} != {pixel:?}"
+                );
+                let behind = (origin.as_dvec3() - direction.as_dvec3() * 300.0).to_array();
+                assert!(interface_world_point(app.world(), "owned", behind)
+                    .unwrap()
+                    .is_none());
+            }
+        }
+        assert!(interface_world_point(app.world(), "retired", [0.0; 3]).is_err());
+        assert!(interface_world_point(app.world(), "owned", [f64::NAN; 3]).is_err());
+    }
+
+    #[test]
+    fn live_camera_projection_matches_the_accepted_view_at_small_and_large_scales() {
+        for (distance, fov) in [(0.001_f32, 0.5_f32), (500., 15.2), (1_000_000., 170.)] {
+            let mut app = App::new();
+            let camera = ViewportCamera {
+                position: [distance, 0., 0.],
+                target: [0.; 3],
+                up: [0., 0., 1.],
+                vertical_fov_degrees: fov,
+            };
+            validate_camera(camera).unwrap();
+            app.insert_resource(CameraResource {
+                camera,
+                revision: 1,
+            })
+            .init_resource::<PresentationResource>()
+            .init_resource::<RenderedRevisions>()
+            .insert_resource(GlobalAmbientLight::default())
+            .add_systems(Update, apply_camera);
+            let entity = app
+                .world_mut()
+                .spawn((
+                    NativeViewportCamera,
+                    Transform::default(),
+                    Projection::Perspective(PerspectiveProjection::default()),
+                ))
+                .id();
+            app.update();
+            let Projection::Perspective(projection) =
+                app.world().get::<Projection>(entity).unwrap()
+            else {
+                panic!("wrong projection")
+            };
+            assert!((projection.fov - fov.to_radians()).abs() < f32::EPSILON);
+            assert!(projection.near < distance * 0.1);
+            assert!(projection.far > distance * 2.0);
+        }
+        assert!(validate_camera(ViewportCamera {
+            position: [0.; 3],
+            target: [0.; 3],
+            ..ViewportCamera::default()
+        })
+        .is_err());
+        assert!(validate_camera(ViewportCamera {
+            vertical_fov_degrees: f32::INFINITY,
+            ..ViewportCamera::default()
+        })
+        .is_err());
+    }
 
     #[test]
     fn cam_stock_upload_gets_a_dedicated_asset_settle_frame() {

@@ -56,7 +56,10 @@ use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Mutex,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
@@ -67,12 +70,21 @@ use nbcad_mcp_mutate::ExecutionKind;
 
 use crate::state::{AppState, BOOTSTRAP_SESSION_ID};
 
+mod native_history;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub(crate) mod native_interface;
+
 /// Placeholder key used before the window is bound to a native project tab.
 const UNBOUND_PROJECT: &str = "__unbound__";
 
 #[derive(Debug)]
 struct ProjectPublisher {
     session_id: String,
+    /// Native control ownership follows document incarnation, not the mutable
+    /// engine revision or a reusable tab id. Retiring this publisher also
+    /// retires every queued native action for its incarnation.
+    native_interface_epoch: u64,
+    native_history: native_history::SolidHistory,
     /// Monotonic export ticket; independent of model mutations.
     next_export_sequence: u64,
     /// Latest export ticket written, including repeated exports of one revision.
@@ -94,9 +106,16 @@ struct ProjectPublisher {
 
 impl ProjectPublisher {
     fn new() -> Self {
+        static NEXT_NATIVE_EPOCH: AtomicU64 = AtomicU64::new(1);
         Self {
             session_id: Uuid::new_v4().to_string(),
+            native_interface_epoch: NEXT_NATIVE_EPOCH
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |epoch| {
+                    epoch.checked_add(1)
+                })
+                .expect("native document incarnations exhausted"),
             next_export_sequence: 0,
+            native_history: native_history::SolidHistory::default(),
             last_export_sequence: 0,
             published_generation: 0,
             last_model_generation: None,
@@ -346,23 +365,7 @@ impl SessionBridgeState {
         if let Some(project_session_id) = project_session_id {
             publisher.rebind_to(project_session_id);
         }
-        let project = publisher.active_mut();
-        project.next_export_sequence = project
-            .next_export_sequence
-            .checked_add(1)
-            .ok_or_else(|| "session generation exhausted".to_string())?;
-        project
-            .pending_exports
-            .insert(project.next_export_sequence, project.engine_revision);
-        let result = json!({
-            "session_id": project.session_id,
-            "window_id": window_label,
-            "generation": project.next_export_sequence,
-            "engine_revision": project.engine_revision,
-            "project_session_id": publisher.active_project_session_id,
-            "document_id": publisher.active_project_session_id,
-            "session_mode": "read_only_snapshot",
-        });
+        let result = reserve_project_export(publisher, window_label)?;
         drop(publishers);
         let _ = self.write_process_instance_file();
         Ok(result)
@@ -747,6 +750,61 @@ fn dispatch_inbox_on_engine(
     parse_engine_envelope(engine.apply_encoded_mutate(spec.engine_method, &encoded, solid))
 }
 
+fn reserve_project_export(
+    publisher: &mut WindowPublisher,
+    window_label: &str,
+) -> Result<Value, String> {
+    let project = publisher.active_mut();
+    project.next_export_sequence = project
+        .next_export_sequence
+        .checked_add(1)
+        .ok_or("Session generation exhausted")?;
+    project
+        .pending_exports
+        .insert(project.next_export_sequence, project.engine_revision);
+    Ok(json!({
+        "session_id": project.session_id,
+        "window_id": window_label,
+        "generation": project.next_export_sequence,
+        "engine_revision": project.engine_revision,
+        "project_session_id": publisher.active_project_session_id,
+        "document_id": publisher.active_project_session_id,
+        "session_mode": "read_only_snapshot",
+    }))
+}
+
+fn is_project_replacement(name: &str) -> bool {
+    matches!(name, "cad_new_project" | "cad_load_project_model")
+}
+
+/// The native interface and inbox use the same replacement dispatcher and
+/// unchanged marker. The caller owns the publisher lock and retirement.
+fn dispatch_project_replacement(
+    engine: &AppState,
+    name: &str,
+    arguments: &Value,
+) -> (Result<Value, String>, bool) {
+    let Some(spec) = nbcad_mcp_mutate::lookup_mutate(name).filter(|_| is_project_replacement(name))
+    else {
+        return (
+            Err("Not a whole-project replacement operation".into()),
+            false,
+        );
+    };
+    match nbcad_mcp_mutate::encode_payload(spec.payload, arguments) {
+        Ok(payload) => {
+            let raw = if name == "cad_load_project_model" {
+                engine.project_load(&payload)
+            } else {
+                engine.project_new()
+            };
+            let changed = !project_replacement_is_unchanged(&raw);
+            (parse_engine_envelope(raw), changed)
+        }
+        Err(error) => (Err(error), false),
+    }
+}
+
 fn archive_inbox_op(session_id: &str, seq: u64) -> Result<(), String> {
     let src = inbox_dir(session_id).join(format!("{seq}.json"));
     let dest_dir = inbox_dir(session_id).join("applied");
@@ -950,7 +1008,7 @@ impl SessionBridgeState {
         result
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "dev-bevy-host"))]
     fn engine_revision_for_window(&self, window_label: &str) -> Result<Option<u64>, String> {
         let mut publishers = self
             .publishers
@@ -1132,21 +1190,7 @@ fn apply_project_replacement_inbox(
     let session_id = publisher.active_mut().session_id.clone();
     let document = engine.active_project_session_id();
     let arguments = request.get("arguments").cloned().unwrap_or(json!({}));
-    let spec = nbcad_mcp_mutate::lookup_mutate(name).expect("validated replacement operation");
-    let (outcome, changed) = match nbcad_mcp_mutate::encode_payload(spec.payload, &arguments) {
-        Ok(payload) => {
-            let raw = if name == "cad_load_project_model" {
-                // Preserve the unchanged marker for malformed/unsupported
-                // project data rejected before native recomputation begins.
-                engine.project_load(&payload)
-            } else {
-                engine.project_new()
-            };
-            let changed = !project_replacement_is_unchanged(&raw);
-            (parse_engine_envelope(raw), changed)
-        }
-        Err(error) => (Err(error), false),
-    };
+    let (outcome, changed) = dispatch_project_replacement(engine, name, &arguments);
     let replacement = changed.then(ProjectPublisher::new);
     let mut receipt = request.clone();
     let mut response = json!({
@@ -1452,7 +1496,7 @@ fn apply_or_reject_one_inbox_op(
             "engine_revision": project.engine_revision,
         }));
     }
-    if matches!(name.as_str(), "cad_new_project" | "cad_load_project_model") {
+    if is_project_replacement(&name) {
         let result = apply_project_replacement_inbox(
             publisher,
             window_label,
@@ -1657,6 +1701,18 @@ fn control_for_window(
     engine: &AppState,
     response: Option<Value>,
 ) -> Result<Value, String> {
+    control_for_window_owned(state, window_label, engine, response, None)
+}
+
+/// The native worker captures a specific document incarnation and request
+/// before leaving the render thread. Validate both before consuming its file.
+fn control_for_window_owned(
+    state: &SessionBridgeState,
+    window_label: &str,
+    engine: &AppState,
+    response: Option<Value>,
+    expected: Option<(&nbcad_interface::DocumentContext, &str)>,
+) -> Result<Value, String> {
     // Use the established lease -> publisher order. A completed slow native
     // query must refresh both liveness files before its client sees the receipt.
     let mut lease_path = state
@@ -1670,6 +1726,18 @@ fn control_for_window(
     let Some(publisher) = publishers.get_mut(window_label) else {
         return Ok(Value::Null);
     };
+    if let Some((owner, _)) = expected {
+        if owner.window_id != window_label
+            || publisher.active_project_session_id.as_deref() != Some(&owner.document_id)
+            || engine.active_project_session_id() != owner.document_id
+            || !publisher
+                .by_project
+                .get(&owner.document_id)
+                .is_some_and(|project| project.native_interface_epoch == owner.epoch)
+        {
+            return Err("The control request's document was replaced before it could run".into());
+        }
+    }
     let session_id = if let Some(response) = response.as_ref() {
         let requested = response
             .get("session_id")
@@ -1724,47 +1792,8 @@ fn control_for_window(
         let _ = fs::remove_file(request);
         return Ok(Value::Null);
     }
-    let Ok(entries) = fs::read_dir(&dir) else {
-        return Ok(Value::Null);
-    };
-    let mut paths = entries
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .is_some_and(|n| n.to_string_lossy().ends_with(".request.json"))
-        })
-        .collect::<Vec<_>>();
-    paths.sort();
-    for path in paths {
-        let Ok(body) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(mut request) = serde_json::from_str::<Value>(&body) else {
-            continue;
-        };
-        if !request.is_object() {
-            let _ = fs::remove_file(path);
-            continue;
-        }
-        let valid_id = request.get("id").and_then(Value::as_str).is_some_and(|id| {
-            !id.is_empty()
-                && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
-                && path
-                    .file_name()
-                    .is_some_and(|name| name == format!("{id}.request.json").as_str())
-        });
-        if !valid_id {
-            let _ = fs::remove_file(path);
-            continue;
-        }
-        if request
-            .get("expires_ms")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            < now_ms()
-        {
-            let _ = fs::remove_file(path);
+    for (path, mut request) in pending_control_requests(&dir) {
+        if expected.is_some_and(|(_, id)| request["id"].as_str() != Some(id)) {
             continue;
         }
         request["session_id"] = json!(session_id);
@@ -1859,6 +1888,79 @@ fn control_for_window(
     Ok(Value::Null)
 }
 
+/// Filesystem-only discovery shared by normal control dispatch and native
+/// busy rejection. It performs no model operation or publisher lock access.
+fn pending_control_requests(dir: &Path) -> Vec<(PathBuf, Value)> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(".request.json"))
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            let request: Value = serde_json::from_str(&fs::read_to_string(&path).ok()?).ok()?;
+            let id = request["id"].as_str();
+            let valid = id.is_some_and(|id| {
+                !id.is_empty()
+                    && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+                    && path
+                        .file_name()
+                        .is_some_and(|name| name == format!("{id}.request.json").as_str())
+            });
+            if !valid || request["expires_ms"].as_u64().unwrap_or(0) < now_ms() {
+                let _ = fs::remove_file(&path);
+                return None;
+            }
+            if dir.join(format!("{}.result.json", id.unwrap())).exists() {
+                return None;
+            }
+            Some((path, request))
+        })
+        .collect()
+}
+
+#[cfg(feature = "dev-bevy-host")]
+fn reject_native_control(session: &str, id: &str, code: &str, reason: &str) -> Result<(), String> {
+    let dir = session_root().join(session).join("controls");
+    if let Some((path, _)) = pending_control_requests(&dir)
+        .into_iter()
+        .find(|(_, request)| request["id"].as_str() == Some(id))
+    {
+        atomic_write(
+            &dir.join(format!("{id}.result.json")),
+            &json!({"status":"failed", "code":code, "mutation_applied":false, "error":reason})
+                .to_string(),
+        )?;
+        let _ = fs::remove_file(path);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "dev-bevy-host")]
+fn reject_busy_controls(session: &str, except_id: Option<&str>) -> Result<(), String> {
+    let dir = session_root().join(session).join("controls");
+    for (path, request) in pending_control_requests(&dir) {
+        let id = request["id"].as_str().expect("validated control id");
+        if except_id == Some(id) {
+            continue;
+        }
+        atomic_write(&dir.join(format!("{id}.result.json")), &json!({
+            "status":"failed", "code":"native_busy", "mutation_applied":false,
+            "error":"A modeling operation is still running. This request was not applied; retry after it completes."
+        }).to_string())?;
+        let _ = fs::remove_file(path);
+    }
+    Ok(())
+}
+
 /// Refresh `heartbeat.json` only — no model export / generation bump.
 #[tauri::command]
 pub fn mcp_session_bridge_heartbeat(
@@ -1913,7 +2015,7 @@ mod tests {
     use super::*;
 
     /// Serialize bridge tests because they share `NBCAD_SESSION_DIR`.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    pub(super) static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn reserve(state: &SessionBridgeState, window_label: &str) -> (String, u64) {
         let result = state.reserve_for_window(window_label).unwrap();

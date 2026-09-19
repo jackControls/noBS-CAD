@@ -4,7 +4,7 @@
  * run in local development and release CI before dependencies are installed.
  */
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,10 +14,10 @@ const camSourcePath = resolve(root, 'src/components/cam/CamToolIcon.tsx');
 const brandPath = resolve(root, 'public/app-icon.svg');
 const provenancePath = resolve(root, 'docs/ICON_PROVENANCE.md');
 const [source, camSource, brand, provenance] = await Promise.all([
-  readFile(sourcePath, 'utf8'),
-  readFile(camSourcePath, 'utf8'),
-  readFile(brandPath, 'utf8'),
-  readFile(provenancePath, 'utf8'),
+  readFile(sourcePath, 'utf8').then(text => text.replaceAll('\r\n', '\n')),
+  readFile(camSourcePath, 'utf8').then(text => text.replaceAll('\r\n', '\n')),
+  readFile(brandPath, 'utf8').then(text => text.replaceAll('\r\n', '\n')),
+  readFile(provenancePath, 'utf8').then(text => text.replaceAll('\r\n', '\n')),
 ]);
 
 const glyphBlock = source.match(
@@ -67,6 +67,18 @@ const forbiddenAssets = forbiddenAssetPatterns
   .map(([, description]) => description);
 
 const problems = [];
+// Shared vector sources are rendered by both React and Rust. Inspect the
+// actual sources as well as the registry so moving a glyph cannot bypass this audit.
+const sharedDir = resolve(root, 'src/assets/ribbon-icons');
+for (const name of await readdir(sharedDir)) {
+  const svg = await readFile(resolve(sharedDir, name), 'utf8');
+  if (!name.endsWith('.svg') || !svg.includes('viewBox="0 0 24 24"')) {
+    problems.push(`Invalid shared ribbon vector: ${name}`);
+  }
+  if (/<(?:image|script|foreignObject)\b|\bon\w+\s*=|\b(?:href|xlink:href)\s*=|data:image\//i.test(svg)) {
+    problems.push(`Shared ribbon vector contains executable or external content: ${name}`);
+  }
+}
 if (undocumented.length) problems.push(`Undocumented custom icons: ${undocumented.join(', ')}`);
 if (stale.length) problems.push(`Documented icons absent from source: ${stale.join(', ')}`);
 if (duplicates.length) problems.push(`Duplicate source icon IDs: ${unique(duplicates).join(', ')}`);

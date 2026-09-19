@@ -10,6 +10,8 @@ repository = "https://github.com/jackControls/noBS-CAD"
 [workspace]
 
 [dependencies]
+nbcad-build-info = { path = "../crates/build-info" }
+nbcad-interface = { path = "../crates/interface" }
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }

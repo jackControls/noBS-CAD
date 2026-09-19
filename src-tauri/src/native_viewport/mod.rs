@@ -17,14 +17,28 @@ mod platform;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub(crate) use platform::script_preview;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod interface_shell;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod profile_outline;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod ui;
+#[cfg(feature = "dev-bevy-host")]
+pub(crate) use platform::apply_interface_viewport;
+#[cfg(all(test, feature = "dev-bevy-host"))]
+pub(crate) use platform::interface_scene_fixture;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub(crate) use platform::{
+    apply_interface_model, apply_interface_preview, apply_interface_view, interface_body_transform,
+    interface_pick, interface_preview_revision, interface_preview_snapshot, interface_sketch_point,
+    interface_view_snapshot, interface_visible_occurrences, interface_world_point,
+};
 #[cfg(all(
     any(target_os = "macos", target_os = "windows", target_os = "linux"),
     feature = "dev-ui-lab"
 ))]
 pub mod ui_lab;
+#[cfg(feature = "dev-bevy-host")]
+pub mod winit_host;
 
 use nbcad_core::BodyAppearance;
 use nbcad_sketch::{BodyPoseDto, InstanceBodyPoseDto, SketchDto};
@@ -101,12 +115,12 @@ impl Default for ViewportPalette {
     fn default() -> Self {
         Self {
             background: [42.0 / 255.0, 45.0 / 255.0, 51.0 / 255.0],
-            panel: [34.0 / 255.0, 38.0 / 255.0, 44.0 / 255.0],
-            header: [40.0 / 255.0, 45.0 / 255.0, 52.0 / 255.0],
+            panel: [35.0 / 255.0, 38.0 / 255.0, 43.0 / 255.0],
+            header: [43.0 / 255.0, 46.0 / 255.0, 53.0 / 255.0],
             ui_edge: [58.0 / 255.0, 62.0 / 255.0, 70.0 / 255.0],
-            ink: [231.0 / 255.0, 235.0 / 255.0, 239.0 / 255.0],
-            mute: [154.0 / 255.0, 163.0 / 255.0, 173.0 / 255.0],
-            accent: [124.0 / 255.0, 109.0 / 255.0, 242.0 / 255.0],
+            ink: [215.0 / 255.0, 220.0 / 255.0, 226.0 / 255.0],
+            mute: [154.0 / 255.0, 160.0 / 255.0, 168.0 / 255.0],
+            accent: [116.0 / 255.0, 99.0 / 255.0, 216.0 / 255.0],
             grid_fine: [58.0 / 255.0, 63.0 / 255.0, 71.0 / 255.0],
             grid_major: [77.0 / 255.0, 84.0 / 255.0, 95.0 / 255.0],
             body: [139.0 / 255.0, 155.0 / 255.0, 172.0 / 255.0],
@@ -326,7 +340,7 @@ impl Default for ViewportHud {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportCamera {
     pub position: [f32; 3],
@@ -657,6 +671,21 @@ pub struct NativeViewport {
 }
 
 impl NativeViewport {
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    pub fn interface(&self) -> interface_shell::NativeInterfaceHandle {
+        self.inner.interface()
+    }
+
+    /// Apply retained interface changes on the one native renderer thread.
+    /// The caller supplies the existing application's typed reducer/view model.
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    pub(crate) fn update_interface(
+        &self,
+        update: impl FnOnce(&mut bevy::prelude::World) + Send + 'static,
+    ) -> Result<(), String> {
+        self.inner.update_interface(update)
+    }
+
     pub fn install(app: &mut App) -> Result<Self, String> {
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
