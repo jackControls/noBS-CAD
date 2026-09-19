@@ -22,3 +22,8 @@ members = [
     "crates/wasm",
     "xtask",
 ]
+
+# The repository version lives in VERSION and is propagated here by
+# `node scripts/sync-version.mjs`; every member inherits it.
+[workspace.package]
+version = "0.2.0"

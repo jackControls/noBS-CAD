@@ -1,6 +1,6 @@
 [package]
 name = "nbcad-occt"
-version = "0.2.0"
+version.workspace = true
 edition = "2021"
 description = "Native Open CASCADE adapter for noBS CAD"
 license = "LGPL-2.1-or-later"

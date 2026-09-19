@@ -692,33 +692,6 @@ fn shared_line_arc_endpoint_radial(
     if !matches!(sketch.entity(arc), Some(Entity::Arc { .. })) {
         return None;
     }
-    // Trimmed fillets/chamfers can intentionally consume and later reopen a
-    // carrier. Their arcs have two tangent carriers and rely on the generic
-    // support-line equation through that topology transition. The endpoint
-    // directional form is for the single connected tangent inferred while
-    // authoring an ordinary arc.
-    let tangent_lines: Vec<_> = sketch
-        .constraints()
-        .filter_map(|(_, constraint)| match *constraint {
-            Constraint::Tangent { a, b } if a == arc => Some(b),
-            Constraint::Tangent { a, b } if b == arc => Some(a),
-            _ => None,
-        })
-        .collect();
-    // A capsule has two explicitly parallel carriers. It has no corner to
-    // consume, and needs endpoint-direction tangency on both arcs: distance
-    // tangency otherwise reports four spurious DOFs at the exact semicircles.
-    // Keep the generic support equations for corner fillets and their reopen
-    // transitions.
-    let capsule = tangent_lines.len() == 2
-        && sketch.constraints().any(|(_, c)| {
-            matches!(*c, Constraint::Parallel { a, b }
-            if (a == tangent_lines[0] && b == tangent_lines[1])
-                || (b == tangent_lines[0] && a == tangent_lines[1]))
-        });
-    if tangent_lines.len() != 1 && !capsule {
-        return None;
-    }
     let (resolved_start, resolved_end) = sketch.resolved_line(line)?;
     if resolved_start.distance(resolved_end) < DEGENERATE_LINE_EPS {
         return None;
@@ -736,6 +709,13 @@ fn shared_line_arc_endpoint_radial(
             }
             _ => None,
         })?;
+    // A fillet retains its original corner as a point incident to both
+    // carriers. Keep support-line tangency for that topology so consumed
+    // carriers can reopen. Two tangencies alone do not identify a fillet:
+    // ordinary arcs need the well-conditioned endpoint equation at both ends.
+    if trim_origin_for_endpoint(sketch, line, point).is_some() {
+        return None;
+    }
     let center = map.pt(sketch, arc)?;
     let endpoint = map.pt(sketch, point)?;
     Some(Diff {
@@ -2300,25 +2280,10 @@ pub(crate) fn solve_with_stays(
     )
 }
 
-/// Whether one endpoint is owned by a modify-tool trim. Fillets mark the
-/// endpoint with `ArcEndpointCoincident`; chamfers mark it as one of the two
-/// `EqualDistance` targets.
+/// Only a retained trim corner permits a carrier to collapse. An ordinary
+/// line joined tangentially to an arc must keep the normal collapse guard.
 fn endpoint_is_trimmed(sketch: &Sketch, line: EntityId, point: EntityId) -> bool {
-    sketch
-        .constraints()
-        .any(|(_, constraint)| match *constraint {
-            Constraint::ArcEndpointCoincident { point: p, arc, .. } if p == point => {
-                sketch.constraints().any(|(_, tangent)| {
-                    matches!(
-                        tangent,
-                        Constraint::Tangent { a, b }
-                            if (*a == line && *b == arc) || (*a == arc && *b == line)
-                    )
-                })
-            }
-            Constraint::EqualDistance { a, b, .. } => a == point || b == point,
-            _ => false,
-        })
+    trim_origin_for_endpoint(sketch, line, point).is_some()
 }
 
 /// Internal trim ownership distinguishes a valid topology transition from an

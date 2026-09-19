@@ -39,6 +39,10 @@ jobs:
         run: |
           node --test scripts/check-knowledge.test.mjs
           node scripts/check-knowledge.mjs
+      # Runs for pull requests too: `knowledge/**` may only pin a release that is
+      # already public, otherwise the deploy below fails later on main instead.
+      - name: Verify the pinned showcase release is public
+        run: node scripts/stage-showcase-media.mjs --verify
       - name: Build static knowledge site
         run: |
           rm -rf _site

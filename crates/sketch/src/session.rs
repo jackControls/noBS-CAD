@@ -1524,15 +1524,23 @@ impl SketchSession {
         }
     }
 
-    fn attach_arc_endpoint_if_acquired(
+    /// Every authored arc exposes real points for selection, dragging and
+    /// later line snaps. A free pick gets its own point; only an intentional
+    /// acquisition shares an existing point (so Ctrl still suppresses it).
+    fn attach_arc_endpoint(
         &mut self,
         arc: EntityId,
         end: crate::constraint::ArcEndpoint,
         position: Vec2,
         target: SnapTarget,
-    ) -> Result<Option<EntityId>, SessionError> {
+    ) -> Result<EntityId, SessionError> {
         let Some(point) = self.materialize_acquired_point(position, target) else {
-            return Ok(None);
+            let point = self.sketch.add_entity(Entity::Point { position });
+            // The two new point variables are determined by these two
+            // equations. This adds a handle without changing the arc's DOF.
+            self.sketch
+                .add_constraint(Constraint::ArcEndpointCoincident { point, arc, end });
+            return Ok(point);
         };
         let relation = Constraint::ArcEndpointCoincident { point, arc, end };
         if !self.has_relation(&relation)
@@ -1542,7 +1550,7 @@ impl SketchSession {
                 "Cannot preserve the acquired arc endpoint".to_string(),
             ));
         }
-        Ok(Some(point))
+        Ok(point)
     }
 
     fn attach_curve_point_if_acquired(
@@ -2813,7 +2821,7 @@ impl SketchSession {
             start_angle,
             end_angle,
         });
-        let start_point = match self.attach_arc_endpoint_if_acquired(
+        let start_point = match self.attach_arc_endpoint(
             id,
             crate::constraint::ArcEndpoint::Start,
             start_pick.0,
@@ -2826,7 +2834,7 @@ impl SketchSession {
                 return Err(error);
             }
         };
-        let end_point = match self.attach_arc_endpoint_if_acquired(
+        let end_point = match self.attach_arc_endpoint(
             id,
             crate::constraint::ArcEndpoint::End,
             end_pick.0,
@@ -2845,12 +2853,8 @@ impl SketchSession {
             return Err(error);
         }
         if !ctrl_held {
-            if let Some(point) = start_point {
-                self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::Start, point);
-            }
-            if let Some(point) = end_point {
-                self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::End, point);
-            }
+            self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::Start, start_point);
+            self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::End, end_point);
         }
         self.recompute();
         self.push_command(before);
@@ -2898,7 +2902,7 @@ impl SketchSession {
             end_angle,
         });
         self.attach_curve_center_if_acquired(id, center_target);
-        let start_point = match self.attach_arc_endpoint_if_acquired(
+        let start_point = match self.attach_arc_endpoint(
             id,
             crate::constraint::ArcEndpoint::Start,
             start,
@@ -2917,30 +2921,27 @@ impl SketchSession {
         // here would move an off-radius point (or distort the arc) merely
         // because it happened to provide the intended angular direction.
         let sweep_is_endpoint = (center.distance(sweep) - radius).abs() <= MERGE_EPS;
-        let end_point = if sweep_is_endpoint {
-            match self.attach_arc_endpoint_if_acquired(
-                id,
-                crate::constraint::ArcEndpoint::End,
-                sweep,
-                sweep_target,
-            ) {
-                Ok(point) => point,
-                Err(error) => {
-                    self.sketch.restore(before);
-                    self.recompute();
-                    return Err(error);
-                }
+        let end_position = center + Vec2::new(radius * end_angle.cos(), radius * end_angle.sin());
+        let end_point = match self.attach_arc_endpoint(
+            id,
+            crate::constraint::ArcEndpoint::End,
+            end_position,
+            if sweep_is_endpoint {
+                sweep_target
+            } else {
+                SnapTarget::None
+            },
+        ) {
+            Ok(point) => point,
+            Err(error) => {
+                self.sketch.restore(before);
+                self.recompute();
+                return Err(error);
             }
-        } else {
-            None
         };
         if !ctrl_held {
-            if let Some(point) = start_point {
-                self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::Start, point);
-            }
-            if let Some(point) = end_point {
-                self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::End, point);
-            }
+            self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::Start, start_point);
+            self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::End, end_point);
         }
         self.recompute();
         self.push_command(before);
@@ -4408,6 +4409,29 @@ impl SketchSession {
                             curve_centers.insert(a);
                         }
                         _ => {}
+                    }
+                    // Adding contact at the other end of an arc can move
+                    // its already-tangent line too. Preserve that carrier's
+                    // length as well: otherwise the nonlinear solve can
+                    // collapse a short peer while fitting the new contact.
+                    for (_, relation) in self.sketch.constraints() {
+                        let Constraint::Tangent {
+                            a: first,
+                            b: second,
+                        } = *relation
+                        else {
+                            continue;
+                        };
+                        let peer = if first == a || first == b {
+                            second
+                        } else if second == a || second == b {
+                            first
+                        } else {
+                            continue;
+                        };
+                        if matches!(self.sketch.entity(peer), Some(Entity::Line { .. })) {
+                            line_lengths.insert(peer);
+                        }
                     }
                 }
 

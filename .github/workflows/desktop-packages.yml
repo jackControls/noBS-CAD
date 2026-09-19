@@ -242,6 +242,11 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Read the application version
+        id: app_version
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
       - name: Set up Rust targets
         shell: pwsh
         run: |
@@ -363,7 +368,7 @@ jobs:
       - name: Upload portable release
         uses: actions/upload-artifact@v4
         with:
-          name: noBS-CAD-0.2.0-windows-${{ matrix.architecture }}
+          name: noBS-CAD-${{ steps.app_version.outputs.version }}-windows-${{ matrix.architecture }}
           path: |
             src-tauri/target/${{ matrix.rust_target }}/release/bundle/portable/*.zip
             src-tauri/target/${{ matrix.rust_target }}/release/bundle/portable/*.sha256
@@ -390,6 +395,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      - name: Read the application version
+        id: app_version
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust targets
         shell: bash
@@ -535,7 +545,7 @@ jobs:
       - name: Upload Ubuntu release
         uses: actions/upload-artifact@v4
         with:
-          name: noBS-CAD-0.2.0-ubuntu-26.04-x64
+          name: noBS-CAD-${{ steps.app_version.outputs.version }}-ubuntu-26.04-x64
           path: |
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/deb/*.deb.sha256
@@ -580,6 +590,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      - name: Read the application version
+        id: app_version
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust targets
         shell: bash
@@ -805,7 +820,7 @@ jobs:
       - name: Upload Apple silicon release
         uses: actions/upload-artifact@v4
         with:
-          name: noBS-CAD-0.2.0-macos-arm64
+          name: noBS-CAD-${{ steps.app_version.outputs.version }}-macos-arm64
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
             src-tauri/target/release/bundle/dmg/*.sha256
