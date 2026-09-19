@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::native_viewport::winit_host::{cancel_native_pointer, prepare_native_input, Modifiers};
-use crate::session_bridge::native_interface::reduce_control_input;
+use crate::session_bridge::native_interface::controller::reduce_control_input;
 use bevy::{
     input::mouse::MouseButtonInput,
     window::{CursorMoved, PrimaryWindow},
@@ -93,7 +93,7 @@ pub(crate) fn drive(
         if !inside(bounds, point) {
             return Err("Point is outside the canvas".into());
         }
-        if handle.hit_key(point).is_some() {
+        if handle.owns_pointer(point) {
             return Err("A native control covers that canvas point".into());
         }
     }

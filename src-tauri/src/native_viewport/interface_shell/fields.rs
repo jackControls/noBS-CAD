@@ -75,15 +75,12 @@ pub(crate) fn spawn_text_field(
                 theme,
             },
             EditableText::new(value),
-<<<<<<< HEAD
             InterfaceTextRevision::default(),
-=======
             // `EditableText` does not require this component, but both our
             // `update_ime` query and Bevy's own `scroll_editable_text` do. A
             // field without it is invisible to the IME, so `ime_enabled` can
             // never turn on and the OS never delivers preedit/commit events.
             TextScroll(Vec2::ZERO),
->>>>>>> origin/feat/bevy-interface
             control,
             node,
             UiTargetCamera(camera),

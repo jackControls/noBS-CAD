@@ -449,10 +449,10 @@ pub(crate) fn process_one(
                 editor.press = None;
                 clear_preview(world, &services.engine, &services.bridge, &frame.context)?;
             }
-            WindowEvent::CursorMoved(event) if editor.draft.tool.is_some() => {
+            WindowEvent::CursorMoved(moved) if editor.draft.tool.is_some() => {
                 let Some(basis) = editor.stamp.as_ref().and_then(|stamp| stamp.basis) else { return Ok(result); };
                 let Some(canvas) = frame.canvases.iter().find(|canvas| canvas.name == "viewport") else { return Ok(result); };
-                let cursor = event.position;
+                let cursor = moved.position;
                 if f64::from(cursor.x) < canvas.bounds.x || f64::from(cursor.x) >= canvas.bounds.x+canvas.bounds.width
                     || f64::from(cursor.y) < canvas.bounds.y || f64::from(cursor.y) >= canvas.bounds.y+canvas.bounds.height {
                     clear_preview(world, &services.engine, &services.bridge, &frame.context)?;
@@ -523,6 +523,12 @@ pub(crate) fn process_one(
                     };
                     if owner != frame.context || !in_canvas || start.distance(cursor) > 3. {
                         return Ok(result);
+                    }
+                    if let Some(value) = crate::session_bridge::native_interface::extrude::handle_canvas_pick(
+                        world, services, &owner,
+                        [cursor.x-canvas.bounds.x as f32,cursor.y-canvas.bounds.y as f32],
+                    )? {
+                        return Ok(value);
                     }
                     let Some(basis) = editor.stamp.as_ref().and_then(|stamp| stamp.basis) else {
                         return Ok(result);
@@ -714,6 +720,7 @@ mod tests {
             owner,
             revision: 2,
             sketch: Some("Sketch1".into()),
+            basis: None,
         };
         synchronize_stamp(&mut editor, current.clone());
         // A rejected commit reports its failure without advancing the stamp,

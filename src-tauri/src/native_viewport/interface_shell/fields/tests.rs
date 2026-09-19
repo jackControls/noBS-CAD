@@ -113,6 +113,10 @@ fn editor_fixture() -> (App, NativeInterfaceHandle, Entity) {
     app.world_mut()
         .run_system_cached(bevy::ui::widget::update_editable_text_styles)
         .unwrap();
+    app.init_resource::<Assets<Image>>();
+    app.world_mut()
+        .run_system_cached(bevy::ui::widget::update_editable_text_layout)
+        .unwrap();
     let action = handle
         .resolve_retained(ControlKey(entity.to_bits()))
         .unwrap();

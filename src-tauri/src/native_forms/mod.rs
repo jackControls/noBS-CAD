@@ -6,6 +6,5 @@ mod measurement;
 
 pub(crate) use extrude::{
     ApplyTicket, ExtrudeField, ExtrudeFieldView, ExtrudeForm, ExtrudeSource, FormModel,
-    PreviewTicket,
 };
 pub(crate) use measurement::{DimensionKind, MeasurementInput, ParameterValue};

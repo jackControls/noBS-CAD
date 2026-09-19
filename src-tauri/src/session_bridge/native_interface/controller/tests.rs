@@ -2,6 +2,56 @@ use super::super::tests::Fixture;
 use super::*;
 use std::fs;
 
+#[test]
+fn both_exit_routes_publish_a_valid_close_confirmation_for_dirty_work() {
+    let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let services = NativeServices {
+        engine: fixture.engine.clone(),
+        bridge: fixture.bridge.clone(),
+    };
+    let mut app = native_viewport::interface_scene_fixture();
+    app.insert_resource(ViewportUiAssets::default());
+    app.world_mut().spawn((Window::default(), PrimaryWindow));
+    app.world_mut().spawn(InterfaceCamera);
+    let handle = NativeInterfaceHandle::new(|| {});
+    for ui in [
+        json!({"action":"file","command":"exit"}),
+        json!({"action":"window","mode":"close"}),
+    ] {
+        let mut state = Controller::new("main".into(), None, Arc::new(AtomicBool::new(false)));
+        // A different initial document is dirty even if it has the same name.
+        let result = apply_control(
+            app.world_mut(),
+            &handle,
+            &services,
+            &mut state,
+            &fixture.owner(),
+            &json!({"expires_ms":now_ms()+30_000,"ui":ui}),
+        )
+        .unwrap();
+        assert_eq!(result["awaiting_input"], true);
+        assert!(!state.exit_after_receipt);
+        synchronize(app.world_mut(), &handle, &services, &mut state).unwrap();
+        interface_shell::tests::publish_layout_once(app.world_mut(), handle.clone());
+        let frame = handle.frame().unwrap();
+        let mut registry = nbcad_interface::SurfaceRegistry::new();
+        registry
+            .replace(
+                frame.context,
+                nbcad_interface::SurfaceFrame {
+                    client: frame.client,
+                    surfaces: frame.surfaces,
+                    canvases: frame.canvases,
+                    modal_stack: frame.modal_stack,
+                    ..Default::default()
+                },
+            )
+            .expect("The real close frame must be inspectable, not stuck awaiting layout");
+        assert_eq!(registry.frame().modal_stack, vec!["close-document"]);
+    }
+}
+
 fn prepare(fixture: &Fixture) -> (App, NativeInterfaceHandle, Entity) {
     let (mut app, handle, entity, _) = interface_shell::tests::fixture();
     let mut frame = handle.frame().unwrap();

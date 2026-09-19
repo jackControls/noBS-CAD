@@ -101,6 +101,11 @@ pub struct InterfaceControl {
 #[derive(Component, Default)]
 pub(crate) struct InterfaceTextRevision(pub u64);
 
+/// A painted panel blocks model picking without inventing an actionable
+/// control for its background. Its children retain normal control semantics.
+#[derive(Component)]
+pub(crate) struct InterfaceOccluder;
+
 impl InterfaceControl {
     pub fn button(surface: impl Into<String>, label: impl Into<String>) -> Self {
         Self {
@@ -170,7 +175,7 @@ struct Shared {
     registry: SurfaceRegistry,
     desired_frame: Option<InterfaceFrame>,
     presented_frame: Option<InterfaceFrame>,
-    hit_order: Vec<(ControlKey, InterfaceRect)>,
+    hit_order: Vec<(Option<ControlKey>, InterfaceRect)>,
     receipt: RenderReceipt,
     submission_waiter: Option<u64>,
     render_dirty: bool,
@@ -476,6 +481,15 @@ impl NativeInterfaceHandle {
         hit(&shared, point)
     }
 
+    pub(crate) fn owns_pointer(&self, point: [f64; 2]) -> bool {
+        self.shared.lock().is_ok_and(|shared| {
+            shared
+                .hit_order
+                .iter()
+                .any(|(_, rect)| contains_point(*rect, point))
+        })
+    }
+
     pub fn take_modal_keys(&self) -> Result<Vec<NativeModalKey>, String> {
         Ok(self
             .shared
@@ -619,7 +633,12 @@ impl NativeInterfaceHandle {
         let key = hit(&shared, position);
         let had_capture = shared.capture.is_some();
         let old_hovered = shared.hovered;
-        let consumed = had_capture || key.is_some() || has_modal(&shared);
+        let consumed = had_capture
+            || shared
+                .hit_order
+                .iter()
+                .any(|(_, rect)| contains_point(*rect, position))
+            || has_modal(&shared);
         match phase {
             PointerPhase::Move => shared.hovered = key,
             PointerPhase::Leave => shared.hovered = None,
@@ -862,7 +881,7 @@ fn hit(shared: &Shared, point: [f64; 2]) -> Option<ControlKey> {
         .iter()
         .rev()
         .find(|(_, rect)| contains_point(*rect, point))
-        .map(|(key, _)| *key)
+        .and_then(|(key, _)| *key)
 }
 
 fn valid_rect(rect: InterfaceRect) -> bool {
@@ -1079,6 +1098,17 @@ fn publish_layout(
         Option<&bevy::text::EditableText>,
         Option<Ref<InterfaceTextRevision>>,
     )>,
+    occluders: Query<
+        (
+            Ref<ComputedNode>,
+            Ref<UiGlobalTransform>,
+            Ref<ComputedStackIndex>,
+            Option<Ref<CalculatedClip>>,
+            Ref<InheritedVisibility>,
+        ),
+        With<InterfaceOccluder>,
+    >,
+    mut removed_occluders: RemovedComponents<InterfaceOccluder>,
     mut removed: RemovedComponents<InterfaceControl>,
     mut removed_clips: RemovedComponents<CalculatedClip>,
     mut last_revision: Local<Option<u64>>,
@@ -1086,9 +1116,20 @@ fn publish_layout(
     let Ok(mut shared) = handle.shared.lock() else {
         return;
     };
-    let removed = removed.read().count() > 0 || removed_clips.read().count() > 0;
+    let removed = removed.read().count() > 0
+        || removed_clips.read().count() > 0
+        || removed_occluders.read().count() > 0;
     if *last_revision == Some(shared.revision)
         && !removed
+        && !occluders
+            .iter()
+            .any(|(node, transform, stack, clip, visibility)| {
+                node.is_changed()
+                    || transform.is_changed()
+                    || stack.is_changed()
+                    || clip.as_ref().is_some_and(|clip| clip.is_changed())
+                    || visibility.is_changed()
+            })
         && !controls.iter().any(
             |(_, control, node, transform, stack, clip, visibility, _, text)| {
                 control.is_changed()
@@ -1202,10 +1243,62 @@ fn publish_layout(
         )
         .collect();
     stacked.sort_by_key(|(stack, _)| *stack);
-    let hits: Vec<_> = stacked
+    let mut hits: Vec<_> = stacked
         .iter()
         .filter(|(_, control)| control.visible)
-        .map(|(_, control)| (control.key, control.bounds))
+        .map(|(stack, control)| (*stack, Some(control.key), control.bounds))
+        .collect();
+    for (node, transform, stack, clip, visibility) in &occluders {
+        if !visibility.get() {
+            continue;
+        }
+        let half = node.size() * 0.5;
+        let corners = [
+            Vec2::new(-half.x, -half.y),
+            Vec2::new(half.x, -half.y),
+            Vec2::new(half.x, half.y),
+            Vec2::new(-half.x, half.y),
+        ]
+        .map(|point| transform.transform_point2(point));
+        let scale = f64::from(node.inverse_scale_factor());
+        let min = corners
+            .into_iter()
+            .fold(Vec2::splat(f32::INFINITY), Vec2::min)
+            .as_dvec2()
+            * scale;
+        let max = corners
+            .into_iter()
+            .fold(Vec2::splat(f32::NEG_INFINITY), Vec2::max)
+            .as_dvec2()
+            * scale;
+        let mut bounds = intersection(
+            InterfaceRect {
+                x: frame.surface.x + min.x,
+                y: frame.surface.y + min.y,
+                width: max.x - min.x,
+                height: max.y - min.y,
+            },
+            frame.surface,
+        );
+        if let Some(clip) = clip {
+            bounds = intersection(
+                bounds,
+                InterfaceRect {
+                    x: frame.surface.x + f64::from(clip.clip.min.x) * scale,
+                    y: frame.surface.y + f64::from(clip.clip.min.y) * scale,
+                    width: f64::from(clip.clip.width()) * scale,
+                    height: f64::from(clip.clip.height()) * scale,
+                },
+            );
+        }
+        if bounds.width > 0. && bounds.height > 0. {
+            hits.push((stack.0, None, bounds));
+        }
+    }
+    hits.sort_by_key(|(stack, _, _)| *stack);
+    let hits = hits
+        .into_iter()
+        .map(|(_, key, bounds)| (key, bounds))
         .collect();
     let mut published: Vec<_> = stacked.into_iter().map(|(_, control)| control).collect();
     // Stable keyboard traversal independent of ECS archetype movement.

@@ -20,11 +20,11 @@ use crate::{
 pub(crate) use crate::native_forms::{ExtrudeField, ExtrudeFieldView};
 
 mod apply;
-mod preview;
 #[cfg(feature = "dev-bevy-host")]
 pub(crate) mod panel;
 #[cfg(feature = "dev-bevy-host")]
 mod picking;
+mod preview;
 #[cfg(feature = "dev-bevy-host")]
 pub(crate) use picking::handle_canvas_pick;
 
@@ -364,7 +364,10 @@ pub(crate) fn reduce(
     if (field_edit
         && !matches!(
             input,
-            ControlInput::SetValue(_) | ControlInput::Click | ControlInput::DoubleClick | ControlInput::Key(_)
+            ControlInput::SetValue(_)
+                | ControlInput::Click
+                | ControlInput::DoubleClick
+                | ControlInput::Key(_)
         ))
         || (!field_edit && !super::is_activation(input))
     {
@@ -506,7 +509,10 @@ fn reduce_owned(
         let model = editor.snapshot.model(editor.form.source());
         match action {
             ExtrudeControl::Field(field) => {
-                let row = editor.form.fields(&model).into_iter()
+                let row = editor
+                    .form
+                    .fields(&model)
+                    .into_iter()
                     .find(|row| row.field == *field && row.visible && row.enabled)
                     .ok_or("This Extrude field is not available")?;
                 match (input, row.value) {
@@ -517,38 +523,69 @@ fn reduce_owned(
                     (input, nbcad_interface::Field::Text { .. }) if super::is_activation(input) => {
                         return Ok(json!({"form_id":form_id,"focused":true}));
                     }
-                    (input, nbcad_interface::Field::Toggle(value)) if super::is_activation(input) => {
-                        editor.form.set_value(*field, if value {"false"} else {"true"}, &model)?;
+                    (input, nbcad_interface::Field::Toggle(value))
+                        if super::is_activation(input) =>
+                    {
+                        editor.form.set_value(
+                            *field,
+                            if value { "false" } else { "true" },
+                            &model,
+                        )?;
                     }
                     (input, nbcad_interface::Field::Choice { value, options }) => {
                         if super::is_activation(input) {
-                            editor.choice_field = (editor.choice_field != Some(*field)).then_some(*field);
-                            return Ok(json!({"form_id":form_id,"choices_open":editor.choice_field.is_some()}));
+                            editor.choice_field =
+                                (editor.choice_field != Some(*field)).then_some(*field);
+                            return Ok(
+                                json!({"form_id":form_id,"choices_open":editor.choice_field.is_some()}),
+                            );
                         }
-                        let ControlInput::Key(key) = input else { return Err("Choose an available field value".into()); };
-                        if key.ctrl || key.meta || key.alt || key.shift { return Err("This field key is not supported".into()); }
-                        let options: Vec<_> = options.iter().filter(|option| !option.disabled).collect();
-                        let index = options.iter().position(|option| option.value == value).unwrap_or(0);
+                        let ControlInput::Key(key) = input else {
+                            return Err("Choose an available field value".into());
+                        };
+                        if key.ctrl || key.meta || key.alt || key.shift {
+                            return Err("This field key is not supported".into());
+                        }
+                        let options: Vec<_> =
+                            options.iter().filter(|option| !option.disabled).collect();
+                        let index = options
+                            .iter()
+                            .position(|option| option.value == value)
+                            .unwrap_or(0);
                         let next = match key.key.as_str() {
-                            "ArrowDown" => index.saturating_add(1).min(options.len().saturating_sub(1)),
+                            "ArrowDown" => {
+                                index.saturating_add(1).min(options.len().saturating_sub(1))
+                            }
                             "ArrowUp" => index.saturating_sub(1),
                             "Home" => 0,
                             "End" => options.len().saturating_sub(1),
                             _ => return Err("This field key is not supported".into()),
                         };
-                        let option = options.get(next).ok_or("This field has no available choices")?;
+                        let option = options
+                            .get(next)
+                            .ok_or("This field has no available choices")?;
                         editor.form.set_value(*field, &option.value, &model)?;
                     }
                     _ => return Err("This input does not match the Extrude field".into()),
                 }
             }
             ExtrudeControl::Choose { field, option } => {
-                if editor.choice_field != Some(*field) { return Err("This choice list is closed".into()); }
-                let row = editor.form.fields(&model).into_iter()
+                if editor.choice_field != Some(*field) {
+                    return Err("This choice list is closed".into());
+                }
+                let row = editor
+                    .form
+                    .fields(&model)
+                    .into_iter()
                     .find(|row| row.field == *field && row.visible && row.enabled)
                     .ok_or("This Extrude field is not available")?;
-                let nbcad_interface::Field::Choice { options, .. } = row.value else { return Err("This field has no choices".into()); };
-                let option = options.get(*option).filter(|option| !option.disabled).ok_or("This field choice is not available")?;
+                let nbcad_interface::Field::Choice { options, .. } = row.value else {
+                    return Err("This field has no choices".into());
+                };
+                let option = options
+                    .get(*option)
+                    .filter(|option| !option.disabled)
+                    .ok_or("This field choice is not available")?;
                 editor.form.set_value(*field, &option.value, &model)?;
                 editor.choice_field = None;
             }

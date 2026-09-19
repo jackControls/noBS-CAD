@@ -1,6 +1,11 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+pub(crate) fn publish_layout_once(world: &mut World, handle: NativeInterfaceHandle) {
+    world.insert_resource(handle);
+    world.run_system_cached(publish_layout).unwrap();
+}
+
 #[test]
 fn interface_camera_cannot_render_world_grid_or_transient_geometry() {
     use bevy::camera::visibility::RenderLayers;
@@ -114,6 +119,41 @@ fn click(handle: &NativeInterfaceHandle) -> Result<(), String> {
     assert!(handle.pointer(PointerPhase::Down, [140.0, 140.0], PointerButton::Primary)?);
     assert!(handle.pointer(PointerPhase::Up, [140.0, 140.0], PointerButton::Primary)?);
     Ok(())
+}
+
+#[test]
+fn painted_panel_blocks_geometry_and_underlying_controls_but_not_its_children() {
+    let (mut app, handle, button, _) = fixture();
+    let panel = app
+        .world_mut()
+        .spawn((
+            InterfaceOccluder,
+            ComputedNode {
+                size: Vec2::new(160., 80.),
+                inverse_scale_factor: 1.,
+                ..default()
+            },
+            UiGlobalTransform::from_translation(Vec2::new(60., 42.)),
+            ComputedStackIndex(2),
+            InheritedVisibility::VISIBLE,
+        ))
+        .id();
+    app.update();
+    assert!(handle.owns_pointer([140., 140.]));
+    assert!(handle.hit_key([140., 140.]).is_none());
+    click(&handle).unwrap();
+    assert!(handle.take_actions().unwrap().is_empty());
+    // A real field/button painted above the panel still receives its input.
+    app.world_mut()
+        .entity_mut(button)
+        .insert(ComputedStackIndex(3));
+    app.update();
+    click(&handle).unwrap();
+    assert_eq!(handle.take_actions().unwrap().len(), 1);
+    // Removing the panel releases its otherwise blank area to the model.
+    app.world_mut().despawn(panel);
+    app.update();
+    assert!(!handle.owns_pointer([230., 160.]));
 }
 
 fn request(handle: &NativeInterfaceHandle) -> ControlRequest {

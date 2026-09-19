@@ -360,6 +360,16 @@ fn update_inner(
             continue;
         }
         if let WindowEvent::MouseWheel(wheel) = &event.event {
+            if let Some(cursor) = event.cursor {
+                let factor = if matches!(wheel.unit, bevy::input::mouse::MouseScrollUnit::Line) {
+                    36.
+                } else {
+                    1.
+                };
+                if extrude::panel::scroll_panel(world, cursor.to_array(), wheel.y * factor) {
+                    continue;
+                }
+            }
             if !state.close_pending {
                 if let (Some(cursor), Some(frame)) = (event.cursor, handle.frame()) {
                     if event.context.as_ref() != Some(&frame.context) {
@@ -541,12 +551,15 @@ fn start_control(
     state.pending = Some(PendingControl {
         response,
         owner: current,
-        presentation_deadline: now.saturating_add(2_000).min(
-            request["expires_ms"]
-                .as_u64()
-                .unwrap_or(now.saturating_add(2_000))
-                .saturating_sub(100),
-        ).max(now.saturating_add(1)),
+        presentation_deadline: now
+            .saturating_add(2_000)
+            .min(
+                request["expires_ms"]
+                    .as_u64()
+                    .unwrap_or(now.saturating_add(2_000))
+                    .saturating_sub(100),
+            )
+            .max(now.saturating_add(1)),
     });
     Ok(())
 }
@@ -646,7 +659,7 @@ fn process_modal_keys(
 
 /// Human, accessibility and MCP actions all flush the same editor transaction
 /// before activation. Only an accepted SetValue becomes the field baseline.
-fn reduce_control_input(
+pub(crate) fn reduce_control_input(
     engine: &AppState,
     bridge: &SessionBridgeState,
     world: &mut World,
@@ -775,6 +788,10 @@ fn apply_control(
             Ok(json!({"awaiting_input":state.close_pending}))
         }
         "window" => {
+            if ui["mode"] == "close" {
+                request_close(state, &services.bridge, &services.engine)?;
+                return Ok(json!({"awaiting_input":state.close_pending}));
+            }
             let mut query = world.query_filtered::<&mut Window, With<PrimaryWindow>>();
             let mut window = query
                 .single_mut(world)
@@ -887,6 +904,17 @@ fn synchronize(
         .bridge
         .native_history_available(&services.engine, &owner)?;
     extrude::synchronize(&services.engine, &services.bridge, world, &owner)?;
+    extrude::panel::synchronize_panel(
+        world,
+        handle,
+        &owner,
+        InterfaceRect {
+            x: (width - 320.).max(side) as f64,
+            y: top as f64,
+            width: 320_f32.min(width - side).max(1.) as f64,
+            height: (height - top - bottom).max(1.) as f64,
+        },
+    )?;
     crate::native_editor::synchronize_controls(
         world,
         handle,
@@ -963,6 +991,16 @@ fn synchronize(
             0.,
             38.,
             158.,
+        ),
+        (
+            "extrude".to_owned(),
+            "Extrude".to_owned(),
+            NativeCommand::Extrude(extrude::ExtrudeCommand::Open { feature_id: None }),
+            presentation.mode == native_viewport::ViewportMode::Sketch
+                || extrude::panel(world).is_some(),
+            502.,
+            0.,
+            100.,
         ),
     ];
     for (index, (body_id, name)) in state.bodies.iter().enumerate() {
@@ -1271,7 +1309,13 @@ fn synchronize(
                 name: "sketch/modify".into(),
                 text: None,
             },
-        ],
+        ]
+        .into_iter()
+        .chain(state.close_pending.then(|| Surface {
+            name: "close-document".into(),
+            text: Some("Unsaved changes".into()),
+        }))
+        .collect(),
         modal_stack: if state.close_pending {
             vec!["close-document".into()]
         } else {
