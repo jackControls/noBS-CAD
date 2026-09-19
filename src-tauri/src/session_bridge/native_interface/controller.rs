@@ -266,6 +266,7 @@ fn update_inner(
         if let Some(polled) = state.polled_control.take() {
             match outcome.value {
                 Ok(value) => {
+                    state.status.clear();
                     let request = &value["control_request"];
                     if request.get("id").is_some() {
                         start_control(world, handle, services, state, &polled.owner, request)?;
@@ -333,6 +334,17 @@ fn update_inner(
             retain_busy_intent(state, &event);
             continue;
         }
+        // Lifecycle input can arrive before the first semantic frame. Handle
+        // it before the ordinary widget ownership check rejects an unstamped
+        // event after initialization has published that first frame.
+        if matches!(event.event, WindowEvent::WindowCloseRequested(_)) {
+            if let Err(error) =
+                close_from_window_event(state, bridge, engine, event.context.as_ref())
+            {
+                state.status = error;
+            }
+            continue;
+        }
         if let Err(error) =
             crate::native_viewport::winit_host::prepare_native_input(world, handle, &mut event)
         {
@@ -398,18 +410,6 @@ fn update_inner(
                     }
                 }
             }
-        }
-        if matches!(event.event, WindowEvent::WindowCloseRequested(_)) {
-            // A title-bar close or Alt-F4 can arrive before the first interface
-            // frame is published, so the event carries no document context yet.
-            // Resolve the owner instead of silently dropping the request: a
-            // window that refuses to close is worse than a late one.
-            let owner = match event.context.clone() {
-                Some(owner) => owner,
-                None => bridge.native_document_context(&state.window_id, engine)?,
-            };
-            bridge.with_native_document_owner(engine, &owner, || Ok(()))?;
-            request_close(state, bridge, engine)?;
         }
         if !event.consumed {
             if let Err(error) = crate::native_editor::process_one(world, handle, services, &event) {
@@ -743,6 +743,18 @@ fn request_close(
     Ok(())
 }
 
+fn close_from_window_event(
+    state: &mut Controller,
+    bridge: &SessionBridgeState,
+    engine: &AppState,
+    stamped_owner: Option<&DocumentContext>,
+) -> Result<(), String> {
+    if let Some(owner) = stamped_owner {
+        bridge.with_native_document_owner(engine, owner, || Ok(()))?;
+    }
+    request_close(state, bridge, engine)
+}
+
 fn apply_control(
     world: &mut World,
     handle: &NativeInterfaceHandle,
@@ -921,9 +933,9 @@ fn synchronize(
         services,
         &owner,
         InterfaceRect {
-            x: 160.,
+            x: 112.,
             y: 38.,
-            width: (width - 160.).max(1.) as f64,
+            width: (width - 112.).max(1.) as f64,
             height: 72.,
         },
     )?;
@@ -990,7 +1002,7 @@ fn synchronize(
             false,
             0.,
             38.,
-            158.,
+            108.,
         ),
         (
             "extrude".to_owned(),
@@ -998,9 +1010,9 @@ fn synchronize(
             NativeCommand::Extrude(extrude::ExtrudeCommand::Open { feature_id: None }),
             presentation.mode == native_viewport::ViewportMode::Sketch
                 || extrude::panel(world).is_some(),
-            502.,
-            0.,
-            100.,
+            270.,
+            38.,
+            48.,
         ),
     ];
     for (index, (body_id, name)) in state.bodies.iter().enumerate() {
@@ -1170,6 +1182,7 @@ fn synchronize(
         }
     });
     for (key, label, command, disabled, x, y, width) in rows {
+        let is_extrude = key == "extrude";
         let is_body = key.starts_with("body-") || key.starts_with("visibility-");
         let surface = command_group(&command);
         let entity = if let Some(entity) = state.controls.get(&key) {
@@ -1198,20 +1211,31 @@ fn synchronize(
                 )
             };
             system.apply(world);
+            if is_extrude {
+                interface_shell::ribbon::decorate(
+                    world,
+                    entity,
+                    interface_shell::ribbon::Icon::Extrude,
+                );
+            }
             bind_command(world, entity, command.clone())?;
             state.controls.insert(key, entity);
             entity
         };
-        let desired = Node {
-            position_type: PositionType::Absolute,
-            left: px(x),
-            top: px(y),
-            width: px(width),
-            height: px(32.),
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            border: UiRect::all(px(1.)),
-            ..default()
+        let desired = if is_extrude {
+            interface_shell::ribbon::node(x, y, width)
+        } else {
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(x),
+                top: px(y),
+                width: px(width),
+                height: px(32.),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                border: UiRect::all(px(1.)),
+                ..default()
+            }
         };
         if world.get::<Node>(entity) != Some(&desired) {
             world.entity_mut(entity).insert(desired);
@@ -1225,7 +1249,11 @@ fn synchronize(
         if control.disabled != disabled {
             control.disabled = disabled;
         }
-        let visible = !is_body || (y >= top && y + 32. <= height - bottom);
+        let visible = if is_extrude {
+            presentation.mode != native_viewport::ViewportMode::Sketch
+        } else {
+            !is_body || (y >= top && y + 32. <= height - bottom)
+        };
         if control.visible != visible {
             control.visible = visible;
         }

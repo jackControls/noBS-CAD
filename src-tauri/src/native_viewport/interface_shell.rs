@@ -23,6 +23,7 @@ use super::ui::{ViewportUiAssets, ViewportUiTheme};
 
 #[cfg(feature = "dev-bevy-host")]
 pub(crate) mod fields;
+pub(crate) mod ribbon;
 
 const MAX_PENDING_ACTIONS: usize = 64;
 
@@ -971,7 +972,12 @@ pub(crate) fn install(
         .add_systems(Startup, setup_camera)
         .add_systems(
             Update,
-            (drain_actions.in_set(InterfaceReduction), update_controls).chain(),
+            (
+                drain_actions.in_set(InterfaceReduction),
+                update_controls,
+                ribbon::update_glyphs,
+            )
+                .chain(),
         )
         .add_systems(
             PostUpdate,
@@ -1016,6 +1022,7 @@ fn update_controls(
         &InterfaceControl,
         &InterfaceLabel,
         &InterfaceButtonStyle,
+        Option<&ribbon::RibbonButton>,
         &mut Node,
         &mut BackgroundColor,
         &mut BorderColor,
@@ -1033,7 +1040,9 @@ fn update_controls(
             camera.is_active = active;
         }
     }
-    for (entity, control, label, style, mut node, mut background, mut border) in &mut controls {
+    for (entity, control, label, style, ribbon, mut node, mut background, mut border) in
+        &mut controls
+    {
         let key = ControlKey(entity.to_bits());
         let theme = style.0;
         let active = control.selected == Some(true)
@@ -1049,7 +1058,9 @@ fn update_controls(
         if node.display != display {
             node.display = display;
         }
-        let fill = if active {
+        let fill = if let Some(ribbon) = ribbon {
+            ribbon.fill(theme, active, shared.hovered == Some(key), control.disabled)
+        } else if active {
             theme.accent_soft
         } else if shared.hovered == Some(key) {
             theme.hover
@@ -1061,6 +1072,8 @@ fn update_controls(
         }
         let edge = BorderColor::all(if shared.focused == Some(key) {
             theme.accent
+        } else if ribbon.is_some() {
+            Color::NONE
         } else {
             theme.edge
         });
@@ -1071,7 +1084,9 @@ fn update_controls(
             if text.0 != control.label {
                 text.0.clone_from(&control.label);
             }
-            let ink = if control.disabled {
+            let ink = if let Some(ribbon) = ribbon {
+                ribbon.ink(theme, control.disabled)
+            } else if control.disabled {
                 theme.mute
             } else if active {
                 theme.accent

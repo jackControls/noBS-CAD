@@ -647,23 +647,31 @@ pub(crate) fn synchronize_controls(
         let mut x = area.x as f32;
         let mut y = area.y as f32;
         for (label, command) in rows {
-            let width = (label.len() as f32 * 6.5 + 20.).clamp(74., 180.);
+            let finish = matches!(command, EditorCommand::Finish | EditorCommand::Complete);
+            let width = 48.;
             if x + width > (area.x + area.width) as f32 && x > area.x as f32 {
                 x = area.x as f32;
-                y += 36.;
+                y += 54.;
             }
-            let visible = x + width <= (area.x + area.width) as f32
-                && y + 32. <= (area.y + area.height) as f32;
-            let node = Node {
-                position_type: PositionType::Absolute,
-                left: px(x),
-                top: px(y),
-                width: px(width),
-                height: px(32.),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                border: UiRect::all(px(1.)),
-                ..default()
+            let visible = finish
+                || (x + width <= (area.x + area.width - 156.) as f32
+                    && y + 52. <= (area.y + area.height) as f32);
+            use crate::native_viewport::interface_shell::ribbon::{self, Icon};
+            let node = if finish {
+                // Finish stays docked at the right, as in the original ribbon.
+                // Complete spline is a separate action immediately to its left.
+                ribbon::finish_node(
+                    (area.x + area.width
+                        - if matches!(command, EditorCommand::Complete) {
+                            296.
+                        } else {
+                            148.
+                        })
+                    .max(area.x) as f32,
+                    area.y as f32 + 20.,
+                )
+            } else {
+                ribbon::node(x, y, width)
             };
             let entity = if let Some(entity) = editor.controls.get(&label) {
                 *entity
@@ -681,6 +689,22 @@ pub(crate) fn synchronize_controls(
                     )
                 };
                 system.apply(world);
+                let icon = match &command {
+                    EditorCommand::Begin(_) => Icon::Sketch,
+                    EditorCommand::Finish | EditorCommand::Complete => Icon::Finish,
+                    EditorCommand::Cancel => Icon::Cancel,
+                    EditorCommand::Tool(tool) => match tool {
+                        CreateTool::Line => Icon::Line,
+                        CreateTool::MidpointLine => Icon::MidpointLine,
+                        CreateTool::Rectangle(_) => Icon::Rectangle,
+                        CreateTool::Circle(_) => Icon::Circle,
+                        CreateTool::Arc3Point | CreateTool::ArcCenter => Icon::Arc,
+                        CreateTool::Slot(_) => Icon::Slot,
+                        CreateTool::Point => Icon::Point,
+                        CreateTool::Spline => Icon::Spline,
+                    },
+                };
+                ribbon::decorate(world, entity, icon);
                 bind_command(world, entity, NativeCommand::Sketch(command.clone()))?;
                 editor.controls.insert(label.clone(), entity);
                 entity

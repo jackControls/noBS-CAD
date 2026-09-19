@@ -124,6 +124,12 @@ notice is preserved in [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 The package copy is also available at `node_modules/lucide-react/LICENSE`
 after dependency installation.
 
+The native ribbon in `src-tauri/src/native_viewport/interface_shell/ribbon.rs`
+renders the migrated CAD diagrams with Bevy primitives on the same 24-unit
+grid. Its point and spline symbols retain the Lucide Crosshair and Spline
+geometry and the notices above. These are renderer ports, not new command
+identities. Visual parity remains part of the native-interface draft review.
+
 ## Contribution requirements
 
 For every new icon:

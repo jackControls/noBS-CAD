@@ -3,6 +3,44 @@ use super::*;
 use std::fs;
 
 #[test]
+fn early_title_bar_close_is_honored_but_a_retired_document_cannot_close_its_replacement() {
+    let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let (mut app, _, _) = prepare(&fixture);
+    let owner = fixture.owner();
+    {
+        let mut state = app.world_mut().resource_mut::<Controller>();
+        close_from_window_event(&mut state, &fixture.bridge, &fixture.engine, None).unwrap();
+        assert!(state.exit_after_receipt);
+        assert!(!state.close_pending);
+        state.exit_after_receipt = false;
+    }
+    fixture
+        .bridge
+        .apply_native_mutation(
+            &fixture.engine,
+            &owner,
+            "cad_new_project",
+            &json!({}),
+            || Ok(()),
+        )
+        .unwrap();
+    let mut state = app.world_mut().resource_mut::<Controller>();
+    assert!(
+        close_from_window_event(&mut state, &fixture.bridge, &fixture.engine, Some(&owner))
+            .is_err()
+    );
+    assert!(!state.exit_after_receipt);
+    assert!(!state.close_pending);
+    close_from_window_event(&mut state, &fixture.bridge, &fixture.engine, None).unwrap();
+    assert!(
+        state.close_pending,
+        "Even an early close must protect unsaved work"
+    );
+    assert!(!state.exit_after_receipt);
+}
+
+#[test]
 fn both_exit_routes_publish_a_valid_close_confirmation_for_dirty_work() {
     let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
     let fixture = Fixture::new();
