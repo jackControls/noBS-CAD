@@ -27,6 +27,7 @@ use std::{
     time::Duration,
 };
 
+pub(crate) mod browser;
 pub(crate) mod files;
 pub(crate) mod worker;
 
@@ -259,7 +260,14 @@ fn update_inner(
             pending.owner = bridge.native_document_context(&state.window_id, engine)?;
             match &outcome.value {
                 Ok(value) => {
-                    pending.response["status"] = json!("applied");
+                    pending.response["status"] = json!(if value["model_error"].is_string() {
+                        "failed"
+                    } else {
+                        "applied"
+                    });
+                    if value["model_error"].is_string() {
+                        pending.response["error"] = value["model_error"].clone();
+                    }
                     pending.response["value"] = value.clone();
                 }
                 Err(error) => {
@@ -764,7 +772,9 @@ fn apply_queued_control(
 }
 
 fn summary(value: &Value) -> String {
-    if value["publication_pending"] == true {
+    if let Some(error) = value["model_error"].as_str() {
+        error.into()
+    } else if value["publication_pending"] == true {
         "Model changed; snapshot publication needs retry".into()
     } else if let Some(error) = value["render_error"].as_str() {
         error.into()
@@ -975,16 +985,10 @@ fn synchronize(
     let height = window.height().max(1.);
     let scale = window.resolution.scale_factor();
     let visible = window.visible;
-    let side = (width * 0.22).clamp(140., 260.).min(width * 0.45);
+    let side = 240_f32.min(width * 0.45);
     let top = 120_f32.min(height * 0.3);
     let bottom = 26_f32.min(height * 0.1);
-    state.sidebar_scroll = state
-        .sidebar_scroll
-        .min((state.bodies.len() as f32 * 36. - (height - top - bottom)).max(0.));
-    let canvas = Rect::from_corners(
-        Vec2::new(side, top),
-        Vec2::new(width, (height - bottom).max(top + 1.)),
-    );
+    let canvas = Rect::from_corners(Vec2::new(side, top), Vec2::new(width, height - bottom));
     native_viewport::apply_interface_viewport(
         world,
         InterfaceRect {
@@ -1102,35 +1106,6 @@ fn synchronize(
             48.,
         ),
     ];
-    for (index, (body_id, name)) in state.bodies.iter().enumerate() {
-        let y = top + index as f32 * 36. - state.sidebar_scroll;
-        rows.push((
-            format!("body-{body_id}"),
-            name.clone(),
-            NativeCommand::SelectBody {
-                body_id: *body_id,
-                occurrence_id: None,
-            },
-            false,
-            0.,
-            y,
-            side - 68.,
-        ));
-        rows.push((
-            format!("visibility-{body_id}"),
-            if presentation.hidden_body_ids.contains(body_id) {
-                "Show"
-            } else {
-                "Hide"
-            }
-            .into(),
-            NativeCommand::ToggleBodyVisibility(*body_id),
-            false,
-            side - 66.,
-            y,
-            64.,
-        ));
-    }
     if state.close_pending {
         rows.push((
             "cancel-close".into(),
@@ -1394,6 +1369,19 @@ fn synchronize(
         }
     }
     files::synchronize(world, services, &owner, width, height)?;
+    browser::synchronize(
+        world,
+        services,
+        &owner,
+        revision,
+        InterfaceRect {
+            x: 0.,
+            y: top as f64,
+            width: side as f64,
+            height: (height - top - bottom) as f64,
+        },
+        &mut state.sidebar_scroll,
+    )?;
     let client = InterfaceRect {
         x: 0.,
         y: 0.,
@@ -1533,10 +1521,6 @@ fn command_group(command: &NativeCommand) -> &'static str {
         }
         NativeCommand::Undo | NativeCommand::Redo => "document/history",
         NativeCommand::ClearSelection | NativeCommand::SelectBody { .. } => "solid/selection",
-        NativeCommand::ToggleBodyVisibility(_) => {
-            nbcad_interface::catalog::group_for("project_set_visibility")
-                .expect("Visibility is in the product catalog")
-        }
         _ => nbcad_interface::catalog::group_for("cad_interface")
             .expect("Interface is in the product catalog"),
     }

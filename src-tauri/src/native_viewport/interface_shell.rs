@@ -925,6 +925,26 @@ struct InterfaceButtonStyle(ViewportUiTheme);
 #[derive(Component, PartialEq)]
 pub(crate) struct InterfaceCaption(pub String);
 
+/// Compact rows and menu items share focus/selection behavior with buttons,
+/// while leaving the enclosing panel visible behind their idle state.
+#[derive(Component)]
+pub(crate) struct InterfaceFlat;
+
+pub(crate) fn compact_label(world: &mut World, entity: Entity, inset: f32) {
+    let label = world.get::<InterfaceLabel>(entity).unwrap().0;
+    let assets = world.resource::<ViewportUiAssets>().clone();
+    let theme = world.get::<InterfaceButtonStyle>(entity).unwrap().0;
+    world.entity_mut(label).insert((
+        theme.text(&assets, 12., FontWeight::NORMAL),
+        TextLayout::no_wrap(),
+        Node {
+            margin: UiRect::left(px(inset)),
+            ..default()
+        },
+    ));
+    world.entity_mut(entity).insert(InterfaceFlat);
+}
+
 pub(crate) fn spawn_button(
     commands: &mut Commands,
     camera: Entity,
@@ -1033,6 +1053,7 @@ fn update_controls(
         &InterfaceButtonStyle,
         Option<&ribbon::RibbonButton>,
         Option<&InterfaceCaption>,
+        Option<&InterfaceFlat>,
         &mut Node,
         &mut BackgroundColor,
         &mut BorderColor,
@@ -1050,8 +1071,18 @@ fn update_controls(
             camera.is_active = active;
         }
     }
-    for (entity, control, label, style, ribbon, caption, mut node, mut background, mut border) in
-        &mut controls
+    for (
+        entity,
+        control,
+        label,
+        style,
+        ribbon,
+        caption,
+        flat,
+        mut node,
+        mut background,
+        mut border,
+    ) in &mut controls
     {
         let key = ControlKey(entity.to_bits());
         let theme = style.0;
@@ -1070,10 +1101,14 @@ fn update_controls(
         }
         let fill = if let Some(ribbon) = ribbon {
             ribbon.fill(theme, active, shared.hovered == Some(key), control.disabled)
+        } else if flat.is_some() && active {
+            ribbon::css_mix(theme.accent, theme.panel, 0.20)
         } else if active {
             theme.accent_soft
         } else if shared.hovered == Some(key) {
             theme.hover
+        } else if flat.is_some() {
+            Color::NONE
         } else {
             theme.panel
         };
@@ -1082,7 +1117,7 @@ fn update_controls(
         }
         let edge = BorderColor::all(if shared.focused == Some(key) {
             theme.accent
-        } else if ribbon.is_some() {
+        } else if ribbon.is_some() || flat.is_some() {
             Color::NONE
         } else {
             theme.edge
@@ -1102,7 +1137,7 @@ fn update_controls(
                 ribbon.ink(theme, control.disabled)
             } else if control.disabled {
                 theme.mute
-            } else if active {
+            } else if active && flat.is_none() {
                 theme.accent
             } else {
                 theme.ink

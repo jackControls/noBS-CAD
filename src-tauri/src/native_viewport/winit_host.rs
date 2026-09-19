@@ -4,7 +4,11 @@
 //! owns the main thread, OS window, input ordering, IME and AccessKit adapter;
 //! there is no second document engine or alternative public command mode.
 
-use std::{collections::HashSet, num::NonZeroU32, time::Duration};
+use std::{
+    collections::HashSet,
+    num::NonZeroU32,
+    time::{Duration, Instant},
+};
 
 use bevy::{
     ecs::message::MessageCursor,
@@ -16,7 +20,7 @@ use bevy::{
     window::{ExitCondition, PrimaryWindow, WindowEvent, WindowResolution},
     winit::{EventLoopProxyWrapper, UpdateMode, WinitSettings, WinitUserEvent},
 };
-use nbcad_interface::{DocumentContext, KeyChord};
+use nbcad_interface::{ControlKey, DocumentContext, KeyChord};
 
 use super::{
     interface_shell::{NativeInterfaceAction, NativeInterfaceHandle, PointerButton, PointerPhase},
@@ -67,6 +71,8 @@ struct HostInputState {
     pressed: HashSet<KeyCode>,
     model_drag: HashSet<MouseButton>,
     alt_graph: bool,
+    click_press: Option<ControlKey>,
+    last_click: Option<(Instant, ControlKey, [f64; 2], DocumentContext)>,
 }
 
 #[derive(Resource, Default)]
@@ -370,11 +376,46 @@ fn route_one(
                 .cursor
                 .map(|point| point.as_dvec2().to_array())
                 .unwrap_or([-1.0; 2]);
-            let phase = if event.state == ButtonState::Pressed {
+            let mut phase = if event.state == ButtonState::Pressed {
                 PointerPhase::Down
             } else {
                 PointerPhase::Up
             };
+            if event.button == MouseButton::Left {
+                let target = handle.hit_key(point);
+                if event.state == ButtonState::Pressed {
+                    state.click_press = target;
+                } else if let Some(target) =
+                    target.filter(|target| Some(*target) == state.click_press.take())
+                {
+                    if let Some(frame) = handle.frame() {
+                        let now = Instant::now();
+                        let double =
+                            state
+                                .last_click
+                                .as_ref()
+                                .is_some_and(|(time, key, prior, owner)| {
+                                    *key == target
+                                        && *owner == frame.context
+                                        && now.duration_since(*time) <= Duration::from_millis(500)
+                                        && (point[0] - prior[0]).abs() <= 4.
+                                        && (point[1] - prior[1]).abs() <= 4.
+                                });
+                        if double {
+                            phase = PointerPhase::DoubleClick;
+                            state.last_click = None;
+                        } else {
+                            state.last_click = Some((now, target, point, frame.context));
+                        }
+                    }
+                } else {
+                    state.click_press = None;
+                    state.last_click = None;
+                }
+            } else {
+                state.click_press = None;
+                state.last_click = None;
+            }
             let consumed = handle.pointer(phase, point, button)?;
             if !consumed && event.state == ButtonState::Pressed {
                 state.model_drag.insert(event.button);
@@ -395,6 +436,8 @@ fn route_one(
             handle.key(chord)
         }
         WindowEvent::WindowFocused(event) if !event.focused => {
+            state.click_press = None;
+            state.last_click = None;
             state.pressed.clear();
             state.model_drag.clear();
             state.cursor = None;
@@ -402,6 +445,8 @@ fn route_one(
             Ok(false)
         }
         WindowEvent::KeyboardFocusLost(_) => {
+            state.click_press = None;
+            state.last_click = None;
             state.pressed.clear();
             state.model_drag.clear();
             handle.blur();
@@ -414,6 +459,55 @@ fn route_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn physical_double_click_routes_once_and_cannot_cross_document_incarnations() {
+        let (mut app, handle, _, _) = super::super::interface_shell::tests::fixture();
+        let mut state = HostInputState {
+            cursor: Some(Vec2::new(140., 140.)),
+            ..default()
+        };
+        let window = Entity::from_bits(1);
+        let click = |state: &mut HostInputState| {
+            for pressed in [ButtonState::Pressed, ButtonState::Released] {
+                route_one(
+                    &handle,
+                    state,
+                    &WindowEvent::MouseButtonInput(bevy::input::mouse::MouseButtonInput {
+                        button: MouseButton::Left,
+                        state: pressed,
+                        window,
+                    }),
+                )
+                .unwrap();
+            }
+        };
+        click(&mut state);
+        click(&mut state);
+        let actions = handle.take_actions().unwrap();
+        assert_eq!(actions.len(), 2);
+        assert_eq!(
+            actions[0].control.input,
+            nbcad_interface::ControlInput::Click
+        );
+        assert_eq!(
+            actions[1].control.input,
+            nbcad_interface::ControlInput::DoubleClick
+        );
+        click(&mut state);
+        handle.take_actions().unwrap();
+        let mut frame = handle.frame().unwrap();
+        frame.context.epoch += 1;
+        handle.present(frame).unwrap();
+        app.update();
+        click(&mut state);
+        let actions = handle.take_actions().unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0].control.input,
+            nbcad_interface::ControlInput::Click
+        );
+    }
 
     fn key(window: Entity, code: KeyCode, logical: Key, state: ButtonState) -> WindowEvent {
         WindowEvent::KeyboardInput(KeyboardInput {

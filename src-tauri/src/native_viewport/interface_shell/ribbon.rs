@@ -54,7 +54,7 @@ impl RibbonButton {
     }
 }
 
-fn css_mix(foreground: Color, background: Color, opacity: f32) -> Color {
+pub(super) fn css_mix(foreground: Color, background: Color, opacity: f32) -> Color {
     let fg = foreground.to_srgba();
     let bg = background.to_srgba();
     Color::srgb(
@@ -79,6 +79,20 @@ pub(crate) enum Icon {
     Finish,
     Cancel,
     Chevron,
+    Box,
+    Bookmark,
+    Crosshair,
+    Square,
+    CircleDot,
+    PenLine,
+    Layers,
+    Settings,
+    ChevronRight,
+    ChevronDown,
+    Eye,
+    EyeOff,
+    Pencil,
+    Globe,
 }
 impl Icon {
     fn svg(self) -> &'static str {
@@ -105,6 +119,20 @@ impl Icon {
             Self::Finish => source!("finish"),
             Self::Cancel => source!("cancel"),
             Self::Chevron => source!("chevron"),
+            Self::Box => source!("box"),
+            Self::Bookmark => source!("bookmark"),
+            Self::Crosshair => source!("crosshair"),
+            Self::Square => source!("square"),
+            Self::CircleDot => source!("circle-dot"),
+            Self::PenLine => source!("pen-line"),
+            Self::Layers => source!("layers-3"),
+            Self::Settings => source!("sliders-horizontal"),
+            Self::ChevronRight => source!("chevron-right"),
+            Self::ChevronDown => source!("chevron-down"),
+            Self::Eye => source!("eye"),
+            Self::EyeOff => source!("eye-off"),
+            Self::Pencil => source!("pencil"),
+            Self::Globe => source!("globe"),
         }
     }
 }
@@ -232,7 +260,9 @@ fn glyph(
     ink: Color,
 ) -> Entity {
     let image = image(world, icon, size.round() as u32);
-    let finish = world.get::<RibbonButton>(owner).unwrap().finish;
+    let finish = world
+        .get::<RibbonButton>(owner)
+        .is_some_and(|button| button.finish);
     let theme = world.get::<InterfaceButtonStyle>(owner).unwrap().0;
     let child = world
         .spawn((
@@ -264,6 +294,38 @@ fn glyph(
         .id();
     world.entity_mut(owner).add_child(child);
     child
+}
+/// Use the same cached SVG pipeline for compact chrome and tree controls.
+pub(crate) fn compact_glyph(
+    world: &mut World,
+    owner: Entity,
+    icon: Icon,
+    x: f32,
+    size: f32,
+) -> Entity {
+    let theme = world.get::<InterfaceButtonStyle>(owner).unwrap().0;
+    glyph(world, owner, icon, x, (24. - size) / 2., size, theme.mute)
+}
+
+pub(crate) fn decoration(world: &mut World, camera: Entity, icon: Icon, ink: Color) -> Entity {
+    let image = image(world, icon, 13);
+    let entity = world.spawn_empty().id();
+    world.entity_mut(entity).insert((
+        UiTargetCamera(camera),
+        ZIndex(30),
+        ImageNode {
+            image,
+            color: ink,
+            ..default()
+        },
+        RibbonGlyph {
+            owner: entity,
+            icon,
+            ink,
+            disabled_ink: ink,
+        },
+    ));
+    entity
 }
 pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
     if world.get::<RibbonButton>(entity).is_some() {

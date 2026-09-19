@@ -3,6 +3,34 @@ use super::*;
 use std::fs;
 
 #[test]
+fn minimized_native_window_keeps_a_valid_inspectable_viewport() {
+    let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let services = NativeServices {
+        engine: fixture.engine.clone(),
+        bridge: fixture.bridge.clone(),
+    };
+    let mut app = native_viewport::interface_scene_fixture();
+    app.insert_resource(ViewportUiAssets::default());
+    app.world_mut().spawn((
+        Window {
+            resolution: bevy::window::WindowResolution::new(0, 0),
+            ..default()
+        },
+        PrimaryWindow,
+    ));
+    app.world_mut().spawn(InterfaceCamera);
+    let handle = NativeInterfaceHandle::new(|| {});
+    let mut state = Controller::new("main".into(), None, Arc::new(AtomicBool::new(false)));
+    synchronize(app.world_mut(), &handle, &services, &mut state).unwrap();
+    interface_shell::tests::publish_layout_once(app.world_mut(), handle.clone());
+    let frame = handle.frame().unwrap();
+    let canvas = frame.canvases.first().unwrap();
+    assert!(canvas.bounds.y + canvas.bounds.height <= frame.client.height);
+    assert!(canvas.bounds.height > 0.);
+}
+
+#[test]
 fn early_title_bar_close_is_honored_but_a_retired_document_cannot_close_its_replacement() {
     let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
     let fixture = Fixture::new();

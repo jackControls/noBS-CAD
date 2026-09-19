@@ -34,6 +34,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum EditorCommand {
     Begin(PlaneRef),
+    Edit(String),
     Finish,
     Tool(CreateTool),
     Cancel,
@@ -225,6 +226,23 @@ pub(crate) fn execute(
     world.resource_scope(|world, mut editor: Mut<Editor>| {
         synchronize_stamp(&mut editor, next);
         match command {
+            EditorCommand::Edit(name) => {
+                if editor
+                    .stamp
+                    .as_ref()
+                    .is_some_and(|stamp| stamp.sketch.is_some())
+                {
+                    return Err("Finish the current sketch before editing another".into());
+                }
+                validate()?;
+                queue_mutation(
+                    world,
+                    editor.stamp.as_ref().unwrap().clone(),
+                    "sketch_edit",
+                    json!({"name":name}),
+                    Completion::Begin,
+                )
+            }
             EditorCommand::Begin(plane) => {
                 if editor
                     .stamp
@@ -376,6 +394,25 @@ fn queue_mutation(
                     clear_preview(world, engine, bridge, &owner)
                 })();
                 committed_feedback(&mut output, &mut editor, followup);
+                if matches!(kind, Completion::Finish)
+                    && engine.document_snapshot().features.iter().any(|f| !matches!(f.kind, nbcad_core::FeatureKind::Sketch | nbcad_core::FeatureKind::ConstructionPlane))
+                {
+                    // Finishing an edited profile must replay dependent solids.
+                    // Keep the original control pending until that replay settles.
+                    let receipt = bridge.native_document_receipt(engine, &owner)?;
+                    let pending = worker::enqueue_operation(world, receipt.owner, receipt.revision, "solid_recompute".into(), json!({}), |world, services, result| {
+                        match result {
+                            Ok(result) => {
+                                let mut value = finish_mutation(&services.engine, &services.bridge, world, "solid_recompute", result);
+                                value["committed"] = json!(true);
+                                Ok(value)
+                            }
+                            Err(error) => Ok(json!({"committed":true,"model_error":format!("Sketch saved, but dependent solids could not be rebuilt: {error}")})),
+                        }
+                    })?;
+                    output["mutation_pending"] = json!(true);
+                    output["mutation_id"] = pending["mutation_id"].clone();
+                }
                 Ok(output)
             })
         },
@@ -691,7 +728,7 @@ pub(crate) fn synchronize_controls(
                 };
                 system.apply(world);
                 let icon = match &command {
-                    EditorCommand::Begin(_) => Icon::Sketch,
+                    EditorCommand::Begin(_) | EditorCommand::Edit(_) => Icon::Sketch,
                     EditorCommand::Finish | EditorCommand::Complete => Icon::Finish,
                     EditorCommand::Cancel => Icon::Cancel,
                     EditorCommand::Tool(tool) => match tool {

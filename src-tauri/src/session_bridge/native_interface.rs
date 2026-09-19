@@ -281,6 +281,8 @@ pub(crate) enum NativeCommand {
     Sketch(crate::native_editor::EditorCommand),
     #[cfg(feature = "dev-bevy-host")]
     File(controller::files::FileCommand),
+    #[cfg(feature = "dev-bevy-host")]
+    Browser(controller::browser::BrowserCommand),
     Extrude(extrude::ExtrudeCommand),
     Mutation {
         operation: String,
@@ -291,7 +293,6 @@ pub(crate) enum NativeCommand {
         body_id: u64,
         occurrence_id: Option<u64>,
     },
-    ToggleBodyVisibility(u64),
     Fit,
     Orient(ViewDirection),
     Undo,
@@ -398,6 +399,10 @@ pub(crate) fn reduce_action(
     if let NativeCommand::File(command) = &binding.command {
         return controller::files::reduce(world, handle, engine, bridge, action, command);
     }
+    #[cfg(feature = "dev-bevy-host")]
+    if let NativeCommand::Browser(command) = &binding.command {
+        return controller::browser::reduce(world, handle, engine, bridge, action, command);
+    }
     if !is_activation(&action.control.input) {
         return Err("This native button does not handle the requested input".into());
     }
@@ -406,6 +411,8 @@ pub(crate) fn reduce_action(
         NativeCommand::Sketch(command)=>crate::native_editor::execute(world,engine,bridge,&action.context,command,||handle.validate_action(action)),
         #[cfg(feature="dev-bevy-host")]
         NativeCommand::File(_)=>unreachable!("File fields are reduced before button activation"),
+        #[cfg(feature="dev-bevy-host")]
+        NativeCommand::Browser(_)=>unreachable!("Browser input is reduced before button activation"),
         NativeCommand::Extrude(_)=>unreachable!("Extrude fields are reduced before button activation"),
         NativeCommand::CancelClose | NativeCommand::DiscardAndClose => {
             bridge.with_native_document_owner(engine, &action.context, || {
@@ -447,19 +454,6 @@ pub(crate) fn reduce_action(
             )?;
             Ok(finish_mutation(engine, bridge, world, &operation, result))
         }
-        NativeCommand::ToggleBodyVisibility(body_id) => {
-            #[cfg(feature="dev-bevy-host")]
-            if controller::worker::available(world) {
-                let receipt = bridge.native_document_receipt(engine, &action.context)?;
-                return controller::worker::enqueue_transaction(world, "project_set_visibility".into(), move |services, guard| {
-                    services.bridge.apply_native_mutation_guarded(&services.engine, &receipt.owner, Some(receipt.revision), "project_set_visibility", || toggle_visibility(&services.engine, body_id), || guard.validate())
-                }, |world, services, result| Ok(finish_mutation(&services.engine, &services.bridge, world, "project_set_visibility", result?)));
-            }
-            let result = bridge.apply_native_mutation_with(engine, &action.context, "project_set_visibility", || {
-                toggle_visibility(engine, body_id)
-            }, || handle.validate_action(action))?;
-            Ok(finish_mutation(engine, bridge, world, "project_set_visibility", result))
-        }
         command => {
             bridge.with_native_document_owner(engine, &action.context, || {
                 handle.validate_action(action)?;
@@ -467,29 +461,6 @@ pub(crate) fn reduce_action(
             })
         }
     }
-}
-
-fn toggle_visibility(engine: &AppState, body_id: u64) -> Result<Value, String> {
-    if !engine
-        .viewport_snapshot()
-        .2
-        .bodies
-        .iter()
-        .any(|body| body.id.0 == body_id)
-    {
-        return Err("The body no longer exists".into());
-    }
-    let mut visibility =
-        super::parse_engine_envelope(engine.engine_call("project_visibility", ""))?;
-    let hidden = visibility["hidden_body_ids"]
-        .as_array_mut()
-        .ok_or("Native visibility is invalid")?;
-    if hidden.iter().any(|id| id.as_u64() == Some(body_id)) {
-        hidden.retain(|id| id.as_u64() != Some(body_id));
-    } else {
-        hidden.push(json!(body_id));
-    }
-    Ok(visibility)
 }
 
 pub(crate) fn model_snapshot(engine: &AppState) -> ViewportModel {
