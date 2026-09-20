@@ -820,6 +820,26 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/concepts/unit-systems-mm-default.md"),
     },
     KnowledgeFile {
+        path: "concepts/soft-disclosure-focus-packs.md",
+        text: include_str!("../../../knowledge/concepts/soft-disclosure-focus-packs.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/attach-vs-headless-sessions.md",
+        text: include_str!("../../../knowledge/concepts/attach-vs-headless-sessions.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/parametric-formulas-driven-dims.md",
+        text: include_str!("../../../knowledge/concepts/parametric-formulas-driven-dims.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/selection-topology-ids-mcp.md",
+        text: include_str!("../../../knowledge/concepts/selection-topology-ids-mcp.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/power-screws-lead-screws.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/power-screws-lead-screws.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/taxonomy.md",
         text: include_str!("../../../knowledge/machine-design/taxonomy.md"),
     },
@@ -1536,10 +1556,96 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn soft_disclosure_focus_packs_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "soft disclosure focus packs cad_list_all_tools",
+            "cad_set_focus focus pack dynamic disclosure",
+            "out of focus tools stay callable list_all_tools",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("soft-disclosure-focus-packs")),
+                "expected soft-disclosure-focus-packs for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn attach_vs_headless_sessions_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "attach vs headless sessions cad_attach",
+            "cad_list_sessions snapshot bridge detach",
+            "headless document vs live attach UUID",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("attach-vs-headless-sessions")),
+                "expected attach-vs-headless-sessions for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn parametric_formulas_driven_dims_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "parametric formulas driven dimensions pitfalls",
+            "driving vs driven dimension solid_edit",
+            "expression tree formula dimension MCP",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("parametric-formulas-driven-dims")),
+                "expected parametric-formulas-driven-dims for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn selection_topology_ids_mcp_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "selection topology ids MCP mutates",
+            "face_id edge_id solid_scene before fillet",
+            "stable body face edge ids for hole",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("selection-topology-ids-mcp")),
+                "expected selection-topology-ids-mcp for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn power_screws_lead_screws_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "power screws lead screws pitch backdrive",
+            "lead screw printed wear nut vise",
+            "Acme trapezoidal power screw CAD-time",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("power-screws-lead-screws")),
+                "expected power-screws-lead-screws for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
     #[test]
     fn check_corpus_ok() {
         let n = check_corpus().expect("corpus check");
-        assert!(n >= 48);
+        assert!(n >= 52);
     }
 
     #[test]
@@ -1577,6 +1683,11 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "concepts/edit-history-not-delete-rebuild.md"));
         assert!(files.iter().any(|f| f.path == "concepts/export-preflight-3mf-stl.md"));
         assert!(files.iter().any(|f| f.path == "concepts/unit-systems-mm-default.md"));
+        assert!(files.iter().any(|f| f.path == "concepts/soft-disclosure-focus-packs.md"));
+        assert!(files.iter().any(|f| f.path == "concepts/attach-vs-headless-sessions.md"));
+        assert!(files.iter().any(|f| f.path == "concepts/parametric-formulas-driven-dims.md"));
+        assert!(files.iter().any(|f| f.path == "concepts/selection-topology-ids-mcp.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/power-screws-lead-screws.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));
         assert!(knowledge_file_by_uri("nbcad://knowledge/../etc/passwd").is_none());

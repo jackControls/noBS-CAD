@@ -6,7 +6,7 @@ status: draft
 updated: 2026-09-20
 topics: dfam, fits, am, recipes, manufacturing, help
 keywords: fit coupons, recipe map, related_recipes, turbine-fit-coupons, d-screw-vise-fit, coupon map, demo scripts, help recipes hub, clearance coupon, AM coupon
-related_recipes: turbine-fit-coupons, d-screw-vise-fit, mounting-plate, fillet-basics, d-screw-vise, garden-bench, vertical-axis-turbine, repeated-bracket-assembly, angle-bracket
+related_recipes: turbine-fit-coupons, d-screw-vise-fit, mounting-plate, fillet-basics, d-screw-vise, garden-bench, vertical-axis-turbine, repeated-bracket-assembly, angle-bracket, revolved-spacer
 sources: nwtc-guns-dfm, doe-3d
 ---
 
@@ -37,6 +37,7 @@ via [HUMAN_HELP](../../../docs/agentic/HUMAN_HELP.md).
 | `garden-bench` | Larger structural / fastener context | [fasteners](fasteners-joints.md), [DFM overview](dfm-overview.md) |
 | `vertical-axis-turbine` | Product joints / hardware pockets | [hardware pocket](am-hardware-pocket-research.md), [bearing stacks](../../concepts/bearing-stacks.md) |
 | `repeated-bracket-assembly` | Locate / pattern repetition | [locating schemes](locating-scheme-dof.md), [nubs](alignment-nubs-pins.md) |
+| `revolved-spacer` | Annular/revolve lesson; spacer stacks | [bearing stacks](../../concepts/bearing-stacks.md), [power screws](power-screws-lead-screws.md), [units](../../concepts/unit-systems-mm-default.md) |
 | `angle-bracket` | Simple bracket DFM | [DFM process](dfm-process-guidelines.md), [ribs](am-ribs-gussets-draft.md) |
 
 ## Concept → recipe cheat sheet (enclosure / AM agents)

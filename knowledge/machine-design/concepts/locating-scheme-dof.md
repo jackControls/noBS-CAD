@@ -67,5 +67,22 @@ roles — see [alignment nubs vs pins](alignment-nubs-pins.md).
 - Using snap beams as the only locate **and** retain
 - Ignoring that a long tongue-and-groove already removed the DOF your nubs fight
 
+
+## Assembly / AM locate checklist
+
+1. Sketch the **6 DOF** and mark which feature owns each.
+2. Name **primary / secondary / tertiary** (or pin+slot) before modeling nubs.
+3. Prefer **two short nubs + float** over four tight dowels on FDM splits
+   ([alignment nubs](alignment-nubs-pins.md)).
+4. Keep **retention** (snaps/screws) off the locate faces when possible
+   ([clamshell](am-clamshell-retainer.md)).
+5. If center-distance shrink will fight two round pins, add a **slot** or
+   relieved secondary.
+6. Coupon the locate fit class ([fits](fits-clearances.md)); do not trust CAD
+   coincidence.
+7. After mates: [assembly interference](../../concepts/assembly-interference.md)
+   at the solved pose — locate success ≠ clearance success.
+8. Drawing datums: [GD&T intro](gdt-intro.md) — do not invent ASME text here.
+
 Related: [fits & clearances](fits-clearances.md),
 [tolerance stack-up intro](tolerance-stackup-intro.md).

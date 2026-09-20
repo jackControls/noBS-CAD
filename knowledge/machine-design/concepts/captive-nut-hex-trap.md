@@ -66,5 +66,18 @@ owns the thread.
   [cosmetic threads](cosmetic-threads-vs-clearance.md)
 - No insertion path once the enclosure is closed
 
+
+## VERIFY checklist (before freezing the pocket)
+
+- [ ] Nut SKU named (thread, across-flats, thickness, locking style)
+- [ ] Across-flats + print allowance from coupon — not folklore
+- [ ] Pocket depth ≥ nut thickness (+ locking collar if any)
+- [ ] Floor / lip present if captivity is required
+- [ ] Screw hole is **clearance**, not a plastic thread
+- [ ] Insertion path after supports removed (slot / open face / split)
+- [ ] Remaining walls ≥ process min ([thin walls](am-thin-walls.md))
+- [ ] Tool access for seating; no closed-box surprise
+- [ ] BOM lists purchased nut + screw; CAD helix is cosmetic if shown
+
 Related: [fasteners & joints](fasteners-joints.md),
 [fits & clearances](fits-clearances.md).

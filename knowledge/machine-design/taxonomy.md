@@ -43,7 +43,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Shafts, keys, retaining rings | **planned** | — |
 | Bearings / hubs / seats | **seeded (partial)** | `concepts.bearing-stacks` — [bearing-stacks](../concepts/bearing-stacks.md) |
 | Springs, seals, couplings | **planned** (lid/labyrinth seeded) | enclosure seal: [am-enclosure-lid-gasket-labyrinth](concepts/am-enclosure-lid-gasket-labyrinth.md); springs/couplings still planned |
-| Power screws / lead screws | **planned** | (vise recipe exists) |
+| Power screws / lead screws | **seeded** | `machine-design.concepts.power-screws-lead-screws` — [power-screws-lead-screws](concepts/power-screws-lead-screws.md) |
 
 ## C. Mechanisms
 
@@ -106,6 +106,11 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Edit history not delete-rebuild | **seeded** | `concepts.edit-history-not-delete-rebuild` — [edit-history-not-delete-rebuild](../concepts/edit-history-not-delete-rebuild.md) |
 | Export preflight / 3MF vs STL | **seeded** | `concepts.export-preflight-3mf-stl` — [export-preflight-3mf-stl](../concepts/export-preflight-3mf-stl.md) (pair with [export-print](../concepts/export-print.md), [adversarial-mesh-audit](../concepts/adversarial-mesh-audit.md)) |
 | Unit systems / mm / formula dims | **seeded** | `concepts.unit-systems-mm-default` — [unit-systems-mm-default](../concepts/unit-systems-mm-default.md) |
+| Soft disclosure / focus packs | **seeded** | `concepts.soft-disclosure-focus-packs` — [soft-disclosure-focus-packs](../concepts/soft-disclosure-focus-packs.md) |
+| Attach vs headless sessions | **seeded** | `concepts.attach-vs-headless-sessions` — [attach-vs-headless-sessions](../concepts/attach-vs-headless-sessions.md) |
+| Parametric formulas / driven dims | **seeded** | `concepts.parametric-formulas-driven-dims` — [parametric-formulas-driven-dims](../concepts/parametric-formulas-driven-dims.md) |
+| Selection / topology ids (MCP) | **seeded** | `concepts.selection-topology-ids-mcp` — [selection-topology-ids-mcp](../concepts/selection-topology-ids-mcp.md) |
+| Power screws / lead screws | **seeded** | `machine-design.concepts.power-screws-lead-screws` — [power-screws-lead-screws](concepts/power-screws-lead-screws.md) |
 
 ## Still thin / planned (honest)
 
@@ -115,7 +120,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Inspection / metrology bridge | still **planned** |
 | Shafts, keys, retaining rings | still **planned** |
 | Springs / couplings (beyond lid seal) | still **planned** |
-| Power screws / lead screws distill | vise recipe exists; concept **planned** |
+| Power screws / lead screws distill | **seeded** — [power-screws-lead-screws](concepts/power-screws-lead-screws.md) |
 | Linkages / gears / cams / belts mobility | gears product page exists; mechanisms **planned** |
 | Materials allowables tables | **planned** (no MatWeb); vocabulary seeded |
 | Full NASA fastener preload distill | overview + hole/insert pages seeded; deep sizing **TODO** |
@@ -128,7 +133,7 @@ such as: `dfam`, `am`, `fdm`, `fasteners`, `joints`, `hardware`, `enclosures`,
 `cables`, `seals`, `threads`, `fits`, `gdt`, `locators`, `print`, `snap-fit`,
 `recipes`, `manufacturing`, `research`, `validation`, `assembly`, `mcp`, `bearings`,
 `mechanisms`, `dfa`, `datums`, `sketch`, `holes`, `history`, `export`, `units`,
-`modeling`, `workflow`. Use `topics` then `search` with those words; `get` with an id
+`modeling`, `workflow`, `disclosure`, `focus`, `sessions`, `parametric`, `selection`, `topology`, `mechanisms`. Use `topics` then `search` with those words; `get` with an id
 from the tables above.
 
 ## Live examples

@@ -48,6 +48,24 @@ dumping pages.
 - Prefer blank-document scripts (`cad_interface` action `script` with a recipe
   id or JSONC source) over hand-rolling every call for known lessons.
 
+
+## Blank-document script rule
+
+Recipes and long `cad_interface` / `cad_script` demos assume a **blank**
+document (or a document you intentionally wiped). Do not replay a lesson into a
+reviewed product model.
+
+| Situation | Action |
+|-----------|--------|
+| Teaching / coupon / recipe id | `cad_new_project` (or equivalent blank) → then `cad_interface` `{ "action": "script", "recipe": "<id>", "mode": "fast" }` |
+| Live desktop already has work | **Do not** attach-and-script over it; open a new project or detach and use headless |
+| Debugging one feature on an existing part | Prefer `solid_edit_*` + [inspect between mutates](inspect-between-mutates.md), not full recipe replay |
+| Recipe failed mid-way | New blank doc; do not “resume” into a half-built scene unless the recipe says so |
+
+Headless goldens and CI follow the same rule: fresh process, blank doc, recipe
+id from the catalog. Soft focus still applies — see
+[soft disclosure & focus packs](soft-disclosure-focus-packs.md).
+
 ## Recipes and presentation deep-links
 
 Help pages list `related_recipes`. Those ids are the same catalog as

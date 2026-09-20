@@ -68,6 +68,30 @@ keepers. `garden-bench` is timber stock plus fasteners as open inputs.
 `mounting-plate` exercises clearance patterns. Keep hardware as named purchased
 parts.
 
+
+## Preload checklist (NASA RP-1228 distill — not sizing)
+
+Use this as a **joint hygiene** gate. It does **not** replace torque/tension
+calculations or the full NASA Fastener Design Manual.
+
+1. **Joint opens under load?** If yes, preload (or redesign) is the issue — not
+   a longer bolt alone.
+2. **Grip stack** — clamped parts + washers; bolt length leaves full nut/insert
+   engagement without bottoming in a blind hole.
+3. **Engagement** — nut/insert thread length appropriate for the material pair;
+   plastic inserts ≠ steel nut rules.
+4. **Bending** — prying, uneven clamp faces, and single-plane soft joints kill
+   fatigue life; add stiffening or relocate.
+5. **Locking choice** — prevailing torque, chemical, mechanical — named for
+   vibration/thermal cycles.
+6. **Re-torque / inspect policy** — who checks after first heat/vibration cycle.
+7. **AM specials** — heat-set / hex trap / clearance roles already chosen
+   ([heat-set](am-heat-set-inserts.md), [captive nut](captive-nut-hex-trap.md)).
+8. **BOM line** — size, grade/class, length, head, finish, locking — not “M3 screw.”
+
+Deep numeric preload/torque tables remain **TODO** (taxonomy Still thin). Prefer
+vendor + NASA RP-1228 for sizing; this page stays checklist-only.
+
 Related: [Materials vocabulary](materials-vocabulary.md),
 [AM assembly join choice](am-assembly-join-choice.md),
 [taxonomy](../taxonomy.md).

@@ -44,6 +44,10 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Edit history discipline | `concepts.edit-history-not-delete-rebuild` | Edit history — do not delete-rebuild |
 | Export preflight 3MF/STL | `concepts.export-preflight-3mf-stl` | Export preflight — 3MF vs STL |
 | Unit systems / mm | `concepts.unit-systems-mm-default` | Unit systems — mm default |
+| Soft disclosure / focus packs | `concepts.soft-disclosure-focus-packs` | Soft disclosure, focus packs |
+| Attach vs headless sessions | `concepts.attach-vs-headless-sessions` | Attach vs headless sessions |
+| Parametric formulas / driven dims | `concepts.parametric-formulas-driven-dims` | Parametric formulas & driven dims |
+| Selection / topology ids (MCP) | `concepts.selection-topology-ids-mcp` | Selection & topology ids for MCP |
 
 ### Machine design (seeded highlights)
 
@@ -84,6 +88,11 @@ Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 - [Edit history not delete-rebuild](concepts/edit-history-not-delete-rebuild.md) - Prefer `solid_edit_*` over remodel.
 - [Export preflight 3MF vs STL](concepts/export-preflight-3mf-stl.md) - AM format choice + preflight checklist.
 - [Unit systems mm default](concepts/unit-systems-mm-default.md) - mm default; formula dim pitfalls.
+- [Soft disclosure / focus packs](concepts/soft-disclosure-focus-packs.md) - Soft focus packs; `cad_list_all_tools` for planning.
+- [Attach vs headless sessions](concepts/attach-vs-headless-sessions.md) - Headless goldens vs explicit attach/refresh/detach.
+- [Parametric formulas / driven dims](concepts/parametric-formulas-driven-dims.md) - Driving vs driven dims; formula pitfalls.
+- [Selection / topology ids for MCP](concepts/selection-topology-ids-mcp.md) - Capture Body/Face/Edge ids before mutates.
+
 - [Contribution process](concepts/process.md) - Lightweight contribution and review expectations.
 - [Export & print](concepts/export-print.md) - Interchange, print export and qualification boundaries.
 - [Gear identification and compatible pairs](concepts/gears.md) - Module/DP, OD limits, pressure angle, ratio changes and mounting.
@@ -119,6 +128,7 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [GD&T intro](machine-design/concepts/gdt-intro.md) - Datums and feature control frames.
 - [Fits & clearances](machine-design/concepts/fits-clearances.md) - Clearance, locational, interference.
 - [Fasteners & joints](machine-design/concepts/fasteners-joints.md) - Preload and purchased hardware.
+- [Power screws / lead screws](machine-design/concepts/power-screws-lead-screws.md) - Lead vs pitch, wear nuts, VERIFY (not load ratings).
 - [Materials vocabulary](machine-design/concepts/materials-vocabulary.md) - Properties for CAD choices.
 - [DFM overview](machine-design/concepts/dfm-overview.md) - Process families and heuristics.
 - [DFM process guidelines](machine-design/concepts/dfm-process-guidelines.md) - Molding, cast, sheet, weld, EDM, CNC.

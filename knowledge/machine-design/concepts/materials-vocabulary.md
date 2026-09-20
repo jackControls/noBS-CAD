@@ -65,5 +65,27 @@ When the class is plastic/AM, open [AM thin walls](am-thin-walls.md) and
 open [DFM process guidelines](dfm-process-guidelines.md) for the cut/form
 family before inventing exotic alloys.
 
+
+## Allowables honesty checklist
+
+Materials **vocabulary** is not an allowables table. Before quoting a number:
+
+1. **Name the dataset** (vendor datasheet, ASTM/ISO grade sheet, KittyCAD JSON pattern) — never “someone said 70 MPa.”
+2. **Say the condition** — heat treat, print orientation, moisture, temperature, strain rate.
+3. **Separate E / Sy / Sut / fatigue** — do not use hardness as Sy.
+4. **Refuse MatWeb/MakeItFrom scrapes** into the repo or into a drawing title block.
+5. **Mark educational ranges** as educational; shipping allowables come from the responsible engineer’s approved source.
+6. **Couple material ↔ process** — FDM PETG ≠ injection PET; 6061-T6 bar ≠ cast “aluminum.”
+7. **CTE / galvanic / chemical** called out when mixed stacks exist.
+8. **Mass/density** only after envelope is real; density does not fix a bad load path.
+
+## Agent checklist (freeze gate)
+
+- [ ] Process named (stock / print / mold / fab)
+- [ ] Environment and load story named
+- [ ] Mating materials / coatings noted
+- [ ] No untitled strength number on the drawing
+- [ ] Filament “looks strong” rejected as evidence
+
 Related: [DFM overview](dfm-overview.md), [Fasteners & joints](fasteners-joints.md),
 [AM thin walls](am-thin-walls.md), [SOURCES](../SOURCES.md).

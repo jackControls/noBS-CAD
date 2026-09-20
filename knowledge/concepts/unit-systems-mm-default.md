@@ -6,7 +6,7 @@ status: draft
 updated: 2026-09-20
 topics: modeling, mcp, units, dimensions, parametric
 keywords: unit system, millimetre, mm default, inch mm mix, formula dims, parametric dimension, unit pitfall, project units, scale export
-related_recipes: fillet-basics, mounting-plate, turbine-fit-coupons
+related_recipes: fillet-basics, mounting-plate, turbine-fit-coupons, revolved-spacer
 ---
 
 # Unit systems — mm default and formula dimension pitfalls
