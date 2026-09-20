@@ -4524,9 +4524,21 @@ fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-fn plane_bases_coplanar(first: PlaneBasis, second: PlaneBasis) -> bool {
+/// Whether two sketch bases describe the same infinite plane, using the
+/// feature replay tolerances. Editors use this same predicate for references.
+pub fn plane_bases_coplanar(first: PlaneBasis, second: PlaneBasis) -> bool {
     const NORMAL_TOLERANCE: f64 = 1e-6;
     const PLANE_DISTANCE_TOLERANCE_MM: f64 = 1e-5;
+    if !first
+        .normal
+        .iter()
+        .chain(&second.normal)
+        .chain(&first.origin)
+        .chain(&second.origin)
+        .all(|v| v.is_finite())
+    {
+        return false;
+    }
     let first_normal_length = dot(first.normal, first.normal).sqrt();
     let second_normal_length = dot(second.normal, second.normal).sqrt();
     if first_normal_length <= EPS || second_normal_length <= EPS {
@@ -4549,6 +4561,26 @@ fn plane_bases_coplanar(first: PlaneBasis, second: PlaneBasis) -> bool {
 mod tests {
     use super::*;
     use nbcad_core::OriginPlane;
+
+    #[test]
+    fn coplanar_axis_references_reject_nonfinite_planes() {
+        let basis = nbcad_core::PlaneRef::OriginPlane {
+            plane: OriginPlane::Xy,
+        }
+        .origin_basis()
+        .unwrap();
+        assert!(plane_bases_coplanar(basis, basis));
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut other = basis;
+            other.normal[0] = invalid;
+            assert!(!plane_bases_coplanar(basis, other));
+            assert!(!plane_bases_coplanar(other, basis));
+            other = basis;
+            other.origin[2] = invalid;
+            assert!(!plane_bases_coplanar(basis, other));
+            assert!(!plane_bases_coplanar(other, basis));
+        }
+    }
 
     fn catalog() -> Vec<ProfileCatalogItemDto> {
         vec![ProfileCatalogItemDto {

@@ -1029,6 +1029,55 @@ pub(crate) fn dimension_label(world: &mut World, entity: Entity, color: Color) {
 #[derive(Component)]
 struct DestructiveButton;
 
+#[derive(Component)]
+struct PrimaryButton;
+
+#[derive(Component)]
+struct CheckboxDecoration { square: Entity, check: Entity }
+
+/// Use a drawn checkbox rather than relying on font-specific checkbox glyphs.
+/// The enclosing control remains the single focus and activation target.
+pub(crate) fn checkbox_button(world: &mut World, entity: Entity, camera: Entity, checked: bool) {
+    let theme = world.get::<InterfaceButtonStyle>(entity).unwrap().0;
+    let (square, check) = if let Some(parts) = world.get::<CheckboxDecoration>(entity) {
+        (parts.square, parts.check)
+    } else {
+        compact_label(world, entity, 24.);
+        let square = world.spawn((Node {
+            position_type: PositionType::Absolute, left:px(4.), top:px(8.),
+            width:px(14.), height:px(14.), border:UiRect::all(px(1.)),
+            border_radius:BorderRadius::all(px(2.)), ..default()
+        }, UiTargetCamera(camera))).id();
+        let check = ribbon::decoration(world, camera, ribbon::Icon::Finish, Color::WHITE);
+        world.entity_mut(check).insert(Node {
+            position_type:PositionType::Absolute, left:px(1.),top:px(1.),
+            width:px(10.),height:px(10.),..default()
+        });
+        world.entity_mut(square).add_child(check);
+        world.entity_mut(entity).add_child(square).insert(CheckboxDecoration {square, check});
+        (square, check)
+    };
+    let background = BackgroundColor(if checked { theme.accent } else { Color::NONE });
+    let border = BorderColor::all(if checked {theme.accent} else {theme.mute});
+    if world.get::<BackgroundColor>(square) != Some(&background) { world.entity_mut(square).insert(background); }
+    if world.get::<BorderColor>(square) != Some(&border) { world.entity_mut(square).insert(border); }
+    let visibility=if checked {Visibility::Inherited} else {Visibility::Hidden};
+    if world.get::<Visibility>(check) != Some(&visibility) {world.entity_mut(check).insert(visibility);}
+}
+
+pub(crate) fn primary_button(world: &mut World, entity: Entity) {
+    if world.get::<PrimaryButton>(entity).is_some() { return; }
+    let mut theme=world.get::<InterfaceButtonStyle>(entity).unwrap().0;
+    theme.panel=theme.accent;
+    theme.hover=ribbon::css_mix(Color::WHITE,theme.accent,0.12);
+    theme.accent_soft=theme.panel;
+    theme.ink=Color::WHITE;theme.accent=Color::WHITE;theme.edge=theme.panel;
+    let label=world.get::<InterfaceLabel>(entity).unwrap().0;
+    let assets=world.resource::<ViewportUiAssets>().clone();
+    world.entity_mut(label).insert(theme.text(&assets,12.,FontWeight::SEMIBOLD));
+    world.entity_mut(entity).remove::<InterfaceFlat>().insert((InterfaceButtonStyle(theme),PrimaryButton));
+}
+
 pub(crate) fn destructive_button(world: &mut World, entity: Entity) {
     if world.get::<DestructiveButton>(entity).is_some() {
         return;
@@ -1243,8 +1292,6 @@ fn update_controls(
                 ribbon.ink(theme, control.disabled)
             } else if control.disabled {
                 theme.mute
-            } else if active && flat.is_none() {
-                theme.accent
             } else {
                 theme.ink
             };

@@ -120,7 +120,7 @@ fn require_idle_model(world: &World) -> Result<(), String> {
     if worker::busy(world) {
         return Err("Wait for the current operation to finish".into());
     }
-    if extrude::panel(world).is_some() {
+    if build::panel(world).is_some() {
         return Err("Apply or cancel Extrude before changing files".into());
     }
     let (_, _, view, _) = native_viewport::interface_view_snapshot(world);

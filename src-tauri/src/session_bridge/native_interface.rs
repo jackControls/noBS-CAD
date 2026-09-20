@@ -22,7 +22,7 @@ use crate::{
 
 #[cfg(feature = "dev-bevy-host")]
 pub(crate) mod controller;
-pub(crate) mod extrude;
+pub(crate) mod build;
 mod history;
 mod prepared;
 mod publication;
@@ -314,7 +314,7 @@ pub(crate) enum NativeCommand {
     Browser(controller::browser::BrowserCommand),
     #[cfg(feature = "dev-bevy-host")]
     History(controller::history::HistoryCommand),
-    Extrude(extrude::ExtrudeCommand),
+    Build(build::BuildCommand),
     Mutation {
         operation: String,
         arguments: Value,
@@ -415,8 +415,8 @@ pub(crate) fn reduce_action(
     if !control.visible || control.disabled {
         return Err("Native control is no longer available".into());
     }
-    if let NativeCommand::Extrude(command) = &binding.command {
-        return extrude::reduce(
+    if let NativeCommand::Build(command) = &binding.command {
+        return build::reduce(
             engine,
             bridge,
             world,
@@ -505,7 +505,7 @@ pub(crate) fn reduce_action(
         NativeCommand::Browser(_)=>unreachable!("Browser input is reduced before button activation"),
         #[cfg(feature="dev-bevy-host")]
         NativeCommand::History(_)=>unreachable!("History input is reduced before button activation"),
-        NativeCommand::Extrude(_)=>unreachable!("Extrude fields are reduced before button activation"),
+        NativeCommand::Build(_)=>unreachable!("Extrude fields are reduced before button activation"),
         NativeCommand::CancelClose | NativeCommand::DiscardAndClose => {
             bridge.with_native_document_owner(engine, &action.context, || {
                 handle.validate_action(action)?;

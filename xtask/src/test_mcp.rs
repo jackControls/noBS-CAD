@@ -8,6 +8,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     if suite == "native-sketch" {
         return crate::native_sketch_test::run(args);
     }
+    if suite == "native-build" {
+        return crate::native_build_test::run(args);
+    }
     if suite == "playback" {
         return crate::playback_test::run(&args.collect::<Vec<_>>()).map_err(anyhow::Error::msg);
     }

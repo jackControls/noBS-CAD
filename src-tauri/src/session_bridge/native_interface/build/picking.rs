@@ -1,4 +1,4 @@
-//! Extrude reference acquisition from the same camera and geometry as rendering.
+//! feature reference acquisition from the same camera and geometry as rendering.
 use super::*;
 use crate::native_viewport::NativePickPurpose;
 use crate::session_bridge::native_interface::controller::NativeServices;
@@ -37,19 +37,40 @@ pub(crate) fn handle_canvas_pick(
         return Ok(None);
     };
     if panel.busy {
-        return Err("Wait for Extrude to finish".into());
+        return Err("Wait for the feature to finish".into());
     }
     let pick = services.bridge.with_native_document_receipt(&services.engine, owner, |revision| {
-        let editor = world.resource::<NativeExtrude>().editor.as_ref().ok_or("Extrude is closed")?;
+        let editor = world.resource::<NativeBuild>().editor.as_ref().ok_or("The feature form is closed")?;
         if editor.id != panel.form_id || editor.snapshot.receipt.owner != *owner || editor.snapshot.receipt.revision != revision {
-            return Err("The model changed; reopen Extrude before selecting references".into());
+            return Err("The model changed; reopen the feature before selecting references".into());
         }
         let hit = native_viewport::interface_pick(world,&owner.document_id,point,NativePickPurpose::Geometry)?;
         let (_,camera,presentation,_) = native_viewport::interface_view_snapshot(world);
         let camera = bevy::math::DVec3::from_array(camera.position.map(f64::from));
         let mut nearest = hit.as_ref().map(|hit| f64::from(hit.distance)).unwrap_or(f64::INFINITY);
+        if target==BuildField::AxisLine {
+            let model=editor.snapshot.model(editor.form.source());
+            let cursor=bevy::math::Vec2::from_array(point);
+            let mut candidate=None;
+            for sketch in &editor.snapshot.viewport.profile_catalog {
+                if presentation.hidden_sketch_names.contains(&sketch.sketch_name) {continue;}
+                for line in &sketch.lines {
+                    if !editor.form.accepts_axis(&sketch.sketch_name,line.entity_id,&model) {continue;}
+                    let Some(a)=native_viewport::interface_world_point(world,&owner.document_id,sketch.basis.to_3d([line.start.x,line.start.y]))? else {continue};
+                    let Some(b)=native_viewport::interface_world_point(world,&owner.document_id,sketch.basis.to_3d([line.end.x,line.end.y]))? else {continue};
+                    let a=bevy::math::Vec2::from_array(a);let b=bevy::math::Vec2::from_array(b);let delta=b-a;
+                    let t=if delta.length_squared()>1e-10 {((cursor-a).dot(delta)/delta.length_squared()).clamp(0.,1.)} else {0.};
+                    let distance=cursor.distance(a+delta*t);
+                    if distance<=7. && candidate.as_ref().is_none_or(|(best,_,_)|distance<*best) {
+                        candidate=Some((distance,sketch.sketch_name.clone(),line.entity_id));
+                    }
+                }
+            }
+            return candidate.map(|(_,sketch_name,entity_id)|BuildPick::AxisLine {sketch_name,entity_id})
+                .ok_or_else(||"Pick a straight line on the profile's plane".into());
+        }
         let mut profile = None;
-        if target == ExtrudeField::Source {
+        if target == BuildField::Source {
             for sketch in &editor.snapshot.viewport.profile_catalog {
                 if presentation.hidden_sketch_names.contains(&sketch.sketch_name) { continue; }
                 let Some(local) = native_viewport::interface_sketch_point(world,&owner.document_id,point,sketch.basis)? else { continue; };
@@ -63,13 +84,20 @@ pub(crate) fn handle_canvas_pick(
                 }
             }
         }
-        if let Some(profile) = profile { return Ok(ExtrudePick::Profiles(vec![profile])); }
-        let hit = hit.ok_or("No selectable Extrude reference at this point")?;
+        if let Some(profile) = profile {
+            let mut profiles=match editor.form.source() {
+                ProfileSource::Profiles {sketch_name,indices} if *sketch_name==profile.sketch_name => indices.iter().map(|index|ProfileRefDto {sketch_name:sketch_name.clone(),profile_index:*index}).collect(),
+                _=>Vec::new(),
+            };
+            if let Some(index)=profiles.iter().position(|p|p==&profile) {profiles.remove(index);} else {profiles.push(profile);}
+            return Ok(BuildPick::Profiles(profiles));
+        }
+        let hit = hit.ok_or("No selectable feature reference at this point")?;
         if hit.occurrence_id.is_some() { return Err("Select a part-local reference; occurrence-local Extrude editing is not available yet".into()); }
         match target {
-            ExtrudeField::Targets => Ok(ExtrudePick::Bodies(vec![BodyId(hit.body_id)])),
-            ExtrudeField::Source | ExtrudeField::StopFace => Ok(ExtrudePick::Face(PlanarFaceSourceDto {body_id:BodyId(hit.body_id),face_id:FaceId(hit.face_id)})),
-            _ => Err("This Extrude field does not accept canvas references".into()),
+            BuildField::Targets => Ok(BuildPick::Bodies(vec![BodyId(hit.body_id)])),
+            BuildField::Source | BuildField::StopFace => Ok(BuildPick::Face(PlanarFaceSourceDto {body_id:BodyId(hit.body_id),face_id:FaceId(hit.face_id)})),
+            _ => Err("This feature field does not accept canvas references".into()),
         }
     })?;
     accept_pick(

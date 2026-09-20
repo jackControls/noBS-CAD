@@ -1,50 +1,12 @@
 //! Exercises rendered native controls and the canvas through MCP. The caller
 //! supplies one blank development document; this fixture never launches a GUI,
 //! closes a window, replaces a document or discards another person's work.
+use crate::native_fixture::{click, control, controls, sketch, start, ui, Fixture};
 use crate::replay::Client;
 use anyhow::{ensure, Context, Result};
 use serde_json::{json, Value};
-use std::{collections::HashMap, fs, path::PathBuf, process::Command, time::Duration};
+use std::fs;
 
-fn controls(value: &Value) -> impl Iterator<Item = &Value> {
-    value["ui"]["surfaces"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .flat_map(|s| s["controls"].as_array().into_iter().flatten())
-}
-fn ui(client: &mut Client, request: Value) -> Result<Value> {
-    let result = client.call("cad_interface", request)?;
-    ensure!(result["status"] == "applied", "Interface failed: {result}");
-    Ok(result)
-}
-fn control(client: &mut Client, label: &str, value: Option<&str>) -> Result<Value> {
-    let inspected = ui(client, json!({"action":"inspect"}))?;
-    let found: Vec<_> = controls(&inspected)
-        .filter(|c| c["label"] == label && c["disabled"] == false)
-        .collect();
-    ensure!(
-        found.len() == 1,
-        "Expected one enabled {label}, got {found:?}"
-    );
-    ui(
-        client,
-        if let Some(value) = value {
-            json!({"action":"set_value","target":found[0]["id"],"value":value})
-        } else {
-            json!({"action":"click","target":found[0]["id"]})
-        },
-    )
-}
-fn sketch(client: &mut Client) -> Result<Value> {
-    client.call("sketch_active", json!({}))
-}
-fn click(client: &mut Client, point: [f64; 2], shift: bool) -> Result<Value> {
-    ui(
-        client,
-        json!({"action":"viewport","gesture":"click","world":[point[0],point[1],0.],"shift":shift}),
-    )
-}
 fn dimension(client: &mut Client) -> Result<Value> {
     let inspected = ui(client, json!({"action":"inspect"}))?;
     let labels: Vec<_> = controls(&inspected)
@@ -146,55 +108,16 @@ fn drawing_sizes(client: &mut Client, out: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
-    let mut options = HashMap::new();
-    while let Some(key) = args.next() {
-        ensure!(
-            ["--server", "--session", "--out"].contains(&key.as_str()),
-            "Unknown option {key}"
-        );
-        let value = args
-            .next()
-            .with_context(|| format!("Missing value for {key}"))?;
-        ensure!(
-            options.insert(key.clone(), value).is_none(),
-            "Duplicate option {key}"
-        );
-    }
-    let server = options
-        .get("--server")
-        .context("Use --server PATH for the rebuilt CAD binary")?;
-    let session = options
-        .get("--session")
-        .context("Use --session UUID for an existing blank native document")?;
-    let out = PathBuf::from(
-        options
-            .get("--out")
-            .context("Use --out PATH for local evidence")?,
-    );
-    ensure!(out.is_absolute(), "The evidence directory must be absolute");
-    let project = out.join("native-sketch.nbcad");
-    let capture = out.join("native-sketch.png");
-    let report = out.join("native-sketch.json");
-    ensure!(
-        !project.exists() && !capture.exists() && !report.exists(),
-        "Choose a fresh evidence directory; existing results are preserved"
-    );
-    fs::create_dir_all(&out)?;
-    let mut command = Command::new(server);
-    command.arg("--headless");
-    let mut client = Client::start_command(command, Some(Duration::from_secs(45)))?;
-    client.call("cad_attach", json!({"session_id":session}))?;
-    let document = client.call("cad_document", json!({}))?;
-    ensure!(
-        document["features"].as_array().is_some_and(Vec::is_empty),
-        "The selected document contains work; choose a blank document"
-    );
-    ensure!(
-        sketch(&mut client)?.is_null(),
-        "Finish the active sketch or choose a blank document"
-    );
-
+pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
+    let Fixture {
+        mut client,
+        server,
+        session,
+        out,
+        project,
+        capture,
+        report,
+    } = start(args, "native-sketch")?;
     control(&mut client, "Sketch on XY", None)?;
     let palette = ui(&mut client, json!({"action":"inspect"}))?;
     ensure!(

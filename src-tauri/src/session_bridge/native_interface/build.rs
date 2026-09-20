@@ -1,4 +1,4 @@
-//! Native Extrude transaction: retained fields, real shared engine commands,
+//! Native profile-feature transaction: retained fields, real shared engine commands,
 //! and transient renderer data all belong to one exact document revision.
 
 use std::collections::HashMap;
@@ -6,18 +6,18 @@ use std::collections::HashMap;
 use bevy::prelude::{Resource, World};
 use nbcad_core::{BodyId, DocumentDto};
 use nbcad_interface::{ControlInput, DocumentContext};
-use nbcad_solid::{ExtrudeDefinitionDto, PlanarFaceSourceDto, ProfileRefDto};
+use nbcad_solid::{ExtrudeDefinitionDto, PlanarFaceSourceDto, ProfileRefDto, RevolveDefinitionDto};
 use serde_json::{json, Value};
 
 use super::{check_owner, finish_mutation, model_snapshot, workspace::DocumentReceipt};
 use crate::{
-    native_forms::{DimensionKind, ExtrudeForm, ExtrudeSource, FormModel, ParameterValue},
+    native_forms::{BuildForm, DimensionKind, FormModel, ParameterValue, ProfileSource},
     native_viewport::{self, ViewportModel, ViewportPreview},
     session_bridge::{parse_engine_envelope, SessionBridgeState},
     state::AppState,
 };
 
-pub(crate) use crate::native_forms::{ExtrudeField, ExtrudeFieldView};
+pub(crate) use crate::native_forms::{BuildField, BuildFieldView, BuildKind};
 
 mod apply;
 #[cfg(feature = "dev-bevy-host")]
@@ -29,22 +29,23 @@ mod preview;
 pub(crate) use picking::handle_canvas_pick;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ExtrudeCommand {
+pub(crate) enum BuildCommand {
     Open {
+        kind: BuildKind,
         feature_id: Option<u64>,
     },
     Control {
         form_id: u64,
-        action: ExtrudeControl,
+        action: BuildControl,
     },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ExtrudeControl {
-    Field(ExtrudeField),
-    Pick(ExtrudeField),
-    Clear(ExtrudeField),
-    Choose { field: ExtrudeField, option: usize },
+pub(crate) enum BuildControl {
+    Field(BuildField),
+    Pick(BuildField),
+    Clear(BuildField),
+    Choose { field: BuildField, option: usize },
     Apply,
     Cancel,
 }
@@ -53,21 +54,23 @@ pub(crate) enum ExtrudeControl {
 /// Occurrence picks must be resolved to the edited component by the caller;
 /// a placed assembly face is not a source-local face with the same integer ID.
 #[derive(Clone, Debug)]
-pub(crate) enum ExtrudePick {
+pub(crate) enum BuildPick {
     Profiles(Vec<ProfileRefDto>),
     Bodies(Vec<BodyId>),
     Face(PlanarFaceSourceDto),
+    AxisLine { sketch_name: String, entity_id: u64 },
 }
 
-pub(crate) struct ExtrudePanel {
+pub(crate) struct BuildPanel {
+    pub kind: BuildKind,
     pub form_id: u64,
-    pub fields: Vec<ExtrudeFieldView>,
+    pub fields: Vec<BuildFieldView>,
     pub can_apply: bool,
     pub busy: bool,
     pub error: Option<String>,
     pub preview_notice: Option<String>,
-    pub pick_target: Option<ExtrudeField>,
-    pub choice_field: Option<ExtrudeField>,
+    pub pick_target: Option<BuildField>,
+    pub choice_field: Option<BuildField>,
 }
 
 struct Snapshot {
@@ -110,9 +113,9 @@ impl Snapshot {
         }
     }
 
-    fn model(&self, source: &ExtrudeSource) -> FormModel<'_> {
+    fn model(&self, source: &ProfileSource) -> FormModel<'_> {
         let parameters = match source {
-            ExtrudeSource::Profiles { sketch_name, .. } => self
+            ProfileSource::Profiles { sketch_name, .. } => self
                 .parameters
                 .get(sketch_name)
                 .map(Vec::as_slice)
@@ -132,17 +135,17 @@ impl Snapshot {
 
 struct Editor {
     id: u64,
-    form: ExtrudeForm,
+    form: BuildForm,
     snapshot: Snapshot,
     previous_preview: ViewportPreview,
     preview_revision: u64,
     preview_notice: Option<String>,
-    pick_target: Option<ExtrudeField>,
-    choice_field: Option<ExtrudeField>,
+    pick_target: Option<BuildField>,
+    choice_field: Option<BuildField>,
 }
 
 #[derive(Resource, Default)]
-struct NativeExtrude {
+struct NativeBuild {
     last_id: u64,
     editor: Option<Editor>,
 }
@@ -172,16 +175,17 @@ fn with_receipt<T>(
 fn check_revision(editor: &Editor, receipt: &DocumentReceipt) -> Result<(), String> {
     if editor.snapshot.receipt != *receipt {
         return Err(
-            "The design changed; cancel and reopen Extrude with its current references".into(),
+            "The design changed; cancel and reopen the feature with its current references".into(),
         );
     }
     Ok(())
 }
 
-pub(crate) fn panel(world: &World) -> Option<ExtrudePanel> {
-    let editor = world.get_resource::<NativeExtrude>()?.editor.as_ref()?;
+pub(crate) fn panel(world: &World) -> Option<BuildPanel> {
+    let editor = world.get_resource::<NativeBuild>()?.editor.as_ref()?;
     let model = editor.snapshot.model(editor.form.source());
-    Some(ExtrudePanel {
+    Some(BuildPanel {
+        kind: editor.form.kind(),
         form_id: editor.id,
         fields: editor.form.fields(&model),
         can_apply: editor.form.can_apply(&model),
@@ -201,7 +205,7 @@ pub(crate) fn synchronize(
     world: &mut World,
     owner: &DocumentContext,
 ) -> Result<(), String> {
-    let mut state = world.remove_resource::<NativeExtrude>().unwrap_or_default();
+    let mut state = world.remove_resource::<NativeBuild>().unwrap_or_default();
     let result = with_receipt(bridge, engine, owner, |receipt| {
         if state
             .editor
@@ -227,13 +231,20 @@ fn update_preview(editor: &mut Editor, world: &mut World) -> Result<(), String> 
     let model = editor.snapshot.model(editor.form.source());
     // Invalid text remains the actual field draft, but must not leave a
     // stale last-valid extrusion appearing to describe the invalid input.
-    let (next, notice) = match editor.form.prepare_preview(&model) {
-        Ok(ticket) => match preview::build(ticket.request(), &editor.snapshot.viewport) {
-            Ok(next) if editor.form.accepts_preview(&ticket, &model) => (next, None),
-            Ok(_) => return Err("Extrude preview was superseded".into()),
-            Err(error) => (ViewportPreview::default(), Some(error)),
-        },
-        Err(_) => (ViewportPreview::default(), None),
+    let (next, notice) = if editor.form.kind() == BuildKind::Revolve {
+        match preview::revolve_references(&editor.form, &model) {
+            Ok(value) => (value, None),
+            Err(e) => (ViewportPreview::default(), Some(e)),
+        }
+    } else {
+        match editor.form.prepare_preview(&model) {
+            Ok(ticket) => match preview::build(ticket.request(), &editor.snapshot.viewport) {
+                Ok(next) if editor.form.accepts_preview(&ticket, &model) => (next, None),
+                Ok(_) => return Err("Extrude preview was superseded".into()),
+                Err(error) => (ViewportPreview::default(), Some(error)),
+            },
+            Err(_) => (ViewportPreview::default(), None),
+        }
     };
     native_viewport::apply_interface_preview(world, &model.owner.document_id, next)?;
     editor.preview_revision = native_viewport::interface_preview_revision(world);
@@ -241,7 +252,7 @@ fn update_preview(editor: &mut Editor, world: &mut World) -> Result<(), String> 
     Ok(())
 }
 
-fn selected_source(world: &World) -> Result<Option<ExtrudePick>, String> {
+fn selected_source(world: &World) -> Result<Option<BuildPick>, String> {
     let (_, _, presentation, _) = native_viewport::interface_view_snapshot(world);
     if presentation.selected_occurrence_id.is_some() {
         return Err(
@@ -249,13 +260,13 @@ fn selected_source(world: &World) -> Result<Option<ExtrudePick>, String> {
         );
     }
     if !presentation.selected_profiles.is_empty() {
-        return Ok(Some(ExtrudePick::Profiles(presentation.selected_profiles)));
+        return Ok(Some(BuildPick::Profiles(presentation.selected_profiles)));
     }
     match (
         presentation.selected_body_ids.as_slice(),
         presentation.selected_face_ids.as_slice(),
     ) {
-        ([body], [face]) => Ok(Some(ExtrudePick::Face(PlanarFaceSourceDto {
+        ([body], [face]) => Ok(Some(BuildPick::Face(PlanarFaceSourceDto {
             body_id: BodyId(*body),
             face_id: nbcad_core::FaceId(*face),
         }))),
@@ -263,10 +274,13 @@ fn selected_source(world: &World) -> Result<Option<ExtrudePick>, String> {
     }
 }
 
-fn apply_pick(editor: &mut Editor, pick: ExtrudePick) -> Result<(), String> {
+fn apply_pick(editor: &mut Editor, pick: BuildPick) -> Result<(), String> {
     let model = editor.snapshot.model(editor.form.source());
     match (editor.pick_target, pick) {
-        (Some(ExtrudeField::Source), ExtrudePick::Profiles(profiles)) => {
+        (Some(BuildField::Source), BuildPick::Profiles(profiles)) => {
+            if profiles.is_empty() {
+                return editor.form.set_source(ProfileSource::None, &model);
+            }
             let first = profiles
                 .first()
                 .ok_or("Select at least one closed profile")?;
@@ -277,7 +291,7 @@ fn apply_pick(editor: &mut Editor, pick: ExtrudePick) -> Result<(), String> {
                 return Err("Extrude source profiles must belong to one sketch".into());
             }
             editor.form.set_source(
-                ExtrudeSource::Profiles {
+                ProfileSource::Profiles {
                     sketch_name: first.sketch_name.clone(),
                     indices: profiles
                         .iter()
@@ -287,16 +301,23 @@ fn apply_pick(editor: &mut Editor, pick: ExtrudePick) -> Result<(), String> {
                 &model,
             )
         }
-        (Some(ExtrudeField::Source), ExtrudePick::Face(face)) => {
-            editor.form.set_source(ExtrudeSource::Face(face), &model)
+        (Some(BuildField::Source), BuildPick::Face(face)) => {
+            editor.form.set_source(ProfileSource::Face(face), &model)
         }
-        (Some(ExtrudeField::Targets), ExtrudePick::Bodies(bodies)) => {
+        (Some(BuildField::Targets), BuildPick::Bodies(bodies)) => {
             editor.form.set_targets(bodies, &model)
         }
-        (Some(ExtrudeField::StopFace), ExtrudePick::Face(face)) => {
+        (Some(BuildField::StopFace), BuildPick::Face(face)) => {
             editor.form.set_stop_face(Some(face), &model)
         }
-        _ => Err("This selection does not match the active Extrude reference field".into()),
+        (
+            Some(BuildField::AxisLine),
+            BuildPick::AxisLine {
+                sketch_name,
+                entity_id,
+            },
+        ) => editor.form.set_axis(Some((sketch_name, entity_id)), &model),
+        _ => Err("This selection does not match the active feature reference field".into()),
     }
 }
 
@@ -306,17 +327,17 @@ pub(crate) fn accept_pick(
     world: &mut World,
     owner: &DocumentContext,
     form_id: u64,
-    pick: ExtrudePick,
+    pick: BuildPick,
     validate_control: impl FnOnce() -> Result<(), String>,
 ) -> Result<Value, String> {
-    let mut state = world.remove_resource::<NativeExtrude>().unwrap_or_default();
+    let mut state = world.remove_resource::<NativeBuild>().unwrap_or_default();
     let result = with_receipt(bridge, engine, owner, |receipt| {
         validate_control()?;
         let editor = state
             .editor
             .as_mut()
             .filter(|editor| editor.id == form_id)
-            .ok_or("The Extrude form changed")?;
+            .ok_or("The feature form changed")?;
         check_revision(editor, &receipt)?;
         apply_pick(editor, pick)?;
         update_preview(editor, world)?;
@@ -331,13 +352,13 @@ pub(crate) fn reduce(
     bridge: &SessionBridgeState,
     world: &mut World,
     owner: &DocumentContext,
-    command: &ExtrudeCommand,
+    command: &BuildCommand,
     input: &ControlInput,
     validate_control: impl FnOnce() -> Result<(), String>,
 ) -> Result<Value, String> {
     if matches!(input, ControlInput::Key(key) if key.key == "Escape" && !key.ctrl && !key.meta && !key.alt && !key.shift)
     {
-        if let ExtrudeCommand::Control { form_id, .. } = command {
+        if let BuildCommand::Control { form_id, .. } = command {
             // The focused field's original binding/owner still authorize
             // this input; Escape closes that same form, not a later editor.
             return reduce(
@@ -345,9 +366,9 @@ pub(crate) fn reduce(
                 bridge,
                 world,
                 owner,
-                &ExtrudeCommand::Control {
+                &BuildCommand::Control {
                     form_id: *form_id,
-                    action: ExtrudeControl::Cancel,
+                    action: BuildControl::Cancel,
                 },
                 &ControlInput::Click,
                 validate_control,
@@ -356,8 +377,8 @@ pub(crate) fn reduce(
     }
     let field_edit = matches!(
         command,
-        ExtrudeCommand::Control {
-            action: ExtrudeControl::Field(_),
+        BuildCommand::Control {
+            action: BuildControl::Field(_),
             ..
         }
     );
@@ -371,9 +392,9 @@ pub(crate) fn reduce(
         ))
         || (!field_edit && !super::is_activation(input))
     {
-        return Err("This input does not match the Extrude control".into());
+        return Err("This input does not match the feature control".into());
     }
-    let mut state = world.remove_resource::<NativeExtrude>().unwrap_or_default();
+    let mut state = world.remove_resource::<NativeBuild>().unwrap_or_default();
     let result = reduce_owned(
         engine,
         bridge,
@@ -393,32 +414,42 @@ fn reduce_owned(
     bridge: &SessionBridgeState,
     world: &mut World,
     owner: &DocumentContext,
-    command: &ExtrudeCommand,
+    command: &BuildCommand,
     input: &ControlInput,
     validate_control: impl FnOnce() -> Result<(), String>,
-    state: &mut NativeExtrude,
+    state: &mut NativeBuild,
 ) -> Result<Value, String> {
-    if let ExtrudeCommand::Open { feature_id } = command {
+    if let BuildCommand::Open { kind, feature_id } = command {
         return with_receipt(bridge, engine, owner, |receipt| {
             validate_control()?;
             if state.editor.is_some() {
-                return Err("Finish or cancel the open Extrude form first".into());
+                return Err("Finish or cancel the open feature form first".into());
             }
             let id = state
                 .last_id
                 .checked_add(1)
-                .ok_or("Extrude form identities exhausted")?;
+                .ok_or("Feature form identities exhausted")?;
             let snapshot = Snapshot::capture(engine, receipt);
             if snapshot.viewport.active_sketch.is_some() {
-                return Err("Finish the active sketch before opening Extrude".into());
+                return Err("Finish the active sketch before opening a solid feature".into());
             }
             if snapshot.viewport.session_id != owner.document_id
                 || native_viewport::interface_view_snapshot(world).0 != owner.document_id
             {
                 return Err("The rendered design is not current".into());
             }
-            let model = snapshot.model(&ExtrudeSource::None);
-            let form = if let Some(id) = feature_id {
+            let model = snapshot.model(&ProfileSource::None);
+            let form = if let (BuildKind::Revolve, Some(id)) = (kind, feature_id) {
+                let definitions: Vec<RevolveDefinitionDto> = serde_json::from_value(
+                    parse_engine_envelope(engine.engine_call("revolve_definitions", ""))?,
+                )
+                .map_err(|e| e.to_string())?;
+                let definition = definitions
+                    .iter()
+                    .find(|d| d.feature_id.0 == *id)
+                    .ok_or("The selected Revolve no longer exists")?;
+                BuildForm::edit_revolve(definition, &model)?
+            } else if let Some(id) = feature_id {
                 let definitions: Vec<ExtrudeDefinitionDto> = serde_json::from_value(
                     parse_engine_envelope(engine.engine_call("extrude_definitions", ""))?,
                 )
@@ -427,9 +458,9 @@ fn reduce_owned(
                     .iter()
                     .find(|definition| definition.feature_id.0 == *id)
                     .ok_or("The selected Extrude feature no longer exists")?;
-                ExtrudeForm::edit(definition, &model)?
+                BuildForm::edit(definition, &model)?
             } else {
-                ExtrudeForm::new(&model)
+                BuildForm::new_kind(*kind, &model)
             };
             let mut editor = Editor {
                 id,
@@ -438,7 +469,7 @@ fn reduce_owned(
                 previous_preview: native_viewport::interface_preview_snapshot(world),
                 preview_revision: native_viewport::interface_preview_revision(world),
                 preview_notice: None,
-                pick_target: Some(ExtrudeField::Source),
+                pick_target: Some(BuildField::Source),
                 choice_field: None,
             };
             if feature_id.is_none() {
@@ -452,10 +483,10 @@ fn reduce_owned(
             Ok(json!({"form_id":id,"opened":true}))
         });
     }
-    let ExtrudeCommand::Control { form_id, action } = command else {
+    let BuildCommand::Control { form_id, action } = command else {
         unreachable!()
     };
-    if matches!(action, ExtrudeControl::Apply) {
+    if matches!(action, BuildControl::Apply) {
         return apply::begin(
             engine,
             bridge,
@@ -470,14 +501,14 @@ fn reduce_owned(
         .editor
         .as_mut()
         .filter(|editor| editor.id == *form_id)
-        .ok_or("The Extrude form changed")?;
+        .ok_or("The feature form changed")?;
     if editor.form.is_busy() {
-        return Err("Extrude is still applying".into());
+        return Err("The feature is still applying".into());
     }
     let mut close = false;
     let result = with_receipt(bridge, engine, owner, |receipt| {
         validate_control()?;
-        if matches!(action, ExtrudeControl::Cancel) {
+        if matches!(action, BuildControl::Cancel) {
             let owns_preview =
                 native_viewport::interface_preview_revision(world) == editor.preview_revision;
             let can_restore = receipt == editor.snapshot.receipt && owns_preview;
@@ -508,13 +539,13 @@ fn reduce_owned(
         check_revision(editor, &receipt)?;
         let model = editor.snapshot.model(editor.form.source());
         match action {
-            ExtrudeControl::Field(field) => {
+            BuildControl::Field(field) => {
                 let row = editor
                     .form
                     .fields(&model)
                     .into_iter()
                     .find(|row| row.field == *field && row.visible && row.enabled)
-                    .ok_or("This Extrude field is not available")?;
+                    .ok_or("This feature field is not available")?;
                 match (input, row.value) {
                     (ControlInput::SetValue(value), _) => {
                         editor.form.set_value(*field, value, &model)?;
@@ -566,11 +597,11 @@ fn reduce_owned(
                             .ok_or("This field has no available choices")?;
                         editor.form.set_value(*field, &option.value, &model)?;
                     }
-                    _ => return Err("This input does not match the Extrude field".into()),
+                    _ => return Err("This input does not match the feature field".into()),
                 }
             }
-            ExtrudeControl::Choose { field, option } => {
-                if editor.choice_field != Some(*field) {
+            BuildControl::Choose { field, option } => {
+                if editor.choice_field != Some(*field) && *field != BuildField::Axis {
                     return Err("This choice list is closed".into());
                 }
                 let row = editor
@@ -578,7 +609,7 @@ fn reduce_owned(
                     .fields(&model)
                     .into_iter()
                     .find(|row| row.field == *field && row.visible && row.enabled)
-                    .ok_or("This Extrude field is not available")?;
+                    .ok_or("This feature field is not available")?;
                 let nbcad_interface::Field::Choice { options, .. } = row.value else {
                     return Err("This field has no choices".into());
                 };
@@ -589,23 +620,42 @@ fn reduce_owned(
                 editor.form.set_value(*field, &option.value, &model)?;
                 editor.choice_field = None;
             }
-            ExtrudeControl::Pick(field) => {
+            BuildControl::Pick(field) => {
                 if !matches!(
                     field,
-                    ExtrudeField::Source | ExtrudeField::Targets | ExtrudeField::StopFace
+                    BuildField::Source
+                        | BuildField::Targets
+                        | BuildField::StopFace
+                        | BuildField::AxisLine
                 ) {
                     return Err("This field is not a geometry reference".into());
                 }
                 editor.pick_target = Some(*field);
                 editor.choice_field = None;
             }
-            ExtrudeControl::Clear(field) => match field {
-                ExtrudeField::Source => editor.form.set_source(ExtrudeSource::None, &model)?,
-                ExtrudeField::Targets => editor.form.set_targets(Vec::new(), &model)?,
-                ExtrudeField::StopFace => editor.form.set_stop_face(None, &model)?,
+            BuildControl::Clear(field) => match field {
+                BuildField::Source => editor.form.set_source(ProfileSource::None, &model)?,
+                BuildField::Targets => editor.form.set_targets(Vec::new(), &model)?,
+                BuildField::StopFace => editor.form.set_stop_face(None, &model)?,
+                BuildField::AxisLine => editor.form.set_axis(None, &model)?,
                 _ => return Err("This field is not a geometry reference".into()),
             },
-            ExtrudeControl::Apply | ExtrudeControl::Cancel => unreachable!(),
+            BuildControl::Apply | BuildControl::Cancel => unreachable!(),
+        }
+        if matches!(
+            action,
+            BuildControl::Field(BuildField::Axis)
+                | BuildControl::Choose {
+                    field: BuildField::Axis,
+                    ..
+                }
+        ) {
+            editor.pick_target = editor
+                .form
+                .fields(&model)
+                .iter()
+                .any(|r| r.field == BuildField::AxisLine && r.visible)
+                .then_some(BuildField::AxisLine);
         }
         update_preview(editor, world)?;
         Ok(json!({"form_id":form_id,"edited":true}))

@@ -436,7 +436,7 @@ fn update_inner(
                 } else {
                     1.
                 };
-                if extrude::panel::scroll_panel(world, cursor.to_array(), wheel.y * factor)
+                if build::panel::scroll_panel(world, cursor.to_array(), wheel.y * factor)
                     || crate::native_editor::panel::scroll_panel(
                         world,
                         cursor.to_array(),
@@ -1063,16 +1063,16 @@ fn synchronize(
     let history = services
         .bridge
         .native_history_available(&services.engine, &owner)?;
-    extrude::synchronize(&services.engine, &services.bridge, world, &owner)?;
-    extrude::panel::synchronize_panel(
+    build::synchronize(&services.engine, &services.bridge, world, &owner)?;
+    build::panel::synchronize_panel(
         world,
         handle,
         &owner,
         InterfaceRect {
-            x: (width - 320.).max(side) as f64,
-            y: top as f64,
+            x: (width - 336.).max(side) as f64,
+            y: (top + 12.) as f64,
             width: 320_f32.min(width - side).max(1.) as f64,
-            height: (height - top - bottom).max(1.) as f64,
+            height: (height - top - bottom - 24.).clamp(1.,580.) as f64,
         },
     )?;
     crate::native_editor::synchronize_controls(
@@ -1161,12 +1161,18 @@ fn synchronize(
         (
             "extrude".to_owned(),
             "Extrude".to_owned(),
-            NativeCommand::Extrude(extrude::ExtrudeCommand::Open { feature_id: None }),
+            NativeCommand::Build(build::BuildCommand::Open { kind:build::BuildKind::Extrude, feature_id: None }),
             presentation.mode == native_viewport::ViewportMode::Sketch
-                || extrude::panel(world).is_some(),
+                || build::panel(world).is_some(),
             270.,
             34.,
             48.,
+        ),
+        (
+            "revolve".to_owned(),"Revolve".to_owned(),
+            NativeCommand::Build(build::BuildCommand::Open {kind:build::BuildKind::Revolve,feature_id:None}),
+            presentation.mode==native_viewport::ViewportMode::Sketch || build::panel(world).is_some(),
+            320.,34.,48.,
         ),
     ];
     if state.close_pending {
@@ -1322,7 +1328,8 @@ fn synchronize(
         }
     });
     for (key, label, command, disabled, x, y, width) in rows {
-        let is_extrude = key == "extrude";
+        let is_extrude = key == "extrude" || key == "revolve";
+        let build_icon = if key=="revolve" {interface_shell::ribbon::Icon::Revolve} else {interface_shell::ribbon::Icon::Extrude};
         let is_body = key.starts_with("body-") || key.starts_with("visibility-");
         let surface = command_group(&command);
         let entity = if let Some(entity) = state.controls.get(&key) {
@@ -1355,7 +1362,7 @@ fn synchronize(
                 interface_shell::ribbon::decorate(
                     world,
                     entity,
-                    interface_shell::ribbon::Icon::Extrude,
+                    build_icon,
                 );
             }
             bind_command(world, entity, command.clone())?;
@@ -1590,7 +1597,7 @@ fn decorate(
 fn command_group(command: &NativeCommand) -> &'static str {
     match command {
         NativeCommand::Sketch(_) => "sketch/draw",
-        NativeCommand::Extrude(_) => nbcad_interface::catalog::group_for("solid_extrude")
+        NativeCommand::Build(_) => nbcad_interface::catalog::group_for("solid_extrude")
             .expect("Extrude is in the product catalog"),
         NativeCommand::Mutation { operation, .. } => {
             nbcad_interface::catalog::group_for(operation).unwrap_or("document/session")

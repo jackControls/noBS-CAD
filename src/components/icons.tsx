@@ -31,14 +31,7 @@ import {
 const GLYPHS: Record<string, ReactNode> = {
   // Solid construction: a profile, transformation path, and result.
   extrude: <SharedRibbonGlyph id="extrude" />,
-  revolve: (
-    <>
-      <path d="M5 3v18" strokeDasharray="2 2" />
-      <path d="M8 18V7h4.5c2.7 0 4.5 2 4.5 5s-1.8 5-4.5 5H8" />
-      <path d="M10 4.5a8.5 8.5 0 0 1 9 4" />
-      <path d="M19 5.5v3h-3" />
-    </>
-  ),
+  revolve: <SharedRibbonGlyph id="revolve" />,
   sweep: (
     <>
       <path d="M3.5 15.5l3-2 3 2-3 2-3-2z" />

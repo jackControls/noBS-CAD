@@ -8,6 +8,56 @@ use crate::native_viewport::{ViewportArrow, ViewportLineLayer, ViewportModel, Vi
 
 const MAX_SEGMENTS: usize = 100_000;
 
+pub(super) fn revolve_references(
+    form: &crate::native_forms::BuildForm,
+    model: &crate::native_forms::FormModel<'_>,
+) -> Result<ViewportPreview, String> {
+    let mut segments = Vec::new();
+    if let crate::native_forms::ProfileSource::Profiles {
+        sketch_name,
+        indices,
+    } = form.source()
+    {
+        if let Some(sketch) = model
+            .profiles
+            .iter()
+            .find(|s| s.sketch_name == *sketch_name)
+        {
+            for profile in sketch.profiles.iter().filter(|p| {
+                indices.contains(&p.index) || p.parent_index.is_some_and(|id| indices.contains(&id))
+            }) {
+                for (a, b) in profile
+                    .points
+                    .iter()
+                    .zip(profile.points.iter().cycle().skip(1))
+                    .take(profile.points.len())
+                {
+                    if segments.len() / 6 >= MAX_SEGMENTS {
+                        return Err("Selected profile is too large to preview".into());
+                    }
+                    segments.extend(sketch.basis.to_3d([a.x, a.y]).map(|v| v as f32));
+                    segments.extend(sketch.basis.to_3d([b.x, b.y]).map(|v| v as f32));
+                }
+            }
+        }
+    }
+    if let Some(axis) = form.revolution_axis(model)? {
+        segments.extend(axis.into_iter().flatten().map(|v| v as f32));
+    }
+    if segments.iter().any(|v| !v.is_finite()) {
+        return Err("Revolve reference exceeds the renderer's range".into());
+    }
+    Ok(ViewportPreview {
+        lines: vec![ViewportLineLayer {
+            color: [0.45, 0.72, 1., 1.],
+            width: 3.,
+            segments,
+            ..Default::default()
+        }],
+        ..Default::default()
+    })
+}
+
 pub(super) fn build(
     request: &ExtrudeRequest,
     model: &ViewportModel,

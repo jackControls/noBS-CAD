@@ -1,6 +1,92 @@
 use super::*;
 use nbcad_core::{Document, FaceId, Feature, UnitSystem};
 
+#[test]
+fn revolve_preserves_axis_identity_and_rejects_non_coplanar_references() {
+    let mut fixture = Fixture::new();
+    let mut axis = fixture.profiles[0].clone();
+    axis.sketch_name = "Axis".into();
+    axis.profiles.clear();
+    axis.lines = vec![nbcad_solid::SketchLineDto {
+        entity_id: 20,
+        start: nbcad_solid::Point2Dto::new(0., 0.),
+        end: nbcad_solid::Point2Dto::new(10., 0.),
+    }];
+    fixture.profiles.push(axis);
+    let mut form = BuildForm::new_kind(BuildKind::Revolve, &fixture.model());
+    form.set_axis(Some(("Axis".into(), 20)), &fixture.model())
+        .unwrap();
+    form.set_source(
+        ProfileSource::Profiles {
+            sketch_name: "Sketch1".into(),
+            indices: vec![0],
+        },
+        &fixture.model(),
+    )
+    .unwrap();
+    form.set_value(BuildField::Angle, "360/2", &fixture.model())
+        .unwrap();
+    assert!(form.can_apply(&fixture.model()));
+    assert_eq!(
+        form.revolution_axis(&fixture.model()).unwrap().unwrap(),
+        [[0., 0., 0.], [10., 0., 0.]]
+    );
+    fixture.profiles[1].basis.origin[2] = 5.;
+    assert!(!form.can_apply(&fixture.model()));
+    assert!(form
+        .fields(&fixture.model())
+        .iter()
+        .any(|f| f.field == BuildField::AxisLine && f.error.is_some()));
+    fixture.profiles[1].basis.origin[2] = 0.;
+    let ticket = form.prepare_apply(&fixture.model()).unwrap();
+    let request: nbcad_solid::RevolveRequest =
+        serde_json::from_value(ticket.arguments().clone()).unwrap();
+    assert_eq!(ticket.operation(), "solid_revolve");
+    assert_eq!(request.axis_line_sketch_name.as_deref(), Some("Axis"));
+    assert_eq!(request.axis_line_entity_id, Some(20));
+    assert_eq!(request.angle_deg, 180.);
+}
+
+#[test]
+fn revolve_hidden_fields_do_not_block_presets_and_custom_units_are_typed() {
+    let fixture = Fixture::new();
+    let model = fixture.model();
+    let mut form = BuildForm::new_kind(BuildKind::Revolve, &model);
+    form.set_source(
+        ProfileSource::Profiles {
+            sketch_name: "Sketch1".into(),
+            indices: vec![0],
+        },
+        &model,
+    )
+    .unwrap();
+    assert!(!form.can_apply(&model));
+    form.set_value(BuildField::Axis, "custom", &model).unwrap();
+    form.set_value(BuildField::OriginX, "broken+", &model)
+        .unwrap();
+    assert!(!form.can_apply(&model));
+    form.set_value(BuildField::Axis, "x", &model).unwrap();
+    assert!(form.can_apply(&model));
+    form.set_value(BuildField::Axis, "custom", &model).unwrap();
+    form.set_value(BuildField::OriginX, "1 in", &model).unwrap();
+    form.set_value(BuildField::DirectionY, "0", &model).unwrap();
+    assert!(!form.can_apply(&model));
+    form.set_value(BuildField::DirectionX, "1", &model).unwrap();
+    form.set_value(BuildField::Operation, "cut", &model)
+        .unwrap();
+    assert!(!form.can_apply(&model));
+    form.set_targets(vec![BodyId(1)], &model).unwrap();
+    assert!(form.can_apply(&model));
+    for invalid in ["0", "361", "-361", "1/0"] {
+        form.set_value(BuildField::Angle, invalid, &model).unwrap();
+        assert!(!form.can_apply(&model));
+    }
+    form.set_value(BuildField::Angle, "90", &model).unwrap();
+    let ticket = form.prepare_apply(&model).unwrap();
+    assert_eq!(ticket.arguments()["axis_origin"]["x"], 25.4);
+    assert_eq!(ticket.arguments()["target_body_ids"], json!([1]));
+}
+
 struct Fixture {
     owner: DocumentContext,
     document: DocumentDto,
@@ -30,11 +116,11 @@ impl Fixture {
             parameters: &[],
         }
     }
-    fn form(&self) -> ExtrudeForm {
+    fn form(&self) -> BuildForm {
         let model = self.model();
-        let mut form = ExtrudeForm::new(&model);
+        let mut form = BuildForm::new(&model);
         form.set_source(
-            ExtrudeSource::Profiles {
+            ProfileSource::Profiles {
                 sketch_name: "Sketch1".into(),
                 indices: vec![0],
             },
@@ -52,9 +138,9 @@ fn typed_measurements_and_field_errors_drive_the_actual_canonical_request() {
     let model = fixture.model();
     let mut form = fixture.form();
     assert!(form.can_apply(&model));
-    form.set_value(ExtrudeField::Distance, "=1/4 in", &model)
+    form.set_value(BuildField::Distance, "=1/4 in", &model)
         .unwrap();
-    form.set_value(ExtrudeField::Taper, "=sin(30)*10 deg", &model)
+    form.set_value(BuildField::Taper, "=sin(30)*10 deg", &model)
         .unwrap();
     let preview = form.prepare_preview(&model).unwrap();
     assert_eq!(
@@ -62,14 +148,13 @@ fn typed_measurements_and_field_errors_drive_the_actual_canonical_request() {
         ExtrudeExtent::Distance { distance: 6.35 }
     );
     assert!((preview.request().taper_angle_deg - 5.).abs() < 1e-12);
-    form.set_value(ExtrudeField::Distance, "1/0", &model)
-        .unwrap();
+    form.set_value(BuildField::Distance, "1/0", &model).unwrap();
     assert!(!form.can_apply(&model));
     assert!(form.prepare_apply(&model).is_err());
     let fields = form.fields(&model);
     let distance = fields
         .iter()
-        .find(|field| field.field == ExtrudeField::Distance)
+        .find(|field| field.field == BuildField::Distance)
         .unwrap();
     assert_eq!(distance.label, "Distance (in)");
     assert!(distance
@@ -85,7 +170,7 @@ fn typed_measurements_and_field_errors_drive_the_actual_canonical_request() {
 fn stop_face_and_target_picks_never_overwrite_the_accepted_source() {
     let fixture = Fixture::new();
     let model = fixture.model();
-    let mut form = ExtrudeForm::new(&model);
+    let mut form = BuildForm::new(&model);
     let source = PlanarFaceSourceDto {
         body_id: BodyId(1),
         face_id: FaceId(11),
@@ -94,9 +179,9 @@ fn stop_face_and_target_picks_never_overwrite_the_accepted_source() {
         body_id: BodyId(1),
         face_id: FaceId(12),
     };
-    form.set_source(ExtrudeSource::Face(source), &model)
+    form.set_source(ProfileSource::Face(source), &model)
         .unwrap();
-    form.set_value(ExtrudeField::Extent, "to_face", &model)
+    form.set_value(BuildField::Extent, "to_face", &model)
         .unwrap();
     form.set_stop_face(Some(stop), &model).unwrap();
     form.set_targets(vec![BodyId(1)], &model).unwrap();
@@ -129,14 +214,14 @@ fn stop_face_feedback_matches_the_kernel_parallel_and_nonzero_extent_contract() 
         .normal = [0., 1., 0.];
     let model = fixture.model();
     let mut form = fixture.form();
-    form.set_value(ExtrudeField::Extent, "to_face", &model)
+    form.set_value(BuildField::Extent, "to_face", &model)
         .unwrap();
     form.set_stop_face(Some(stop), &model).unwrap();
     assert!(!form.can_apply(&model));
     assert!(form
         .fields(&model)
         .into_iter()
-        .find(|field| field.field == ExtrudeField::StopFace)
+        .find(|field| field.field == BuildField::StopFace)
         .unwrap()
         .error
         .unwrap()
@@ -146,7 +231,7 @@ fn stop_face_feedback_matches_the_kernel_parallel_and_nonzero_extent_contract() 
     assert!(form
         .fields(&fixture.model())
         .into_iter()
-        .find(|field| field.field == ExtrudeField::StopFace)
+        .find(|field| field.field == BuildField::StopFace)
         .unwrap()
         .error
         .unwrap()
@@ -161,7 +246,7 @@ fn stale_references_and_invalid_profile_regions_cannot_be_applied() {
     for indices in [vec![1], vec![0, 0], vec![99]] {
         assert!(form
             .set_source(
-                ExtrudeSource::Profiles {
+                ProfileSource::Profiles {
                     sketch_name: "Sketch1".into(),
                     indices
                 },
@@ -202,9 +287,7 @@ fn preview_and_apply_receipts_cannot_complete_newer_edits_or_retry_attempts() {
     let first = form.prepare_apply(&model).unwrap();
     assert!(form.is_busy());
     assert!(!form.accepts_preview(&preview, &model));
-    assert!(form
-        .set_value(ExtrudeField::Distance, "20", &model)
-        .is_err());
+    assert!(form.set_value(BuildField::Distance, "20", &model).is_err());
     assert!(form.cancel(&model).is_err());
     form.apply_failed(&first, &model, "Exact kernel failure".into())
         .unwrap();
@@ -235,21 +318,21 @@ fn extent_specific_validation_ignores_hidden_inputs_and_validates_both_sides() {
     let fixture = Fixture::new();
     let model = fixture.model();
     let mut form = fixture.form();
-    form.set_value(ExtrudeField::Extent, "two_sides", &model)
+    form.set_value(BuildField::Extent, "two_sides", &model)
         .unwrap();
-    form.set_value(ExtrudeField::SecondDistance, "-2", &model)
+    form.set_value(BuildField::SecondDistance, "-2", &model)
         .unwrap();
     assert!(!form.can_apply(&model));
     let fields = form.fields(&model);
     assert!(fields
         .iter()
-        .find(|field| field.field == ExtrudeField::SecondDistance)
+        .find(|field| field.field == BuildField::SecondDistance)
         .unwrap()
         .error
         .is_some());
-    form.set_value(ExtrudeField::Extent, "through_all", &model)
+    form.set_value(BuildField::Extent, "through_all", &model)
         .unwrap();
-    form.set_value(ExtrudeField::Distance, "incomplete+", &model)
+    form.set_value(BuildField::Distance, "incomplete+", &model)
         .unwrap();
     assert!(
         form.can_apply(&model),
@@ -259,13 +342,13 @@ fn extent_specific_validation_ignores_hidden_inputs_and_validates_both_sides() {
         !form
             .fields(&model)
             .iter()
-            .find(|field| field.field == ExtrudeField::Distance)
+            .find(|field| field.field == BuildField::Distance)
             .unwrap()
             .visible
     );
-    form.set_value(ExtrudeField::Taper, "90", &model).unwrap();
+    form.set_value(BuildField::Taper, "90", &model).unwrap();
     assert!(!form.can_apply(&model));
-    form.set_value(ExtrudeField::Taper, "2 mm", &model).unwrap();
+    form.set_value(BuildField::Taper, "2 mm", &model).unwrap();
     assert!(!form.can_apply(&model));
 }
 
@@ -278,7 +361,7 @@ fn editing_preserves_the_existing_feature_id_and_explicit_operation() {
         .push(Feature::new(FeatureId(9), "Extrude", FeatureKind::Extrude));
     let model = fixture.model();
     let definition:ExtrudeDefinitionDto=serde_json::from_value(json!({"feature_id":9,"name":"Extrude","source_face":null,"sketch_name":"Sketch1","profile_indices":[0],"operation":"cut","extent":{"type":"distance","distance":12.},"taper_angle_deg":0.,"flip":true,"target_body_ids":[1],"new_body_ids":[]})).unwrap();
-    let mut form = ExtrudeForm::edit(&definition, &model).unwrap();
+    let mut form = BuildForm::edit(&definition, &model).unwrap();
     let apply = form.prepare_apply(&model).unwrap();
     assert_eq!(apply.operation(), "solid_edit_extrude");
     let request: EditExtrudeRequest = serde_json::from_value(apply.arguments().clone()).unwrap();

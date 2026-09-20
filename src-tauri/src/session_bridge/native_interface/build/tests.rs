@@ -58,7 +58,10 @@ fn open(
         &fixture.bridge,
         world,
         owner,
-        &ExtrudeCommand::Open { feature_id },
+        &BuildCommand::Open {
+            kind: BuildKind::Extrude,
+            feature_id,
+        },
         &ControlInput::Click,
         || Ok(()),
     )
@@ -72,7 +75,7 @@ fn action(
     world: &mut World,
     owner: &DocumentContext,
     form_id: u64,
-    action: ExtrudeControl,
+    action: BuildControl,
     input: ControlInput,
 ) -> Result<Value, String> {
     reduce(
@@ -80,7 +83,7 @@ fn action(
         &fixture.bridge,
         world,
         owner,
-        &ExtrudeCommand::Control { form_id, action },
+        &BuildCommand::Control { form_id, action },
         &input,
         || Ok(()),
     )
@@ -91,7 +94,7 @@ fn field(
     world: &mut World,
     owner: &DocumentContext,
     id: u64,
-    field: ExtrudeField,
+    field: BuildField,
     value: &str,
 ) {
     action(
@@ -99,7 +102,7 @@ fn field(
         world,
         owner,
         id,
-        ExtrudeControl::Field(field),
+        BuildControl::Field(field),
         ControlInput::SetValue(value.into()),
     )
     .unwrap();
@@ -114,6 +117,135 @@ fn maximum_z(fixture: &Fixture) -> f32 {
         .iter()
         .flat_map(|body| body.mesh.positions.chunks_exact(3).map(|point| point[2]))
         .fold(f32::NEG_INFINITY, f32::max)
+}
+
+#[test]
+fn revolve_controls_commit_edit_cancel_and_undo_a_real_parametric_solid() {
+    let _lock = super::super::super::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let owner = sketch(&fixture);
+    let mut app = scene(&fixture, &owner);
+    let open_revolve = |world: &mut World, feature_id| {
+        reduce(
+            &fixture.engine,
+            &fixture.bridge,
+            world,
+            &owner,
+            &BuildCommand::Open {
+                kind: BuildKind::Revolve,
+                feature_id,
+            },
+            &ControlInput::Click,
+            || Ok(()),
+        )
+        .unwrap()["form_id"]
+            .as_u64()
+            .unwrap()
+    };
+    let before = exported(&fixture);
+    let id = open_revolve(app.world_mut(), None);
+    assert!(!panel(app.world()).unwrap().can_apply);
+    field(&fixture, app.world_mut(), &owner, id, BuildField::Axis, "x");
+    field(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        BuildField::Angle,
+        "180",
+    );
+    assert!(panel(app.world()).unwrap().can_apply);
+    assert!(
+        !native_viewport::interface_preview_snapshot(app.world()).lines[0]
+            .segments
+            .is_empty()
+    );
+    assert_eq!(exported(&fixture), before);
+    let result = action(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        BuildControl::Apply,
+        ControlInput::Click,
+    )
+    .unwrap();
+    assert_eq!(result["operation"], "solid_revolve");
+    assert!(
+        result["form_error"].is_null() && result["render_error"].is_null(),
+        "{result}"
+    );
+    assert_eq!(fixture.engine.viewport_snapshot().2.bodies.len(), 1);
+    assert!(fixture.engine.viewport_snapshot().2.errors.is_empty());
+    let feature = fixture
+        .engine
+        .document_snapshot()
+        .features
+        .last()
+        .unwrap()
+        .id;
+    let initial = exported(&fixture);
+    let id = open_revolve(app.world_mut(), Some(feature.0));
+    field(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        BuildField::Angle,
+        "270",
+    );
+    action(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        BuildControl::Cancel,
+        ControlInput::Click,
+    )
+    .unwrap();
+    assert_eq!(exported(&fixture), initial);
+    let id = open_revolve(app.world_mut(), Some(feature.0));
+    field(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        BuildField::Angle,
+        "270",
+    );
+    let result = action(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        BuildControl::Apply,
+        ControlInput::Click,
+    )
+    .unwrap();
+    assert_eq!(result["operation"], "solid_edit_revolve");
+    assert_eq!(
+        fixture
+            .engine
+            .document_snapshot()
+            .features
+            .last()
+            .unwrap()
+            .id,
+        feature
+    );
+    let definitions =
+        || parse_engine_envelope(fixture.engine.engine_call("revolve_definitions", "")).unwrap();
+    assert_eq!(definitions()[0]["angle_deg"], 270.);
+    let undone = fixture
+        .bridge
+        .apply_native_history(&fixture.engine, &owner, false, || Ok(()))
+        .unwrap();
+    assert_eq!(definitions()[0]["angle_deg"], 180.);
+    fixture
+        .bridge
+        .apply_native_history(&fixture.engine, &undone.context, true, || Ok(()))
+        .unwrap();
+    assert_eq!(definitions()[0]["angle_deg"], 270.);
 }
 
 #[test]
@@ -147,7 +279,7 @@ fn actual_preview_and_invalid_fields_never_mutate_the_model_and_cancel_restores_
         app.world_mut(),
         &owner,
         id,
-        ExtrudeField::Distance,
+        BuildField::Distance,
         "2 + (",
     );
     let panel = panel(app.world()).unwrap();
@@ -155,7 +287,7 @@ fn actual_preview_and_invalid_fields_never_mutate_the_model_and_cancel_restores_
     let distance = panel
         .fields
         .iter()
-        .find(|field| field.field == ExtrudeField::Distance)
+        .find(|field| field.field == BuildField::Distance)
         .unwrap();
     assert!(distance.error.is_some());
     assert!(matches!(&distance.value, nbcad_interface::Field::Text {value,..} if value == "2 + ("));
@@ -167,7 +299,7 @@ fn actual_preview_and_invalid_fields_never_mutate_the_model_and_cancel_restores_
         app.world_mut(),
         &owner,
         id,
-        ExtrudeControl::Apply,
+        BuildControl::Apply,
         ControlInput::Click
     )
     .is_err());
@@ -177,7 +309,7 @@ fn actual_preview_and_invalid_fields_never_mutate_the_model_and_cancel_restores_
         app.world_mut(),
         &owner,
         id,
-        ExtrudeControl::Cancel,
+        BuildControl::Cancel,
         ControlInput::Click,
     )
     .unwrap();
@@ -195,7 +327,7 @@ fn actual_preview_and_invalid_fields_never_mutate_the_model_and_cancel_restores_
         app.world_mut(),
         &owner,
         id,
-        ExtrudeControl::Apply,
+        BuildControl::Apply,
         ControlInput::Click
     )
     .is_err());
@@ -214,7 +346,7 @@ fn native_apply_and_edit_recompute_the_real_parametric_extrusion_and_cancel_pres
         app.world_mut(),
         &owner,
         id,
-        ExtrudeField::Distance,
+        BuildField::Distance,
         "=(2 + 3) * 5 mm",
     );
     let result = action(
@@ -222,7 +354,7 @@ fn native_apply_and_edit_recompute_the_real_parametric_extrusion_and_cancel_pres
         app.world_mut(),
         &owner,
         id,
-        ExtrudeControl::Apply,
+        BuildControl::Apply,
         ControlInput::Click,
     )
     .unwrap();
@@ -247,7 +379,7 @@ fn native_apply_and_edit_recompute_the_real_parametric_extrusion_and_cancel_pres
         app.world_mut(),
         &owner,
         edit_id,
-        ExtrudeField::Distance,
+        BuildField::Distance,
         "35 mm",
     );
     assert_eq!(
@@ -260,7 +392,7 @@ fn native_apply_and_edit_recompute_the_real_parametric_extrusion_and_cancel_pres
         app.world_mut(),
         &owner,
         edit_id,
-        ExtrudeControl::Cancel,
+        BuildControl::Cancel,
         ControlInput::Click,
     )
     .unwrap();
@@ -271,7 +403,7 @@ fn native_apply_and_edit_recompute_the_real_parametric_extrusion_and_cancel_pres
         app.world_mut(),
         &owner,
         edit_id,
-        ExtrudeField::Distance,
+        BuildField::Distance,
         "35 mm",
     );
     let result = action(
@@ -279,7 +411,7 @@ fn native_apply_and_edit_recompute_the_real_parametric_extrusion_and_cancel_pres
         app.world_mut(),
         &owner,
         edit_id,
-        ExtrudeControl::Apply,
+        BuildControl::Apply,
         ControlInput::Click,
     )
     .unwrap();
@@ -315,9 +447,9 @@ fn stale_owner_revision_and_cancelled_activation_cannot_commit_or_repaint_old_wo
         &fixture.bridge,
         app.world_mut(),
         &owner,
-        &ExtrudeCommand::Control {
+        &BuildCommand::Control {
             form_id: id,
-            action: ExtrudeControl::Apply,
+            action: BuildControl::Apply,
         },
         &ControlInput::Click,
         || Err("Control binding changed".into()),
@@ -335,7 +467,7 @@ fn stale_owner_revision_and_cancelled_activation_cannot_commit_or_repaint_old_wo
         app.world_mut(),
         &owner,
         id,
-        ExtrudeControl::Apply,
+        BuildControl::Apply,
         ControlInput::Click
     )
     .is_err());
@@ -373,7 +505,7 @@ fn stale_owner_revision_and_cancelled_activation_cannot_commit_or_repaint_old_wo
         app.world_mut(),
         &owner,
         id,
-        ExtrudeControl::Cancel,
+        BuildControl::Cancel,
         ControlInput::Click
     )
     .is_err());
@@ -404,7 +536,7 @@ fn focused_escape_closes_its_form_without_overwriting_a_newer_preview() {
         app.world_mut(),
         &owner,
         id,
-        ExtrudeControl::Field(ExtrudeField::Distance),
+        BuildControl::Field(BuildField::Distance),
         ControlInput::Key(nbcad_interface::KeyChord::plain("Escape")),
     )
     .unwrap();
@@ -442,7 +574,7 @@ fn native_apply_enqueues_once_and_completes_the_original_form_with_real_geometry
         app.world_mut(),
         &owner,
         id,
-        ExtrudeField::Distance,
+        BuildField::Distance,
         "25 mm",
     );
     let pending = action(
@@ -450,7 +582,7 @@ fn native_apply_enqueues_once_and_completes_the_original_form_with_real_geometry
         app.world_mut(),
         &owner,
         id,
-        ExtrudeControl::Apply,
+        BuildControl::Apply,
         ControlInput::Click,
     )
     .unwrap();
@@ -463,7 +595,7 @@ fn native_apply_enqueues_once_and_completes_the_original_form_with_real_geometry
         app.world_mut(),
         &owner,
         id,
-        ExtrudeControl::Apply,
+        BuildControl::Apply,
         ControlInput::Click
     )
     .unwrap_err()

@@ -6,6 +6,8 @@
 //! ```
 
 mod install_mcp;
+mod native_build_test;
+mod native_fixture;
 mod native_sketch_test;
 mod package;
 mod package_mcp;
@@ -83,10 +85,11 @@ Commands:
                 Repeat --server-arg for additional executable arguments.
                 --timeout-seconds N bounds each request (default: 120).
                 --desktop also checks default stdio in one owned GUI, save, disconnect and guarded exit.
-  test-mcp      Run contracts (default), live, controls, native-sketch, playback, scripts-workspace, exit, bench, garden-bench, or drawing. Additional
+  test-mcp      Run contracts (default), live, controls, native-sketch, native-build, playback, scripts-workspace, exit, bench, garden-bench, or drawing. Additional
                 arguments pass directly to the selected MCP test/demo driver.
                 Example: cargo xtask test-mcp live --server PATH --desktop PATH
                 Native sketch: test-mcp native-sketch --server CAD_BINARY --session BLANK_DOCUMENT_UUID --out ABSOLUTE_PATH
+                Native solid: test-mcp native-build --server CAD_BINARY --session BLANK_DOCUMENT_UUID --out ABSOLUTE_PATH
   install-mcp   Detect installed agent clients and upsert the local nbcad-mcp
                 stdio server into each client's user config (Cursor, VS Code,
                 Claude, OpenCode).

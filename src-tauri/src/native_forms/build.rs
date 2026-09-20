@@ -7,6 +7,28 @@ use nbcad_solid::{
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
+mod revolve;
+use revolve::RevolveFields;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BuildKind {
+    Extrude,
+    Revolve,
+}
+impl BuildKind {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Extrude => "Extrude",
+            Self::Revolve => "Revolve",
+        }
+    }
+    pub(crate) fn operation(self) -> &'static str {
+        match self {
+            Self::Extrude => "solid_extrude",
+            Self::Revolve => "solid_revolve",
+        }
+    }
+}
 
 /// Borrow one coherent native snapshot under the document publisher lease.
 /// Parameters belong to the accepted source sketch and use canonical units.
@@ -20,7 +42,7 @@ pub(crate) struct FormModel<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ExtrudeField {
+pub(crate) enum BuildField {
     Source,
     Operation,
     Extent,
@@ -30,10 +52,17 @@ pub(crate) enum ExtrudeField {
     Flip,
     Targets,
     StopFace,
+    Axis,
+    AxisLine,
+    OriginX,
+    OriginY,
+    DirectionX,
+    DirectionY,
+    Angle,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ExtrudeSource {
+pub(crate) enum ProfileSource {
     None,
     Profiles {
         sketch_name: String,
@@ -43,8 +72,8 @@ pub(crate) enum ExtrudeSource {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ExtrudeFieldView {
-    pub field: ExtrudeField,
+pub(crate) struct BuildFieldView {
+    pub field: BuildField,
     pub label: String,
     pub value: Field,
     pub error: Option<String>,
@@ -99,13 +128,13 @@ enum Phase {
     Closed,
 }
 
-/// Actual Extrude fields, separated from rendering and event delivery. The
+/// Profile feature fields, separated from rendering and event delivery. The
 /// payload is always the established nbcad-solid DTO consumed by MCP too.
 #[derive(Debug)]
-pub(crate) struct ExtrudeForm {
+pub(crate) struct BuildForm {
     stamp: Stamp,
     feature: Option<FeatureId>,
-    source: ExtrudeSource,
+    source: ProfileSource,
     operation: ExtrudeOperation,
     operation_manual: bool,
     extent: ExtrudeExtent,
@@ -117,9 +146,10 @@ pub(crate) struct ExtrudeForm {
     stop_face: Option<PlanarFaceSourceDto>,
     phase: Phase,
     engine_error: Option<String>,
+    revolve: Option<RevolveFields>,
 }
 
-impl ExtrudeForm {
+impl BuildForm {
     pub(crate) fn new(model: &FormModel<'_>) -> Self {
         let units = model.document.settings.units;
         Self {
@@ -130,7 +160,7 @@ impl ExtrudeForm {
                 edit: 0,
             },
             feature: None,
-            source: ExtrudeSource::None,
+            source: ProfileSource::None,
             operation: ExtrudeOperation::NewBody,
             operation_manual: false,
             extent: ExtrudeExtent::default(),
@@ -142,6 +172,22 @@ impl ExtrudeForm {
             stop_face: None,
             phase: Phase::Editing,
             engine_error: None,
+            revolve: None,
+        }
+    }
+
+    pub(crate) fn new_kind(kind: BuildKind, model: &FormModel<'_>) -> Self {
+        let mut form = Self::new(model);
+        if kind == BuildKind::Revolve {
+            form.revolve = Some(RevolveFields::new(model.document.settings.units));
+        }
+        form
+    }
+    pub(crate) fn kind(&self) -> BuildKind {
+        if self.revolve.is_some() {
+            BuildKind::Revolve
+        } else {
+            BuildKind::Extrude
         }
     }
 
@@ -158,8 +204,8 @@ impl ExtrudeForm {
         form.feature = Some(definition.feature_id);
         form.source = definition
             .source_face
-            .map(ExtrudeSource::Face)
-            .unwrap_or_else(|| ExtrudeSource::Profiles {
+            .map(ProfileSource::Face)
+            .unwrap_or_else(|| ProfileSource::Profiles {
                 sketch_name: definition.sketch_name.clone(),
                 indices: definition.profile_indices.clone(),
             });
@@ -217,16 +263,18 @@ impl ExtrudeForm {
     pub(crate) fn engine_error(&self) -> Option<&str> {
         self.engine_error.as_deref()
     }
-    pub(crate) fn source(&self) -> &ExtrudeSource {
+    pub(crate) fn source(&self) -> &ProfileSource {
         &self.source
     }
 
     fn check_model(&self, model: &FormModel<'_>) -> Result<(), String> {
         if self.stamp.owner != *model.owner || self.stamp.model_revision != model.engine_revision {
-            return Err("The document changed; reopen Extrude with its current references".into());
+            return Err(
+                "The document changed; reopen the feature with its current references".into(),
+            );
         }
         if self.phase == Phase::Closed {
-            return Err("The Extrude form is closed".into());
+            return Err("The feature form is closed".into());
         }
         Ok(())
     }
@@ -234,12 +282,12 @@ impl ExtrudeForm {
     fn editing(&self, model: &FormModel<'_>) -> Result<(), String> {
         self.check_model(model)?;
         if self.phase != Phase::Editing {
-            return Err("Extrude is still applying".into());
+            return Err("The feature is still applying".into());
         }
         self.stamp
             .edit
             .checked_add(1)
-            .ok_or("Extrude form revision exhausted")?;
+            .ok_or("Feature form revision exhausted")?;
         Ok(())
     }
 
@@ -250,21 +298,37 @@ impl ExtrudeForm {
 
     pub(crate) fn set_value(
         &mut self,
-        field: ExtrudeField,
+        field: BuildField,
         value: &str,
         model: &FormModel<'_>,
     ) -> Result<(), String> {
         self.editing(model)?;
+        if matches!(
+            field,
+            BuildField::Axis
+                | BuildField::OriginX
+                | BuildField::OriginY
+                | BuildField::DirectionX
+                | BuildField::DirectionY
+                | BuildField::Angle
+        ) {
+            self.revolve
+                .as_mut()
+                .ok_or("This feature has no revolution axis")?
+                .set(field, value)?;
+            self.changed();
+            return Ok(());
+        }
         match field {
-            ExtrudeField::Distance => self.distance.set_text(value.into()),
-            ExtrudeField::SecondDistance => self.second_distance.set_text(value.into()),
-            ExtrudeField::Taper => self.taper.set_text(value.into()),
-            ExtrudeField::Operation => {
+            BuildField::Distance => self.distance.set_text(value.into()),
+            BuildField::SecondDistance => self.second_distance.set_text(value.into()),
+            BuildField::Taper => self.taper.set_text(value.into()),
+            BuildField::Operation => {
                 self.operation =
                     serde_json::from_value(json!(value)).map_err(|error| error.to_string())?;
                 self.operation_manual = true;
             }
-            ExtrudeField::Extent => {
+            BuildField::Extent => {
                 // Deserialize the existing tagged extent type rather than
                 // maintaining a parallel variant/schema registry.
                 self.extent = serde_json::from_value(
@@ -272,7 +336,7 @@ impl ExtrudeForm {
                 )
                 .map_err(|error| error.to_string())?;
             }
-            ExtrudeField::Flip => {
+            BuildField::Flip => {
                 self.flip = match value {
                     "true" => true,
                     "false" => false,
@@ -287,15 +351,18 @@ impl ExtrudeForm {
 
     pub(crate) fn set_source(
         &mut self,
-        source: ExtrudeSource,
+        source: ProfileSource,
         model: &FormModel<'_>,
     ) -> Result<(), String> {
         self.editing(model)?;
-        if source != ExtrudeSource::None {
+        if self.revolve.is_some() && matches!(source, ProfileSource::Face(_)) {
+            return Err("Revolve needs closed sketch profiles".into());
+        }
+        if source != ProfileSource::None {
             validate_source(&source, model)?;
         }
         if !self.operation_manual {
-            if let ExtrudeSource::Face(face) = &source {
+            if let ProfileSource::Face(face) = &source {
                 self.operation = ExtrudeOperation::Join;
                 self.targets = vec![face.body_id];
             } else {
@@ -335,11 +402,8 @@ impl ExtrudeForm {
         Ok(())
     }
 
-    fn request(
-        &self,
-        model: &FormModel<'_>,
-    ) -> Result<ExtrudeRequest, Vec<(ExtrudeField, String)>> {
-        use ExtrudeField as F;
+    fn request(&self, model: &FormModel<'_>) -> Result<ExtrudeRequest, Vec<(BuildField, String)>> {
+        use BuildField as F;
         let mut errors = Vec::new();
         if let Err(error) = self.check_model(model) {
             return Err(vec![(F::Source, error)]);
@@ -440,7 +504,7 @@ impl ExtrudeForm {
                 errors.push((F::Targets, error));
             }
             let joined_profiles = self.operation == ExtrudeOperation::Join
-                && matches!(&self.source,ExtrudeSource::Profiles{indices,..} if indices.len()>1);
+                && matches!(&self.source,ProfileSource::Profiles{indices,..} if indices.len()>1);
             if self.targets.is_empty() && !joined_profiles {
                 errors.push((F::Targets, "Select a target body for this operation".into()));
             }
@@ -449,12 +513,12 @@ impl ExtrudeForm {
             return Err(errors);
         }
         let (source_face, sketch_name, profile_indices) = match &self.source {
-            ExtrudeSource::Face(face) => (Some(*face), String::new(), Vec::new()),
-            ExtrudeSource::Profiles {
+            ProfileSource::Face(face) => (Some(*face), String::new(), Vec::new()),
+            ProfileSource::Profiles {
                 sketch_name,
                 indices,
             } => (None, sketch_name.clone(), indices.clone()),
-            ExtrudeSource::None => unreachable!("validated above"),
+            ProfileSource::None => unreachable!("validated above"),
         };
         Ok(ExtrudeRequest {
             source_face,
@@ -473,11 +537,14 @@ impl ExtrudeForm {
     }
 
     pub(crate) fn can_apply(&self, model: &FormModel<'_>) -> bool {
-        self.phase == Phase::Editing && self.request(model).is_ok()
+        self.phase == Phase::Editing && self.payload(model).is_ok()
     }
 
     pub(crate) fn prepare_preview(&self, model: &FormModel<'_>) -> Result<PreviewTicket, String> {
         self.editing(model)?;
+        if self.revolve.is_some() {
+            return Err("Revolve uses axis/reference highlighting".into());
+        }
         let request = self.request(model).map_err(first_error)?;
         Ok(PreviewTicket {
             stamp: self.stamp.clone(),
@@ -493,19 +560,7 @@ impl ExtrudeForm {
 
     pub(crate) fn prepare_apply(&mut self, model: &FormModel<'_>) -> Result<ApplyTicket, String> {
         self.editing(model)?;
-        let request = self.request(model).map_err(first_error)?;
-        let (operation, arguments) = if let Some(feature_id) = self.feature {
-            (
-                "solid_edit_extrude",
-                serde_json::to_value(EditExtrudeRequest {
-                    feature_id,
-                    extrude: request,
-                }),
-            )
-        } else {
-            ("solid_extrude", serde_json::to_value(request))
-        };
-        let arguments = arguments.map_err(|error| error.to_string())?;
+        let (operation, arguments) = self.payload(model).map_err(first_error)?;
         // Every Apply attempt has its own generation, including retrying the
         // same text after an unchanged failure. An older completion cannot
         // close or fail the replacement attempt.
@@ -525,7 +580,7 @@ impl ExtrudeForm {
         error: String,
     ) -> Result<(), String> {
         if self.phase != Phase::Applying || !self.matches(&ticket.stamp) {
-            return Err("This completion belongs to another Extrude operation".into());
+            return Err("This completion belongs to another feature operation".into());
         }
         if let Err(changed) = self.check_model(model) {
             self.phase = Phase::Closed;
@@ -543,11 +598,11 @@ impl ExtrudeForm {
         engine_revision: u64,
     ) -> Result<(), String> {
         if self.phase != Phase::Applying || !self.matches(&ticket.stamp) {
-            return Err("This completion belongs to another Extrude operation".into());
+            return Err("This completion belongs to another feature operation".into());
         }
         self.phase = Phase::Closed;
         if self.stamp.owner != *owner || engine_revision <= self.stamp.model_revision {
-            return Err("Extrude completion no longer owns the edited document".into());
+            return Err("Feature completion no longer owns the edited document".into());
         }
         Ok(())
     }
@@ -556,7 +611,7 @@ impl ExtrudeForm {
     /// only when true: an old owner must never paint over its replacement.
     pub(crate) fn cancel(&mut self, model: &FormModel<'_>) -> Result<bool, String> {
         if self.phase == Phase::Applying {
-            return Err("Extrude is still applying".into());
+            return Err("The feature is still applying".into());
         }
         let restore_previous_preview = self.check_model(model).is_ok();
         self.phase = Phase::Closed;
@@ -570,8 +625,11 @@ impl ExtrudeForm {
             && self.stamp.edit == other.edit
     }
 
-    pub(crate) fn fields(&self, model: &FormModel<'_>) -> Vec<ExtrudeFieldView> {
-        use ExtrudeField as F;
+    pub(crate) fn fields(&self, model: &FormModel<'_>) -> Vec<BuildFieldView> {
+        if self.revolve.is_some() {
+            return self.revolve_fields(model);
+        }
+        use BuildField as F;
         let issues = self.request(model).err().unwrap_or_default();
         let enabled = self.phase == Phase::Editing && self.check_model(model).is_ok();
         let text = |value: &MeasurementInput| Field::Text {
@@ -591,11 +649,11 @@ impl ExtrudeForm {
                 .collect(),
         };
         let source_label = match &self.source {
-            ExtrudeSource::None => "Select profiles or a planar face".into(),
-            ExtrudeSource::Face(face) => {
+            ProfileSource::None => "Select profiles or a planar face".into(),
+            ProfileSource::Face(face) => {
                 format!("Source: body {} · face {}", face.body_id.0, face.face_id.0)
             }
-            ExtrudeSource::Profiles {
+            ProfileSource::Profiles {
                 sketch_name,
                 indices,
             } => format!("{sketch_name} · {} profile(s)", indices.len()),
@@ -679,7 +737,7 @@ impl ExtrudeForm {
             ),
         ];
         rows.into_iter()
-            .map(|(field, label, value, visible)| ExtrudeFieldView {
+            .map(|(field, label, value, visible)| BuildFieldView {
                 field,
                 label,
                 value,
@@ -694,12 +752,38 @@ impl ExtrudeForm {
     }
 }
 
-fn first_error(errors: Vec<(ExtrudeField, String)>) -> String {
+impl BuildForm {
+    fn payload(
+        &self,
+        model: &FormModel<'_>,
+    ) -> Result<(&'static str, Value), Vec<(BuildField, String)>> {
+        if self.revolve.is_some() {
+            return self.revolve_payload(model);
+        }
+        let request = self.request(model)?;
+        let (op, value) = if let Some(feature_id) = self.feature {
+            (
+                "solid_edit_extrude",
+                serde_json::to_value(EditExtrudeRequest {
+                    feature_id,
+                    extrude: request,
+                }),
+            )
+        } else {
+            ("solid_extrude", serde_json::to_value(request))
+        };
+        value
+            .map(|v| (op, v))
+            .map_err(|e| vec![(BuildField::Source, e.to_string())])
+    }
+}
+
+fn first_error(errors: Vec<(BuildField, String)>) -> String {
     errors
         .into_iter()
         .next()
         .map(|(_, error)| error)
-        .unwrap_or_else(|| "Extrude is not ready".into())
+        .unwrap_or_else(|| "The feature is not ready".into())
 }
 
 fn validate_targets(targets: &[BodyId], model: &FormModel<'_>) -> Result<(), String> {
@@ -739,7 +823,7 @@ fn validate_face(source: PlanarFaceSourceDto, model: &FormModel<'_>) -> Result<(
 }
 
 fn validate_stop_face(
-    source: &ExtrudeSource,
+    source: &ProfileSource,
     stop: PlanarFaceSourceDto,
     model: &FormModel<'_>,
 ) -> Result<(), String> {
@@ -754,13 +838,13 @@ fn validate_stop_face(
             .and_then(|face| face.plane)
     };
     let source_basis = match source {
-        ExtrudeSource::Face(face) => face_basis(*face),
-        ExtrudeSource::Profiles { sketch_name, .. } => model
+        ProfileSource::Face(face) => face_basis(*face),
+        ProfileSource::Profiles { sketch_name, .. } => model
             .profiles
             .iter()
             .find(|catalog| catalog.sketch_name == *sketch_name)
             .map(|catalog| catalog.basis),
-        ExtrudeSource::None => None,
+        ProfileSource::None => None,
     };
     if let (Some(source), Some(stop)) = (source_basis, face_basis(stop)) {
         let alignment: f64 = source
@@ -788,11 +872,11 @@ fn validate_stop_face(
     Ok(())
 }
 
-fn validate_source(source: &ExtrudeSource, model: &FormModel<'_>) -> Result<(), String> {
+fn validate_source(source: &ProfileSource, model: &FormModel<'_>) -> Result<(), String> {
     match source {
-        ExtrudeSource::None => Err("Select a sketch profile or planar source face".into()),
-        ExtrudeSource::Face(face) => validate_face(*face, model),
-        ExtrudeSource::Profiles {
+        ProfileSource::None => Err("Select a sketch profile or planar source face".into()),
+        ProfileSource::Face(face) => validate_face(*face, model),
+        ProfileSource::Profiles {
             sketch_name,
             indices,
         } => {

@@ -63,7 +63,7 @@ fn feature(document: &DocumentDto, id: u64) -> Result<&Feature, String> {
 fn idle(world: &World) -> Result<(), String> {
     if native_viewport::interface_view_snapshot(world).2.mode
         == native_viewport::ViewportMode::Sketch
-        || extrude::panel(world).is_some()
+        || build::panel(world).is_some()
     {
         return Err("Finish or cancel the current edit before changing feature history".into());
     }
@@ -241,12 +241,13 @@ fn edit(
             crate::native_editor::EditorCommand::Edit(feature.name.clone()),
             || handle.validate_action(action),
         ),
-        FeatureKind::Extrude => extrude::reduce(
+        FeatureKind::Extrude | FeatureKind::Revolve => build::reduce(
             engine,
             bridge,
             world,
             &action.context,
-            &extrude::ExtrudeCommand::Open {
+            &build::BuildCommand::Open {
+                kind: if feature.kind==FeatureKind::Revolve {build::BuildKind::Revolve} else {build::BuildKind::Extrude},
                 feature_id: Some(id),
             },
             &ControlInput::Click,

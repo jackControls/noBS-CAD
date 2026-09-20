@@ -372,6 +372,9 @@ pub(super) fn synchronize(
                     None,
                     31,
                 )?;
+                if offset != 0. {
+                    interface_shell::primary_button(world, panel.widgets.entity(key).unwrap());
+                }
             }
             if editor.interaction.dimension_id.is_some() {
                 panel.widgets.button(
@@ -690,6 +693,9 @@ pub(super) fn synchronize(
                     None,
                     31,
                 )?;
+                if offset != 0. {
+                    interface_shell::primary_button(world, panel.widgets.entity(key).unwrap());
+                }
             }
         }
         panel.widgets.finish(world);

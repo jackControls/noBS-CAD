@@ -28,15 +28,15 @@ pub(super) fn begin(
     owner: &DocumentContext,
     form_id: u64,
     validate_control: impl FnOnce() -> Result<(), String>,
-    state: &mut NativeExtrude,
+    state: &mut NativeBuild,
 ) -> Result<Value, String> {
     let editor = state
         .editor
         .as_mut()
         .filter(|editor| editor.id == form_id)
-        .ok_or("The Extrude form changed")?;
+        .ok_or("The feature form changed")?;
     if editor.form.is_busy() {
-        return Err("Extrude is still applying".into());
+        return Err("The feature is still applying".into());
     }
     #[cfg(feature = "dev-bevy-host")]
     {
@@ -51,7 +51,7 @@ pub(super) fn begin(
                 ticket.operation().to_owned(),
                 ticket.arguments().clone(),
                 move |world, services, outcome| {
-                    let mut state = world.remove_resource::<NativeExtrude>().unwrap_or_default();
+                    let mut state = world.remove_resource::<NativeBuild>().unwrap_or_default();
                     let result = complete(
                         &services.engine,
                         &services.bridge,
@@ -91,7 +91,7 @@ fn complete(
     engine: &AppState,
     bridge: &SessionBridgeState,
     world: &mut World,
-    state: &mut NativeExtrude,
+    state: &mut NativeBuild,
     form_id: u64,
     ticket: &ApplyTicket,
     outcome: Result<NativeMutationResult, String>,

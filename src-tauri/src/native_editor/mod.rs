@@ -630,7 +630,7 @@ pub(crate) fn process_one(
                         return interaction::pointer(world,services,&owner,&mut editor,start,cursor,canvas.bounds,event.modifiers.shift,event.modifiers.ctrl);
                     }
                     if start.distance(cursor)>3. {return Ok(result);}
-                    if let Some(value) = crate::session_bridge::native_interface::extrude::handle_canvas_pick(
+                    if let Some(value) = crate::session_bridge::native_interface::build::handle_canvas_pick(
                         world, services, &owner,
                         [cursor.x-canvas.bounds.x as f32,cursor.y-canvas.bounds.y as f32],
                     )? {

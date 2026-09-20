@@ -107,3 +107,8 @@ controls and canvas, checks nine modification forms and Undo, driving/reference
 dimensions, constraint deletion, Escape cancellation, capture and Save. It
 requires an explicitly selected blank document and fresh output filenames;
 it does not launch or close a desktop window, discard work or upload evidence.
+
+The corresponding `native-build` suite uses the same arguments and safety
+checks. It drives native Revolve profile and axis selection, creation, history
+editing, close/Cancel, Undo/Redo, rendered capture and Save. Kernel-backed form
+tests also exercise invalid values, reference ownership and coplanar axes.

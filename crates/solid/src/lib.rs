@@ -12,7 +12,7 @@ mod stable;
 mod thread;
 
 pub use dto::*;
-pub use history::{SolidDocument, SolidError};
+pub use history::{plane_bases_coplanar, SolidDocument, SolidError};
 pub use profile::{
     canonicalize_profile_curves, extract_closed_loops, extract_closed_loops_allow_open,
     ProfileError, Segment2,

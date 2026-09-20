@@ -1,5 +1,6 @@
 // Canonical product/Lucide geometry shared with the Rust renderer.
 import extrude from '../assets/ribbon-icons/extrude.svg?raw';
+import revolve from '../assets/ribbon-icons/revolve.svg?raw';
 import line from '../assets/ribbon-icons/line.svg?raw';
 import midpointLine from '../assets/ribbon-icons/midpointLine.svg?raw';
 import rect from '../assets/ribbon-icons/rect.svg?raw';
@@ -37,7 +38,7 @@ import collinear from '../assets/ribbon-icons/collinear.svg?raw';
 import symmetry from '../assets/ribbon-icons/symmetry.svg?raw';
 import dimension from '../assets/ribbon-icons/dim.svg?raw';
 
-const sources = { dimension, trim, extend, break: breakGlyph, offset, fillet, chamfer, moveCopy, mirror, select, rectPattern, circPattern, hv, fix, midpointC, coincident, tangent, equal, parallel, perpendicular, concentric, collinear, symmetry, extrude, line, midpointLine, rect, circle, arc, slot, sketch, spline, point, finish, cancel, chevron };
+const sources = { dimension, trim, extend, break: breakGlyph, offset, fillet, chamfer, moveCopy, mirror, select, rectPattern, circPattern, hv, fix, midpointC, coincident, tangent, equal, parallel, perpendicular, concentric, collinear, symmetry, extrude, revolve, line, midpointLine, rect, circle, arc, slot, sketch, spline, point, finish, cancel, chevron };
 const content = Object.fromEntries(Object.entries(sources).map(([id, svg]) => [id, svg.replace(/^<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '')]));
 const strokes = Object.fromEntries(Object.entries(sources).map(([id, svg]) => [id, Number(svg.match(/stroke-width="([\d.]+)"/)?.[1] ?? 1.6)]));
 

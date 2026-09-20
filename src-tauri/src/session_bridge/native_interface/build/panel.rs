@@ -1,7 +1,7 @@
-//! The retained native Extrude panel. Every field comes from the typed form;
+//! The retained native profile-feature panel. Every field comes from the typed form;
 //! its actual widget is the control inspected and driven by MCP.
 
-use super::{ExtrudeCommand, ExtrudeControl};
+use super::{BuildCommand, BuildControl};
 use crate::native_viewport::{
     interface_shell::{
         self, fields, InterfaceCamera, InterfaceControl, InterfaceOccluder, NativeInterfaceHandle,
@@ -20,7 +20,7 @@ struct PanelWidgets {
     form_id: u64,
     root: Option<Entity>,
     body: Option<Entity>,
-    controls: HashMap<String, (Entity, ExtrudeCommand)>,
+    controls: HashMap<String, (Entity, BuildCommand)>,
     labels: HashMap<String, Entity>,
     area: Area,
     scroll: f32,
@@ -97,7 +97,7 @@ fn synchronize_owned(
         || area.width < 120.
         || area.height < 120.
     {
-        return Err("The native Extrude panel needs usable window bounds".into());
+        return Err("The native feature panel needs usable window bounds".into());
     }
     let mut cameras = world.query_filtered::<Entity, With<InterfaceCamera>>();
     let camera = cameras
@@ -109,15 +109,15 @@ fn synchronize_owned(
         .unwrap_or_default();
     let theme = ViewportUiTheme::from_palette(&ViewportPalette::default());
     let width = area.width as f32;
-    let height = area.height as f32;
+    let height = (area.height as f32).min(content_height(&panel) + 92.);
     let body_height = height - 92.;
     let root = *state.root.get_or_insert_with(|| {
         world
             .spawn((
-                Name::new("Extrude panel"),
+                Name::new("Build feature panel"),
                 Node::default(),
                 BackgroundColor(theme.panel),
-                BorderColor::all(theme.edge),
+                BorderColor::all(theme.accent),
                 UiTargetCamera(camera),
                 InterfaceOccluder,
                 ZIndex(40),
@@ -126,13 +126,14 @@ fn synchronize_owned(
     });
     let mut root_node = node(area.x as f32, area.y as f32, width, height);
     root_node.border = UiRect::all(px(1.));
+    root_node.border_radius = BorderRadius::all(px(12.));
     if world.get::<Node>(root) != Some(&root_node) {
         world.entity_mut(root).insert(root_node);
     }
     let body = *state.body.get_or_insert_with(|| {
         let body = world
             .spawn((
-                Name::new("Extrude fields"),
+                Name::new("feature fields"),
                 Node::default(),
                 UiTargetCamera(camera),
                 ZIndex(41),
@@ -148,7 +149,10 @@ fn synchronize_owned(
     }
     state.owner = Some(owner.clone());
     state.form_id = panel.form_id;
-    state.area = area;
+    state.area = Area {
+        height: f64::from(height),
+        ..area
+    };
     let mut live_controls = HashSet::new();
     let mut live_labels = HashSet::new();
     label(
@@ -158,7 +162,7 @@ fn synchronize_owned(
         "title",
         root,
         camera,
-        "Extrude",
+        panel.kind.label(),
         node(14., 8., width - 28., 24.),
         theme,
         &assets,
@@ -166,10 +170,79 @@ fn synchronize_owned(
     );
     let mut y = 0.;
     let inner = width - 24.;
+    let mut close =
+        InterfaceControl::button("solid/build", format!("Close {}", panel.kind.label()));
+    close.disabled = panel.busy;
+    widget(
+        world,
+        state,
+        &mut live_controls,
+        "close",
+        root,
+        camera,
+        close,
+        node(width - 34., 7., 26., 26.),
+        BuildCommand::Control {
+            form_id: panel.form_id,
+            action: BuildControl::Cancel,
+        },
+        theme,
+        &assets,
+    )?;
     for row in panel.fields.iter().filter(|row| row.visible) {
         let key = format!("{:?}", row.field);
+        if row.field == super::BuildField::Axis {
+            if let Field::Choice { value, options } = &row.value {
+                label(
+                    world,
+                    state,
+                    &mut live_labels,
+                    "axis-label",
+                    body,
+                    camera,
+                    "AXIS",
+                    node(0., y - state.scroll, inner, 18.),
+                    theme,
+                    &assets,
+                    false,
+                );
+                y += 20.;
+                for (index, option) in options.iter().enumerate() {
+                    let mut c = InterfaceControl::button("solid/build", &option.label);
+                    c.role = "radio".into();
+                    c.selected = Some(option.value == *value);
+                    c.disabled = !row.enabled || option.disabled;
+                    widget(
+                        world,
+                        state,
+                        &mut live_controls,
+                        &format!("axis-{}", option.value),
+                        body,
+                        camera,
+                        c,
+                        node(
+                            (index % 2) as f32 * (inner + 6.) * 0.5,
+                            y + (index / 2) as f32 * 36. - state.scroll,
+                            (inner - 6.) * 0.5,
+                            30.,
+                        ),
+                        BuildCommand::Control {
+                            form_id: panel.form_id,
+                            action: BuildControl::Choose {
+                                field: row.field,
+                                option: index,
+                            },
+                        },
+                        theme,
+                        &assets,
+                    )?;
+                }
+                y += 76.;
+                continue;
+            }
+        }
         let mut control = InterfaceControl::button(
-            nbcad_interface::catalog::group_for("solid_extrude").unwrap_or("solid/build"),
+            nbcad_interface::catalog::group_for(panel.kind.operation()).unwrap_or("solid/build"),
             &row.label,
         );
         control.disabled = !row.enabled;
@@ -191,7 +264,7 @@ fn synchronize_owned(
                     false,
                 );
                 y += 20.;
-                action = ExtrudeControl::Field(row.field);
+                action = BuildControl::Field(row.field);
                 if let Field::Choice { value, options } = &row.value {
                     let selected = options
                         .iter()
@@ -207,12 +280,33 @@ fn synchronize_owned(
                 }
             }
             Field::Toggle(value) => {
-                action = ExtrudeControl::Field(row.field);
+                action = BuildControl::Field(row.field);
                 control.role = "checkbox".into();
                 control.selected = Some(*value);
             }
             Field::None => {
-                action = ExtrudeControl::Pick(row.field);
+                let label_text = match row.field {
+                    super::BuildField::Source => "PROFILES",
+                    super::BuildField::AxisLine => "AXIS LINE",
+                    super::BuildField::Targets => "TARGET BODIES",
+                    super::BuildField::StopFace => "STOP FACE",
+                    _ => "REFERENCE",
+                };
+                label(
+                    world,
+                    state,
+                    &mut live_labels,
+                    &format!("{key}-label"),
+                    body,
+                    camera,
+                    label_text,
+                    node(0., y - state.scroll, inner, 18.),
+                    theme,
+                    &assets,
+                    false,
+                );
+                y += 20.;
+                action = BuildControl::Pick(row.field);
                 control.selected = Some(panel.pick_target == Some(row.field));
             }
         }
@@ -231,7 +325,7 @@ fn synchronize_owned(
                 if reference { inner - 62. } else { inner },
                 30.,
             ),
-            ExtrudeCommand::Control {
+            BuildCommand::Control {
                 form_id: panel.form_id,
                 action,
             },
@@ -239,7 +333,16 @@ fn synchronize_owned(
             &assets,
         )?;
         if reference {
-            let mut clear = InterfaceControl::button("solid/build", "Clear");
+            let mut clear = InterfaceControl::button(
+                "solid/build",
+                match row.field {
+                    super::BuildField::Source => "Clear source profiles",
+                    super::BuildField::AxisLine => "Clear axis line",
+                    super::BuildField::Targets => "Clear target bodies",
+                    super::BuildField::StopFace => "Clear stop face",
+                    _ => "Clear reference",
+                },
+            );
             clear.disabled = !row.enabled;
             widget(
                 world,
@@ -250,9 +353,9 @@ fn synchronize_owned(
                 camera,
                 clear,
                 node(inner - 58., y - state.scroll, 58., 30.),
-                ExtrudeCommand::Control {
+                BuildCommand::Control {
                     form_id: panel.form_id,
-                    action: ExtrudeControl::Clear(row.field),
+                    action: BuildControl::Clear(row.field),
                 },
                 theme,
                 &assets,
@@ -275,9 +378,9 @@ fn synchronize_owned(
                         camera,
                         choice,
                         node(8., y - state.scroll, inner - 8., 28.),
-                        ExtrudeCommand::Control {
+                        BuildCommand::Control {
                             form_id: panel.form_id,
-                            action: ExtrudeControl::Choose {
+                            action: BuildControl::Choose {
                                 field: row.field,
                                 option: index,
                             },
@@ -329,7 +432,8 @@ fn synchronize_owned(
     }
     state.max_scroll = (y - body_height).max(0.);
     state.scroll = state.scroll.min(state.max_scroll);
-    let mut cancel = InterfaceControl::button("solid/build", "Cancel Extrude");
+    let mut cancel =
+        InterfaceControl::button("solid/build", format!("Cancel {}", panel.kind.label()));
     cancel.disabled = panel.busy;
     widget(
         world,
@@ -340,9 +444,9 @@ fn synchronize_owned(
         camera,
         cancel,
         node(12., height - 42., (inner - 8.) * 0.5, 30.),
-        ExtrudeCommand::Control {
+        BuildCommand::Control {
             form_id: panel.form_id,
-            action: ExtrudeControl::Cancel,
+            action: BuildControl::Cancel,
         },
         theme,
         &assets,
@@ -350,9 +454,9 @@ fn synchronize_owned(
     let mut apply = InterfaceControl::button(
         "solid/build",
         if panel.busy {
-            "Applying…"
+            "Applying…".to_owned()
         } else {
-            "Apply Extrude"
+            format!("Apply {}", panel.kind.label())
         },
     );
     apply.disabled = !panel.can_apply;
@@ -366,9 +470,9 @@ fn synchronize_owned(
         camera,
         apply,
         node(16. + inner * 0.5, height - 42., (inner - 8.) * 0.5, 30.),
-        ExtrudeCommand::Control {
+        BuildCommand::Control {
             form_id: panel.form_id,
-            action: ExtrudeControl::Apply,
+            action: BuildControl::Apply,
         },
         theme,
         &assets,
@@ -402,7 +506,7 @@ fn widget(
     camera: Entity,
     mut control: InterfaceControl,
     mut node: Node,
-    command: ExtrudeCommand,
+    command: BuildCommand,
     theme: ViewportUiTheme,
     assets: &ViewportUiAssets,
 ) -> Result<(), String> {
@@ -437,17 +541,23 @@ fn widget(
         };
         system.apply(world);
         world.entity_mut(parent).add_child(entity);
-        bind_command(world, entity, NativeCommand::Extrude(command.clone()))?;
+        if matches!(control.field, Field::Choice {..}) {
+            let glyph=interface_shell::ribbon::compact_glyph(world,entity,interface_shell::ribbon::Icon::Chevron,0.,10.);
+            let mut bounds=world.get::<Node>(glyph).unwrap().clone();
+            bounds.left=Val::Auto;bounds.right=px(8.);bounds.top=px(10.);
+            world.entity_mut(glyph).insert(bounds);
+        }
+        bind_command(world, entity, NativeCommand::Build(command.clone()))?;
         state.controls.insert(key.into(), (entity, command.clone()));
         entity
     };
     if state.controls[key].1 != command {
-        bind_command(world, entity, NativeCommand::Extrude(command.clone()))?;
+        bind_command(world, entity, NativeCommand::Build(command.clone()))?;
         state.controls.get_mut(key).unwrap().1 = command;
     }
     control.binding = world
         .get::<InterfaceControl>(entity)
-        .ok_or("Extrude widget was removed")?
+        .ok_or("Feature widget was removed")?
         .binding;
     if matches!(control.field, Field::Text { .. }) {
         control.text_editing = true;
@@ -462,7 +572,77 @@ fn widget(
     if world.get::<ZIndex>(entity) != Some(&ZIndex(42)) {
         world.entity_mut(entity).insert(ZIndex(42));
     }
+    let caption = if key == "close" {
+        Some("×")
+    } else if key == "apply" {
+        Some("OK")
+    } else if key == "cancel" {
+        Some("Cancel")
+    } else if key.ends_with("-clear") {
+        Some("Clear")
+    } else {
+        None
+    };
+    if let Some(text) = caption {
+        let caption = interface_shell::InterfaceCaption(text.into());
+        if world.get::<interface_shell::InterfaceCaption>(entity) != Some(&caption) {
+            world.entity_mut(entity).insert(caption);
+        }
+    }
+    if key == "apply" {
+        interface_shell::primary_button(world, entity);
+    }
+    if let Some(control) = world.get::<InterfaceControl>(entity) {
+        if let Field::Toggle(checked) = control.field {
+            let checked = checked;
+            interface_shell::checkbox_button(world, entity, camera, checked);
+            let mut bounds = world.get::<Node>(entity).unwrap().clone();
+            bounds.justify_content = JustifyContent::Start;
+            bounds.border = UiRect::default();
+            world.entity_mut(entity).insert(bounds);
+        } else if let Field::Choice { value, options } = &control.field {
+            let selected = options
+                .iter()
+                .find(|option| option.value == *value)
+                .map(|option| option.label.as_str())
+                .unwrap_or(value);
+            let caption = interface_shell::InterfaceCaption(selected.into());
+            if world.get::<interface_shell::InterfaceCaption>(entity) != Some(&caption) {
+                world.entity_mut(entity).insert(caption);
+            }
+        }
+    }
     Ok(())
+}
+
+fn content_height(panel: &super::BuildPanel) -> f32 {
+    let mut height = 0.;
+    for row in panel.fields.iter().filter(|row| row.visible) {
+        if row.field == super::BuildField::Axis {
+            height += 96.;
+            continue;
+        }
+        height += if matches!(row.value, Field::Toggle(_)) {
+            36.
+        } else {
+            56.
+        };
+        if panel.choice_field == Some(row.field) {
+            if let Field::Choice { options, .. } = &row.value {
+                height += options.len() as f32 * 30.;
+            }
+        }
+        if row.error.is_some() {
+            height += 42.;
+        }
+    }
+    if panel.error.is_some() {
+        height += 56.;
+    }
+    if panel.preview_notice.is_some() {
+        height += 56.;
+    }
+    height
 }
 
 #[allow(clippy::too_many_arguments)]
