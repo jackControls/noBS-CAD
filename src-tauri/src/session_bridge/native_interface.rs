@@ -251,7 +251,7 @@ impl SessionBridgeState {
             let edit_history = if operation == "solid_delete_feature"
                 || operation == "solid_reorder_feature"
                 || operation.starts_with("solid_edit_")
-                || matches!(operation, "assembly_set_occurrence_pose" | "assembly_duplicate_occurrence" | "assembly_create_component" | "assembly_create_occurrence" | "assembly_update_component" | "assembly_update_occurrence" | "assembly_set_occurrence_grounded")
+                || matches!(operation, "assembly_set_occurrence_pose" | "assembly_duplicate_occurrence" | "assembly_create_component" | "assembly_create_occurrence" | "assembly_update_component" | "assembly_update_occurrence" | "assembly_set_occurrence_grounded" | "assembly_create_joint" | "assembly_update_joint" | "assembly_delete_joint" | "assembly_set_joint_enabled")
             {
                 let model =
                     super::parse_engine_envelope(engine.engine_call("project_export_model", ""))?;
@@ -418,6 +418,10 @@ pub(crate) fn reduce_action(
     }
     if !control.visible || control.disabled {
         return Err("Native control is no longer available".into());
+    }
+    #[cfg(feature = "dev-bevy-host")]
+    if controller::assembly::joint::active(world) && matches!(&binding.command,NativeCommand::Feature(_) | NativeCommand::Sketch(_)) {
+        return Err("Finish or cancel the joint editor before starting another modeling command".into());
     }
     if let NativeCommand::Feature(command) = &binding.command {
         return feature::reduce(

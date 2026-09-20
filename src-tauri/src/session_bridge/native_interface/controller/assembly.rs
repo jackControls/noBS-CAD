@@ -10,6 +10,7 @@ use nbcad_sketch::{
     AssemblyDocumentDto, AssemblyTransformDto, ComponentDefinitionDto, ComponentOccurrenceDto,
 };
 use std::collections::HashSet;
+pub(crate) mod joint;
 mod panel;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,6 +22,7 @@ pub(crate) enum EditField {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Command {
+    Joint(joint::Command),
     Show(bool),
     Select(u64),
     Expand(u64),
@@ -265,6 +267,11 @@ pub(crate) fn reduce(
     action: &NativeInterfaceAction,
     command: &Command,
 ) -> Result<Value, String> {
+    if let Command::Joint(command) = command {
+        world.init_resource::<Browser>();
+        world.resource_mut::<Browser>().enabled = true;
+        return joint::reduce(world, handle, engine, bridge, action, command);
+    }
     let receipt = bridge.native_document_receipt(engine, &action.context)?;
     bridge
         .with_native_document_owner(engine, &action.context, || handle.validate_action(action))?;
@@ -568,7 +575,7 @@ pub(crate) fn reduce(
                     json!({if definition {"component"} else {"occurrence"}:patch}),
                 ));
             }
-            Command::Show(_) | Command::Edit(..) => unreachable!(),
+            Command::Show(_) | Command::Edit(..) | Command::Joint(_) => unreachable!(),
         }
         if let Some((op, args)) = request {
             if native_viewport::interface_geometry(world)
@@ -577,7 +584,7 @@ pub(crate) fn reduce(
             {
                 return Err("Finish the active sketch before editing the assembly".into());
             }
-            if feature::panel(world).is_some() {
+            if feature::panel(world).is_some() || joint::active(world) {
                 return Err("Finish or cancel the open feature before editing the assembly".into());
             }
             mutation(

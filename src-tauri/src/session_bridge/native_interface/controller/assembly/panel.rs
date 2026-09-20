@@ -180,7 +180,9 @@ pub(super) fn paint(
     let (_, _, view, _) = native_viewport::interface_view_snapshot(world);
     let selected = view.selected_occurrence_id;
     let form = feature::panel(world);
-    let blocked = form.is_some() || view.mode == native_viewport::ViewportMode::Sketch;
+    let blocked = form.is_some()
+        || joint::active(world)
+        || view.mode == native_viewport::ViewportMode::Sketch;
     let mut p = Paint {
         world,
         widgets: &mut state.widgets,
@@ -761,6 +763,83 @@ pub(super) fn paint(
                 y += 48.;
             }
         }
+    }
+    p.text("joints-label", "JOINTS", 8., y + 10., width - 90., 20., 10.);
+    p.button(
+        "new-joint",
+        "Create joint",
+        Some("+ Joint"),
+        Command::Joint(joint::Command::Open(None)),
+        width - 74.,
+        y + 5.,
+        66.,
+        28.,
+        None,
+        blocked,
+        None,
+        Field::None,
+    )?;
+    y += 42.;
+    for j in &a.joints {
+        p.button(
+            &format!("joint-{}", j.id.0),
+            &format!("Edit joint {}", j.name),
+            Some(&j.name),
+            Command::Joint(joint::Command::Open(Some(j.id.0))),
+            8.,
+            y,
+            width - 64.,
+            28.,
+            Some(Icon::Joint),
+            blocked,
+            None,
+            Field::None,
+        )?;
+        p.button(
+            &format!("joint-{}-enabled", j.id.0),
+            &format!(
+                "{} joint {}",
+                if j.enabled { "Suppress" } else { "Unsuppress" },
+                j.name
+            ),
+            Some(""),
+            Command::Joint(joint::Command::Enabled(j.id.0)),
+            width - 52.,
+            y,
+            22.,
+            28.,
+            Some(if j.enabled { Icon::Eye } else { Icon::EyeOff }),
+            blocked,
+            None,
+            Field::None,
+        )?;
+        p.button(
+            &format!("joint-{}-delete", j.id.0),
+            &format!("Delete joint {}", j.name),
+            Some("×"),
+            Command::Joint(joint::Command::Delete(j.id.0)),
+            width - 28.,
+            y,
+            22.,
+            28.,
+            None,
+            blocked,
+            None,
+            Field::None,
+        )?;
+        y += 32.;
+    }
+    if a.joints.is_empty() {
+        p.text(
+            "no-joints",
+            "Create joints to relate component instances.",
+            12.,
+            y,
+            width - 24.,
+            36.,
+            10.,
+        );
+        y += 40.;
     }
     state.max_scroll = (y - (height - 88.)).max(0.);
     state.scroll = state.scroll.min(state.max_scroll);

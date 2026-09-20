@@ -437,7 +437,7 @@ fn update_inner(
                 } else {
                     1.
                 };
-                if feature::panel::scroll_panel(world, cursor.to_array(), wheel.y * factor)
+                if assembly::joint::scroll(world,cursor.to_array(),wheel.y*factor) || feature::panel::scroll_panel(world, cursor.to_array(), wheel.y * factor)
                     || crate::native_editor::panel::scroll_panel(
                         world,
                         cursor.to_array(),
@@ -799,6 +799,10 @@ pub(crate) fn reduce_control_input(
             }
         }
     }
+    if matches!(&action.control.input, ControlInput::Key(k) if k.key=="Escape"&&!k.ctrl&&!k.meta&&!k.alt&&!k.shift) && assembly::joint::active(world) {
+        bridge.with_native_document_owner(engine,&action.context,||handle.validate_action(action))?;
+        return assembly::joint::cancel(world,engine,bridge,&action.context);
+    }
     fields::after_window_input(world, handle)?;
     let Some(adapted) = fields::adapt_control_input(world, handle, action)? else {
         return Ok(json!({"handled":true,"field_navigation":true}));
@@ -1054,6 +1058,7 @@ fn synchronize(
     let history = services
         .bridge
         .native_history_available(&services.engine, &owner)?;
+    assembly::joint::synchronize(world,services,&owner,revision,InterfaceRect{x:(width-400.).max(side)as f64,y:(top+12.)as f64,width:380_f32.min(width-side).max(1.)as f64,height:(height-top-bottom-24.).max(1.)as f64})?;
     feature::synchronize(&services.engine, &services.bridge, world, &owner)?;
     feature::panel::synchronize_panel(
         world,
@@ -1154,7 +1159,7 @@ fn synchronize(
             "Extrude".to_owned(),
             NativeCommand::Feature(feature::FeatureCommand::Open { kind:feature::SolidFormKind::Extrude, feature_id: None }),
             presentation.mode == native_viewport::ViewportMode::Sketch
-                || feature::panel(world).is_some(),
+                || feature::panel(world).is_some() || assembly::joint::active(world),
             270.,
             34.,
             48.,
@@ -1162,15 +1167,16 @@ fn synchronize(
         (
             "revolve".to_owned(),"Revolve".to_owned(),
             NativeCommand::Feature(feature::FeatureCommand::Open {kind:feature::SolidFormKind::Revolve,feature_id:None}),
-            presentation.mode==native_viewport::ViewportMode::Sketch || feature::panel(world).is_some(),
+            presentation.mode==native_viewport::ViewportMode::Sketch || feature::panel(world).is_some() || assembly::joint::active(world),
             320.,34.,48.,
         ),
     ];
     for (key,kind,x) in [("sweep",feature::SolidFormKind::Sweep,370.),("loft",feature::SolidFormKind::Loft,420.),("rib",feature::SolidFormKind::Rib,470.),("solid-fillet",feature::SolidFormKind::Fillet,530.),("solid-chamfer",feature::SolidFormKind::Chamfer,580.),("solid-shell",feature::SolidFormKind::Shell,630.),("combine",feature::SolidFormKind::Combine,690.),("offset-plane",feature::SolidFormKind::OffsetPlane,750.),("midplane",feature::SolidFormKind::Midplane,800.),("angle-plane",feature::SolidFormKind::AnglePlane,850.),("solid-mirror",feature::SolidFormKind::Mirror,910.),("split-body",feature::SolidFormKind::SplitBody,960.),("solid-rectangular-pattern",feature::SolidFormKind::RectangularPattern,1010.),("solid-circular-pattern",feature::SolidFormKind::CircularPattern,1060.),("external-thread",feature::SolidFormKind::ExternalThread,1110.),("hole",feature::SolidFormKind::Hole,1160.),("move-copy",feature::SolidFormKind::MoveCopy,1210.)] {
         rows.push((key.into(),kind.label().into(),NativeCommand::Feature(feature::FeatureCommand::Open {kind,feature_id:None}),
-            presentation.mode==native_viewport::ViewportMode::Sketch||feature::panel(world).is_some(),x,34.,48.));
+            presentation.mode==native_viewport::ViewportMode::Sketch||feature::panel(world).is_some() || assembly::joint::active(world),x,34.,48.));
     }
     rows.push(("assembly".into(),"Assembly".into(),NativeCommand::Assembly(assembly::Command::Show(!assembly::active(world))),presentation.mode==native_viewport::ViewportMode::Sketch,1270.,34.,48.));
+    rows.push(("joint".into(),"Joint".into(),NativeCommand::Assembly(assembly::Command::Joint(assembly::joint::Command::Open(None))),presentation.mode==native_viewport::ViewportMode::Sketch || feature::panel(world).is_some() || assembly::joint::active(world),1320.,34.,40.));
     if state.close_pending {
         rows.push((
             "cancel-close".into(),
@@ -1324,8 +1330,8 @@ fn synchronize(
         }
     });
     for (key, label, command, disabled, x, y, width) in rows {
-        let is_extrude = matches!(key.as_str(), "extrude" | "revolve" | "sweep" | "loft" | "rib" | "solid-fillet" | "solid-chamfer" | "solid-shell" | "combine" | "offset-plane" | "midplane" | "angle-plane" | "solid-mirror" | "split-body" | "solid-rectangular-pattern" | "solid-circular-pattern" | "external-thread" | "hole" | "move-copy" | "assembly");
-        let build_icon = match key.as_str() {"assembly"=>interface_shell::ribbon::Icon::Boxes,"revolve"=>interface_shell::ribbon::Icon::Revolve,"sweep"=>interface_shell::ribbon::Icon::Sweep,"loft"=>interface_shell::ribbon::Icon::Loft,"rib"=>interface_shell::ribbon::Icon::Rib,"solid-fillet"=>interface_shell::ribbon::Icon::Fillet,"solid-chamfer"=>interface_shell::ribbon::Icon::Chamfer,"solid-shell"=>interface_shell::ribbon::Icon::Shell,"external-thread"=>interface_shell::ribbon::Icon::ExternalThread,"hole"=>interface_shell::ribbon::Icon::Hole,"move-copy"=>interface_shell::ribbon::Icon::MoveCopy,"combine"=>interface_shell::ribbon::Icon::Combine,"offset-plane"=>interface_shell::ribbon::Icon::OffsetPlane,"midplane"=>interface_shell::ribbon::Icon::Midplane,"angle-plane"=>interface_shell::ribbon::Icon::AnglePlane,"solid-mirror"=>interface_shell::ribbon::Icon::Mirror,"split-body"=>interface_shell::ribbon::Icon::SplitBody,"solid-rectangular-pattern"=>interface_shell::ribbon::Icon::RectangularPattern,"solid-circular-pattern"=>interface_shell::ribbon::Icon::CircularPattern,_=>interface_shell::ribbon::Icon::Extrude};
+        let is_extrude = matches!(key.as_str(), "extrude" | "revolve" | "sweep" | "loft" | "rib" | "solid-fillet" | "solid-chamfer" | "solid-shell" | "combine" | "offset-plane" | "midplane" | "angle-plane" | "solid-mirror" | "split-body" | "solid-rectangular-pattern" | "solid-circular-pattern" | "external-thread" | "hole" | "move-copy" | "assembly" | "joint");
+        let build_icon = match key.as_str() {"joint"=>interface_shell::ribbon::Icon::Joint,"assembly"=>interface_shell::ribbon::Icon::Boxes,"revolve"=>interface_shell::ribbon::Icon::Revolve,"sweep"=>interface_shell::ribbon::Icon::Sweep,"loft"=>interface_shell::ribbon::Icon::Loft,"rib"=>interface_shell::ribbon::Icon::Rib,"solid-fillet"=>interface_shell::ribbon::Icon::Fillet,"solid-chamfer"=>interface_shell::ribbon::Icon::Chamfer,"solid-shell"=>interface_shell::ribbon::Icon::Shell,"external-thread"=>interface_shell::ribbon::Icon::ExternalThread,"hole"=>interface_shell::ribbon::Icon::Hole,"move-copy"=>interface_shell::ribbon::Icon::MoveCopy,"combine"=>interface_shell::ribbon::Icon::Combine,"offset-plane"=>interface_shell::ribbon::Icon::OffsetPlane,"midplane"=>interface_shell::ribbon::Icon::Midplane,"angle-plane"=>interface_shell::ribbon::Icon::AnglePlane,"solid-mirror"=>interface_shell::ribbon::Icon::Mirror,"split-body"=>interface_shell::ribbon::Icon::SplitBody,"solid-rectangular-pattern"=>interface_shell::ribbon::Icon::RectangularPattern,"solid-circular-pattern"=>interface_shell::ribbon::Icon::CircularPattern,_=>interface_shell::ribbon::Icon::Extrude};
         let is_body = key.starts_with("body-") || key.starts_with("visibility-");
         let surface = command_group(&command);
         let entity = if let Some(entity) = state.controls.get(&key) {

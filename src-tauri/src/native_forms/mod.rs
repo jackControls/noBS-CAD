@@ -2,6 +2,8 @@
 //! These are form state and validation, not another command or schema catalog.
 
 mod feature;
+#[cfg(feature = "dev-bevy-host")]
+pub(crate) mod joint;
 mod measurement;
 
 pub(crate) use feature::{

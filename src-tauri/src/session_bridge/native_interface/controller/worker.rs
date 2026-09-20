@@ -226,6 +226,51 @@ pub(crate) fn enqueue_document_io(
     enqueue(world, operation, transaction, complete, false)
 }
 
+/// A read-only solver preview keeps the kernel off the input/render thread and
+/// does not publish, advance history or prepare a replacement geometry snapshot.
+pub(crate) fn enqueue_query(
+    world: &mut World,
+    owner: DocumentContext,
+    revision: u64,
+    operation: String,
+    arguments: Value,
+    complete: impl FnOnce(
+            &mut World,
+            &NativeServices,
+            Result<NativeMutationResult, String>,
+        ) -> Result<Value, String>
+        + Send
+        + 'static,
+) -> Result<Value, String> {
+    let label = operation.clone();
+    enqueue(
+        world,
+        label,
+        move |services, guard| {
+            services
+                .bridge
+                .with_native_document_receipt(&services.engine, &owner, |current| {
+                    if current != revision {
+                        return Err("The model changed before the preview could run".into());
+                    }
+                    guard.validate()?;
+                    let value = crate::session_bridge::parse_engine_envelope(
+                        services
+                            .engine
+                            .engine_call(&operation, &arguments.to_string()),
+                    )?;
+                    Ok(NativeMutationResult {
+                        context: owner.clone(),
+                        engine_revision: revision,
+                        value,
+                    })
+                })
+        },
+        complete,
+        false,
+    )
+}
+
 fn enqueue(
     world: &mut World,
     operation: String,

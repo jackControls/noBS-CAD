@@ -3,6 +3,7 @@
 
 mod annotations;
 mod solid;
+use crate::session_bridge::native_interface::controller::assembly::joint;
 mod dynamic;
 pub(crate) mod support;
 pub(crate) use dynamic::SizeField;
@@ -544,6 +545,16 @@ pub(crate) fn process_one(
             }
         }
     }
+    if frame.modal_stack.is_empty() && event.context.as_ref() == Some(&frame.context) && joint::active(world) {
+        if matches!(&event.event, WindowEvent::KeyboardInput(k) if k.state==ButtonState::Pressed && k.key_code==KeyCode::Escape) {return joint::cancel(world,&services.engine,&services.bridge,&frame.context);}
+        if let WindowEvent::CursorMoved(moved)=&event.event {
+            if let Some(c)=frame.canvases.iter().find(|c|c.name=="viewport") {
+                let p=moved.position;let a=c.bounds;
+                let inside=p.x>=a.x as f32&&p.y>=a.y as f32&&p.x<(a.x+a.width)as f32&&p.y<(a.y+a.height)as f32&&!handle.owns_pointer([p.x as f64,p.y as f64]);
+                if let Some(value)=joint::canvas(world,services,&frame.context,inside.then_some([p.x-a.x as f32,p.y-a.y as f32]),false)? {return Ok(value);}
+            }
+        }
+    }
     let next = stamp(
         &services.engine,
         &services.bridge,
@@ -695,6 +706,7 @@ pub(crate) fn process_one(
                         return support::pick(world, services, &owner, &mut editor,
                             [cursor.x-canvas.bounds.x as f32,cursor.y-canvas.bounds.y as f32]);
                     }
+                    if let Some(value)=joint::canvas(world,services,&owner,Some([cursor.x-canvas.bounds.x as f32,cursor.y-canvas.bounds.y as f32]),true)? {return Ok(value);}
                     if let Some(value) = crate::session_bridge::native_interface::feature::handle_canvas_pick(
                         world, services, &owner,
                         [cursor.x-canvas.bounds.x as f32,cursor.y-canvas.bounds.y as f32],
@@ -921,7 +933,7 @@ pub(crate) fn synchronize_controls(
             if world.get::<Node>(entity) != Some(&node) {
                 world.entity_mut(entity).insert(node);
             }
-            let build_open = crate::session_bridge::native_interface::feature::panel(world).is_some();
+            let build_open = crate::session_bridge::native_interface::feature::panel(world).is_some() || joint::active(world);
             let mut control = world
                 .get_mut::<InterfaceControl>(entity)
                 .ok_or("Sketch control was removed")?;
