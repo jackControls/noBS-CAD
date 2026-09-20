@@ -65,7 +65,7 @@ Record numbers with units and source (datasheet rev, caliper note, coupon).
 - Pocket depth leaves remaining floor/wall ≥ process min on every side.
 - Add lead-in / chamfer on entry faces where the body slides in —
   [fillet vs chamfer](fillet-chamfer.md).
-- Do not use the pocket as the sole locator if the actuator can rattle —
+- Prefer a second locate (nubs/pins) when the actuator can rattle —
   combine with pads, nubs, or a retainer class
   ([alignment nubs](alignment-nubs-pins.md),
   [clamshell retainer](am-clamshell-retainer.md)).

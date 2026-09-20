@@ -51,7 +51,7 @@ accuracy when thermal gradients and residual stress win. Flatness is a
 - Slow large solid infill skins; avoid sudden thick-to-thin thermal sinks
 - Fixture or weight during cool-down for critical flats (shop practice)
 
-Numbers and temperatures are **machine-/filament-specific** — do not copy a
+Numbers and temperatures are **machine-/filament-specific** — prefer measuring over copying a
 universal °C table from this page.
 
 ## Coupon / verify

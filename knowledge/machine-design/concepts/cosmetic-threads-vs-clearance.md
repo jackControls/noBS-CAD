@@ -56,7 +56,7 @@ when you explicitly accept printed-thread limits.
 ## CAD hygiene checklist
 
 1. Label the hole **role** (clearance / tap / insert / cosmetic-only).
-2. Put thread callouts in BOM or drawing notes; do not rely on helix count.
+2. Put thread callouts in BOM or drawing notes; prefer notes over helix count.
 3. Suppress or exclude cosmetic faces from manufacturing exports when they are
    display-only.
 4. For special helical features (leadscrews, printed worms), treat them as

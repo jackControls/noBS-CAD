@@ -75,7 +75,7 @@ Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 - [MCP workflow](concepts/agent-mcp-workflow.md) - Help-first, soft focus, inspect, edit, sessions, units.
 - [Research before commit](concepts/research-before-commit.md) - VERIFY table and local help before freezing geometry.
 - [Assembly interference check](concepts/assembly-interference.md) - Geometric overlap/clearance at solved poses vs fit classes.
-- [Validate before show](concepts/validate-before-show.md) - Mandatory review shot pack; reject blank/inside-solid frames.
+- [Validate before show](concepts/validate-before-show.md) - Mandatory review shot pack; prefer recapture when frames are blank or inside-solid.
 - [Adversarial mesh audit](concepts/adversarial-mesh-audit.md) - Manifold, wall probes, shards; printable-solid gate.
 - [Export & print](concepts/export-print.md) - Interchange, 3MF vs STL, mesh preflight, qualification boundaries.
 - [Contribution process](concepts/process.md) - Lightweight contribution and review expectations.

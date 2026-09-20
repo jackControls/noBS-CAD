@@ -12,7 +12,7 @@ sources: nwtc-guns-dfm, doe-3d
 
 # AM clamshell retainer (slide first, detent second)
 
-Use when an FDM/AM **retainer** holds two clamshell halves together. Never invent
+Use when an FDM/AM **retainer** holds two clamshell halves together. Prefer the simple clamp loop before inventing
 snap geometry without this order.
 
 ## Print orientation
@@ -23,7 +23,7 @@ snap geometry without this order.
 - Prefer a simple **rectangle with a center cutout** (channel / frame), not a
   decorative C or ornamental hooks, until the slide fit is proven.
 
-## Function split (do not merge)
+## Function split (prefer separate roles)
 
 1. **Clamp / strength** — faces that keep the two halves from separating. Sized
    for a clean removable **slide-in**.
@@ -42,8 +42,8 @@ see [AM snap-fits](am-snap-fit.md) mechanism classes.
 2. Validate: slide in / slide out by hand intent, no overlap on the clamp
    faces, printable without supports in the side orientation.
 3. Only then add **tiny detent** details on the insert faces.
-4. Do not invent complex barbs, I-beams, or load-bearing snaps while iterating
-   the slide fit.
+4. Prefer a simple retainer while iterating; leave complex barbs, I-beams, or load-bearing snaps for a later pass
+   after the slide fit.
 
 ## Engineering checklist
 

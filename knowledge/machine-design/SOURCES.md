@@ -11,10 +11,10 @@ searchable: false
 
 Bundled prose is project content under `LGPL-2.1-or-later` unless a page says
 otherwise. **Distill** only from public-domain or CC BY (and similar).
-**Link-only** means cite and send the reader out — do not copy body text.
+**Link-only** means cite and send the reader out — prefer distill + URL over copying body text.
 
 Concept frontmatter `sources:` values **must** match an `id` below.
-Never paste ASME Y14.5, ISO 1101, or other standards body text.
+Prefer purchase/read + citation for ASME Y14.5, ISO 1101, and other standards; keep body text outside the corpus.
 ShareAlike (SA) sources stay **link-only** until maintainers decide SA policy.
 
 Policy narrative: [`docs/machine-design-distill-vs-link.md`](https://github.com/jackControls/noBS-CAD/blob/docs/machine-design-kb/docs/machine-design-distill-vs-link.md)
@@ -28,7 +28,7 @@ Policy narrative: [`docs/machine-design-distill-vs-link.md`](https://github.com/
 | `nist-gdt-2` | NIST / Berez GD&T Part II | https://zenodo.org/records/8237278 | cc-by-4.0 | Inspection, implementation, limits & fits teaching |
 | `nist-pmi` | NIST MBE PMI CAD models & STEP | https://www.nist.gov/ctl/smart-connected-systems-division/smart-connected-manufacturing-systems-group/mbe-pmi-0 | public-domain | Annotated PMI examples; not a how-to course |
 | `nwtc-guns-dfm` | NWTC LibreTexts DFM (Guns) | https://eng.libretexts.org/Courses/Northeast_Wisconsin_Technical_College/Design_for_Various_Manufacturing_Methods | cc-by-4.0 | [Ch.1 DFM](https://eng.libretexts.org/Courses/Northeast_Wisconsin_Technical_College/Design_for_Various_Manufacturing_Methods/01%3A_Design_for_Manufacturing_(DFM)), [Ch.2 processes](https://eng.libretexts.org/Courses/Northeast_Wisconsin_Technical_College/Design_for_Various_Manufacturing_Methods/02%3A_DFM_Guidelines_for_Specific_Manufacturing_Processes); license https://creativecommons.org/licenses/by/4.0/ |
-| `palni-dfma` | PALNI Design for Manufacture and Assembly | https://pressbooks.palni.org/designmanufactureassembly/ | cc-by-4.0 | DFA principles; do not copy Boothroyd tables |
+| `palni-dfma` | PALNI Design for Manufacture and Assembly | https://pressbooks.palni.org/designmanufactureassembly/ | cc-by-4.0 | DFA principles; prefer distill + link over Boothroyd tables |
 | `doe-3d` | DOE Module 3D DFM/DFA/reliability | https://www.energy.gov/sites/default/files/2021-07/Module_3D.pdf | public-domain | High-level checklists; strip third-party figures |
 | `nasa-fastener` | NASA Fastener Design Manual (RP-1228) | https://ntrs.nasa.gov/citations/19900009424 | public-domain | Public use permitted |
 | `nasa-bearing` | NASA rolling-element bearing reports | https://ntrs.nasa.gov/citations/19830018943 | public-domain | Confirm each NTRS record |
@@ -52,14 +52,14 @@ Policy narrative: [`docs/machine-design-distill-vs-link.md`](https://github.com/
 | `baughman-me270` | Baughman Iowa State ME design | https://iastate.pressbooks.pub/me270baughman/ | cc-by-sa | **Link-only** until SA policy |
 | `mechanics-map` | Mechanics Map | https://mechanicsmap.org/ | cc-by-sa | **Link-only** until SA policy |
 | `wikipedia-gdt` | Wikipedia GD&T | https://en.wikipedia.org/wiki/Geometric_dimensioning_and_tolerancing | cc-by-sa | Short paraphrase only; large reuse → SA |
-| `freecad-wiki` | FreeCAD documentation wiki | https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/License.md | cc-by-3.0 | Pattern reference; do not fork |
-| `asme-y14` | ASME Y14.5 / Y14.41 / Y14.46 | https://www.asme.org/codes-standards | proprietary | Purchase/read; never copy |
-| `iso-gps` | ISO 1101 / GPS (ISO/TC 213) | https://www.iso.org/committee/54924.html | proprietary | Never copy |
-| `iso-286` | ISO 286 / preferred fits | https://www.iso.org/ | proprietary | Never copy fit charts |
+| `freecad-wiki` | FreeCAD documentation wiki | https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/License.md | cc-by-3.0 | Pattern reference; prefer cite over fork |
+| `asme-y14` | ASME Y14.5 / Y14.41 / Y14.46 | https://www.asme.org/codes-standards | proprietary | Purchase/read; link-out |
+| `iso-gps` | ISO 1101 / GPS (ISO/TC 213) | https://www.iso.org/committee/54924.html | proprietary | Link-out |
+| `iso-286` | ISO 286 / preferred fits | https://www.iso.org/ | proprietary | Link-out fit charts |
 | `asme-b4` | ASME B4.x preferred fits | https://www.asme.org/codes-standards | proprietary | Preferred-fit *purposes* taught via NIST only with hard fence |
 | `matweb` | MatWeb | vendor | proprietary | No scrape |
 | `makeitfrom` | MakeItFrom | vendor | proprietary | No scrape |
-| `boothroyd` | Boothroyd-Dewhurst DFA tables | proprietary | proprietary | Do not reproduce |
+| `boothroyd` | Boothroyd-Dewhurst DFA tables | proprietary | proprietary | Link-out only |
 | `vendor-cad-help` | Onshape / SolidWorks / Autodesk help | vendor | proprietary | Paraphrase only |
 
 ## In-repo recipe ids (not third-party text)

@@ -4,7 +4,7 @@
 - [How humans find help today](HUMAN_HELP.md) — index/taxonomy/MCP/Pages doors; Scripts deep-link; prompts gap.
 
 Committed operating docs for humans and coding agents working on noBS CAD.
-**Do not** add root `AGENTS.md` / `.cursor/rules` to git (project policy).
+Prefer leaving root `AGENTS.md` / `.cursor/rules` out of git (project policy).
 
 | Doc | Purpose |
 |-----|---------|

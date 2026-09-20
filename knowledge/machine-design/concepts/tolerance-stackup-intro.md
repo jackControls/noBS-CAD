@@ -45,7 +45,7 @@ charts, bilateral tables, or closed numeric stacks you can copy into a drawing.
 4. Check for **fighting locators**
    ([locating schemes](locating-scheme-dof.md)).
 5. Prefer a **coupon** over a hand-wavy closed stack for AM mates.
-6. Never paste proprietary handbook stack tables into this KB or a drawing note.
+6. Prefer link-out citations for proprietary handbook stack tables; keep body text outside the KB and drawing notes.
 
 ## Where teaching sources help
 
@@ -53,7 +53,7 @@ charts, bilateral tables, or closed numeric stacks you can copy into a drawing.
   teaching companions: [Zenodo Part I](https://zenodo.org/records/7647256),
   [Part II](https://zenodo.org/records/8237278).
 - Contractual GPS / Y14 practices — purchase [ASME Y14.5](https://www.asme.org/codes-standards)
-  / [ISO GPS](https://www.iso.org/committee/54924.html); **never** paste standard
+  / [ISO GPS](https://www.iso.org/committee/54924.html); prefer cite + distill over pasting standard
   body text into this KB.
 - Preferred-fit designations — link-out only via [fits & clearances](fits-clearances.md).
 

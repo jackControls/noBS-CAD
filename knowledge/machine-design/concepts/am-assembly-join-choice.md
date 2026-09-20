@@ -20,7 +20,7 @@ detailing a clip. Snap-fits are not the default for every FDM enclosure.
 Guns / NWTC ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)), DOE
 Module 3D (public domain), fastener thinking from NASA RP-1228 (public domain).
 Adhesive and ultrasonic **process windows** are vendor-/material-specific —
-link out; do not invent cure schedules here.
+link out; prefer vendor cure schedules over inventing them here.
 
 ## Decision table (first pass)
 
@@ -47,7 +47,7 @@ loose lids.
 
 ## Glue / weld hygiene (AM)
 
-- Design a **bond land** (width, length, flash control) — do not rely on edge
+- Design a **bond land** (width, length, flash control) — prefer a land over edge
   contact of two thin shells.
 - Keep adhesive away from living hinges, cable jackets, and heat-set melt zones.
 - Solvent welding is material-pair specific (e.g. some ABS systems); many FDM

@@ -32,7 +32,7 @@ figures for orientation only.
 | Pin / axle hole ID | ~4.8 mm class | Pin OD and hole ID differ; measure both |
 | Beam thickness | ~7.4–8 mm class | Varies by generation and clone |
 
-Treat every cell as **suspect until measured**. Do not paste these into a
+Treat every cell as **suspect until measured**. Prefer measured values in a
 shipping drawing as certified. Prefer **mm** project units
 ([MCP workflow](../../concepts/agent-mcp-workflow.md)).
 

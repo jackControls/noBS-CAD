@@ -17,7 +17,7 @@ further reading). **Agent door:** `cad_help` `topics` / `search` / `get` using
 the **ids** in the tables (path with `/` → `.`).
 
 **Coverage honesty:** agents should search **seeded** pages first. For
-**planned** rows, prefer linked further-reading / web — do not invent from an
+**planned** rows, prefer linked further-reading / web — leave empty rather than invent from an
 empty topic.
 
 Provenance: [SOURCES](SOURCES.md). Browse note:

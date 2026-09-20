@@ -32,7 +32,7 @@ Heuristics only — IP / weather ratings need a measured coupon, not this page.
 | **Gasket seat** | Soft purchased gasket or foam | Groove or rebate sized to gasket cross-section |
 | **O-ring groove** | Round elastomer; higher clamp discipline | Vendor groove + compression % (link-out chart) |
 
-Do not claim “weatherproof” from a labyrinth alone. Labyrinths slow dust and
+Prefer rating seals from the full stack (gasket + labyrinth + coupons). Labyrinths slow dust and
 splash; elastomers and clamp load do sealing work.
 
 ## Lid anatomy (roles)
@@ -52,12 +52,12 @@ splash; elastomers and clamp load do sealing work.
 
 ## FDM notes
 
-- Prefer the **seal path in the XY plane** when possible so layer rings do not
-  open a stair-step leak along the perimeter.
+- Prefer the **seal path in the XY plane** when possible so layer rings stay
+  continuous rather than opening a stair-step leak along the perimeter.
 - Gasket grooves need remaining wall ≥ process min after the cut —
   [thin walls](am-thin-walls.md). Paper-thin groove floors crush or crack.
 - Labyrinth walls are tall thin features — check overhangs and support cleanup
   ([supports](am-supports-overhangs.md)).
 - Coupon: print a short arc of the seal, clamp with the real stack, check dust
-  / light / water spray as appropriate. Do not scale a 20 mm coupon to a
+  / light / water spray as appropriate. Prefer a coupon sized to the real seal path over scaling a 20 mm coupon to a
   300 mm lid without a flatness plan ([warpage & flatness](am-warpage-cooling-flatness.md)).

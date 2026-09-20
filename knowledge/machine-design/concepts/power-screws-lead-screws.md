@@ -32,7 +32,7 @@ RP-1228 (public domain) plus DFM checklists. No torque/load tables here.
 ## CAD-time checklist
 
 1. **Purchased vs printed** — name the screw/nut SKU or the printed wear pair;
-   do not imply catalog duty from a cosmetic helix
+   prefer catalog ratings over implying duty from a cosmetic helix
    ([cosmetic threads](cosmetic-threads-vs-clearance.md)).
 2. **Lead ↔ travel** — document lead so agents stop inventing turn counts.
 3. **Nut role** — captive / flanged / trapezoid / printed — and how it is

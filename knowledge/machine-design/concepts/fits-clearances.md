@@ -33,8 +33,8 @@ Teaching rewrite informed by NIST / Berez GD&T Part II limits-and-fits review
 | **Interference fit** | Always overlap; press, shrink, or freeze assembly. | press fit, force fit, shrink fit |
 
 Say whether a number is **radial** or **diametral**. Mixing those is a common
-print-to-part bug. Process matters: a reamed hole and an FDM hole do not share
-the same allowance at the same nominal.
+print-to-part bug. Process matters: a reamed hole and an FDM hole leave different
+clearances even at the same nominal — pick the allowance for the process pair.
 
 ## Checklist before locking a fit class
 
@@ -47,7 +47,7 @@ the same allowance at the same nominal.
 5. **Coupon the critical joint** before flagship commit
    (`turbine-fit-coupons`, `d-screw-vise-fit`) — see
    [fit coupons map](fit-coupons-recipes-map.md).
-6. **Do not confuse** an **interference fit** (press class) with an
+6. **Keep distinct** an **interference fit** (press class) versus an
    **assembly interference** report (bodies overlapping in space).
 
 ## Preferred-fit designations (link-out only)
@@ -63,7 +63,7 @@ For contractual designations and deviation tables, open:
 - [ASME B4.x](https://www.asme.org/codes-standards) (purchase)
 - NIST Part II deck (CC BY) as a teaching companion — not a substitute
 
-Do not treat any in-app help list as an ISO/ASME fit chart.
+Prefer purchased ISO/ASME charts for official fits; treat in-app help lists as teaching distill.
 
 ## AM / FDM habits
 

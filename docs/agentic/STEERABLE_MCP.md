@@ -1,8 +1,8 @@
 # Steerable MCP — agent operating rules
 
-## Invariants (do not break)
+## Invariants (keep these true)
 
-1. **Disclosure is guidance, not a jail.** Never reject `tools/call` with “not in focus.”
+1. **Disclosure is guidance, not a jail.** Prefer accepting `tools/call`; soft focus only reshapes lists.
 2. **Hard errors** = missing IDs, invalid sketch state, kernel failure only.
 3. **Notification name** must stay exactly `notifications/tools/list_changed`.
 4. **Stdout** = JSON-RPC only; logs on **stderr**.
@@ -30,11 +30,11 @@ Keep `disclosure::tags_for_tool` aligned when adding dialogs or export tools.
 `cad_list_sessions` / `cad_attach` / `cad_refresh` / `cad_detach` implement a
 **read-only snapshot bridge** under `NBCAD_SESSION_DIR`:
 
-- session ids are **UUID v4** (document names rejected);
+- session ids are **UUID v4** (document names are display-only);
 - Tauri owns one UUID per desktop window and publishes
   `<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json}` with pre-export generation reservations;
 - attach **fails** if `model.json` is missing or invalid;
-- MCP **never** writes the session files back after editing in memory;
+- MCP keeps session files read-only after editing in memory;
 - refresh is explicit (no filesystem watcher);
 - this is **not** a live UI co-link / LWW writeback.
 

@@ -25,7 +25,7 @@ slowly, warp, and hide thin remaining walls after later cuts.
 |---------|------|
 | **Rib** | Thin wall standing off a face to raise bending stiffness with little mass |
 | **Gusset / brace** | Triangular or short web at a corner or boss-to-wall junction |
-| **Supported boss** | Boss tied back to walls with gussets so screw loads do not peel layers |
+| **Supported boss** | Boss tied back to walls with gussets so screw loads stay in the shell instead of peeling layers |
 
 Keep rib **thickness** on the order of the parent wall (often slightly thinner
 in molding; for FDM match nozzle/min-wall practice — see
@@ -34,8 +34,8 @@ skin they join — heat and sink marks concentrate there.
 
 ## Layout habits
 
-- Space parallel ribs so the slicer can still fill skins; do not create
-  unreachable micro-channels.
+- Space parallel ribs so the slicer can still fill skins; prefer spacing that keeps
+  channels reachable for fill.
 - Intersect ribs with **fillets** at the root ([fillet vs chamfer](fillet-chamfer.md)).
 - Orient tall ribs with print Z in mind: a rib on edge can be strong in bending
   yet weak if layers peel along its height under tension.
@@ -50,14 +50,14 @@ skin they join — heat and sink marks concentrate there.
 - AM: reduces scarring when peeling supports from near-vertical faces and eases
   sliding mates on printed sockets.
 
-You do not need molding-level draft everywhere on FDM, but **zero-draft deep
+FDM rarely needs molding-level draft everywhere, but **zero-draft deep
 pockets** and interlocking slides deserve a second look. Pair with
 [supports & overhangs](am-supports-overhangs.md).
 
 **Draft is not anisotropy.** Draft helps demold / peel / slide along a pull or
 build axis. **Layer-line anisotropy** (strength and flex vs layer planes) is a
 separate orientation decision — see
-[AM thin walls and print orientation](am-thin-walls.md). Do not “add draft”
+[AM thin walls and print orientation](am-thin-walls.md). Prefer purposeful draft over “add draft”
 expecting it to fix a part that bends across weak layer bonds.
 
 ## Even sections

@@ -24,7 +24,7 @@ scrap.
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/);
 and Gagnon & Bearman, *[Design for Manufacture and Assembly](https://pressbooks.palni.org/designmanufactureassembly/)* (PALNI),
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
-Rewritten for noBS CAD help — not a chapter mirror. Do not copy Boothroyd
+Rewritten for noBS CAD help — not a chapter mirror. Prefer distill + link over copying Boothroyd
 proprietary timing tables.
 
 ## CAD-time habits

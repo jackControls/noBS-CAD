@@ -71,11 +71,11 @@ roles — see [alignment nubs vs pins](alignment-nubs-pins.md).
    ([clamshell](am-clamshell-retainer.md)).
 5. If center-distance shrink will fight two round pins, add a **slot** or
    relieved secondary.
-6. Coupon the locate fit class ([fits](fits-clearances.md)); do not trust CAD
+6. Coupon the locate fit class ([fits](fits-clearances.md)); prefer coupons over CAD
    coincidence.
 7. After mates: [assembly interference](../../concepts/assembly-interference.md)
    at the solved pose — locate success ≠ clearance success.
-8. Drawing datums: [GD&T intro](gdt-intro.md) — do not invent ASME text here.
+8. Drawing datums: [GD&T intro](gdt-intro.md) — prefer link-out standards over inventing ASME text here.
 
 Related: [fits & clearances](fits-clearances.md),
 [tolerance stack-up intro](tolerance-stackup-intro.md).

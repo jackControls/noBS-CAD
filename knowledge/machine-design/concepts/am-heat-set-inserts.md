@@ -20,7 +20,7 @@ pilot.
 **Attribution:** joint thinking from NASA Fastener Design Manual RP-1228
 (public domain) and DFM habits from Guns / NWTC LibreTexts
 ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). Vendor insert
-charts are **link-out only** — do not copy proprietary tables into CAD.
+charts are **link-out only** — prefer vendor charts outside CAD.
 
 ## When inserts beat tapped plastic
 
@@ -47,7 +47,7 @@ the wear surface to metal.
 5. **Stand-off / base fillet** — blend boss into the parent wall so layer bonds
    and molding-style sink are less severe ([AM thin walls](am-thin-walls.md)).
 
-Do not model the insert’s **external knurl** as the CAD hole diameter. The hole
+Prefer modeling the **pilot hole** diameter from the vendor chart, not the insert’s **external knurl**. The hole
 is for the **cold pilot**; the knurl melts into plastic.
 
 ## Process notes (FDM)

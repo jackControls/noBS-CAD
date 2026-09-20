@@ -59,4 +59,4 @@ Fixtures/results stay under `/workspace/cad-design-ops/evals/` (`help-goldens.js
 | H45 | search `face_id edge_id topology solid_scene` | `agent-mcp-workflow` |
 | H46 | search `power screws lead screws pitch backdrive` | `power-screws-lead-screws` |
 
-Caps **confirmed** 2026-09-19 (H1–H8 core); corpus through **H46** (2026-09-20 purge retune): search default 5 / max 10, snippet ~280, get 12 KiB, topics page 50. Locked in `docs/machine-design-help-search.md`. Retune only from honest FAIL notes — do not silently weaken goldens.
+Caps **confirmed** 2026-09-19 (H1–H8 core); corpus through **H46** (2026-09-20 purge retune): search default 5 / max 10, snippet ~280, get 12 KiB, topics page 50. Locked in `docs/machine-design-help-search.md`. Retune only from honest FAIL notes — keep goldens honest; prefer stronger queries over softer expectations.

@@ -33,7 +33,7 @@ dims, fastener patterns, bearing seats, and snap class.
    Prefer a **blank** document when replaying recipes.
 4. **Primary datasheets / catalogs** for purchased parts (bearing, fastener,
    motor) — record nominal + tolerance **source**.
-5. **Web search** only as escape hatch; cite URL + date. Never paste closed
+5. **Web search** as escape hatch after local miss; cite URL + date. Prefer distill over pasting closed
    standards tables (ASME/ISO body text) into model notes as if they were yours.
 
 ## Capture a VERIFY table before modeling
@@ -52,6 +52,6 @@ Also record: function + constraints, print process, open questions.
 ## Commit rule
 
 - Changing a VERIFY row by more than process tolerance ⇒ regenerate affected
-  features; do not “nudge” unrelated faces.
+  features; keep edits on the intended faces.
 - If research flips mechanism class (tabs vs clips, press vs slip), scrap the
-  wrong embodiment — do not patch.
+  wrong embodiment — prefer a clean redesign over a patch.

@@ -18,8 +18,8 @@ not hole/shaft **class** selection.
 Design **intent** for a **clearance fit**, **transition fit**, or **interference fit**
 (press class) lives on [fits & clearances](../machine-design/concepts/fits-clearances.md).
 An **interference fit** is a hole/shaft class — it is **not** what this tool
-reports. Do not treat a preferred-designation chart as a substitute for an
-assembly collision check, or vice versa.
+reports. Prefer keeping preferred-designation charts and assembly collision checks as separate tools —
+use each for its job, with coupons when the class matters.
 
 ## What the tool reports
 
@@ -75,7 +75,7 @@ tight.
 1. `assembly_document` / scene inspect → confirm occurrences and visibility.
 2. `assembly_interference_check` (optionally scoped + threshold).
 3. If overlap is unintended: fix pose/joint or solid; re-inspect; re-check.
-4. If overlap matches a press **intent**: document that; do not “clear” it by
+4. If overlap matches a press **intent**: document that; prefer documenting over “clearing” it by
    shrinking functional interference without a VERIFY row.
 
 Standards bodies publish GPS / preferred-designation systems (ISO 286, ASME B4.x,

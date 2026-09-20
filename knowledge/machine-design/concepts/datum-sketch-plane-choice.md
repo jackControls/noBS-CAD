@@ -58,7 +58,7 @@ sketch plane or edit the feature
 - **GD&T datum** — inspection reference on the drawing
   ([GD&T intro](gdt-intro.md), [locating schemes](locating-scheme-dof.md)).
 
-Do not invent ASME datum frames from a random construction plane.
+Prefer deliberate datum planes; keep ASME frames tied to functional faces, not a random construction plane.
 
 ## Related recipes
 

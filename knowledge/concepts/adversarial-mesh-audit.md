@@ -33,7 +33,7 @@ before [validate before show](validate-before-show.md).
    leftovers from combine cuts.
 4. **Flexure location** — compliance must live in the designed beam/clip, not a
    thinned parent shell ([AM snap-fits](../machine-design/concepts/am-snap-fit.md)).
-5. **Nubs / socks** — reject wedding-cake stacked cylinders and open sock floors;
+5. **Nubs / socks** — prefer continuous locate geometry over wedding-cake stacked cylinders and open sock floors;
    prefer smooth lofted caps + closed socks
    ([alignment nubs vs pins](../machine-design/concepts/alignment-nubs-pins.md)).
 6. **Lead-ins / proud humps** — continuous ramp; flush mating faces; no staircase catch.
@@ -42,9 +42,9 @@ before [validate before show](validate-before-show.md).
 
 ## Pass / fail
 
-- **Fail closed:** any paper-thin wall, non-manifold export candidate, or artifact
-  body → redesign; do not ship.
-- **Do not** treat “clearance ≥ X” or a green JSON gate alone as pass.
+- **Prefer redesign before ship:** any paper-thin wall, non-manifold export candidate, or artifact
+  body → redesign and re-audit.
+- Prefer a full visual + mesh audit; treat “clearance ≥ X” or a green JSON gate as supporting evidence, not a solo pass.
 - Record measured min wall and where it was taken (section id / probe path).
 
 ## MCP vs offline

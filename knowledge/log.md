@@ -1,5 +1,13 @@
 # noBS CAD knowledge update log
 
+## 2026-09-20 — Golden-path tone sweep
+
+- Corpus + agentic ADR wording flipped to prefer / golden-path packs (what to do);
+  kept engineering content and link-out copyright stance. Soft prefer OK; jail
+  language out.
+- Design Ops `guidance/help-unified-plan.md` gained a short Doctrine block (OKF,
+  one corpus, golden-path authorship, structure adjustable, ship when Jeff says).
+
 ## 2026-09-20 — Purge MCP ops micro-pages (golden-path rewrite)
 
 Merged MCP ops Concepts into `concepts/agent-mcp-workflow.md` (help, soft focus,
@@ -37,7 +45,7 @@ kept main's product concepts (gears, workholding, bearings, wind) plus existing
 - Extended the knowledge gate to validate source provenance and recipe references.
 
 ## 2026-09-11
-- **Update**: Added actual G-code footprint, bridge-anchor and preceding-layer checks; zero support paths alone do not establish printability.
+- **Update**: Added actual G-code footprint, bridge-anchor and preceding-layer checks; zero support paths alone leave printability unproven — prefer bridge/anchor checks.
 - **Update**: Added small-generator/rotor/load matching and bearing/axial-retention guidance, with manufacturer and experimental references. Both use the existing automatic MCP resource inventory.
 - **Update**: Added sourced gear-identification/pair-design and additive-workholding guidance.
 - **Integration**: Native MCP resources expose the same Markdown corpus offline; no separate knowledge store or modeling tool.

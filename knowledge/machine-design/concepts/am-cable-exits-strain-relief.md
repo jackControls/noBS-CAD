@@ -14,7 +14,7 @@ sources: nwtc-guns-dfm, doe-3d, palni-dfma
 
 A **wire window** is not leftover air after a pocket. It is a named feature with
 an exit face, a minimum aperture for the cable bundle, edge treatment, and a
-**strain-relief** plan so tug loads do not land on solder joints or thin walls.
+**strain-relief** plan so tug loads stay off solder joints and thin walls.
 
 **Attribution:** DFAM / enclosure hygiene adapted from Guns / NWTC LibreTexts
 DFM ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)) and DOE Module
@@ -37,15 +37,15 @@ insulation and print walls together.
 ## Geometry checklist
 
 1. **Bundle envelope** — measured OD (or max connector) + print/assembly
-   allowance; do not size to bare conductor.
+   allowance; prefer jacket + bundle OD over bare conductor.
 2. **Remaining wall** — after the window, every adjacent shell must stay ≥
    process min ([AM thin walls](am-thin-walls.md)).
 3. **Edge treatment** — chamfer or fillet entry/exit so jacket does not saw on
    a knife edge ([fillet vs chamfer](fillet-chamfer.md)).
 4. **Split-line story** — if the cable is trapped at close, plan which half
    owns the channel and how the mating half closes without pinching.
-5. **Strain relief** — clamp or tie the **jacket** to the case so tension never
-   reaches the joint; leave a service loop when rework matters.
+5. **Strain relief** — clamp or tie the **jacket** to the case so tension stays
+   off the joint; leave a service loop when rework matters.
 6. **Orientation** — prefer exits that avoid sharp Z stair-steps on the jacket
    path; support strategy for overhanging lips —
    [supports & overhangs](am-supports-overhangs.md).

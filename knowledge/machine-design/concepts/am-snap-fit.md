@@ -20,7 +20,7 @@ beam cannot flex.
 ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)), DOE Module 3D
 checklists (US government / public domain), and PALNI DFMA principles
 ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). Heuristics only —
-confirm with material, nozzle, and a **coupon**. Do not paste closed vendor
+confirm with material, nozzle, and a **coupon**. Prefer link-out over pasting closed vendor
 design tables.
 
 ## Name the mechanism class
@@ -35,13 +35,13 @@ Pick **one** before modeling:
 | **Living hinge** | Thin flexible web in the same part |
 | **Friction detent** | Interference or bump without a distinct hook |
 
-Do not “add a clip” without choosing the class. Wrong class → wrong thickness
+Prefer choosing the snap **class** before modeling a clip. Wrong class → wrong thickness
 and wrong print orientation.
 
 ## Role-based thickness (not one global wall)
 
 Name roles for every mating surface: **flexure beam**, **hook/barb**,
-**seat/shoulder**, **relief cut**, **stop face**. Do not reuse one thickness
+**seat/shoulder**, **relief cut**, **stop face**. Prefer sizing each feature over one thickness
 for all roles.
 
 Starting guidance (confirm with coupon):
@@ -53,8 +53,8 @@ Starting guidance (confirm with coupon):
    side after the seat is cut:
    `remaining = parent_wall - seat_depth - opposite_feature`.
    If remaining < min wall → shallower seat, boss, or thicker parent.
-3. **Deflection space**: the hook needs free travel; the seat must not eat the
-   cavity so the beam cannot flex.
+3. **Deflection space**: the hook needs free travel; keep the seat from eating the
+   cavity so the beam can flex.
 4. **Lead-ins** on entry faces; avoid knife-edge printed barbs.
 5. Prefer **role-based fits** (slip / locate / press) over one global XY hole
    compensation — see [fits & clearances](fits-clearances.md).
@@ -73,7 +73,7 @@ Starting checklist (coupon before commit — no universal mm from this page):
 2. **Hinge length (span)** — long enough for the required open angle without
    yielding the web; short stubs concentrate strain and crack early.
 3. **Land / shoulder** — thick sections on both sides of the web so clamps and
-   loads do not tear into the flexure.
+   loads stay off the flexure root.
 4. **Bend vs layers** — prefer orientation so bend does not peel layer bonds on
    first open ([AM thin walls / anisotropy](am-thin-walls.md)). When unsure,
    print a hinge coupon first.

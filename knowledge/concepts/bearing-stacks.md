@@ -27,7 +27,7 @@ experiment and an outdoor mechanism need different qualification.
 [NSK shield and seal comparison](https://www.nsk.com/content/dam/nsk-marketing/projects-completed/literature/product-brochures/deep-grooves-bbs_product-brochure/en_deep-grooves-bbs_product-brochure/preview-pdf_deep-grooves-bbs_product-brochure_en/EN_Deep%20Grooves%20BBs_Product_Brochure_low-res.pdf).
 
 Specify a collar by bore, outside diameter, width, screw envelope and fastening
-method. Do not draw a convenient thin annulus and describe it as an unspecified
+method. Prefer modeling the real seat/shoulder stack over a convenient thin annulus labeled as an unspecified
 purchased collar. Set-screw and clamp collars can differ in size and shaft
 marking; preserve installation/removal access after the housing is assembled.
 For example, Ruland's 8 mm set-screw MSC-8-F is 16 mm OD and 8 mm wide, while its
@@ -48,7 +48,7 @@ Name **which ring** is stationary and which rotates, then assign fit **roles**
 | Hub OD ↔ mate bore | Press hub / pulley / gear | Lead-in + shoulder stop |
 
 See [fits & clearances](../machine-design/concepts/fits-clearances.md) for class
-language. Preferred-fit codes stay **link-out**; do not treat this page as an
+language. Preferred-fit codes stay **link-out**; treat this page as guidance, not an
 ISO 286 chart.
 
 ### Hub / seat geometry checklist
@@ -59,8 +59,8 @@ ISO 286 chart.
    diameter must clear seals/shields per the bearing drawing.
 3. **Relief / undercut** — optional grind relief so the fillet does not hold the
    race off the shoulder.
-4. **Depth** — seat depth ≥ bearing width (or intentional stand-proud); do not
-   bury seals against a flat floor that rubs.
+4. **Depth** — seat depth ≥ bearing width (or intentional stand-proud); prefer
+   clearance so seals stay off a rubbing flat floor.
 5. **Wall around printed seats** — remaining housing wall after the bore must
    meet process min ([AM thin walls](../machine-design/concepts/am-thin-walls.md)).
 
@@ -77,13 +77,13 @@ abutment diameter alone does not define the largest safe spacer diameter.
 For two bearings, calculate the inner-ring stack and housing shoulder spacing
 from the same datums, including widths, spacer length and shim tolerances.
 Define the intended axial location, permitted float or specified preload.
-Do not squeeze an uncertain printed stack between collars until it appears
+Prefer measuring and coupons before clamping an uncertain printed stack between collars until it appears
 tight: excess fit or unintended preload can increase drag and damage bearings.
 Provide adjustment and measure free rotation after each retaining operation.
 [NSK fits and internal clearance](https://www.nsk.com/tools-resources/abc-bearings/fits-and-internal-clearance/).
 
-Fit each ring with force applied to that ring; do not transmit installation
-force through the balls. Include shaft lead-ins, deburring, bearing insertion
+Fit each ring with force applied to that ring; route installation
+force through the pressed ring, not the balls. Include shaft lead-ins, deburring, bearing insertion
 direction and access for the pressing sleeve, fasteners and removal tool.
 [NSK mounting guidance](https://www.nsk.com/eu-en/tools-resources/technical-services/mounting-tools/).
 
@@ -92,7 +92,7 @@ direction and access for the pressing sleeve, fasteners and removal tool.
 Check assembly paths, running clearance, shaft runout, axial movement and tool
 access. Print representative seats before the housing, then measure starting
 and running resistance with the actual bearings and retention hardware.
-Catalog bearing load ratings do not rate the printed housing or its clamps.
+Catalog bearing load ratings cover the bearing; rate the printed housing and clamps separately.
 An ideal revolute joint proves a kinematic relationship, not bearing friction,
 alignment, retention or durability. See [additive workholding](additive-workholding.md)
 and [small generators](small-wind-generators.md) for related checks.

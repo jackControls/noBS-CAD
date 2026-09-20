@@ -153,7 +153,7 @@
         "doe-3d",
         "palni-dfma"
       ],
-      "snippet": "A wire window is not leftover air after a pocket. It is a named feature with an exit face, a minimum aperture for the cable bundle, edge treatment, and a strain-relief plan so tug loads do not land on solder joints or t…"
+      "snippet": "A wire window is not leftover air after a pocket. It is a named feature with an exit face, a minimum aperture for the cable bundle, edge treatment, and a strain-relief plan so tug loads stay off solder joints or t…"
     },
     {
       "id": "machine-design.concepts.am-clamshell-retainer",
@@ -186,7 +186,7 @@
         "nwtc-guns-dfm",
         "doe-3d"
       ],
-      "snippet": "Use when an FDM/AM retainer holds two clamshell halves together. Never invent snap geometry without this order. - Print the retainer on its side so layer lines run with the clamp load (stronger against the halves separa…"
+      "snippet": "Use when an FDM/AM retainer holds two clamshell halves together. Prefer this order before inventing snap geometry. - Print the retainer on its side so layer lines run with the clamp load (stronger against the halves separa…"
     },
     {
       "id": "machine-design.concepts.am-enclosure-lid-gasket-labyrinth",

@@ -49,7 +49,7 @@ checklists (public domain). Confirm with your shop or print profile.
 1. Decide **load path and assembly lead-in** before clicking fillet everywhere.
 2. Match fillet radius to tool or mold capability — tiny cosmetic fillets that
    the process cannot hold are noise.
-3. Do not use a fillet to hide an undersized wall or an impossible undercut.
+3. Prefer fixing wall/undercut geometry before filleting.
 4. Prefer **edit history** (`solid_edit_fillet` / `solid_edit_chamfer`) over
    delete-rebuild — see
    [MCP workflow](../../concepts/agent-mcp-workflow.md).
@@ -66,9 +66,9 @@ Walk this before a cosmetic blend pass:
 1. **Internal corner in tension/fatigue?** → fillet (tool/mold radius), not chamfer.
 2. **Assembly lead-in / bearing seat / snap entry?** → chamfer (or short lead fillet).
 3. **FDM upper edge that would droop as a roundover?** → prefer chamfer until coupon proves fillet.
-4. **CNC internal?** → radius ≥ end-mill; do not model R0.1 “sharp” as a feature.
+4. **CNC internal?** → radius ≥ end-mill; prefer a real tool radius over modeling R0.1 “sharp” as a feature.
 5. **Sheet bend?** → bend radius rules beat decorative edge blends near the bend.
-6. **Edit path?** → `solid_edit_fillet` / `solid_edit_chamfer` — do not delete-rebuild.
+6. **Edit path?** → `solid_edit_fillet` / `solid_edit_chamfer` — prefer edit over delete-rebuild.
 7. **Inspect** → `solid_scene` after the blend; confirm edge ids still match intent.
 8. **Recipe** → `fillet-basics` on a **blank** document when teaching the op.
 

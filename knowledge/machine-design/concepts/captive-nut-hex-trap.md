@@ -43,7 +43,7 @@ measure or read the standard sheet for the SKU you buy.
 5. **Tool / finger access** — prove you can seat the nut after print supports
    are gone.
 
-Do not model the **thread** inside the trap as load-bearing plastic. The nut
+Prefer the **nut** as the load path; keep plastic trap geometry as retention only. The nut
 owns the thread.
 
 ## AM / FDM notes
@@ -53,9 +53,9 @@ owns the thread.
 - Prefer trap axis along build **Z** when you can so flats are clean; coupon
   across-flats fit (loose spin vs jammed).
 - Locking nuts (nylon insert, all-metal) need the full thickness plus any
-  collar — do not truncate the pocket.
-- Heat-set inserts and nut traps solve different access problems; do not mix
-  roles on one joint without a BOM note.
+  collar — prefer full pocket depth for the nut.
+- Heat-set inserts and nut traps solve different access problems; prefer one class per joint,
+  and name both roles on one joint only with a BOM note.
 
 ## VERIFY checklist (before freezing the pocket)
 

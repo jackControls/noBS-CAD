@@ -40,8 +40,8 @@ first.
    explicit limit before patterning.
 2. **Bar / web min** — ≥ process min wall after chamfers; count remaining
    material at intersections ([thin walls](am-thin-walls.md)).
-3. **Pitch / open area** — enough open fraction for the thermal story; do not
-   invent CFM from CAD alone — coupon or measure.
+3. **Pitch / open area** — enough open fraction for the thermal story; prefer
+   coupon or measure over inventing CFM from CAD alone.
 4. **Edge treatment** — break sharp slot edges so jackets and fingers are not
    cut ([fillet vs chamfer](fillet-chamfer.md)).
 5. **Tie to shell** — grille must blend into the parent wall; island bars with

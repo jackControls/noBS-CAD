@@ -37,7 +37,7 @@ cooling and speed are sane. Long unsupported floors sag. Design:
 
 - Keep bridge spans short; add a rib or break a cavity into chambers.
 - Orient so bridges run along a direction your printer bridges well.
-- Do not assume a wide horizontal internal ceiling will bridge cleanly.
+- Prefer verifying bridge/support for a wide horizontal internal ceiling.
 
 ## Support strategy (design-time)
 

@@ -24,7 +24,7 @@ only close on the CAD screen. Name the class before modeling mating bumps.
 | **Purchased dowel / pin** | Precision locate between machined or printed halves | Catalog envelope + press/slip roles — see [fits](fits-clearances.md) |
 | **Pilot / tongue** | Continuous rail or tongue-and-groove along a seam | Not discrete nubs; different stack-up |
 
-Do not “add pins” when you need short AM locators, or vice versa.
+Prefer naming the locate class first: short AM locators vs pins — match geometry to the class.
 
 ## AM nubs (preferred for FDM clamshells)
 

@@ -23,7 +23,7 @@ intent.
 [Part II](https://zenodo.org/records/8237278)),
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 This page is **not** a substitute for [ASME Y14.5](https://www.asme.org/codes-standards)
-or ISO GPS (ISO 1101 and related). Never paste standard tables into the repo.
+or ISO GPS (ISO 1101 and related). Prefer link-out; keep standard tables outside the repo.
 
 ## Why plus/minus is not enough
 

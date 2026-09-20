@@ -24,7 +24,7 @@ only whether the solid is manifold.
 
 - Pick a **process min wall** from nozzle, layer height, material, and slicer
   (often on the order of a few nozzle widths for reliable skins — confirm with
-  your profile; do not invent a universal millimeter rule from this page).
+  your profile; treat this page as orientation guidance, not a universal millimeter rule).
 - Apply min wall **per role**: outer shell, cavity wall, rib, boss, clip beam,
   hinge web. Deep pockets and seats subtract from parent walls — compute
   remaining thickness after every cut.
@@ -50,7 +50,7 @@ differ sharply from strength across layers. Prefer putting primary tension in
 plane with layers when the part allows. Flexures and living hinges need an
 explicit bend-vs-layer plan.
 
-Do not confuse anisotropy with **draft** (taper for demold / support peel /
+Keep **anisotropy** distinct from **draft** (taper for demold / support peel /
 sliding mates). Draft lives on
 [AM ribs, gussets, and draft](am-ribs-gussets-draft.md); both may apply, but
 they answer different questions.

@@ -20,7 +20,7 @@ specification.
 Core ideas (NASA Fastener Design Manual RP-1228, public domain — see
 [SOURCES](../SOURCES.md)):
 
-- **Preload** clamps the joint so working loads do not open it.
+- **Preload** clamps the joint so working loads leave the joint closed.
 - **Grip, engagement, and thread runout** must match the stack of parts.
 - **Locking** (prevailing torque, chemical, mechanical) is a choice, not an
   afterthought on vibrating machinery.
@@ -28,8 +28,8 @@ Core ideas (NASA Fastener Design Manual RP-1228, public domain — see
   only tensile area.
 - Mixed materials and coatings affect galling and corrosion.
 
-Modeled ISO/UN holes in noBS CAD are geometry aids. They do not certify
-strength. Do not publish load ratings from CAD alone.
+Modeled ISO/UN holes in noBS CAD are geometry aids. Prefer handbook/coupon strength
+ratings; treat CAD as geometry, not a load certificate.
 
 ## Checklist before locking hardware
 
@@ -59,7 +59,7 @@ strength. Do not publish load ratings from CAD alone.
 | Hole feature vs sketch pattern | [Hole wizard vs modeled hole](hole-wizard-vs-modeled.md) |
 
 Full preload/torque/engagement distill from NASA-RP-1228 remains a longer TODO —
-do not treat this overview as sizing guidance.
+prefer handbook sizing over treating this overview as a sizing chart.
 
 ## In this product
 

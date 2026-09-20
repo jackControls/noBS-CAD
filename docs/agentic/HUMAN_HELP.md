@@ -35,7 +35,7 @@ humans use the same recipe ids from page frontmatter (`related_recipes`).
 - **Humans:** start at index or taxonomy; follow links; optional Pages.
 - **Agents:** prefer `cad_help` `search` → `get` (id-only); use `topics` to
   discover labels; `resources/read` only for the chosen full page.
-- Do **not** maintain separate agent-only articles.
+- Prefer one shared corpus; agent and human doors point at the same pages.
 
 ## MCP prompts (gap)
 
@@ -49,9 +49,8 @@ prompts land, point them at the same `cad_help` ids.
 
 Knowledge embeds at MCP **build** time. After corpus changes on this machine:
 run `cad-design-ops/scripts/install-nbcad-mcp.sh` (stdio prove). **Cursor still
-lags** until Jeff re-Adds the MCP entry with **bash + `launch.sh`** — do not
-Uninstall/Add from an agent session; pkill/Restart alone can leave a stale
-server.
+lags** until Jeff re-Adds the MCP entry with **bash + `launch.sh`**. Prefer
+Jeff owning Uninstall/Add; pkill/Restart alone can leave a stale server.
 
 ## Worked example (human via `cad_help`)
 

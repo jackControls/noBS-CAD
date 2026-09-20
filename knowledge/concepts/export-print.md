@@ -71,8 +71,8 @@ equally long empty span. Measure the actual unsupported region and its anchors.
 Where clearance permits, tangent sloped roof faces can preserve a circular
 tool envelope while limiting each layer's inward step. A small flat ceiling
 can retain more roof stock than a pointed peak. Check both the retained
-clearance and remaining material, then reslice the native geometry; do not
-silently alter critical fits using a slicer's geometry-changing options.
+clearance and remaining material, then reslice the native geometry; prefer
+native edits over silently altering critical fits with a slicer's geometry-changing options.
 
 Short bridges still depend on material, cooling, speed and flow.
 [Prusa's bridging guidance](https://help.prusa3d.com/article/poor-bridging_1802)

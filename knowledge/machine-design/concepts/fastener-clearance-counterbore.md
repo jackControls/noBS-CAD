@@ -49,7 +49,7 @@ Say **through** vs **blind**, and which part carries the **thread**.
 - Counterbore **diameter** clears the head (and tool) with a small radial gap —
   not the same as shank clearance.
 - Countersink **angle** must match the head (commonly 82° / 90° families —
-  confirm hardware; do not invent from this page).
+  confirm hardware; treat this page as vocabulary, not a sizing chart).
 - Keep recess floors flat enough for washer face contact when used.
 - On FDM, deep counterbores steal wall; section the stack.
 

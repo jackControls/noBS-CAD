@@ -22,7 +22,7 @@ catalog is not an engineering allowables table.
 | Symbol / word | Meaning | CAD habit |
 |---------------|---------|-----------|
 | **E** | Elastic modulus (stiffness) | Stiff vs flexible; deflection talk |
-| **Sy / Sut** | Yield / ultimate tensile | Do not invent from color |
+| **Sy / Sut** | Yield / ultimate tensile | Prefer datasheet values over color |
 | **Hardness** | Process / wear proxy | Not a substitute for Sy |
 | **Fatigue / endurance** | Repeated loads | Geometry + surface dominate |
 | **CTE** | Thermal expansion | Mixed-material stacks move |
@@ -48,7 +48,7 @@ machine, mold, print). Naming a class without a process is incomplete.
 
 - Prefer cited, licensed datasets (for example KittyCAD `material-properties`,
   Apache-2.0) as a **pattern**, not as certified allowables.
-- Do not scrape MatWeb or MakeItFrom into the repo.
+- Prefer link-out datasheets; keep MatWeb/MakeItFrom outside the repo.
 - Educational ranges are not design allowables. Say so on the page and in
   agent answers.
 
@@ -70,9 +70,9 @@ family before inventing exotic alloys.
 
 Materials **vocabulary** is not an allowables table. Before quoting a number:
 
-1. **Name the dataset** (vendor datasheet, ASTM/ISO grade sheet, KittyCAD JSON pattern) — never “someone said 70 MPa.”
+1. **Name the dataset** (vendor datasheet, ASTM/ISO grade sheet, KittyCAD JSON pattern) — prefer a cited source over “someone said 70 MPa.”
 2. **Say the condition** — heat treat, print orientation, moisture, temperature, strain rate.
-3. **Separate E / Sy / Sut / fatigue** — do not use hardness as Sy.
+3. **Separate E / Sy / Sut / fatigue** — prefer tensile data over hardness-as-Sy.
 4. **Refuse MatWeb/MakeItFrom scrapes** into the repo or into a drawing title block.
 5. **Mark educational ranges** as educational; shipping allowables come from the responsible engineer’s approved source.
 6. **Couple material ↔ process** — FDM PETG ≠ injection PET; 6061-T6 bar ≠ cast “aluminum.”

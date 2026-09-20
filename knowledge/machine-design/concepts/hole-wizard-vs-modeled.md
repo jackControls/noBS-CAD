@@ -45,9 +45,9 @@ Even then, name the **intent** in a note or VERIFY table.
    points — over duplicated independent holes you will forget to edit.
 5. After pattern: `solid_scene` inspect
    ([MCP workflow](../../concepts/agent-mcp-workflow.md)).
-6. Do not mix cosmetic helix major with drill size.
+6. Prefer keeping cosmetic helix major separate from drill size.
 
-## Edit, do not delete-rebuild
+## Prefer edit over delete-rebuild
 
 Changing diameter, depth, or points: use **`solid_edit_hole`** and
 `solid_hole_definitions` to read back. Deleting the solid and re-subtracting

@@ -22,8 +22,8 @@ the scale path behind `SearchIndex` when growth bars trip — not day-one.
 
 Provisional start values were **locked** after Design Ops wire goldens
 **H1–H8 PASS** (`cad-design-ops/evals/run_help_goldens.py` →
-`help-golden-results.md`). Do not retune from anecdotes; only from a new
-honest FAIL on that harness (or successor).
+`help-golden-results.md`). Prefer retuning from a new honest FAIL on that
+harness (or successor) over anecdotes.
 
 | Knob | Value | Confirmed by |
 |------|-------|--------------|
@@ -69,7 +69,7 @@ Do **not** maintain separate agent vs user articles.
 - Sub‑tens‑of‑ms search on a warm corpus for typical queries (agent loops
   amplify every miss / every 200 ms)
 - Ranking lives in Rust once — Pages JSON is best-effort only
-- Pluggable backend so we do not rewrite MCP/UI when the index grows
+- Pluggable backend so MCP/UI stay stable when the index grows
 
 ### Architecture
 
@@ -93,7 +93,7 @@ tool schemas or the Help panel.
 | Full-text / fielded | Tiny in-process **BM25** (or weighted TF) over embedded `Page`s | Corpus is still recipes-sized; zero mmap/segment complexity |
 | Corpus load | `include_str!` / `include_dir!` like `crates/recipes` | Same rebuild story |
 | Quick jump (UI) | **`nucleo-matcher`** (MPL-2.0 — THIRD_PARTY) | Instant title/id palette; separate from full-text |
-| Escape | Web after local miss | Never paste ASME/ISO body text |
+| Escape | Web after local miss | Prefer link-out; keep ASME/ISO body text outside the corpus |
 
 Consume committed `search-index.json` **or** parse markdown in Rust — **one**
 frontmatter contract. Prefer: CI keeps JSON fresh; Rust embeds markdown (or
@@ -102,7 +102,7 @@ JSON + bodies) keyed by `id`.
 ### Scale path (v1.5) — in-process Tantivy
 
 **Assume growth.** When any of these trip, implement Tantivy behind the same
-`SearchIndex` trait (do not wait for “1k pages” folklore):
+`SearchIndex` trait (swap when growth justifies it — no “1k pages” folklore gate):
 
 - page count ≳ **~200–500**, or body text ≳ a few MB uncompressed, **or**
 - golden-query recall/latency misses after BM25 tuning, **or**
@@ -144,7 +144,7 @@ Suggested stack (decide in implementation, not here): `pulldown-cmark` or
 markdown pipeline — **same sanitized HTML** whether opened from search or deep
 link.
 
-Agents get **markdown** (or capped plain text) from `get` — they do not need
+Agents get **markdown** (or capped plain text) from `get` — prefer that over
 the HTML path. One source file; two presentations.
 
 ## Workspace placement
@@ -154,7 +154,7 @@ Three Cargo workspaces: **root**, **`mcp-server`**, **`src-tauri`**.
 1. `crates/help` as a **root** workspace member (`nbcad-help`)
 2. `mcp-server` path-deps it (like `nbcad-recipes`)
 3. `src-tauri` path-deps it for search + render helpers
-4. **Never** add the index crate to `crates/wasm`
+4. Keep the index crate **out of** `crates/wasm`
 
 ## MCP surface
 
@@ -162,7 +162,7 @@ One spine tool: `cad_help` with `action: search | get | topics`
 
 - search: small `limit`, snippet-first (agents hate floods)
 - get: **id-only** allowlist; hard byte cap; optional `truncated`
-- never path-based reads
+- prefer **id-only** get (allowlist), not path-based reads
 - `cad_help_open_example` → existing recipe/`cad_script` paths
 
 ## Security
@@ -172,7 +172,7 @@ One spine tool: `cad_help` with `action: search | get | topics`
 | Path traversal | Id-only catalog lookup |
 | Markdown in UI | Sanitize / no raw HTML; CSP |
 | MCP context flood | Caps + one tool + snippets default |
-| NC / SA ingest | Help tools return **in-repo distill only**; NC URLs are citations, never fetched into the corpus |
+| NC / SA ingest | Help tools return **in-repo distill only**; NC URLs are citations (link-out, not ingested) |
 | Future contrib | Untrusted until reviewed |
 
 ## Ranking fields
@@ -199,7 +199,7 @@ Optional: boost `related_recipes` when the caller passes active recipe context.
 - [ ] Help UI: sanitized article render + recipe chips + stub visibility
 - [ ] Agent `get` returns markdown/plain, not HTML
 - [ ] No index/nucleo in wasm
-- [ ] Id-only get; traversal tests fail closed
+- [ ] Id-only get; traversal misses prefer deny / empty over path escape
 - [ ] Local hit for “clearance fit” / “draft angle” without network
 - [ ] p95 search warm-path target documented in crate (aim ≪ 50 ms on
       laptop-class hardware at v1 size; re-measure at scale)

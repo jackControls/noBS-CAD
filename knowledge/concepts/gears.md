@@ -25,10 +25,10 @@ to one module:
 - `d_mm = m_mm × z` is the reference pitch diameter.
 - `OD_mm = m_mm × (z + 2)`, so `m_mm = OD_mm / (z + 2)`.
 - In inch gearing, `DP = z / d_in = (z + 2) / OD_in`.
-- Convert with `m_mm = 25.4 / DP`; do not put a millimetre OD into the inch DP formula.
+- Convert with `m_mm = 25.4 / DP`; keep millimetre OD out of the inch DP formula.
 
-These OD shortcuts do not identify profile-shifted, stub-tooth, helical, internal,
-bevel, or modified-tip gears. Treat a near-standard result as a candidate to
+These OD shortcuts leave profile-shifted, stub-tooth, helical, internal,
+bevel, or modified-tip gears unidentified. Treat a near-standard result as a candidate to
 verify against the mating gear or manufacturer drawing, not a complete identity.
 Pressure angle and tooth form cannot be established by OD and tooth count alone.
 See [KHK's dimension reference](https://khkgears.net/gear-knowledge/gear-technical-reference/calculation-gear-dimensions/)
@@ -54,7 +54,7 @@ fixed; choose integer counts together and recheck the resulting ratio.
 Small pinions require an undercut and root-strength check for their actual
 pressure angle, addendum and manufacturing method. Profile shift can help, but
 also changes tip thickness, contact and working centre-distance requirements.
-Do not apply a universal minimum tooth count or add arbitrary clearance by
+Prefer catalog/profile rules over a universal minimum tooth count or arbitrary clearance by
 scaling the entire gear. Preserve bore fit and hub/root stock, check keyways or
 set-screw holes against the tooth root, and qualify backlash with the actual
 material and print orientation. [KHK tooth-form reference](https://khkgears.net/new/gear_knowledge/gear_technical_reference/involute_gear_profile.html).
