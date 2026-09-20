@@ -14,6 +14,10 @@ pub(super) fn references(
     viewport: &ViewportModel,
 ) -> Result<ViewportPreview, String> {
     let mut segments = Vec::new();
+    let mut triangles = Vec::new();
+    if let Some((body, faces)) = form.selected_faces() {
+        triangles.push(face_fill(model.scene, body, faces, [1., 0.80, 0.25, 0.35])?);
+    }
     if let Some((id, edges)) = form.selected_edges() {
         if let Some(body) = model.scene.bodies.iter().find(|b| b.id == id) {
             for edge in body.edges.iter().filter(|edge| edges.contains(&edge.id)) {
@@ -81,6 +85,7 @@ pub(super) fn references(
         return Err("Feature reference exceeds the renderer's range".into());
     }
     Ok(ViewportPreview {
+        triangles,
         lines: vec![ViewportLineLayer {
             color: if form.selected_edges().is_some() {
                 [1., 0.88, 0.35, 1.]
@@ -91,6 +96,54 @@ pub(super) fn references(
             segments,
             ..Default::default()
         }],
+        ..Default::default()
+    })
+}
+
+pub(super) fn face_fill(
+    scene: &nbcad_solid::SolidSceneDto,
+    body: nbcad_core::BodyId,
+    faces: &[nbcad_core::FaceId],
+    color: [f32; 4],
+) -> Result<crate::native_viewport::ViewportTriangleLayer, String> {
+    let body = scene
+        .bodies
+        .iter()
+        .find(|b| b.id == body)
+        .ok_or("Selected body no longer exists")?;
+    let selected: std::collections::HashSet<_> = faces.iter().collect();
+    let mut positions = Vec::new();
+    for face in body.faces.iter().filter(|f| selected.contains(&f.id)) {
+        let start = face.first_index as usize;
+        let end = start
+            .checked_add(face.index_count as usize)
+            .ok_or("Face tessellation is too large")?;
+        let indices = body
+            .mesh
+            .indices
+            .get(start..end)
+            .ok_or("Face tessellation is incomplete")?;
+        if indices.len() % 3 != 0 || positions.len() / 9 + indices.len() / 3 > MAX_SEGMENTS {
+            return Err("Selected faces are too large to preview".into());
+        }
+        for &index in indices {
+            let start = (index as usize)
+                .checked_mul(3)
+                .ok_or("Face vertex exceeds renderer range")?;
+            let point = body
+                .mesh
+                .positions
+                .get(start..start + 3)
+                .ok_or("Face vertex is missing")?;
+            if point.iter().any(|v| !v.is_finite()) {
+                return Err("Face vertex exceeds renderer range".into());
+            }
+            positions.extend_from_slice(point);
+        }
+    }
+    Ok(crate::native_viewport::ViewportTriangleLayer {
+        positions,
+        color,
         ..Default::default()
     })
 }

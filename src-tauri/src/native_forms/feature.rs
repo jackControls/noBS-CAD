@@ -15,6 +15,8 @@ mod rib;
 use rib::RibFields;
 mod edges;
 use edges::EdgeFields;
+mod shell;
+use shell::ShellFields;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SolidFormKind {
@@ -25,6 +27,7 @@ pub(crate) enum SolidFormKind {
     Rib,
     Fillet,
     Chamfer,
+    Shell,
 }
 impl SolidFormKind {
     pub(crate) fn from_feature_kind(kind: FeatureKind) -> Option<Self> {
@@ -36,6 +39,7 @@ impl SolidFormKind {
             FeatureKind::Rib => Self::Rib,
             FeatureKind::Fillet => Self::Fillet,
             FeatureKind::Chamfer => Self::Chamfer,
+            FeatureKind::Shell => Self::Shell,
             _ => return None,
         })
     }
@@ -52,6 +56,7 @@ impl SolidFormKind {
             Self::Rib => "Rib",
             Self::Fillet => "Fillet",
             Self::Chamfer => "Chamfer",
+            Self::Shell => "Shell",
         }
     }
     pub(crate) fn operation(self) -> &'static str {
@@ -63,6 +68,7 @@ impl SolidFormKind {
             Self::Rib => "solid_rib",
             Self::Fillet => "solid_fillet",
             Self::Chamfer => "solid_chamfer",
+            Self::Shell => "solid_shell",
         }
     }
 }
@@ -110,6 +116,8 @@ pub(crate) enum SolidField {
     Edges,
     Radius,
     TangentChain,
+    Faces,
+    Inward,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -201,6 +209,7 @@ pub(crate) struct SolidForm {
     paths: Option<PathFields>,
     rib: Option<RibFields>,
     edges: Option<EdgeFields>,
+    shell: Option<ShellFields>,
 }
 
 impl SolidForm {
@@ -230,6 +239,7 @@ impl SolidForm {
             paths: None,
             rib: None,
             edges: None,
+            shell: None,
         }
     }
 
@@ -243,10 +253,15 @@ impl SolidForm {
             form.rib = Some(RibFields::new(model.document.settings.units));
         } else if matches!(kind, SolidFormKind::Fillet | SolidFormKind::Chamfer) {
             form.edges = Some(EdgeFields::new(kind, model.document.settings.units));
+        } else if kind == SolidFormKind::Shell {
+            form.shell = Some(ShellFields::new(model.document.settings.units));
         }
         form
     }
     pub(crate) fn kind(&self) -> SolidFormKind {
+        if self.shell.is_some() {
+            return SolidFormKind::Shell;
+        }
         if let Some(edges) = &self.edges {
             return edges.kind;
         }
@@ -387,6 +402,11 @@ impl SolidForm {
         model: &FormModel<'_>,
     ) -> Result<(), String> {
         self.editing(model)?;
+        if let Some(shell) = &mut self.shell {
+            shell.set(field, value)?;
+            self.changed();
+            return Ok(());
+        }
         if let Some(edges) = &mut self.edges {
             edges.set(field, value)?;
             self.changed();
@@ -745,6 +765,9 @@ impl SolidForm {
     }
 
     pub(crate) fn fields(&self, model: &FormModel<'_>) -> Vec<SolidFieldView> {
+        if self.shell.is_some() {
+            return self.shell_fields(model);
+        }
         if self.edges.is_some() {
             return self.edge_fields(model);
         }
@@ -885,6 +908,9 @@ impl SolidForm {
         &self,
         model: &FormModel<'_>,
     ) -> Result<(&'static str, Value), Vec<(SolidField, String)>> {
+        if self.shell.is_some() {
+            return self.shell_payload(model);
+        }
         if self.edges.is_some() {
             return self.edge_payload(model);
         }

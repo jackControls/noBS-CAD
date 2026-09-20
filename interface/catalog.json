@@ -228,7 +228,9 @@
             "solid_hole",
             "solid_edit_hole",
             "solid_external_thread",
-            "solid_edit_external_thread"
+            "solid_edit_external_thread",
+            "solid_shell",
+            "solid_edit_shell"
           ]
         },
         {
@@ -380,8 +382,6 @@
             }
           ],
           "operations": [
-            "solid_shell",
-            "solid_edit_shell",
             "solid_move_copy",
             "solid_edit_move_copy",
             "solid_combine",

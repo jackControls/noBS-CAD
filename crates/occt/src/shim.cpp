@@ -2211,7 +2211,23 @@ void Kernel::apply_job(const FfiJob& job) {
     if (!shell.IsDone() || shell.Shape().IsNull()) {
       throw std::runtime_error("OCCT could not build the selected Shell");
     }
-    found->second = shell.Shape();
+    const TopoDS_Shape result = shell.Shape();
+    if (!BRepCheck_Analyzer(result, true, false).IsValid()) {
+      throw std::runtime_error("OCCT Shell produced invalid geometry; reduce the wall thickness");
+    }
+    GProp_GProps before_properties, after_properties;
+    BRepGProp::VolumeProperties(found->second, before_properties);
+    BRepGProp::VolumeProperties(result, after_properties);
+    const double before_volume = std::abs(before_properties.Mass());
+    const double after_volume = std::abs(after_properties.Mass());
+    const double volume_tolerance = std::max(1e-8, before_volume * 1e-8);
+    // Offset algorithms can report success after an inward offset crosses the
+    // opposite wall. An inward shell must remove material from the source.
+    if (!std::isfinite(after_volume) || after_volume <= volume_tolerance ||
+        (job.inward && after_volume >= before_volume - volume_tolerance)) {
+      throw std::runtime_error("Shell wall thickness leaves no valid hollow body");
+    }
+    found->second = result;
     return;
   }
   if (job.kind == 9) {

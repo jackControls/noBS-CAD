@@ -39,3 +39,36 @@ pub fn group_for(operation: &str) -> Option<&'static str> {
         })
         .and_then(|group| group["id"].as_str())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn body_feature_buttons_and_their_commands_share_the_same_product_group() {
+        for workspace in document()["workspaces"].as_array().unwrap() {
+            for panel in workspace["panels"].as_array().unwrap() {
+                let group = format!(
+                    "{}/{}",
+                    workspace["id"].as_str().unwrap(),
+                    panel["id"].as_str().unwrap()
+                );
+                for button in panel["buttons"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|button| button["action"] == "bodyFeature")
+                {
+                    let kind = button["payload"].as_str().unwrap();
+                    for operation in [format!("solid_{kind}"), format!("solid_edit_{kind}")] {
+                        assert_eq!(
+                            group_for(&operation),
+                            Some(group.as_str()),
+                            "{operation} differs from its ribbon group"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

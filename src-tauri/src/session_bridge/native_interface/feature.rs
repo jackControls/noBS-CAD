@@ -30,7 +30,7 @@ pub(crate) mod panel;
 mod picking;
 mod preview;
 #[cfg(feature = "dev-bevy-host")]
-pub(crate) use picking::{handle_canvas_pick, hover_edges};
+pub(crate) use picking::{handle_canvas_pick, hover_references};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FeatureCommand {
@@ -59,6 +59,10 @@ pub(crate) enum FeatureControl {
 /// a placed assembly face is not a source-local face with the same integer ID.
 #[derive(Clone, Debug)]
 pub(crate) enum FeaturePick {
+    Faces {
+        body: Option<BodyId>,
+        faces: Vec<nbcad_core::FaceId>,
+    },
     Edges {
         body: Option<BodyId>,
         edges: Vec<nbcad_core::EdgeId>,
@@ -203,6 +207,7 @@ struct Editor {
     stage: Option<std::sync::Arc<editing::Stage>>,
     original_view: Option<ViewportModel>,
     hovered_edge: Option<(BodyId, nbcad_core::EdgeId)>,
+    hovered_face: Option<(BodyId, nbcad_core::FaceId)>,
 }
 
 #[derive(Resource, Default)]
@@ -351,6 +356,20 @@ fn update_preview(editor: &mut Editor, world: &mut World) -> Result<(), String> 
             }
         }
     }
+    if let Some((body, face)) = editor.hovered_face {
+        if !editor
+            .form
+            .selected_faces()
+            .is_some_and(|(b, ids)| b == body && ids.contains(&face))
+        {
+            next.triangles.push(preview::face_fill(
+                model.scene,
+                body,
+                &[face],
+                [1., 0.65, 0.2, 0.25],
+            )?);
+        }
+    }
     native_viewport::apply_interface_preview(world, &model.owner.document_id, next)?;
     editor.preview_revision = native_viewport::interface_preview_revision(world);
     editor.preview_notice = notice;
@@ -387,6 +406,9 @@ fn selected_source(world: &World, snapshot: &Snapshot) -> Result<Option<FeatureP
 fn apply_pick(editor: &mut Editor, pick: FeaturePick) -> Result<(), String> {
     let model = editor.snapshot.model(editor.form.parameter_sketch());
     match (editor.pick_target, pick) {
+        (Some(SolidField::Faces), FeaturePick::Faces { body, faces }) => {
+            editor.form.set_faces(body, faces, &model)
+        }
         (Some(SolidField::Edges), FeaturePick::Edges { body, edges }) => {
             editor.form.set_edges(body, edges, &model)
         }
@@ -515,9 +537,12 @@ fn reduce_owned(
     state: &mut NativeFeature,
 ) -> Result<Value, String> {
     if let FeatureCommand::Open { kind, feature_id } = command {
-        if let Some(feature_id) =
-            feature_id.filter(|_| matches!(kind, SolidFormKind::Fillet | SolidFormKind::Chamfer))
-        {
+        if let Some(feature_id) = feature_id.filter(|_| {
+            matches!(
+                kind,
+                SolidFormKind::Fillet | SolidFormKind::Chamfer | SolidFormKind::Shell
+            )
+        }) {
             return editing::begin(
                 engine,
                 bridge,
@@ -619,6 +644,8 @@ fn reduce_owned(
                 pick_target: Some(
                     if matches!(kind, SolidFormKind::Fillet | SolidFormKind::Chamfer) {
                         SolidField::Edges
+                    } else if *kind == SolidFormKind::Shell {
+                        SolidField::Faces
                     } else if *kind == SolidFormKind::Rib {
                         SolidField::Path
                     } else {
@@ -629,6 +656,7 @@ fn reduce_owned(
                 stage: None,
                 original_view: None,
                 hovered_edge: None,
+                hovered_face: None,
             };
             if feature_id.is_none()
                 && matches!(kind, SolidFormKind::Fillet | SolidFormKind::Chamfer)
@@ -654,6 +682,28 @@ fn reduce_owned(
                                     .iter()
                                     .copied()
                                     .map(nbcad_core::EdgeId)
+                                    .collect(),
+                            },
+                        )?;
+                    }
+                }
+            } else if feature_id.is_none() && *kind == SolidFormKind::Shell {
+                let (_, _, presentation, _) = native_viewport::interface_view_snapshot(world);
+                if let [body] = presentation.selected_body_ids.as_slice() {
+                    if editor
+                        .snapshot
+                        .source_local(*body, presentation.selected_occurrence_id)
+                        && !presentation.selected_face_ids.is_empty()
+                    {
+                        apply_pick(
+                            &mut editor,
+                            FeaturePick::Faces {
+                                body: Some(BodyId(*body)),
+                                faces: presentation
+                                    .selected_face_ids
+                                    .iter()
+                                    .copied()
+                                    .map(nbcad_core::FaceId)
                                     .collect(),
                             },
                         )?;
@@ -816,6 +866,7 @@ fn reduce_owned(
                 if !matches!(
                     field,
                     SolidField::Source
+                        | SolidField::Faces
                         | SolidField::Edges
                         | SolidField::Targets
                         | SolidField::StopFace
@@ -829,6 +880,7 @@ fn reduce_owned(
                 editor.choice_field = None;
             }
             FeatureControl::Clear(field) => match field {
+                SolidField::Faces => editor.form.set_faces(None, Vec::new(), &model)?,
                 SolidField::Edges => editor.form.set_edges(None, Vec::new(), &model)?,
                 SolidField::Source => editor.form.set_profiles(Vec::new(), &model)?,
                 SolidField::Targets => editor.form.set_targets(Vec::new(), &model)?,

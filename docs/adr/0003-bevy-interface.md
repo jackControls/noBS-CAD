@@ -137,3 +137,14 @@ under the original document receipt and records one Undo boundary. Separate
 renderer cache incarnations prevent the input preview from reusing final meshes.
 The `native-refine` Rust MCP suite checks rendered picking, units, invalid sizes,
 context-menu/double-click editing, Cancel, Undo/Redo, captures and saved parts.
+
+Shell uses this same form and isolated topology editor, with removable-face
+selection, face hover/highlighting, typed wall thickness and inward/outward
+offset. The Refine fixture exercises multi-face toggling and the history routes.
+The shared OCCT command validates the resulting B-rep and volume before replacing
+the body; an impossible inward thickness cannot silently commit an inverted or
+oversized result. Native engine tests verify both offset directions and recovery
+after a rejected edit.
+Ordinary model edges have their own small depth bias: coincident cavity seams
+remain visible with Bevy's strict reverse-Z depth test, while rear edges remain
+occluded and the reference grid retains its original depth behavior.

@@ -1,4 +1,4 @@
-//! Edge editors display the actual feature input in an isolated kernel. Opening
+//! Topology editors display the actual feature input in an isolated kernel. Opening
 //! and cancelling never move the live history cursor or dirty the document.
 use super::*;
 use std::sync::{
@@ -101,8 +101,10 @@ impl SessionBridgeState {
         validate: impl FnOnce() -> Result<(), String>,
     ) -> Result<super::super::NativeMutationResult, String> {
         use crate::session_bridge::{bump_engine_revision, native_history::HistoryState};
-        if !matches!(operation, "solid_edit_fillet" | "solid_edit_chamfer")
-            || arguments["feature_id"].as_u64() != Some(stage.feature_id)
+        if !matches!(
+            operation,
+            "solid_edit_fillet" | "solid_edit_chamfer" | "solid_edit_shell"
+        ) || arguments["feature_id"].as_u64() != Some(stage.feature_id)
         {
             return Err("This prepared model belongs to another feature edit".into());
         }
@@ -174,19 +176,24 @@ fn prepare(
     }
     let stage = Arc::new(Stage::new(engine, &receipt, id)?);
     let definitions = parse_engine_envelope(stage.engine.engine_call(
-        if kind == SolidFormKind::Fillet {
-            "fillet_definitions"
-        } else {
-            "chamfer_definitions"
+        match kind {
+            SolidFormKind::Fillet => "fillet_definitions",
+            SolidFormKind::Chamfer => "chamfer_definitions",
+            SolidFormKind::Shell => "body_feature_definitions",
+            _ => return Err("This feature has no topology editor".into()),
         },
         "",
     ))?;
     let definition = definitions
         .as_array()
         .and_then(|items| items.iter().find(|d| d["feature_id"].as_u64() == Some(id)))
-        .ok_or("The edge feature no longer exists")?;
+        .ok_or("The feature no longer exists")?;
     let snapshot = Snapshot::capture(&stage.engine, receipt)?;
-    let form = SolidForm::edit_edges(kind, definition, &snapshot.model(None))?;
+    let form = if kind == SolidFormKind::Shell {
+        SolidForm::edit_shell(definition, &snapshot.model(None))?
+    } else {
+        SolidForm::edit_edges(kind, definition, &snapshot.model(None))?
+    };
     Ok(Prepared {
         stage,
         snapshot,
@@ -206,6 +213,11 @@ fn install(
         .last_id
         .checked_add(1)
         .ok_or("Feature identities exhausted")?;
+    let pick_target = Some(if prepared.form.kind() == SolidFormKind::Shell {
+        SolidField::Faces
+    } else {
+        SolidField::Edges
+    });
     let mut editor = Editor {
         id,
         form: prepared.form,
@@ -213,11 +225,12 @@ fn install(
         previous_preview: native_viewport::interface_preview_snapshot(world),
         preview_revision: native_viewport::interface_preview_revision(world),
         preview_notice: None,
-        pick_target: Some(SolidField::Edges),
+        pick_target,
         choice_field: None,
         stage: Some(prepared.stage),
         original_view: Some(prepared.original),
         hovered_edge: None,
+        hovered_face: None,
     };
     native_viewport::apply_interface_edit_model(world, editor.snapshot.viewport.clone())?;
     if let Err(error) = update_preview(&mut editor, world) {

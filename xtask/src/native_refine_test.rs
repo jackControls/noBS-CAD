@@ -46,14 +46,18 @@ fn case(client: &mut Client, out: &Path, kind: &str) -> Result<Value> {
         })
         .context("Visible upper front edge missing")?;
     let points = edge["points"].as_array().unwrap();
-    let world: Vec<_> = ["x", "y", "z"]
-        .iter()
-        .map(|k| {
-            (points.first().unwrap()[*k].as_f64().unwrap()
-                + points.last().unwrap()[*k].as_f64().unwrap())
-                * 0.5
-        })
-        .collect();
+    let world: Vec<_> = if kind == "Shell" {
+        vec![15., 10., 10.]
+    } else {
+        ["x", "y", "z"]
+            .iter()
+            .map(|k| {
+                (points.first().unwrap()[*k].as_f64().unwrap()
+                    + points.last().unwrap()[*k].as_f64().unwrap())
+                    * 0.5
+            })
+            .collect()
+    };
     control(client, kind, None)?;
     ui(
         client,
@@ -63,12 +67,16 @@ fn case(client: &mut Client, out: &Path, kind: &str) -> Result<Value> {
         client,
         json!({"action":"viewport","gesture":"click","world":world}),
     )?;
-    let size = if kind == "Fillet" {
+    let size = if kind == "Shell" {
+        "Wall thickness"
+    } else if kind == "Fillet" {
         "Radius"
     } else {
         "Distance"
     };
-    let property = if kind == "Fillet" {
+    let property = if kind == "Shell" {
+        "thickness"
+    } else if kind == "Fillet" {
         "radius"
     } else {
         "distance"
@@ -87,19 +95,42 @@ fn case(client: &mut Client, out: &Path, kind: &str) -> Result<Value> {
         "Refinement fields escaped the shared Refine group"
     );
     control(client, size, Some("0.1 cm"))?;
-    control(client, "Tangent chain", None)?;
+    if kind == "Shell" {
+        // A second face can be toggled without losing the first opening.
+        for _ in 0..2 {
+            ui(
+                client,
+                json!({"action":"viewport","gesture":"click","world":[15.,0.,5.]}),
+            )?;
+        }
+        control(client, "Offset walls inward", None)?;
+        control(client, "Offset walls inward", None)?;
+    } else {
+        control(client, "Tangent chain", None)?;
+    }
     ui(
         client,
         json!({"action":"capture","path":out.join(format!("{}-form.png",kind.to_lowercase()))}),
     )?;
     control(client, &format!("Apply {kind}"), None)?;
-    let method = format!("solid_{}_definitions", kind.to_lowercase());
+    let method = if kind == "Shell" {
+        "solid_body_feature_definitions".to_owned()
+    } else {
+        format!("solid_{}_definitions", kind.to_lowercase())
+    };
     let original = client.call(&method, json!({}))?;
     ensure!(
         original[0][property] == 1.
-            && original[0]["edge_ids"]
-                .as_array()
-                .is_some_and(|ids| ids.contains(&edge["id"])),
+            && (if kind == "Shell" {
+                original[0]["face_ids"]
+                    .as_array()
+                    .is_some_and(|ids| ids.len() == 1)
+                    && original[0]["inward"] == true
+            } else {
+                original[0]["edge_ids"]
+                    .as_array()
+                    .is_some_and(|ids| ids.contains(&edge["id"]))
+            }),
         "Wrong edge or size: {original}"
     );
     let name = original[0]["name"]
@@ -146,6 +177,24 @@ fn case(client: &mut Client, out: &Path, kind: &str) -> Result<Value> {
             && final_scene["errors"].as_array().is_some_and(Vec::is_empty),
         "Refine produced invalid geometry"
     );
+    if kind == "Shell" {
+        ensure!(
+            final_scene["bodies"][0]["faces"]
+                .as_array()
+                .is_some_and(|faces| faces.iter().any(|face| face["plane"]["normal"][2]
+                    .as_f64()
+                    .is_some_and(|z| z > 0.999)
+                    && face["plane"]["origin"][2]
+                        .as_f64()
+                        .is_some_and(|z| (z - 2.).abs() < 1e-6))),
+            "Shell must leave the edited 2 mm floor beneath the selected top opening"
+        );
+        control(client, "Top", None)?;
+        ui(
+            client,
+            json!({"action":"capture","path":out.join("shell-top.png")}),
+        )?;
+    }
     control(client, "Isometric", None)?;
     let capture = out.join(format!("native-{}.png", kind.to_lowercase()));
     let project = out.join(format!("native-{}.nbcad", kind.to_lowercase()));
@@ -158,7 +207,7 @@ fn case(client: &mut Client, out: &Path, kind: &str) -> Result<Value> {
         client,
         json!({"action":"file","command":"save","path":project}),
     )?;
-    println!("PASS: {kind} live edge picking, typed sizes, validation, history edit, Cancel, Undo/Redo and Save");
+    println!("PASS: {kind} live reference picking, typed sizes, validation, history edit, Cancel, Undo/Redo and Save");
     Ok(json!({"project":project,"capture":capture,"definitions":client.call(&method,json!({}))?}))
 }
 pub(super) fn run(args: impl Iterator<Item = String>) -> Result<()> {
@@ -170,6 +219,11 @@ pub(super) fn run(args: impl Iterator<Item = String>) -> Result<()> {
         .client
         .call("cad_attach", json!({"session_id":new["active_session_id"]}))?;
     cases.push(case(&mut fixture.client, &fixture.out, "Chamfer")?);
+    let new = control(&mut fixture.client, "New document", None)?;
+    fixture
+        .client
+        .call("cad_attach", json!({"session_id":new["active_session_id"]}))?;
+    cases.push(case(&mut fixture.client, &fixture.out, "Shell")?);
     fs::write(
         &fixture.report,
         serde_json::to_string_pretty(&json!({"passed":true,"cases":cases}))?,

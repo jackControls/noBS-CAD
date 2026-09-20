@@ -548,7 +548,7 @@ pub(crate) fn process_one(
                 editor.press = None;
                 clear_preview(world, &services.engine, &services.bridge, &frame.context)?;
                 support::hover(world, &frame.context, &mut editor.support, None)?;
-                crate::session_bridge::native_interface::feature::hover_edges(world,services,&frame.context,None)?;
+                crate::session_bridge::native_interface::feature::hover_references(world,services,&frame.context,None)?;
             }
             WindowEvent::CursorMoved(moved) if editor.support.active => {
                 if let Some(canvas) = frame.canvases.iter().find(|c| c.name == "viewport") {
@@ -564,7 +564,7 @@ pub(crate) fn process_one(
                 if let Some(canvas)=frame.canvases.iter().find(|c|c.name=="viewport") {
                     let p=moved.position;let a=canvas.bounds;
                     let inside=f64::from(p.x)>=a.x&&f64::from(p.x)<a.x+a.width&&f64::from(p.y)>=a.y&&f64::from(p.y)<a.y+a.height&&!handle.owns_pointer([f64::from(p.x),f64::from(p.y)]);
-                    let handled=crate::session_bridge::native_interface::feature::hover_edges(world,services,&frame.context,inside.then_some([p.x-a.x as f32,p.y-a.y as f32]))?;
+                    let handled=crate::session_bridge::native_interface::feature::hover_references(world,services,&frame.context,inside.then_some([p.x-a.x as f32,p.y-a.y as f32]))?;
                     result=json!({"handled":handled,"hover":inside});
                 }
             }

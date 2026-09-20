@@ -55,13 +55,7 @@ const GLYPHS: Record<string, ReactNode> = {
   ),
   fillet: <SharedRibbonGlyph id="fillet" />,
   chamfer: <SharedRibbonGlyph id="chamfer" />,
-  shell: (
-    <>
-      <path d="M5 5h14v14H5V5z" />
-      <path d="M8 8h8v8H8V8z" />
-      <path d="M10 5h4" strokeWidth="3.2" />
-    </>
-  ),
+  shell: <SharedRibbonGlyph id="shell" />,
   draft: (
     <>
       <path d="M5 20V5h5M19 20L15 5h-2" />

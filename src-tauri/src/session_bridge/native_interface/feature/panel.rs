@@ -288,6 +288,7 @@ fn synchronize_owned(
                     }
                     super::SolidField::Source => "PROFILES",
                     super::SolidField::Edges => "EDGES",
+                    super::SolidField::Faces => "FACES TO REMOVE",
                     super::SolidField::AxisLine => "AXIS LINE",
                     super::SolidField::Targets => "TARGET BODIES",
                     super::SolidField::StopFace => "STOP FACE",
@@ -359,6 +360,7 @@ fn synchronize_owned(
                     }
                     super::SolidField::Source => "Click a profile in the viewport.",
                     super::SolidField::Edges => "Click edges to add or remove from this body.",
+                    super::SolidField::Faces => "Click faces on one body to add or remove openings.",
                     super::SolidField::AxisLine => "Click a straight line on the profile plane.",
                     super::SolidField::Path if panel.kind == super::SolidFormKind::Rib => {
                         "Click centerline curves to add or remove."

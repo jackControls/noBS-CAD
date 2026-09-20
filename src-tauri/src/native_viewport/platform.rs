@@ -2417,6 +2417,9 @@ struct NativeAnnotationRoot;
 struct CadHighlightGizmos;
 
 #[derive(Default, Reflect, GizmoConfigGroup)]
+struct CadModelEdgeGizmos;
+
+#[derive(Default, Reflect, GizmoConfigGroup)]
 struct CamUpcomingPathGizmos;
 
 #[derive(Default, Reflect, GizmoConfigGroup)]
@@ -2544,6 +2547,7 @@ fn build_bevy_app(
 /// in separate worlds. A preview never replaces the live model or camera.
 pub(super) fn install_cad_scene(app: &mut bevy::app::App) {
     app.init_gizmo_group::<CadHighlightGizmos>()
+        .init_gizmo_group::<CadModelEdgeGizmos>()
         .init_gizmo_group::<CamUpcomingPathGizmos>()
         .init_gizmo_group::<CamCompletedPathGizmos>()
         .init_gizmo_group::<CadSketchGizmos>()
@@ -2612,6 +2616,10 @@ fn setup_scene(
         VIEWPORT_LINE_REFERENCE_DIAGONAL * 0.6,
         1.0,
     );
+    // Bevy's reverse-Z line pass compares Greater, so a line exactly on a
+    // face can disappear. A small relative bias retains cavity seams without
+    // making ordinary edges visible through the opposite wall.
+    gizmo_config.config_mut::<CadModelEdgeGizmos>().0.depth_bias = -0.0001;
     let (highlight_config, _) = gizmo_config.config_mut::<CadHighlightGizmos>();
     highlight_config.depth_bias = -1.0;
     // Bevy line pipelines write depth and compare Greater (reverse Z).
@@ -4447,7 +4455,7 @@ fn face_mesh(body: &BodyDto, face: &FaceDto) -> Option<Mesh> {
 }
 
 fn draw_cad_gizmos(
-    mut gizmos: Gizmos,
+    model_lines: (Gizmos, Gizmos<CadModelEdgeGizmos>),
     mut sketch_gizmos: Gizmos<CadSketchGizmos>,
     mut sketch_point_outlines: Gizmos<CadSketchPointOutlineGizmos>,
     mut sketch_points: Gizmos<CadSketchPointGizmos>,
@@ -4468,6 +4476,7 @@ fn draw_cad_gizmos(
     presentation: Res<PresentationResource>,
     face_boundaries: Query<(&NativeCadFace, &NativeModelGeometry)>,
 ) {
+    let (mut gizmos, mut model_edges) = model_lines;
     let (mut highlights, mut cam_upcoming, mut cam_completed) = cam_paths;
     let state = &presentation.0;
     let fine = rgba(palette.0.grid_fine, 0.28);
@@ -4482,6 +4491,7 @@ fn draw_cad_gizmos(
     // segment. It produces no pixels, but makes the first frame after an
     // invalid -> valid picker transition update an existing GPU asset.
     keep_gizmo_asset_resident(&mut highlights);
+    keep_gizmo_asset_resident(&mut model_edges);
     keep_gizmo_asset_resident(&mut cam_upcoming);
     keep_gizmo_asset_resident(&mut cam_completed);
     keep_gizmo_asset_resident(&mut pick_halo);
@@ -4680,7 +4690,7 @@ fn draw_cad_gizmos(
                     // Through-geometry wireframe for the ghosted part.
                     draw_edge_segments(&mut highlights, edge, rgb(color), &body_transform);
                 } else {
-                    draw_edge_segments(&mut gizmos, edge, rgba(color, 0.92), &body_transform);
+                    draw_edge_segments(&mut model_edges, edge, rgba(color, 0.92), &body_transform);
                 }
                 if selected || hovered {
                     draw_edge_segments(
@@ -7559,6 +7569,7 @@ mod tests {
     fn viewport_cameras_use_portable_msaa() {
         let mut gizmo_config = GizmoConfigStore::default();
         gizmo_config.insert(GizmoConfig::default(), CadHighlightGizmos::default());
+        gizmo_config.insert(GizmoConfig::default(), CadModelEdgeGizmos::default());
         gizmo_config.insert(GizmoConfig::default(), CamUpcomingPathGizmos::default());
         gizmo_config.insert(GizmoConfig::default(), CamCompletedPathGizmos::default());
         gizmo_config.insert(GizmoConfig::default(), CadSketchGizmos::default());

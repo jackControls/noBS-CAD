@@ -120,9 +120,13 @@ fn maximum_z(fixture: &Fixture) -> f32 {
 }
 
 #[test]
-fn edge_features_stage_original_topology_without_mutating_and_commit_one_undo_step() {
+fn topology_features_stage_original_input_without_mutating_and_commit_one_undo_step() {
     let _lock = super::super::super::tests::TEST_LOCK.lock().unwrap();
-    for kind in [SolidFormKind::Fillet, SolidFormKind::Chamfer] {
+    for kind in [
+        SolidFormKind::Fillet,
+        SolidFormKind::Chamfer,
+        SolidFormKind::Shell,
+    ] {
         let fixture = Fixture::new();
         let owner = sketch(&fixture);
         fixture.bridge.apply_native_mutation(&fixture.engine,&owner,"solid_extrude",
@@ -154,9 +158,16 @@ fn edge_features_stage_original_topology_without_mutating_and_commit_one_undo_st
             app.world_mut(),
             &owner,
             id,
-            FeaturePick::Edges {
-                body: Some(body.id),
-                edges: vec![edge],
+            if kind == SolidFormKind::Shell {
+                FeaturePick::Faces {
+                    body: Some(body.id),
+                    faces: vec![body.faces[0].id],
+                }
+            } else {
+                FeaturePick::Edges {
+                    body: Some(body.id),
+                    edges: vec![edge],
+                }
             },
             || Ok(()),
         )
@@ -167,15 +178,24 @@ fn edge_features_stage_original_topology_without_mutating_and_commit_one_undo_st
             app.world_mut(),
             &owner,
             id,
-            FeaturePick::Edges {
-                body: Some(body.id),
-                edges: vec![nbcad_core::EdgeId(u64::MAX)]
+            if kind == SolidFormKind::Shell {
+                FeaturePick::Faces {
+                    body: Some(body.id),
+                    faces: vec![nbcad_core::FaceId(u64::MAX)],
+                }
+            } else {
+                FeaturePick::Edges {
+                    body: Some(body.id),
+                    edges: vec![nbcad_core::EdgeId(u64::MAX)],
+                }
             },
             || Ok(())
         )
         .is_err());
         let size = if kind == SolidFormKind::Fillet {
             SolidField::Radius
+        } else if kind == SolidFormKind::Shell {
+            SolidField::Thickness
         } else {
             SolidField::Distance
         };
@@ -277,6 +297,71 @@ fn edge_features_stage_original_topology_without_mutating_and_commit_one_undo_st
             .apply_native_history(&fixture.engine, &result.context, true, || Ok(()))
             .unwrap();
         assert_eq!(exported(&fixture), edited);
+        if kind == SolidFormKind::Shell {
+            // Both directions remain real geometry operations, not a cosmetic
+            // checkbox. The inward result stays inside its input bounds.
+            let scene = fixture.engine.viewport_snapshot().2;
+            assert!(scene.bodies[0]
+                .mesh
+                .positions
+                .chunks_exact(3)
+                .all(|p| p[0] >= -1e-4
+                    && p[0] <= 20.0001
+                    && p[1] >= -1e-4
+                    && p[1] <= 12.0001
+                    && p[2] >= -1e-4
+                    && p[2] <= 10.0001));
+            // Undo/Redo rotates document ownership. Use the returned receipt.
+            let current_owner = fixture.owner();
+            native_viewport::apply_interface_model(
+                app.world_mut(),
+                model_snapshot(&fixture.engine),
+            )
+            .unwrap();
+            let opened = reduce(
+                &fixture.engine,
+                &fixture.bridge,
+                app.world_mut(),
+                &current_owner,
+                &FeatureCommand::Open {
+                    kind,
+                    feature_id: Some(feature),
+                },
+                &ControlInput::Click,
+                || Ok(()),
+            )
+            .unwrap();
+            let id = opened["form_id"].as_u64().unwrap();
+            field(
+                &fixture,
+                app.world_mut(),
+                &current_owner,
+                id,
+                SolidField::Inward,
+                "false",
+            );
+            action(
+                &fixture,
+                app.world_mut(),
+                &current_owner,
+                id,
+                FeatureControl::Apply,
+                ControlInput::Click,
+            )
+            .unwrap();
+            let scene = fixture.engine.viewport_snapshot().2;
+            assert!(scene.errors.is_empty());
+            assert!(scene.bodies[0]
+                .mesh
+                .positions
+                .chunks_exact(3)
+                .any(|p| p[0] < -0.1
+                    || p[0] > 20.1
+                    || p[1] < -0.1
+                    || p[1] > 12.1
+                    || p[2] < -0.1
+                    || p[2] > 10.1));
+        }
     }
 }
 

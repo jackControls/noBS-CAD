@@ -5,7 +5,7 @@ use crate::session_bridge::native_interface::controller::NativeServices;
 use nbcad_core::FaceId;
 use nbcad_solid::Point2Dto;
 
-pub(crate) fn hover_edges(
+pub(crate) fn hover_references(
     world: &mut World,
     services: &NativeServices,
     owner: &DocumentContext,
@@ -13,11 +13,10 @@ pub(crate) fn hover_edges(
 ) -> Result<bool, String> {
     let mut state = world.remove_resource::<NativeFeature>().unwrap_or_default();
     let result = (|| {
-        let Some(editor) = state
-            .editor
-            .as_mut()
-            .filter(|e| e.pick_target == Some(SolidField::Edges) && !e.form.is_busy())
-        else {
+        let Some(editor) = state.editor.as_mut().filter(|e| {
+            matches!(e.pick_target, Some(SolidField::Edges | SolidField::Faces))
+                && !e.form.is_busy()
+        }) else {
             return Ok(false);
         };
         with_receipt(&services.bridge, &services.engine, owner, |receipt| {
@@ -28,11 +27,27 @@ pub(crate) fn hover_edges(
                         world,
                         &owner.document_id,
                         p,
-                        NativePickPurpose::RefinableEdge,
+                        if editor.pick_target == Some(SolidField::Edges) {
+                            NativePickPurpose::RefinableEdge
+                        } else {
+                            NativePickPurpose::Geometry
+                        },
                     )
                 })
                 .transpose()?
                 .flatten();
+            if editor.pick_target == Some(SolidField::Faces) {
+                let next = hit
+                    .filter(|hit| editor.snapshot.source_local(hit.body_id, hit.occurrence_id))
+                    .map(|hit| (BodyId(hit.body_id), FaceId(hit.face_id)));
+                if next != editor.hovered_face
+                    || native_viewport::interface_preview_revision(world) != editor.preview_revision
+                {
+                    editor.hovered_face = next;
+                    update_preview(editor, world)?;
+                }
+                return Ok(true);
+            }
             let next = hit
                 .filter(|hit| editor.snapshot.source_local(hit.body_id, hit.occurrence_id))
                 .and_then(|hit| {
@@ -355,6 +370,25 @@ pub(crate) fn handle_canvas_pick(
                     return Err("Open the component before selecting its references".into());
                 }
                 match target {
+                    SolidField::Faces => {
+                        let body = BodyId(hit.body_id);
+                        let id = FaceId(hit.face_id);
+                        let mut faces = editor
+                            .form
+                            .selected_faces()
+                            .filter(|(selected, _)| *selected == body)
+                            .map(|(_, f)| f.to_vec())
+                            .unwrap_or_default();
+                        if let Some(index) = faces.iter().position(|f| *f == id) {
+                            faces.remove(index);
+                        } else {
+                            faces.push(id);
+                        }
+                        Ok(FeaturePick::Faces {
+                            body: Some(body),
+                            faces,
+                        })
+                    }
                     SolidField::Targets => {
                         let mut targets = editor.form.targets().to_vec();
                         let id = BodyId(hit.body_id);
