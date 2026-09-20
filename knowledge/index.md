@@ -41,6 +41,7 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Mesh / wall probe audit | `concepts.adversarial-mesh-audit` | Adversarial mesh audit |
 | Assembly overlap @ pose | `concepts.assembly-interference` | Assembly interference check |
 | Export / print / 3MF vs STL | `concepts.export-print` | Export and print |
+| Design VERSION / gen_v scripts | `concepts.design-version-scripts` | Design VERSION and generator naming |
 
 ### Machine design (seeded highlights)
 
@@ -89,6 +90,7 @@ Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 - [Architecture](concepts/architecture.md) - Kernel, shell, and project-file boundaries.
 - [MCP harness](concepts/mcp-harness.md) - Headless/live routing and engineering resources.
 - [MCP workflow](concepts/agent-mcp-workflow.md) - Help-first, soft focus, inspect, edit, sessions, units.
+- [Design VERSION / gen scripts](concepts/design-version-scripts.md) - One VERSION constant → gen_vM_N.py; embed + prune obsolete generators.
 - [Research before commit](concepts/research-before-commit.md) - VERIFY table and local help before freezing geometry.
 - [Assembly interference check](concepts/assembly-interference.md) - Geometric overlap/clearance at solved poses vs fit classes.
 - [Validate before show](concepts/validate-before-show.md) - Mandatory review shot pack; prefer recapture when frames are blank or inside-solid.

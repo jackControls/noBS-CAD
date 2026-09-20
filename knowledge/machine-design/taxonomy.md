@@ -112,6 +112,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Datum / CS / sketch plane choice | **seeded** | `machine-design.concepts.datum-sketch-plane-choice` — [datum-sketch-plane-choice](concepts/datum-sketch-plane-choice.md) |
 | Hole feature vs modeled / patterns | **seeded** | `machine-design.concepts.hole-wizard-vs-modeled` — [hole-wizard-vs-modeled](concepts/hole-wizard-vs-modeled.md) |
 | Export / print / 3MF vs STL | **seeded** | `concepts.export-print` — [export-print](../concepts/export-print.md) (pair with [adversarial-mesh-audit](../concepts/adversarial-mesh-audit.md)) |
+| Design VERSION / gen_v script naming | **seeded** | `concepts.design-version-scripts` — [design-version-scripts](../concepts/design-version-scripts.md) |
 
 ## Still thin / planned (honest)
 
@@ -134,7 +135,7 @@ such as: `dfam`, `am`, `fdm`, `fasteners`, `joints`, `hardware`, `enclosures`,
 `cables`, `seals`, `threads`, `fits`, `gdt`, `locators`, `print`, `snap-fit`,
 `recipes`, `manufacturing`, `research`, `validation`, `assembly`, `mcp`, `bearings`,
 `mechanisms`, `springs`, `couplings`, `mbd`, `pmi`, `drawings`, `dfa`, `datums`, `sketch`, `holes`, `history`, `export`, `units`,
-`modeling`, `workflow`, `disclosure`, `focus`, `sessions`, `parametric`, `selection`, `topology`. Use `topics` then `search` with those words; `get` with an id
+`modeling`, `workflow`, `disclosure`, `focus`, `sessions`, `parametric`, `selection`, `topology`, `VERSION`, `gen_v`. Use `topics` then `search` with those words; `get` with an id
 from the tables above.
 
 ## Live examples

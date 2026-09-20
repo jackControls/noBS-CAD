@@ -652,6 +652,10 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/concepts/agent-mcp-workflow.md"),
     },
     KnowledgeFile {
+        path: "concepts/design-version-scripts.md",
+        text: include_str!("../../../knowledge/concepts/design-version-scripts.md"),
+    },
+    KnowledgeFile {
         path: "concepts/gears.md",
         text: include_str!("../../../knowledge/concepts/gears.md"),
     },
@@ -1847,6 +1851,23 @@ mod tests {
     }
 
     #[test]
+    fn design_version_scripts_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "design VERSION gen_v script naming",
+            "VERSION DESIGN_VERSION gen_vM_N.py",
+            "gen_meta version prune obsolete generators",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("design-version-scripts")),
+                "expected design-version-scripts for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn check_corpus_ok() {
         let n = check_corpus().expect("corpus check");
         assert!(n >= 50);
@@ -1862,6 +1883,7 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "concepts/assembly-interference.md"));
         assert!(files.iter().any(|f| f.path == "concepts/validate-before-show.md"));
         assert!(files.iter().any(|f| f.path == "concepts/adversarial-mesh-audit.md"));
+        assert!(files.iter().any(|f| f.path == "concepts/design-version-scripts.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/alignment-nubs-pins.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-clamshell-retainer.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-heat-set-inserts.md"));

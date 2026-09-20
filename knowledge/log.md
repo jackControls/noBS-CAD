@@ -1,3 +1,13 @@
+## 2026-09-20 — Design VERSION / gen_v script naming
+
+- Seeded `concepts.design-version-scripts` (one authoritative VERSION /
+  DESIGN_VERSION; filename `gen_vM_N.py`; embed in script/gen_meta/JSONC; cut
+  prior gen_v*.py in the same change set; blank-doc + versioned recipe ids).
+- Taxonomy H → seeded; index doctrine table + Concepts bullet; soft pointer
+  from agent-mcp-workflow; one-line docs/agentic INDEX note.
+- Rust embed + BM25/unit tests; wire goldens H76+. Design Ops handoff blurb
+  lives under cad-design-ops/guidance (not product).
+
 ## 2026-09-20 — Bearings / hubs / seats CAD-time deepen
 
 - Seeded `machine-design.concepts.bearings-hubs-seats` (shaft/housing seats,
