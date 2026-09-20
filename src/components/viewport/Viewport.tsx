@@ -4496,7 +4496,15 @@ export function Viewport() {
           const { center, radius, midAngle, textPos } = geom;
           const m = { x: center.x + radius * Math.cos(midAngle), y: center.y + radius * Math.sin(midAngle) };
           const uAng = midAngle;
-          addScreenPolyline(group, [center.x, center.y, z, m.x, m.y, z], green, 1.25);
+          // ISO/ANSI: the leader runs from the centre through the arc with its
+          // arrowhead on the arc, and carries on to the text, so the value reads
+          // as attached to the arrow it belongs to. A text placed beyond the arc
+          // therefore still gets one continuous leader.
+          const reach = Math.hypot(textPos.x - center.x, textPos.y - center.y);
+          const leaderEnd = reach > radius
+            ? { x: center.x + Math.cos(uAng) * reach, y: center.y + Math.sin(uAng) * reach }
+            : m;
+          addScreenPolyline(group, [center.x, center.y, z, leaderEnd.x, leaderEnd.y, z], green, 1.25);
           makeArrow(group, uAng, m, z, green);
           addDimText(group, dimLike, textPos, new CAD.Vector3(Math.cos(uAng), Math.sin(uAng), 0), {
             selected: opts.selected,
@@ -6229,7 +6237,7 @@ export function Viewport() {
       offset: ['distance'],
       scale: ['factor'],
       polygon: ['edges', 'radius'],
-      arcCenter: ['radius'],
+      arcCenter: ['radius', 'angle'],
       slot: ['width'],
     };
 
@@ -7348,6 +7356,25 @@ export function Viewport() {
      * the same ray and the pointer never went anywhere. */
     const MIN_ARC_TRAVEL_RAD = 1e-6;
 
+    /** The sweep the run would commit. A typed angle locks the magnitude the
+     * way a typed radius locks the distance, and the pointer still chooses the
+     * direction; a positive typed angle with no travel of its own goes
+     * counter-clockwise. */
+    const resolvedArcSweep = (travel: number, lockedAngleDeg: number | undefined): number => {
+      if (
+        lockedAngleDeg === undefined
+        || !Number.isFinite(lockedAngleDeg)
+        || Math.abs(lockedAngleDeg) < 1e-9
+      ) {
+        return travel;
+      }
+      const radians = Math.abs(lockedAngleDeg) * (Math.PI / 180);
+      const direction = Math.abs(travel) > MIN_ARC_TRAVEL_RAD
+        ? Math.sign(travel)
+        : Math.sign(lockedAngleDeg);
+      return direction * radians;
+    };
+
     /** Accumulate the pointer's signed angular travel for the center arc, so
      * preview and commit agree on which half a drag describes. A drag longer
      * than a full turn stays a full circle. */
@@ -7578,7 +7605,9 @@ export function Viewport() {
                 && arcEndpointHasConnectedTangent(anchor, aim);
               store.getState().updateDynInput(
                 { radius: r.toFixed(2) },
-                {},
+                // The included angle only means something once the first
+                // endpoint has fixed the start ray.
+                { angle: false },
                 pos.x,
                 pos.y,
               );
@@ -7596,14 +7625,18 @@ export function Viewport() {
               // apart is the same rays either way round, so the path the
               // cursor took is the only thing that says which half to draw.
               const travel = accumulateArcTravel(run, a1);
-              setPreviewPositions(tessellateArcSweep(anchor, r, a0, travel, 0.12));
+              const sweepRad = resolvedArcSweep(travel, locks.angle);
+              setPreviewPositions(tessellateArcSweep(anchor, r, a0, sweepRad, 0.12));
               tangentInference = !inferenceOverride
                 && (
                   arcEndpointHasConnectedTangent(anchor, start)
                   || arcEndpointHasConnectedTangent(anchor, sweep)
                 );
               store.getState().updateDynInput(
-                { radius: r.toFixed(2) },
+                {
+                  radius: r.toFixed(2),
+                  angle: (sweepRad * 180 / Math.PI).toFixed(1),
+                },
                 {},
                 pos.x,
                 pos.y,
@@ -7840,6 +7873,14 @@ export function Viewport() {
             // looking like "the tool drew the whole circle".
             previewSeq += 1;
             setPreviewPositions(null);
+            // The sweep has a start ray now, so the angle field joins the
+            // radius immediately instead of waiting for the next pointer move.
+            store.getState().updateDynInput(
+              { angle: '0.0' },
+              {},
+              lastPointerClient?.x ?? 0,
+              lastPointerClient?.y ?? 0,
+            );
             break;
           }
           const [center, start] = run.points;
@@ -7852,9 +7893,10 @@ export function Viewport() {
           // commit: that is how a stray click (or a cursor the snap pulled back
           // onto the start ray) used to turn into a full circle. Keep the run
           // armed and wait for the pointer; dragging a deliberate full turn is
-          // still a full circle.
+          // still a full circle. A typed angle supplies its own magnitude, so
+          // typing one and clicking is a complete answer.
           const travel = run.arc
-            ? accumulateArcTravel(run, angleOf(center, directed))
+            ? resolvedArcSweep(accumulateArcTravel(run, angleOf(center, directed)), locks.angle)
             : null;
           if (travel !== null && Math.abs(travel) < MIN_ARC_TRAVEL_RAD) break;
           void engine
@@ -7969,6 +8011,10 @@ export function Viewport() {
           if (fields && tool !== 'slot') {
             const pos = clusterPos(e.clientX, e.clientY);
             store.getState().showDynInput(fields, pos.x, pos.y);
+            if (tool === 'arcCenter') {
+              // Radius only until the first endpoint fixes the start ray.
+              store.getState().updateDynInput({}, { angle: false }, pos.x, pos.y);
+            }
             refreshLockValues();
           }
           if (queuedCommit) {

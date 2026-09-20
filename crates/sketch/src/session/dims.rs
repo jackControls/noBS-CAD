@@ -57,6 +57,24 @@ impl SketchSession {
         }
     }
 
+    /// Direction of the arc's own midpoint, which is where its radius leader
+    /// touches it. `None` for a full circle, whose leader may point anywhere.
+    fn arc_mid_angle(&self, id: EntityId) -> Option<f64> {
+        match self.sketch.entity(id) {
+            Some(Entity::Arc {
+                start_angle,
+                end_angle,
+                ..
+            }) => {
+                // Stored arcs always sweep counter-clockwise, so the span is
+                // the positive remainder of the two angles.
+                let span = (end_angle - start_angle).rem_euclid(std::f64::consts::TAU);
+                Some(start_angle + span / 2.0)
+            }
+            _ => None,
+        }
+    }
+
     fn kind_of(&self, id: EntityId) -> Option<&'static str> {
         match self.sketch.entity(id) {
             Some(Entity::Point { .. }) => Some("point"),
@@ -757,17 +775,22 @@ impl SketchSession {
         let Ok(param) = self.param_from_text(ParamKind::Length, Some(text), r) else {
             return;
         };
+        // ISO/ANSI radius dimension: the leader runs radially through the arc
+        // with its arrowhead on the arc, and the text sits just outside the arc
+        // along that same leader. Placing it on a fixed diagonal offset instead
+        // pushed it a whole radius away from the arrow it belongs to.
+        let mid = self
+            .arc_mid_angle(arc)
+            .unwrap_or(std::f64::consts::FRAC_PI_4);
+        let gap = default_radial_dimension_gap(r * 2.0);
+        let text_pos = center + Vec2::new(mid.cos(), mid.sin()) * (r + gap);
         let _ = self.add_constraint_bound(
             Constraint::Radius {
                 entity: arc,
                 value: r,
             },
             param,
-            center
-                + Vec2::new(
-                    r + default_radial_dimension_gap(r * 2.0),
-                    r + default_radial_dimension_gap(r * 2.0),
-                ),
+            text_pos,
             false,
         );
     }

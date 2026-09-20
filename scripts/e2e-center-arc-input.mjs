@@ -503,6 +503,70 @@ try {
   assert.equal(away.marker, null, 'the acquisition marker clears with it');
   await cancel();
 
+  console.log('8. The sweep angle follows the cursor, takes a typed value, and Tab reaches it');
+  await arm('arcCenter');
+  await clickSketch(frame.center.x, frame.center.y);
+  await moveSketch(frame.center.x + 6, frame.center.y);
+  // The included angle means nothing until the first endpoint fixes the start
+  // ray, so only the radius is offered before it.
+  let angleField = await dynField('angle');
+  assert.ok(angleField, 'the angle field is armed with the tool');
+  assert.equal(angleField.visible, false, 'the angle stays out of the way before the first endpoint');
+  assert.ok(await dynField('radius'), 'the radius is live straight after the centre');
+  await clickSketch(frame.center.x + 6, frame.center.y);
+  const angleDegrees = async () => Number((await dynField('angle'))?.value);
+  await moveSketch(frame.center.x, frame.center.y + 6);
+  assert.ok(
+    Math.abs((await angleDegrees()) - 90) < 0.5,
+    `the angle follows the cursor, got ${await angleDegrees()}`,
+  );
+  // Counter-clockwise is positive, clockwise negative: the sign is the sweep's.
+  await moveSketch(frame.center.x, frame.center.y - 6);
+  assert.ok(
+    Math.abs((await angleDegrees()) + 90) < 0.5,
+    `a clockwise sweep reads negative, got ${await angleDegrees()}`,
+  );
+  // Tab moves between the two fields exactly as it does for the line.
+  const focusedField = () =>
+    page.evaluate(() => {
+      const d = window.__appStore.getState().dynInput;
+      const visible = d.fields.filter((f) => f.visible);
+      return d.focus === null ? null : visible[d.focus]?.key ?? null;
+    });
+  await page.keyboard.press('Tab');
+  await page.waitForTimeout(120);
+  assert.equal(await focusedField(), 'radius', 'Tab reaches the first field');
+  await page.keyboard.press('Tab');
+  await page.waitForTimeout(120);
+  assert.equal(await focusedField(), 'angle', 'Tab moves on to the angle');
+  await page.keyboard.type('45', { delay: 40 });
+  await page.waitForTimeout(250);
+  angleField = await dynField('angle');
+  assert.equal(angleField.locked, true, 'typing locks the angle');
+  assert.equal(angleField.value, '45');
+  assert.equal((await dynField('radius')).locked, false, 'the radius stays live');
+  // A typed angle fixes the size; the pointer still picks which way round.
+  const beforeAngle = (await sketch()).entities.filter((entity) => entity.kind === 'arc').length;
+  await moveSketch(frame.center.x, frame.center.y - 4);
+  await clickSketch(frame.center.x, frame.center.y - 4);
+  await page.waitForFunction(
+    (count) =>
+      window.__appStore.getState().activeSketch.entities.filter(
+        (entity) => entity.kind === 'arc',
+      ).length === count + 1,
+    beforeAngle,
+  );
+  await cancel();
+  const lockedSweep = (await sketch()).entities.filter((entity) => entity.kind === 'arc').pop();
+  assert.ok(
+    Math.abs(lockedSweep.end_angle - lockedSweep.start_angle - Math.PI / 4) < 1e-6,
+    `the typed angle sizes the sweep: ${lockedSweep.start_angle} .. ${lockedSweep.end_angle}`,
+  );
+  assert.ok(
+    (lockedSweep.start_angle + lockedSweep.end_angle) / 2 < 0,
+    'the drag direction still chooses the side the arc covers',
+  );
+
   assert.deepEqual(pageErrors, []);
   console.log('center-arc input: all checks passed');
 } finally {

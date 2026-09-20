@@ -132,6 +132,18 @@ fn a_typed_radius_locks_the_arc_and_adds_a_driving_dimension() {
     assert_eq!(dimensions[0].kind, "radius");
     assert_eq!(dimensions[0].text, "R12.00");
     assert_eq!(dimensions[0].entities, vec![arc_id]);
+    // ISO/ANSI radius dimension: the value sits just outside the arc along the
+    // leader that carries its arrowhead, not on a diagonal a whole radius away.
+    // The engine's gap is a quarter of the diameter, clamped to 2..8 mm.
+    let gap = (radius * 0.5).clamp(2.0, 8.0);
+    let mid_angle = (start_angle + end_angle) / 2.0;
+    let expected = center + Vec2::new(mid_angle.cos(), mid_angle.sin()) * (radius + gap);
+    assert!(
+        close(dimensions[0].text_pos, expected),
+        "radius text at {:?}, expected {:?}",
+        dimensions[0].text_pos,
+        expected
+    );
 
     // A driving radius stays parametric: editing it re-solves the arc.
     let mut session = session;
