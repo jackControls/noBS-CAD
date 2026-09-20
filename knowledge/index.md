@@ -161,7 +161,7 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [Locating schemes & DOF](machine-design/concepts/locating-scheme-dof.md) - Primary/secondary locate; avoid overconstraint.
 - [Tolerance stack-up intro](machine-design/concepts/tolerance-stackup-intro.md) - Dimensional loops; citation-only, no closed tables.
 - [AM supports & overhangs](machine-design/concepts/am-supports-overhangs.md) - Support strategy, bridging, overhang design.
-- [Technic-style envelope (unofficial)](machine-design/concepts/technic-envelope.md) - Approximate pitch/pin notes; verify; unofficial.
+- [Technic-style envelope (unofficial)](machine-design/concepts/technic-envelope.md) - Open LDraw/Technic.scad nominals (LDU→mm); measure + coupon; unofficial.
 - [Hardware pocket research](machine-design/concepts/am-hardware-pocket-research.md) - Servo/horn/spline/bolt-circle VERIFY pattern.
 - [AM cable exits & strain relief](machine-design/concepts/am-cable-exits-strain-relief.md) - Wire windows, grommets, jacket clamp.
 - [Captive nut / hex trap](machine-design/concepts/captive-nut-hex-trap.md) - Anti-rotation nut pockets for AM.

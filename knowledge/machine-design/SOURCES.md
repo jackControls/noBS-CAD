@@ -3,7 +3,7 @@ type: Concept
 title: Machine-design sources
 description: Provenance table with stable ids for concept frontmatter sources keys.
 status: draft
-updated: 2026-09-11
+updated: 2026-09-20
 searchable: false
 ---
 
@@ -30,6 +30,7 @@ Policy narrative: [`docs/machine-design-distill-vs-link.md`](https://github.com/
 | `nwtc-guns-dfm` | NWTC LibreTexts DFM (Guns) | https://eng.libretexts.org/Courses/Northeast_Wisconsin_Technical_College/Design_for_Various_Manufacturing_Methods | cc-by-4.0 | [Ch.1 DFM](https://eng.libretexts.org/Courses/Northeast_Wisconsin_Technical_College/Design_for_Various_Manufacturing_Methods/01%3A_Design_for_Manufacturing_(DFM)), [Ch.2 processes](https://eng.libretexts.org/Courses/Northeast_Wisconsin_Technical_College/Design_for_Various_Manufacturing_Methods/02%3A_DFM_Guidelines_for_Specific_Manufacturing_Processes); license https://creativecommons.org/licenses/by/4.0/ |
 | `palni-dfma` | PALNI Design for Manufacture and Assembly | https://pressbooks.palni.org/designmanufactureassembly/ | cc-by-4.0 | DFA principles; prefer distill + link over Boothroyd tables |
 | `doe-3d` | DOE Module 3D DFM/DFA/reliability | https://www.energy.gov/sites/default/files/2021-07/Module_3D.pdf | public-domain | High-level checklists; strip third-party figures |
+| `technic-scad` | Technic.scad (cfinke) | https://github.com/cfinke/Technic.scad | mit | Print-oriented beam/pin constants (≈8 mm pitch, ~4.85 mm hole); compatible intent, not a LEGO drawing |
 | `nasa-fastener` | NASA Fastener Design Manual (RP-1228) | https://ntrs.nasa.gov/citations/19900009424 | public-domain | Public use permitted |
 | `nasa-bearing` | NASA rolling-element bearing reports | https://ntrs.nasa.gov/citations/19830018943 | public-domain | Confirm each NTRS record |
 | `kittycad-materials` | KittyCAD material-properties | https://github.com/KittyCAD/material-properties | apache-2.0 | JSON pattern; not certified allowables |
@@ -53,6 +54,8 @@ Policy narrative: [`docs/machine-design-distill-vs-link.md`](https://github.com/
 | `mechanics-map` | Mechanics Map | https://mechanicsmap.org/ | cc-by-sa | **Link-only** until SA policy |
 | `wikipedia-gdt` | Wikipedia GD&T | https://en.wikipedia.org/wiki/Geometric_dimensioning_and_tolerancing | cc-by-sa | Short paraphrase only; large reuse → SA |
 | `freecad-wiki` | FreeCAD documentation wiki | https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/License.md | cc-by-3.0 | Pattern reference; prefer cite over fork |
+| `ldraw-ffs` | LDraw File Format Specification | https://www.ldraw.org/article/218.html | verify | LDU definition (≈0.4 mm); cite URL; **not** a LEGO Group spec — unofficial for product design |
+| `ldraw-opls` | LDraw Official Parts Library Specs | https://www.ldraw.org/article/512.html | verify | Stud/LDU dimension language for library parts; cite URL; unofficial for product design |
 | `asme-y14` | ASME Y14.5 / Y14.41 / Y14.46 | https://www.asme.org/codes-standards | proprietary | Purchase/read; link-out |
 | `iso-gps` | ISO 1101 / GPS (ISO/TC 213) | https://www.iso.org/committee/54924.html | proprietary | Link-out |
 | `iso-286` | ISO 286 / preferred fits | https://www.iso.org/ | proprietary | Link-out fit charts |

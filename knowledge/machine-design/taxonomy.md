@@ -56,7 +56,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Chains & sprockets | **seeded** | `machine-design.concepts.mechanisms-chains-sprockets` — [mechanisms-chains-sprockets](concepts/mechanisms-chains-sprockets.md) |
 | Gears (product page) | **seeded** | `concepts.gears` — [gears](../concepts/gears.md) |
 | Printed gears (FDM DFAM) | **seeded** | `machine-design.concepts.am-printed-gears-dfam` — [am-printed-gears-dfam](concepts/am-printed-gears-dfam.md) |
-| Technic-style beam/pin envelope | **seeded (unofficial)** | `machine-design.concepts.technic-envelope` — [technic-envelope](concepts/technic-envelope.md) |
+| Technic-style beam/pin envelope | **seeded (LDraw/open nominals; unofficial)** | `machine-design.concepts.technic-envelope` — [technic-envelope](concepts/technic-envelope.md) |
 | Intermittent / Geneva-style | **seeded** | `machine-design.concepts.mechanisms-intermittent-geneva` — [mechanisms-intermittent-geneva](concepts/mechanisms-intermittent-geneva.md) |
 | Product joints demo | recipe | `vertical-axis-turbine` |
 | Deep tooth / cam-law / belt-tension / Geneva slot charts | **planned** | datasheets + `mit-272` link-out; Help stays roles only |
