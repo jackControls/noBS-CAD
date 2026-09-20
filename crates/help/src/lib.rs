@@ -756,6 +756,22 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/machine-design/concepts/technic-envelope.md"),
     },
     KnowledgeFile {
+        path: "machine-design/concepts/am-hardware-pocket-research.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-hardware-pocket-research.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/am-cable-exits-strain-relief.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-cable-exits-strain-relief.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/captive-nut-hex-trap.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/captive-nut-hex-trap.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/cosmetic-threads-vs-clearance.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/cosmetic-threads-vs-clearance.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/taxonomy.md",
         text: include_str!("../../../knowledge/machine-design/taxonomy.md"),
     },
@@ -1174,10 +1190,79 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn hardware_pocket_servo_bolt_circle_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "servo horn spline bolt circle PCD",
+            "hardware pocket research actuator mount",
+            "purchased flange bolt pattern VERIFY",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("am-hardware-pocket-research")),
+                "expected am-hardware-pocket-research for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn cable_exits_strain_relief_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "wire window cable exit strain relief",
+            "grommet cord grip AM enclosure",
+            "jacket clamp wire channel FDM",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("am-cable-exits-strain-relief")),
+                "expected am-cable-exits-strain-relief for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn captive_nut_hex_trap_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "captive nut hex nut trap",
+            "printed hex pocket anti-rotation nut",
+            "drop-in nut trap FDM",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("captive-nut-hex-trap")),
+                "expected captive-nut-hex-trap for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn cosmetic_threads_vs_clearance_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "cosmetic thread modeled clearance helix",
+            "CAD visual thread vs tap drill",
+            "display helix not drill size",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("cosmetic-threads-vs-clearance")),
+                "expected cosmetic-threads-vs-clearance for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
     #[test]
     fn check_corpus_ok() {
         let n = check_corpus().expect("corpus check");
-        assert!(n >= 32);
+        assert!(n >= 36);
     }
 
     #[test]
@@ -1199,6 +1284,10 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/tolerance-stackup-intro.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-supports-overhangs.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/technic-envelope.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-hardware-pocket-research.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-cable-exits-strain-relief.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/captive-nut-hex-trap.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/cosmetic-threads-vs-clearance.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));
         assert!(knowledge_file_by_uri("nbcad://knowledge/../etc/passwd").is_none());

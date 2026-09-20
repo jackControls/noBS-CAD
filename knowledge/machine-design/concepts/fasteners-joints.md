@@ -37,6 +37,10 @@ For **clearance vs counterbore vs tap vs insert**, use
 [Fastener clearance & counterbore](fastener-clearance-counterbore.md).
 For FDM bosses and crush ribs, use
 [AM heat-set inserts](am-heat-set-inserts.md).
+For **hex nut traps / captive nuts**, use
+[Captive nut and hex nut trap](captive-nut-hex-trap.md).
+For **cosmetic CAD threads vs real hole roles**, use
+[Cosmetic threads vs modeled clearance](cosmetic-threads-vs-clearance.md).
 
 Full preload/torque/engagement distill from NASA-RP-1228 remains a longer TODO —
 do not treat this overview as sizing guidance.

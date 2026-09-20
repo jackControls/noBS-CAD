@@ -1,12 +1,14 @@
 # Agentic guidance index
 
-- [Eval goldens](EVALS.md) — modeling E1–E5 and help H1–H8 wire checks (`cad_help` + resources).
+- [Eval goldens](EVALS.md) — modeling E1–E5 and help H1–H8+ wire checks (`cad_help` + resources).
+- [How humans find help today](HUMAN_HELP.md) — index/taxonomy/MCP/Pages doors; Scripts deep-link; prompts gap.
 
 Committed operating docs for humans and coding agents working on noBS CAD.
 **Do not** add root `AGENTS.md` / `.cursor/rules` to git (project policy).
 
 | Doc | Purpose |
 |-----|---------|
+| [HUMAN_HELP.md](HUMAN_HELP.md) | Human browse path (pre–Tauri Help) |
 | [STEERABLE_MCP.md](STEERABLE_MCP.md) | Soft disclosure invariants |
 | [INSTALL_MCP.md](INSTALL_MCP.md) | Standalone development-server installer |
 | [../DEVELOPMENT.md](../DEVELOPMENT.md) | Canonical build, SDK and test setup |

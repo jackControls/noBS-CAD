@@ -3,9 +3,9 @@ type: Concept
 title: AM snap-fits and living hinges
 description: Cantilever clips, latches, and living hinges for FDM — role-based thickness, seat depth, and print orientation before commit.
 status: draft
-updated: 2026-09-19
+updated: 2026-09-20
 topics: dfam, am, snap-fit, fdm, joints
-keywords: snap fit, cantilever, clip, latch, living hinge, flexure, barb, seat, pocket depth, beam thickness
+keywords: snap fit, cantilever, clip, latch, living hinge, hinge sizing, flexure, barb, seat, pocket depth, beam thickness, hinge web, hinge span
 related_recipes: turbine-fit-coupons, fillet-basics
 sources: nwtc-guns-dfm, doe-3d, palni-dfma
 ---
@@ -59,13 +59,31 @@ Starting guidance (confirm with coupon):
 5. Prefer **role-based fits** (slip / locate / press) over one global XY hole
    compensation — see [fits & clearances](fits-clearances.md).
 
-## Living hinges
+## Living hinges (sizing deepen)
 
 A living hinge is a **designed thin web**, not leftover material after a deep
 pocket. Keep hinge length and thickness intentional; keep adjacent walls thick
-enough to survive print and flex cycles. Prefer hinge bend across a print
-orientation that does not delaminate on first open — when unsure, print a
-hinge coupon first.
+enough to survive print and flex cycles.
+
+Starting checklist (coupon before commit — no universal mm from this page):
+
+1. **Web thickness** — thin enough to bend, ≥ process min for a continuous skin;
+   uniform along the hinge length; no accidental necks unless that neck *is*
+   the hinge.
+2. **Hinge length (span)** — long enough for the required open angle without
+   yielding the web; short stubs concentrate strain and crack early.
+3. **Land / shoulder** — thick sections on both sides of the web so clamps and
+   loads do not tear into the flexure.
+4. **Bend vs layers** — prefer orientation so bend does not peel layer bonds on
+   first open ([AM thin walls / anisotropy](am-thin-walls.md)). When unsure,
+   print a hinge coupon first.
+5. **Cycle life** — living hinges are mechanism class, not decoration; state
+   expected open/close count and material (some filaments flex far better than
+   others).
+
+Do **not** create a separate “hinge page” guess: size here, then validate with
+a coupon. Related drafts/ribs for stiff lands:
+[AM ribs, gussets, and draft](am-ribs-gussets-draft.md).
 
 ## Print orientation for flexures
 

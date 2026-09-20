@@ -4,13 +4,59 @@ okf_version: "0.2"
 
 # noBS CAD — Open Knowledge Format (OKF) index
 
-Portable knowledge bundle for humans and agents. Specification:
+Portable knowledge bundle for **humans and agents**. Specification:
 [Open Knowledge Format v0.2](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).
 
 Keep concepts **thin**. Longer material lives in the repository’s
 [goals](../docs/goals.md), [MCP harness notes](../docs/mcp-harness.md),
 [proposed architecture](../docs/proposed-architecture.md), and
-[machine-design KB notes](../docs/machine-design-kb.md).
+[machine-design help search](../docs/machine-design-help-search.md).
+
+## How to browse (humans)
+
+1. **This index** — product/agent doctrine + machine-design door list (below).
+2. **[Machine-design taxonomy](machine-design/taxonomy.md)** — seeded vs planned
+   topic map with **page ids** and titles (best map for “what exists?”).
+3. **Search** — MCP tool `cad_help` → `topics` (labels) → `search` → `get` by id;
+   or full-text in your editor over `knowledge/**`.
+4. **Full page** — open the Markdown file, or MCP `resources/read` on
+   `nbcad://knowledge/...` (same text).
+5. **Demos** — recipe chips / `related_recipes` deep-link **Scripts** (unchanged);
+   no Bevy viewport inside Help yet.
+
+Operating note: [How humans find help today](../docs/agentic/HUMAN_HELP.md).
+
+## Topic map → page ids (quick)
+
+Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
+`cad_help` `get` (id-only).
+
+### Agent doctrine & validation
+
+| Topic | Id | Title |
+|-------|----|-------|
+| MCP tenacity / blank-doc scripts | `concepts.agent-mcp-workflow` | Agent MCP workflow |
+| VERIFY before freeze | `concepts.research-before-commit` | Research before commit |
+| Review shot pack | `concepts.validate-before-show` | Validate before show |
+| Mesh / wall probe audit | `concepts.adversarial-mesh-audit` | Adversarial mesh audit |
+| Assembly overlap @ pose | `concepts.assembly-interference` | Assembly interference check |
+
+### Machine design (seeded highlights)
+
+| Topic | Id | Title |
+|-------|----|-------|
+| Fits / clearance class | `machine-design.concepts.fits-clearances` | Fits and clearances |
+| GD&T intro | `machine-design.concepts.gdt-intro` | GD&T intro |
+| Snap-fits / living hinges | `machine-design.concepts.am-snap-fit` | AM snap-fits and living hinges |
+| Thin walls / anisotropy | `machine-design.concepts.am-thin-walls` | AM thin walls and print orientation |
+| Hardware pocket / servo / PCD | `machine-design.concepts.am-hardware-pocket-research` | Hardware pocket research |
+| Cable exits / strain relief | `machine-design.concepts.am-cable-exits-strain-relief` | AM cable exits… |
+| Captive / hex nut trap | `machine-design.concepts.captive-nut-hex-trap` | Captive nut and hex nut trap |
+| Cosmetic vs clearance threads | `machine-design.concepts.cosmetic-threads-vs-clearance` | Cosmetic threads vs modeled clearance |
+| Heat-set inserts | `machine-design.concepts.am-heat-set-inserts` | AM heat-set inserts… |
+| Fastener hole roles | `machine-design.concepts.fastener-clearance-counterbore` | Fastener clearance & counterbore |
+
+Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 
 ## Concepts
 
@@ -52,7 +98,7 @@ Open design-time help (GD&T, elements, mechanisms, materials, DFM).
 Prefer **seeded** pages via `cad_help` before web search; see taxonomy for **planned**
 gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 
-- [Taxonomy](machine-design/taxonomy.md) - Topic map for the domain KB.
+- [Taxonomy](machine-design/taxonomy.md) - Topic map for the domain KB (**human door**).
 - [Sources](machine-design/SOURCES.md) - License and provenance table.
 - [GD&T intro](machine-design/concepts/gdt-intro.md) - Datums and feature control frames.
 - [Fits & clearances](machine-design/concepts/fits-clearances.md) - Clearance, locational, interference.
@@ -60,18 +106,22 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [Materials vocabulary](machine-design/concepts/materials-vocabulary.md) - Properties for CAD choices.
 - [DFM overview](machine-design/concepts/dfm-overview.md) - Process families and heuristics.
 - [DFM process guidelines](machine-design/concepts/dfm-process-guidelines.md) - Molding, cast, sheet, weld, EDM, CNC.
-- [AM snap-fits](machine-design/concepts/am-snap-fit.md) - Cantilever clips, latches, living hinges.
+- [AM snap-fits](machine-design/concepts/am-snap-fit.md) - Cantilever clips, latches, living hinges (sizing).
 - [AM thin walls](machine-design/concepts/am-thin-walls.md) - FDM min wall, anisotropy, print orientation.
 - [Fillet vs chamfer](machine-design/concepts/fillet-chamfer.md) - When to blend vs bevel.
 - [Alignment nubs vs pins](machine-design/concepts/alignment-nubs-pins.md) - Locator class: short AM nubs/socks vs pins/dowels.
 - [AM clamshell retainer](machine-design/concepts/am-clamshell-retainer.md) - Slide-fit first, then optional detents.
 - [AM heat-set inserts](machine-design/concepts/am-heat-set-inserts.md) - Bosses, crush ribs, heat-set vs tapped plastic.
 - [Fastener clearance & counterbore](machine-design/concepts/fastener-clearance-counterbore.md) - Clearance, counterbore, tap vs insert roles.
-- [AM ribs, gussets, and draft](machine-design/concepts/am-ribs-gussets-draft.md) - Stiffen with ribs; draft and even sections.
+- [AM ribs, gussets, and draft](machine-design/concepts/am-ribs-gussets-draft.md) - Stiffen with ribs; draft vs anisotropy cross-link.
 - [Locating schemes & DOF](machine-design/concepts/locating-scheme-dof.md) - Primary/secondary locate; avoid overconstraint.
 - [Tolerance stack-up intro](machine-design/concepts/tolerance-stackup-intro.md) - Dimensional loops; citation-only, no closed tables.
 - [AM supports & overhangs](machine-design/concepts/am-supports-overhangs.md) - Support strategy, bridging, overhang design.
 - [Technic-style envelope (unofficial)](machine-design/concepts/technic-envelope.md) - Approximate pitch/pin notes; verify; unofficial.
+- [Hardware pocket research](machine-design/concepts/am-hardware-pocket-research.md) - Servo/horn/spline/bolt-circle VERIFY pattern.
+- [AM cable exits & strain relief](machine-design/concepts/am-cable-exits-strain-relief.md) - Wire windows, grommets, jacket clamp.
+- [Captive nut / hex trap](machine-design/concepts/captive-nut-hex-trap.md) - Anti-rotation nut pockets for AM.
+- [Cosmetic threads vs clearance](machine-design/concepts/cosmetic-threads-vs-clearance.md) - Display helix vs real hole roles.
 
 Use the listed resources for their stated scope, then consult the cited sources
 for more detail. The bundle is guidance for design decisions; it does not supply

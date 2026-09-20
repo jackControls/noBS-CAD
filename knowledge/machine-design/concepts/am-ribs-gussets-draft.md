@@ -54,6 +54,12 @@ You do not need molding-level draft everywhere on FDM, but **zero-draft deep
 pockets** and interlocking slides deserve a second look. Pair with
 [supports & overhangs](am-supports-overhangs.md).
 
+**Draft is not anisotropy.** Draft helps demold / peel / slide along a pull or
+build axis. **Layer-line anisotropy** (strength and flex vs layer planes) is a
+separate orientation decision — see
+[AM thin walls and print orientation](am-thin-walls.md). Do not “add draft”
+expecting it to fix a part that bends across weak layer bonds.
+
 ## Even sections
 
 Sudden thick-to-thin jumps trap heat (molding) and create stress risers at layer
