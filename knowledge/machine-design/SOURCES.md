@@ -31,7 +31,7 @@ Policy narrative: [`docs/machine-design-distill-vs-link.md`](https://github.com/
 | `palni-dfma` | PALNI Design for Manufacture and Assembly | https://pressbooks.palni.org/designmanufactureassembly/ | cc-by-4.0 | DFA principles; prefer distill + link over Boothroyd tables |
 | `doe-3d` | DOE Module 3D DFM/DFA/reliability | https://www.energy.gov/sites/default/files/2021-07/Module_3D.pdf | public-domain | High-level checklists; strip third-party figures |
 | `technic-scad` | Technic.scad (cfinke) | https://github.com/cfinke/Technic.scad | mit | Print-oriented beam/pin constants (≈8 mm pitch, ~4.85 mm hole); compatible intent, not a LEGO drawing |
-| `nasa-fastener` | NASA Fastener Design Manual (RP-1228) | https://ntrs.nasa.gov/citations/19900009424 | public-domain | Public use permitted |
+| `nasa-fastener` | NASA Fastener Design Manual (RP-1228) | https://ntrs.nasa.gov/citations/19900009424 | public-domain | Preload/torque/lube/grip distill OK; **no** paste of torque tables into Help |
 | `nasa-bearing` | NASA rolling-element bearing reports | https://ntrs.nasa.gov/citations/19830018943 | public-domain | Confirm each NTRS record |
 | `kittycad-materials` | KittyCAD material-properties | https://github.com/KittyCAD/material-properties | apache-2.0 | JSON pattern; not certified allowables |
 | `materials-project` | Materials Project | https://next-gen.materialsproject.org/ | cc-by-4.0 | Computed crystalline props; exclude GNoME BY-NC |

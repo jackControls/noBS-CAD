@@ -1183,7 +1183,24 @@ mod tests {
     }
 
     #[test]
-    fn fastener_clearance_counterbore_searchable() {
+    fn fasteners_joints_preload_torque_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "fastener preload",
+            "bolt torque friction",
+            "clamp load",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("fasteners-joints")),
+                "expected fasteners-joints for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+        fn fastener_clearance_counterbore_searchable() {
         let store = HelpStore::bundled();
         for query in [
             "fastener clearance counterbore",

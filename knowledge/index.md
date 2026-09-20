@@ -58,6 +58,7 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Captive / hex nut trap | `machine-design.concepts.captive-nut-hex-trap` | Captive nut and hex nut trap |
 | Cosmetic vs clearance threads | `machine-design.concepts.cosmetic-threads-vs-clearance` | Cosmetic threads vs modeled clearance |
 | Heat-set inserts | `machine-design.concepts.am-heat-set-inserts` | AM heat-set inserts… |
+| Fastener preload / torque | `machine-design.concepts.fasteners-joints` | Fasteners and joints |
 | Fastener hole roles | `machine-design.concepts.fastener-clearance-counterbore` | Fastener clearance & counterbore |
 | Lid / gasket / labyrinth | `machine-design.concepts.am-enclosure-lid-gasket-labyrinth` | AM enclosure lid… |
 | Vent / finger-trap grille | `machine-design.concepts.am-ventilation-grille-finger-trap` | AM ventilation grille… |
@@ -133,7 +134,7 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [Sources](machine-design/SOURCES.md) - License and provenance table.
 - [GD&T intro](machine-design/concepts/gdt-intro.md) - Datums and feature control frames.
 - [Fits & clearances](machine-design/concepts/fits-clearances.md) - Clearance, locational, interference.
-- [Fasteners & joints](machine-design/concepts/fasteners-joints.md) - Preload and purchased hardware.
+- [Fasteners & joints](machine-design/concepts/fasteners-joints.md) - Preload/clamp load, torque as install vs proof, friction/lube; VERIFY datasheet (no invented charts).
 - [Power screws / lead screws](machine-design/concepts/power-screws-lead-screws.md) - Lead vs pitch, wear nuts, VERIFY (not load ratings).
 - [Materials vocabulary](machine-design/concepts/materials-vocabulary.md) - Properties for CAD choices.
 - [DFM overview](machine-design/concepts/dfm-overview.md) - Process families and heuristics.

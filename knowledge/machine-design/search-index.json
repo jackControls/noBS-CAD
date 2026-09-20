@@ -955,16 +955,24 @@
       "id": "machine-design.concepts.fasteners-joints",
       "path": "knowledge/machine-design/concepts/fasteners-joints.md",
       "title": "Fasteners and joints",
-      "description": "Threaded joints and purchased hardware — preload basics plus pointers to clearance holes, counterbores, and AM heat-set inserts.",
+      "description": "Purchased threaded joints — preload / clamp load, torque as install method vs proof, friction/lube sensitivity, grip/engagement, and VERIFY to datasheet — NASA RP-1228 golden path (no invented torque charts).",
       "status": "draft",
       "topics": [
         "fasteners",
         "joints",
-        "machine-elements"
+        "machine-elements",
+        "hardware"
       ],
       "keywords": [
         "bolt",
         "preload",
+        "clamp load",
+        "torque",
+        "friction",
+        "lubricant",
+        "nut factor",
+        "K factor",
+        "proof load",
         "thread",
         "washer",
         "locking",
@@ -973,7 +981,8 @@
         "engagement",
         "grip length",
         "purchased hardware",
-        "BOM fastener"
+        "BOM fastener",
+        "running torque"
       ],
       "related_recipes": [
         "d-screw-vise",
@@ -983,7 +992,7 @@
       "sources": [
         "nasa-fastener"
       ],
-      "snippet": "Most assemblies are held by purchased fasteners, not by modeled threads alone. Call out the real hardware (size, grade/class, length, head, locking) on the drawing or BOM, and keep CAD threads as modeled geometry plus a…"
+      "snippet": "Most assemblies are held by purchased fasteners, not by modeled threads alone. Call out the real hardware (size, grade/class, length, head, finish, locking) on the drawing or BOM, and keep CAD threads as modeled geometr…"
     },
     {
       "id": "machine-design.concepts.fillet-chamfer",
@@ -1682,7 +1691,9 @@
         "ldraw-ffs",
         "ldraw-opls",
         "technic-scad",
-        "doe-3d"
+        "doe-3d",
+        "stegu-ldu",
+        "cailliau-lego-dims"
       ],
       "snippet": "LEGO® and Technic are trademarks of the LEGO Group, which does not sponsor or endorse this help page. Prefer purchased pins/axles when clutch and wear matter. Open CAD libraries publish design grids (exact LDU counts). …"
     },

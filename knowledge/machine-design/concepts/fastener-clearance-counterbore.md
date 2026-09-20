@@ -56,7 +56,8 @@ Say **through** vs **blind**, and which part carries the **thread**.
 ## CAD hygiene
 
 - Model **purchased** hardware as named BOM items; CAD threads are geometry
-  aids, not strength certificates ([fasteners stub](fasteners-joints.md)).
+  aids, not strength certificates. Preload / torque roles:
+  [fasteners & joints](fasteners-joints.md).
 - Couple hole roles with [fits & clearances](fits-clearances.md) when shafts or
   dowels share the same plate.
 - For printed stacks, qualify with coupons before locking XY shrink

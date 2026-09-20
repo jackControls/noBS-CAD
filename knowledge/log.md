@@ -1,3 +1,14 @@
+## 2026-09-20 — Fasteners preload / torque deepen (NASA RP-1228)
+
+- Deepened `machine-design.concepts.fasteners-joints`: preload / clamp load,
+  torque as install method vs proof, friction/lube / *K* sensitivity, grip &
+  engagement, proof-load and running-torque roles; **no** invented torque charts
+  — VERIFY datasheet or NASA RP-1228 (`nasa-fastener`).
+- Taxonomy B Fasteners → seeded (preload/torque distill); Still-thin row → deep
+  charts stay datasheet. Index quick-lookup + bullet; clearance soft pointer;
+  SOURCES note. Goldens H88–H90; Rust BM25 queries.
+- Rebuilt search-index.json; MCP embed via install script (no Cursor Uninstall/Add).
+
 ## 2026-09-20
 
 - Deepened [Technic-style envelope](machine-design/concepts/technic-envelope.md) with open-source **LDraw LDU** brick/stud/Technic nominals (1 LDU ≈ 0.4 mm; stud pitch 20 LDU / 8 mm; brick 24 LDU / 9.6 mm; plate 8 LDU / 3.2 mm; stud/hole class 12 LDU / 4.8 mm; axle length modules N×8 mm) plus MIT Technic.scad print-oriented hole bias; kept unofficial / trademark / measure-first tone.

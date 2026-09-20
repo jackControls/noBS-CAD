@@ -38,7 +38,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 
 | Topic | Status | Id / title |
 |-------|--------|------------|
-| Fasteners & joints | **seeded** | `machine-design.concepts.fasteners-joints` — [fasteners-joints](concepts/fasteners-joints.md); also [fastener-clearance-counterbore](concepts/fastener-clearance-counterbore.md), [am-heat-set-inserts](concepts/am-heat-set-inserts.md), [captive-nut-hex-trap](concepts/captive-nut-hex-trap.md) |
+| Fasteners & joints | **seeded** (preload/torque distill) | `machine-design.concepts.fasteners-joints` — [fasteners-joints](concepts/fasteners-joints.md) preload/clamp/torque-as-install; also [fastener-clearance-counterbore](concepts/fastener-clearance-counterbore.md), [am-heat-set-inserts](concepts/am-heat-set-inserts.md), [captive-nut-hex-trap](concepts/captive-nut-hex-trap.md) |
 | Hardware pocket / actuator / bolt circle research | **seeded** | `machine-design.concepts.am-hardware-pocket-research` — [am-hardware-pocket-research](concepts/am-hardware-pocket-research.md) |
 | Shafts, keys, retaining rings | **seeded** | `machine-design.concepts.shafts-keys-retaining-rings` — [shafts-keys-retaining-rings](concepts/shafts-keys-retaining-rings.md) |
 | Bearings / hubs / seats | **seeded** | `machine-design.concepts.bearings-hubs-seats` — [bearings-hubs-seats](concepts/bearings-hubs-seats.md); product/SKU: [bearing-stacks](../concepts/bearing-stacks.md) |
@@ -127,7 +127,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Deep spring-rate / coupling misalignment charts | springs-couplings seeded (roles only); numeric charts **TODO** (datasheets) |
 | Deep cam-law / belt-tension / chain-tension / tooth / Geneva-slot charts | mechanisms hub + linkages/cams/belts/chains/Geneva **seeded (partial)**; printed-gears DFAM seeded (no module-strength tables); numeric charts stay datasheet / `mit-272` |
 | Materials allowables tables | **planned** (no MatWeb); vocabulary seeded |
-| Full NASA fastener preload distill | overview + hole/insert pages seeded; deep sizing **TODO** |
+| Deep fastener torque / proof-load / K-factor charts | fasteners-joints **seeded** (preload/clamp + torque-as-install + friction/lube roles); numeric tables stay NASA RP-1228 / datasheet |
 | More MCP `prompts` (beyond `help_search`) | design-flow prompts still pages + skills ([HUMAN_HELP](../../docs/agentic/HUMAN_HELP.md)) |
 
 ## `cad_help` topics labels (useful seeds)
