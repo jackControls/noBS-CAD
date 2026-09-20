@@ -5137,6 +5137,7 @@ impl SketchSession {
                 .collect(),
             dimensions: self.dimension_dtos(),
             dimension_style: self.dimension_style,
+            grid_snap: self.grid_snap,
             dof: DofDto {
                 value: analysis.dof,
                 fully_defined: analysis.dof == 0 && analysis.unknowns > 0,

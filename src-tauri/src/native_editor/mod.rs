@@ -2,6 +2,8 @@
 //! are scoped to one document incarnation, engine revision and active sketch.
 
 mod annotations;
+mod palette;
+pub(crate) use palette::PaletteCommand;
 mod constraints;
 mod forms;
 pub(crate) mod mcp;
@@ -48,6 +50,7 @@ pub(crate) enum EditorCommand {
     Cancel,
     Complete,
     Interaction(InteractionCommand),
+    Palette(PaletteCommand),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -326,6 +329,9 @@ pub(crate) fn execute(
             EditorCommand::Interaction(command) => {
                 interaction::execute(world, engine, bridge, owner, &mut editor, command, validate)
             }
+            EditorCommand::Palette(command) => {
+                palette::execute(world, engine, bridge, owner, &mut editor, command, validate)
+            }
         }
     })
 }
@@ -359,6 +365,7 @@ enum Completion {
     Finish,
     Primitive,
     Modify,
+    Settings,
 }
 
 fn queue_mutation(
@@ -390,6 +397,7 @@ fn queue_mutation(
                 let same_gesture = editor.stamp.as_ref() == Some(&expected);
                 let accepted = if same_gesture {
                     match kind {
+                        Completion::Settings => Ok(()),
                         Completion::Primitive => editor.draft.accepted(&result.value),
                         Completion::Begin | Completion::Finish => {
                             editor.draft.select(None);
@@ -802,6 +810,7 @@ pub(crate) fn synchronize_controls(
                     EditorCommand::Begin(_) | EditorCommand::Edit(_) => Icon::Sketch,
                     EditorCommand::Finish | EditorCommand::Complete => Icon::Finish,
                     EditorCommand::Cancel => Icon::Cancel,
+                    EditorCommand::Palette(_) => Icon::Settings,
                     EditorCommand::Interaction(command) => match command {
                         InteractionCommand::Modify(ModifyTool::Trim) => Icon::Trim,
                         InteractionCommand::Modify(ModifyTool::Extend) => Icon::Extend,
@@ -864,6 +873,7 @@ pub(crate) fn synchronize_controls(
             x += width + 2.;
         }
         panel::synchronize(world, camera, &mut editor, area)?;
+        palette::synchronize(world, camera, services, owner, &editor, canvas)?;
         annotations::synchronize(world, camera, services, owner, &editor, canvas)
     })
 }

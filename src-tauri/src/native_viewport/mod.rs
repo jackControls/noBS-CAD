@@ -169,6 +169,12 @@ pub enum ViewportOriginPlane {
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportPresentation {
+    /// Presentation-only palette choices; hiding a point never deletes it or
+    /// disables snapping. False preserves existing clients' display defaults.
+    #[serde(default)]
+    pub hide_sketch_grid: bool,
+    #[serde(default)]
+    pub hide_sketch_points: bool,
     #[serde(default)]
     pub mode: ViewportMode,
     pub hovered_origin_plane: Option<ViewportOriginPlane>,

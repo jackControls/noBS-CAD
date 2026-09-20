@@ -44,6 +44,29 @@ impl Widgets {
     pub(crate) fn begin(&mut self) {
         self.live.clear();
     }
+    /// Retain a fixed decorative SVG alongside the panel's controls.
+    pub(crate) fn glyph(
+        &mut self,
+        world: &mut World,
+        camera: Entity,
+        key: &str,
+        bounds: Node,
+        icon: Icon,
+        color: Color,
+        z: i32,
+    ) {
+        self.live.insert(key.into());
+        let entity = *self
+            .decoration
+            .entry(key.into())
+            .or_insert_with(|| ribbon::decoration(world, camera, icon, color));
+        if world.get::<Node>(entity) != Some(&bounds) {
+            world.entity_mut(entity).insert(bounds);
+        }
+        if world.get::<ZIndex>(entity) != Some(&ZIndex(z)) {
+            world.entity_mut(entity).insert(ZIndex(z));
+        }
+    }
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn button(
         &mut self,

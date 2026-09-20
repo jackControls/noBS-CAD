@@ -4489,7 +4489,11 @@ fn draw_cad_gizmos(
     keep_gizmo_asset_resident(&mut profile_borders);
 
     if state.mode == ViewportMode::Sketch {
-        if let Some(sketch) = &model.active_sketch {
+        if let Some(sketch) = model
+            .active_sketch
+            .as_ref()
+            .filter(|_| !state.hide_sketch_grid)
+        {
             draw_grid_on_basis(&mut gizmos, &sketch.basis, fine, major);
         }
     } else {
@@ -5053,6 +5057,7 @@ fn draw_cad_gizmos(
                     palette.0.active_sketch
                 }))
             },
+            !state.hide_sketch_points,
         );
         draw_sketch(
             &mut pick_feedback,
@@ -5068,6 +5073,7 @@ fn draw_cad_gizmos(
                     None
                 }
             },
+            true,
         );
         draw_sketch(
             &mut highlights,
@@ -5085,6 +5091,7 @@ fn draw_cad_gizmos(
                     None
                 }
             },
+            true,
         );
     }
 
@@ -5540,6 +5547,7 @@ fn draw_sketch<Config, ColorFor>(
     viewport: ViewportSizeResource,
     point_radius_px: f32,
     mut color_for: ColorFor,
+    show_points: bool,
 ) where
     Config: GizmoConfigGroup,
     ColorFor: FnMut(&EntityDto) -> Option<Color>,
@@ -5549,16 +5557,18 @@ fn draw_sketch<Config, ColorFor>(
             continue;
         };
         draw_sketch_curve(gizmos, &sketch.basis, entity, color);
-        draw_sketch_entity_grips(
-            gizmos,
-            &sketch.basis,
-            entity,
-            camera,
-            viewport,
-            point_radius_px,
-            color,
-            !sketch_entity_style(entity).1,
-        );
+        if show_points {
+            draw_sketch_entity_grips(
+                gizmos,
+                &sketch.basis,
+                entity,
+                camera,
+                viewport,
+                point_radius_px,
+                color,
+                !sketch_entity_style(entity).1,
+            );
+        }
     }
 }
 

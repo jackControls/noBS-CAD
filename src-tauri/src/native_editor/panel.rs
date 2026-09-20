@@ -17,6 +17,7 @@ struct Panel {
 }
 pub(super) fn group(command: &EditorCommand) -> &'static str {
     match command {
+        EditorCommand::Palette(_) => "sketch/selection",
         EditorCommand::Interaction(
             InteractionCommand::Relation(_)
             | InteractionCommand::ConstraintInfo(_)
@@ -705,6 +706,9 @@ pub(crate) fn modal(world: &World) -> Option<&'static str> {
         .map(|_| "sketch-menu")
 }
 pub(crate) fn scroll_panel(world: &mut World, point: [f32; 2], delta: f32) -> bool {
+    if super::palette::scroll(world, point, delta) {
+        return true;
+    }
     let Some(mut panel) = world.get_resource_mut::<Panel>() else {
         return false;
     };

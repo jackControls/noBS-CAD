@@ -7,6 +7,16 @@ use crate::session_bridge::native_interface::controller::chrome::{rect, Widgets}
 use nbcad_sketch::{ConstraintKind, DimensionDto, EntityDto, Vec2 as Point};
 
 const COLOR: [f32; 4] = [0.69, 0.79, 0.04, 1.];
+fn readable_angle(a: [f32; 2], b: [f32; 2]) -> f32 {
+    let mut angle = (b[1] - a[1]).atan2(b[0] - a[0]);
+    if angle > std::f32::consts::FRAC_PI_2 {
+        angle -= std::f32::consts::PI;
+    }
+    if angle < -std::f32::consts::FRAC_PI_2 {
+        angle += std::f32::consts::PI;
+    }
+    angle
+}
 #[derive(Resource, Default)]
 struct AnnotationState {
     stamp: Option<Stamp>,
@@ -209,6 +219,7 @@ pub(super) fn synchronize(
         .unwrap_or_default();
     let result = (|| {
         let (_, view, _, size) = native_viewport::interface_view_snapshot(world);
+        let visibility = palette::visibility(world);
         let mut key: Vec<_> = view
             .position
             .into_iter()
@@ -226,6 +237,10 @@ pub(super) fn synchronize(
             .map(|c| c.id.0)
             .unwrap_or(u64::MAX);
         key.extend([selected as u32, (selected >> 32) as u32]);
+        key.extend([
+            visibility.hide_dimensions as u32,
+            visibility.hide_constraints as u32,
+        ]);
         if state.stamp == editor.stamp && state.view == key {
             return Ok(());
         }
@@ -239,7 +254,11 @@ pub(super) fn synchronize(
         if let Some(sketch) = &state.sketch {
             let (_, _, _, size) = native_viewport::interface_view_snapshot(world);
             let offset = [canvas.x as f32, canvas.y as f32];
-            for dim in &sketch.dimensions {
+            for dim in sketch
+                .dimensions
+                .iter()
+                .filter(|_| !visibility.hide_dimensions)
+            {
                 let world_point = |p: Point| sketch.basis.to_3d([p.x, p.y]);
                 let Some(screen) = native_viewport::interface_world_point(
                     world,
@@ -262,15 +281,41 @@ pub(super) fn synchronize(
                         unit = unit.max((p[0] - screen[0]).hypot(p[1] - screen[1]));
                     }
                 }
-                for pair in leaders(dim, &sketch.entities, 6. / f64::from(unit)) {
+                let lines = leaders(dim, &sketch.entities, 6. / f64::from(unit));
+                let angle = if sketch.dimension_style == nbcad_core::DimensionStyle::Aligned
+                    && dim.kind != "angle"
+                {
+                    if let Some([a, b]) = lines.last() {
+                        match (
+                            native_viewport::interface_world_point(
+                                world,
+                                &owner.document_id,
+                                world_point(*a),
+                            )?,
+                            native_viewport::interface_world_point(
+                                world,
+                                &owner.document_id,
+                                world_point(*b),
+                            )?,
+                        ) {
+                            (Some(a), Some(b)) => readable_angle(a, b),
+                            _ => 0.,
+                        }
+                    } else {
+                        0.
+                    }
+                } else {
+                    0.
+                };
+                for pair in lines {
                     for point in pair {
                         segments.extend(world_point(point).map(|v| v as f32));
                     }
                 }
                 let w = (dim.text.chars().count() as f32 * 7. + 12.).max(36.);
                 let mut bounds = rect(
-                    offset[0] + screen[0] - w / 2.,
-                    offset[1] + screen[1] - 22.,
+                    offset[0] + screen[0] - w / 2. + angle.sin() * 12.,
+                    offset[1] + screen[1] - 10. - angle.cos() * 12.,
                     w,
                     20.,
                 );
@@ -297,9 +342,16 @@ pub(super) fn synchronize(
                     entity,
                     Color::srgba(COLOR[0], COLOR[1], COLOR[2], COLOR[3]),
                 );
+                world
+                    .entity_mut(entity)
+                    .insert(UiTransform::from_rotation(Rot2::radians(angle)));
             }
             let mut anchors = HashMap::<(i32, i32), usize>::new();
-            for constraint in &sketch.constraints {
+            for constraint in sketch
+                .constraints
+                .iter()
+                .filter(|_| !visibility.hide_constraints)
+            {
                 if constraint.constraint.kind() != ConstraintKind::Geometric {
                     continue;
                 }
@@ -378,6 +430,13 @@ pub(super) fn synchronize(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn aligned_labels_follow_the_projected_line_and_remain_upright() {
+        let q = std::f32::consts::FRAC_PI_4;
+        assert!((readable_angle([100., 30.], [110., 40.]) - q).abs() < 1e-6);
+        assert!((readable_angle([110., 40.], [100., 30.]) - q).abs() < 1e-6);
+        assert!((readable_angle([2., 4.], [2., 8.]) - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+    }
     #[test]
     fn radius_leader_touches_the_actual_arc_even_when_the_label_is_on_its_missing_half() {
         let arc: EntityDto = serde_json::from_value(json!({"kind":"arc","id":3,"center":{"x":0.,"y":0.},"radius":10.,"start_angle":0.,"end_angle":std::f64::consts::PI,"fully_defined":false})).unwrap();

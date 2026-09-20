@@ -108,6 +108,38 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     );
 
     control(&mut client, "Sketch on XY", None)?;
+    let palette = ui(&mut client, json!({"action":"inspect"}))?;
+    ensure!(
+        controls(&palette).any(|c| c["label"] == "Sketch Palette" && c["expanded"] == true),
+        "Sketch palette is missing"
+    );
+    for label in ["Sketch Grid", "Points"] {
+        control(&mut client, label, None)?;
+        let inspected = ui(&mut client, json!({"action":"inspect"}))?;
+        ensure!(
+            controls(&inspected).any(|c| c["label"] == label && c["value"] == false),
+            "{label} did not turn off"
+        );
+        control(&mut client, label, None)?;
+    }
+    control(&mut client, "Snap", None)?;
+    ensure!(
+        sketch(&mut client)?["grid_snap"] == false,
+        "Snap did not reach the engine"
+    );
+    control(&mut client, "Snap", None)?;
+    ensure!(
+        sketch(&mut client)?["grid_snap"] == true,
+        "Snap was not restored"
+    );
+    control(&mut client, "Sketch Palette", None)?;
+    let collapsed = ui(&mut client, json!({"action":"inspect"}))?;
+    ensure!(
+        !controls(&collapsed).any(|c| c["label"] == "Snap"),
+        "Collapsed palette still exposes its controls"
+    );
+    control(&mut client, "Sketch Palette", None)?;
+    control(&mut client, "Return to Flat View", None)?;
     control(&mut client, "Rectangle", None)?;
     click(&mut client, [-30., -20.], false)?;
     click(&mut client, [30., 20.], false)?;
@@ -269,6 +301,40 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     );
     println!("PASS: visible dimension create/edit/reference/driving");
 
+    let geometry = sketch(&mut client)?["entities"].clone();
+    for (toggle, prefix) in [
+        ("Dimensions", "Edit dimension "),
+        ("Constraints", "Constraint "),
+    ] {
+        control(&mut client, toggle, None)?;
+        let hidden = ui(&mut client, json!({"action":"inspect"}))?;
+        ensure!(
+            !controls(&hidden).any(|c| c["label"].as_str().is_some_and(|s| s.starts_with(prefix))),
+            "Hidden {toggle} still expose selectable annotations"
+        );
+        control(&mut client, toggle, None)?;
+        let restored = ui(&mut client, json!({"action":"inspect"}))?;
+        ensure!(
+            controls(&restored).any(|c| c["label"].as_str().is_some_and(|s| s.starts_with(prefix))),
+            "{toggle} annotations were not restored"
+        );
+    }
+    control(&mut client, "ISO Dimension Style", None)?;
+    ensure!(
+        sketch(&mut client)?["dimension_style"] == "iso",
+        "ISO style did not reach the engine"
+    );
+    control(&mut client, "ISO Dimension Style", None)?;
+    ensure!(
+        sketch(&mut client)?["dimension_style"] == "aligned",
+        "Aligned style was not restored"
+    );
+    ensure!(
+        sketch(&mut client)?["entities"] == geometry,
+        "Palette changes altered geometry"
+    );
+    println!("PASS: palette collapse, display toggles, snap and dimension style");
+
     let before = sketch(&mut client)?;
     let inspected = ui(&mut client, json!({"action":"inspect"}))?;
     let label = controls(&inspected)
@@ -328,7 +394,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     fs::write(
         &report,
         serde_json::to_vec_pretty(&json!({"status":"passed","server":server,"session":session,
-        "checks":["nine_modify_forms_and_undo","dimension_edit_modes","constraint_delete_undo","escape_cancel","render_capture","save"],
+        "checks":["nine_modify_forms_and_undo","dimension_edit_modes","constraint_delete_undo","escape_cancel","sketch_palette","render_capture","save"],
         "sketch":final_sketch,"project":project,"capture":capture}))?,
     )?;
     println!("PASS: native sketch saved; report {}", report.display());

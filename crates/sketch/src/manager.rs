@@ -9280,6 +9280,7 @@ mod project_tests {
             reference_midpoints: Vec::new(),
             dimensions: Vec::new(),
             dimension_style: DimensionStyle::Aligned,
+            grid_snap: true,
             dof: crate::dto::DofDto {
                 value: 0,
                 fully_defined: true,
