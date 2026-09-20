@@ -51,6 +51,13 @@ pub(crate) fn pointer(
     event: Pointer,
     point: Option<[f32; 2]>,
 ) -> Result<bool, String> {
+    if world
+        .get_resource::<NativeFeature>()
+        .and_then(|s| s.editor.as_ref())
+        .is_some_and(|e| e.form.kind() == SolidFormKind::MoveCopy)
+    {
+        return super::move_copy::pointer(world, services, owner, event, point);
+    }
     let mut state = world.remove_resource::<NativeFeature>().unwrap_or_default();
     let result = (|| {
         let Some(editor) = state.editor.as_mut() else {

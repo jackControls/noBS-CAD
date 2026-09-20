@@ -7,6 +7,7 @@ mod body_planes;
 mod patterns;
 mod threads;
 mod holes;
+mod move_copy;
 
 fn sketch(fixture: &Fixture) -> DocumentContext {
     let owner = fixture.owner();

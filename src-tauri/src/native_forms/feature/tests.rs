@@ -298,6 +298,8 @@ impl Fixture {
             scene: &self.scene,
             datum_planes: &[],
             parameters: &[],
+            assembly: None,
+            assembly_solution: None,
         }
     }
     fn form(&self) -> SolidForm {

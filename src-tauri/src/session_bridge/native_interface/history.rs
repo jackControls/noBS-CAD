@@ -1,6 +1,7 @@
 //! Sketch and solid application Undo/Redo through the shared live dispatcher.
-//! Assembly and drawing command histories have separate snapshot boundaries;
-//! their native workspace reducers must dispatch those before this solid path.
+//! Placement changes share the bounded edit snapshots, so their Undo restores
+//! assembly intent instead of deleting an unrelated source feature. Additional
+//! workspace reducers must register their own mutation boundaries here.
 
 use super::super::{
     bump_engine_revision, dispatch_inbox_on_engine, dispatch_project_replacement,

@@ -108,6 +108,7 @@ impl SessionBridgeState {
                 | "solid_edit_shell"
                 | "solid_edit_external_thread"
                 | "solid_edit_hole"
+                | "solid_edit_move_copy"
                 | "solid_edit_combine"
                 | "construction_plane_edit_offset"
                 | "construction_plane_edit_midplane"
@@ -192,7 +193,8 @@ fn prepare(
             SolidFormKind::Hole => "hole_definitions",
             SolidFormKind::Fillet => "fillet_definitions",
             SolidFormKind::Chamfer => "chamfer_definitions",
-            SolidFormKind::ExternalThread
+            SolidFormKind::MoveCopy
+            | SolidFormKind::ExternalThread
             | SolidFormKind::Shell
             | SolidFormKind::Combine
             | SolidFormKind::Mirror
@@ -211,7 +213,9 @@ fn prepare(
         .and_then(|items| items.iter().find(|d| d["feature_id"].as_u64() == Some(id)))
         .ok_or("The feature no longer exists")?;
     let snapshot = Snapshot::capture(&stage.engine, receipt)?;
-    let form = if kind == SolidFormKind::Hole {
+    let form = if kind == SolidFormKind::MoveCopy {
+        SolidForm::edit_move(definition, &snapshot.model(None))?
+    } else if kind == SolidFormKind::Hole {
         SolidForm::edit_hole(definition, &snapshot.model(None))?
     } else if kind == SolidFormKind::ExternalThread {
         SolidForm::edit_thread(definition, &snapshot.model(None))?
@@ -276,8 +280,12 @@ fn install(
         hovered_edge: None,
         hovered_face: None,
         hovered_body: None,
+        hovered_occurrence: None,
         hovered_plane: None,
         hovered_point: None,
+        move_view: None,
+        move_hover: None,
+        move_drag: None,
         #[cfg(feature = "dev-bevy-host")]
         offset_drag: None,
     };

@@ -615,6 +615,7 @@ pub enum NativePickPurpose {
     JointConnector,
     RefinableEdge,
     StraightEdge,
+    Vertex,
 }
 
 #[derive(Debug, Clone, Serialize)]

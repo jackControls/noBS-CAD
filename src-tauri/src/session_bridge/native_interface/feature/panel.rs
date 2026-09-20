@@ -116,6 +116,10 @@ fn synchronize_owned(
         .cloned()
         .unwrap_or_default();
     let theme = ViewportUiTheme::from_palette(&ViewportPalette::default());
+    let component = panel.fields.iter().any(|r| {
+        r.field == super::SolidField::MoveObjectType
+            && matches!(&r.value,Field::Choice{value,..} if value=="component")
+    });
     let width = area.width as f32;
     let height = (area.height as f32).min(content_height(&panel) + 92.);
     let body_height = height - 92.;
@@ -308,16 +312,19 @@ fn synchronize_owned(
             }
             continue;
         }
-        if row.field == super::SolidField::Axis {
+        if matches!(
+            row.field,
+            super::SolidField::Axis | super::SolidField::MoveObjectType
+        ) {
             if let Field::Choice { value, options } = &row.value {
                 label(
                     world,
                     state,
                     &mut live_labels,
-                    "axis-label",
+                    &format!("{key}-radio-label"),
                     body,
                     camera,
-                    "AXIS",
+                    &row.label.to_uppercase(),
                     node(0., y - state.scroll, inner, 18.),
                     theme,
                     &assets,
@@ -333,7 +340,7 @@ fn synchronize_owned(
                         world,
                         state,
                         &mut live_controls,
-                        &format!("axis-{}", option.value),
+                        &format!("{key}-{}", option.value),
                         body,
                         camera,
                         c,
@@ -354,7 +361,7 @@ fn synchronize_owned(
                         &assets,
                     )?;
                 }
-                y += 76.;
+                y += options.len().div_ceil(2) as f32 * 36. + 4.;
                 continue;
             }
         }
@@ -395,12 +402,16 @@ fn synchronize_owned(
                     super::SolidField::Edges => "EDGES",
                     super::SolidField::Faces => "FACES TO REMOVE",
                     super::SolidField::Cylinder => "CYLINDRICAL SURFACE",
+                    super::SolidField::FromPoint => "FROM POINT",
+                    super::SolidField::ToPoint => "TO POINT",
+                    super::SolidField::PivotPoint => "ROTATION PIVOT",
                     super::SolidField::HoleSupport => "SUPPORT FACE",
                     super::SolidField::HolePositions => "POSITIONS",
                     super::SolidField::TargetBody => "TARGET BODY",
                     super::SolidField::Bodies if panel.kind == super::SolidFormKind::SplitBody => {
                         "BODY TO SPLIT"
                     }
+                    super::SolidField::Bodies if component => "COMPONENT",
                     super::SolidField::Bodies => "BODIES",
                     super::SolidField::ToolBodies => "TOOL BODIES",
                     super::SolidField::FirstPlane
@@ -445,6 +456,14 @@ fn synchronize_owned(
                 y += 20.;
                 action = FeatureControl::Pick(row.field);
                 control.selected = Some(panel.pick_target == Some(row.field));
+                if row.field.is_move_point() {
+                    control.label = match row.field {
+                        super::SolidField::FromPoint => "Pick from point",
+                        super::SolidField::ToPoint => "Pick to point",
+                        _ => "Pick rotation pivot",
+                    }
+                    .into();
+                }
             }
         }
         let reference = matches!(row.value, Field::None);
@@ -470,6 +489,11 @@ fn synchronize_owned(
             &assets,
         )?;
         if reference {
+            if row.field.is_move_point() {
+                world
+                    .entity_mut(state.controls[&key].0)
+                    .insert(interface_shell::InterfaceCaption(row.label.clone()));
+            }
             interface_shell::reference_caption(world, state.controls[&key].0);
             label(
                 world,
@@ -484,6 +508,9 @@ fn synchronize_owned(
                     }
                     super::SolidField::Source => "Click a profile in the viewport.",
                     super::SolidField::Edges => "Click edges to add or remove from this body.",
+                    field if field.is_move_point() => {
+                        "Pick a sketch point, body vertex or surface."
+                    }
                     super::SolidField::HoleSupport => {
                         "Select a planar face for the hole direction."
                     }
@@ -499,6 +526,9 @@ fn synchronize_owned(
                     super::SolidField::TargetBody => "Click the body that will receive the result.",
                     super::SolidField::Bodies if panel.kind == super::SolidFormKind::SplitBody => {
                         "Click the body to divide at the reference plane."
+                    }
+                    super::SolidField::Bodies if component => {
+                        "Click an instance to place its component."
                     }
                     super::SolidField::Bodies => "Click bodies to add or remove.",
                     super::SolidField::ToolBodies => {
@@ -532,6 +562,9 @@ fn synchronize_owned(
             let mut clear = InterfaceControl::button(
                 panel.kind.group(),
                 match row.field {
+                    super::SolidField::FromPoint => "Clear from point",
+                    super::SolidField::ToPoint => "Clear to point",
+                    super::SolidField::PivotPoint => "Clear rotation pivot",
                     super::SolidField::HoleSupport => "Clear support face",
                     super::SolidField::HolePositions => "Clear hole positions",
                     super::SolidField::Source => "Clear source profiles",
@@ -944,8 +977,15 @@ fn content_height(panel: &super::FeaturePanel) -> f32 {
             }
             continue;
         }
-        if row.field == super::SolidField::Axis {
-            height += 96.;
+        if matches!(
+            row.field,
+            super::SolidField::Axis | super::SolidField::MoveObjectType
+        ) {
+            height += if row.field == super::SolidField::Axis {
+                96.
+            } else {
+                60.
+            };
             continue;
         }
         height += match row.value {

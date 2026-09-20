@@ -28,7 +28,9 @@ fn pick(
     poses: &[BodyPoseDto],
     instances: &[InstanceBodyPoseDto],
 ) -> Option<NativePick> {
-    pick_edges(scene, camera, viewport, cursor, hidden, poses, instances, false)
+    pick_edges(
+        scene, camera, viewport, cursor, hidden, poses, instances, false, false,
+    )
 }
 pub(super) fn pick_edges(
     scene: &SolidSceneDto,
@@ -39,6 +41,7 @@ pub(super) fn pick_edges(
     poses: &[BodyPoseDto],
     instances: &[InstanceBodyPoseDto],
     straight: bool,
+    vertices: bool,
 ) -> Option<NativePick> {
     let basis = camera_projection(camera, viewport)?;
     let cursor = Vec2::from_array(cursor);
@@ -71,10 +74,28 @@ pub(super) fn pick_edges(
                 .collect()
         };
         for (occurrence, transform) in placements {
-            for edge in body.edges.iter().filter(|edge| if straight { edge_is_straight(edge) } else { edge.refinable }) {
+            for edge in body.edges.iter().filter(|edge| {
+                vertices
+                    || if straight {
+                        edge_is_straight(edge)
+                    } else {
+                        edge.refinable
+                    }
+            }) {
                 let mut best = None;
-                for pair in edge.points.windows(2) {
-                    let [mut a, mut b] = [&pair[0], &pair[1]].map(|p| {
+                let count = if vertices {
+                    usize::from(!edge.points.is_empty()) * 2
+                } else {
+                    edge.points.len().saturating_sub(1)
+                };
+                for index in 0..count {
+                    let pair = if vertices {
+                        let p = &edge.points[if index == 0 { 0 } else { edge.points.len() - 1 }];
+                        [p, p]
+                    } else {
+                        [&edge.points[index], &edge.points[index + 1]]
+                    };
+                    let [mut a, mut b] = pair.map(|p| {
                         transform.transform_point(Vec3::new(p.x as f32, p.y as f32, p.z as f32))
                     });
                     if !a.is_finite() || !b.is_finite() {
@@ -105,7 +126,7 @@ pub(super) fn pick_edges(
                     };
                     let screen = sa + delta * t;
                     let distance = cursor.distance_squared(screen);
-                    if distance > 49. {
+                    if distance > if vertices { 81. } else { 49. } {
                         continue;
                     }
                     // Perspective-correct point at the closest projected pixel.
@@ -185,6 +206,39 @@ mod tests {
             up: [0., 1., 0.],
             vertical_fov_degrees: 45.,
         }
+    }
+    #[test]
+    fn vertex_snap_has_pixel_tolerance_and_rejects_occluded_or_hidden_points() {
+        let mut scene = scene();
+        for edge in &mut scene.bodies[0].edges {
+            edge.refinable = false;
+        }
+        let viewport = (800., 600.);
+        let basis = camera_projection(camera(), viewport).unwrap();
+        let (screen, _) = project(&basis, viewport, Vec3::new(-2., 0., 1.)).unwrap();
+        let pick = |scene: &SolidSceneDto, cursor: [f32; 2], hidden: &[u64]| {
+            pick_edges(
+                scene,
+                camera(),
+                viewport,
+                cursor,
+                hidden,
+                &[],
+                &[],
+                false,
+                true,
+            )
+        };
+        let hit = pick(&scene, [screen.x - 6., screen.y + 1.], &[]).unwrap();
+        assert_eq!(hit.point, [-2., 0., 1.]);
+        assert!(pick(&scene, [screen.x - 10., screen.y], &[]).is_none());
+        assert!(pick(&scene, screen.to_array(), &[1]).is_none());
+        scene.bodies[0].edges.retain(|e| e.id.0 == 1);
+        let (rear, _) = project(&basis, viewport, Vec3::new(-2., 0., 0.)).unwrap();
+        assert!(
+            pick(&scene, rear.to_array(), &[]).is_none(),
+            "Hidden vertices cannot snap through the front face"
+        );
     }
     #[test]
     fn picks_visible_edges_with_pixel_tolerance_and_rejects_occluded_hidden_and_ineligible_edges() {

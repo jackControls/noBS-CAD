@@ -5,6 +5,6 @@ mod feature;
 mod measurement;
 
 pub(crate) use feature::{
-    ApplyTicket, SolidField, SolidFieldView, SolidForm, SolidFormKind, FormModel, ProfileSource,
+    MoveMode, ApplyTicket, SolidField, SolidFieldView, SolidForm, SolidFormKind, FormModel, ProfileSource,
 };
 pub(crate) use measurement::{DimensionKind, MeasurementInput, ParameterValue};

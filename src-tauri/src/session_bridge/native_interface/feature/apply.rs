@@ -144,6 +144,11 @@ fn complete(
                 });
             let completion = if matches {
                 let mut editor = state.editor.take().unwrap();
+                let restoration = if owns_preview {
+                    move_copy::restore(&mut editor, world)
+                } else {
+                    Ok(())
+                };
                 let view = if editor.form.kind().has_plane_references() {
                     plane_view(world, &result.context, false, None)
                 } else {
@@ -153,7 +158,7 @@ fn complete(
                     editor
                         .form
                         .apply_succeeded(ticket, &result.context, result.engine_revision);
-                form.and(view)
+                form.and(view).and(restoration)
             } else {
                 Ok(())
             };

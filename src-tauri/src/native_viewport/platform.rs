@@ -7020,8 +7020,8 @@ fn pick_occt_scene(
     instance_body_poses: &[InstanceBodyPoseDto],
     purpose: NativePickPurpose,
 ) -> Option<NativePick> {
-    if matches!(purpose, NativePickPurpose::RefinableEdge | NativePickPurpose::StraightEdge) {
-        return edge_picking::pick_edges(scene,camera,viewport,[x,y],hidden_body_ids,body_poses,instance_body_poses,purpose == NativePickPurpose::StraightEdge);
+    if matches!(purpose, NativePickPurpose::RefinableEdge | NativePickPurpose::StraightEdge | NativePickPurpose::Vertex) {
+        return edge_picking::pick_edges(scene,camera,viewport,[x,y],hidden_body_ids,body_poses,instance_body_poses,purpose == NativePickPurpose::StraightEdge, purpose == NativePickPurpose::Vertex);
     }
     let (origin, direction, world_per_pixel_factor) = camera_pick_ray(camera, viewport, x, y)?;
     let mut best: Option<NativePick> = None;

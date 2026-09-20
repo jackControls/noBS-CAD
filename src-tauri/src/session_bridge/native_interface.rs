@@ -250,6 +250,7 @@ impl SessionBridgeState {
             let edit_history = if operation == "solid_delete_feature"
                 || operation == "solid_reorder_feature"
                 || operation.starts_with("solid_edit_")
+                || matches!(operation, "assembly_set_occurrence_pose" | "assembly_duplicate_occurrence")
             {
                 let model =
                     super::parse_engine_envelope(engine.engine_call("project_export_model", ""))?;

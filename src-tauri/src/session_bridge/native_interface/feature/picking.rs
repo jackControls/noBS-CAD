@@ -18,6 +18,9 @@ pub(crate) fn hover_references(
                 e.pick_target,
                 Some(
                     SolidField::Edges
+                        | SolidField::FromPoint
+                        | SolidField::ToPoint
+                        | SolidField::PivotPoint
                         | SolidField::HoleSupport
                         | SolidField::HolePositions
                         | SolidField::Cylinder
@@ -37,6 +40,14 @@ pub(crate) fn hover_references(
         };
         with_receipt(&services.bridge, &services.engine, owner, |receipt| {
             check_revision(editor, &receipt)?;
+            if editor.pick_target.is_some_and(SolidField::is_move_point) {
+                let next = point.and_then(|p| move_point(world, editor, owner, p));
+                if next != editor.hovered_point {
+                    editor.hovered_point = next;
+                    update_preview(editor, world)?;
+                }
+                return Ok(true);
+            }
             if editor.pick_target == Some(SolidField::HolePositions) {
                 let next = point.and_then(|p| hole_point(world, editor, owner, p).map(|(_, p)| p));
                 if next != editor.hovered_point
@@ -85,10 +96,16 @@ pub(crate) fn hover_references(
                 editor.pick_target,
                 Some(SolidField::TargetBody | SolidField::ToolBodies | SolidField::Bodies)
             ) {
-                let next = hit
-                    .filter(|hit| editor.snapshot.source_local(hit.body_id, hit.occurrence_id))
-                    .map(|hit| BodyId(hit.body_id));
-                if next != editor.hovered_body
+                let hit = hit.filter(|hit| {
+                    editor.form.move_is_component()
+                        || editor.snapshot.source_local(hit.body_id, hit.occurrence_id)
+                });
+                let occurrence = hit.as_ref().and_then(|hit| hit.occurrence_id);
+                let next = hit.map(|hit| BodyId(hit.body_id));
+                let occurrence_changed = editor.hovered_occurrence != occurrence;
+                editor.hovered_occurrence = occurrence;
+                if occurrence_changed
+                    || next != editor.hovered_body
                     || native_viewport::interface_preview_revision(world) != editor.preview_revision
                 {
                     editor.hovered_body = next;
@@ -217,6 +234,13 @@ pub(crate) fn handle_canvas_pick(
                     }
                     return Ok(FeaturePick::Plane(plane));
                 }
+                if target.is_move_point() {
+                    return move_point(world, editor, owner, point)
+                        .map(FeaturePick::MovePoint)
+                        .ok_or_else(|| {
+                            "Pick a visible sketch point, body vertex or surface".into()
+                        });
+                }
                 if target == SolidField::HolePositions {
                     if let Some((reference, point)) = hole_point(world, editor, owner, point) {
                         return Ok(FeaturePick::HolePosition {
@@ -239,6 +263,13 @@ pub(crate) fn handle_canvas_pick(
                 )?;
                 if target.is_straight_reference() {
                     let hit = hit.ok_or("Pick a straight edge")?;
+                    if editor.form.move_is_component() {
+                        return Ok(FeaturePick::OccurrenceEdge(
+                            BodyId(hit.body_id),
+                            nbcad_core::EdgeId(hit.edge_id.ok_or("Choose a straight edge")?),
+                            hit.occurrence_id.ok_or("Choose a component edge")?,
+                        ));
+                    }
                     if !editor.snapshot.source_local(hit.body_id, hit.occurrence_id) {
                         return Err("Open the component before selecting its axis".into());
                     }
@@ -473,6 +504,12 @@ pub(crate) fn handle_canvas_pick(
                     return Ok(FeaturePick::Profiles(profiles));
                 }
                 let hit = hit.ok_or("No selectable feature reference at this point")?;
+                if target == SolidField::Bodies && editor.form.move_is_component() {
+                    return hit
+                        .occurrence_id
+                        .map(FeaturePick::Occurrence)
+                        .ok_or_else(|| "Select an assembly component".into());
+                }
                 if !editor.snapshot.source_local(hit.body_id, hit.occurrence_id) {
                     return Err("Open the component before selecting its references".into());
                 }
@@ -613,6 +650,83 @@ fn hole_point(
         }
     }
     best.map(|(_, r, p)| (r, p))
+}
+
+fn move_point(
+    world: &World,
+    editor: &Editor,
+    owner: &DocumentContext,
+    cursor: [f32; 2],
+) -> Option<[f64; 3]> {
+    if let Some((_, point)) = hole_point(world, editor, owner, cursor) {
+        return Some(point);
+    }
+    let hit = native_viewport::interface_pick(
+        world,
+        &owner.document_id,
+        cursor,
+        NativePickPurpose::Vertex,
+    )
+    .ok()
+    .flatten()
+    .or_else(|| {
+        native_viewport::interface_pick(
+            world,
+            &owner.document_id,
+            cursor,
+            NativePickPurpose::Geometry,
+        )
+        .ok()
+        .flatten()
+    })?;
+    // Acquire exact endpoints on the hit body before falling back to the surface
+    // intersection. An occluded body's vertices must not snap through the front.
+    let body = editor
+        .snapshot
+        .viewport
+        .scene
+        .bodies
+        .iter()
+        .find(|b| b.id.0 == hit.body_id)?;
+    let view = native_viewport::interface_view_snapshot(world).2;
+    let pose = hit
+        .occurrence_id
+        .and_then(|id| {
+            view.instance_body_poses
+                .iter()
+                .find(|p| p.occurrence_id.0 == id && p.body_id.0 == hit.body_id)
+                .map(|p| (p.translation, p.rotation))
+        })
+        .or_else(|| {
+            view.body_poses
+                .iter()
+                .find(|p| p.body_id.0 == hit.body_id)
+                .map(|p| (p.translation, p.rotation))
+        })
+        .unwrap_or(([0.; 3], [0., 0., 0., 1.]));
+    let rotation = bevy::math::DQuat::from_array(pose.1);
+    let translation = bevy::math::DVec3::from_array(pose.0);
+    let mut best: Option<(f32, [f64; 3])> = None;
+    for edge in &body.edges {
+        for point in edge.points.first().into_iter().chain(edge.points.last()) {
+            let p = (rotation * bevy::math::DVec3::new(point.x, point.y, point.z) + translation)
+                .to_array();
+            let Some(pixel) = native_viewport::interface_world_point(world, &owner.document_id, p)
+                .ok()
+                .flatten()
+            else {
+                continue;
+            };
+            let distance = (pixel[0] - cursor[0]).hypot(pixel[1] - cursor[1]);
+            if distance <= 9. && best.as_ref().is_none_or(|(d, _)| distance < *d) {
+                best = Some((distance, p));
+            }
+        }
+    }
+    Some(
+        best.map(|(_, p)| p)
+            .unwrap_or_else(|| hit.point.map(f64::from)),
+    )
 }
 
 #[cfg(test)]

@@ -10,7 +10,7 @@ impl SolidFormKind {
         matches!(self, Self::RectangularPattern | Self::CircularPattern)
     }
     pub(crate) fn selects_bodies(self) -> bool {
-        self.is_pattern() || self.is_body_plane()
+        self.is_pattern() || self.is_body_plane() || self == Self::MoveCopy
     }
 }
 impl SolidField {
@@ -38,6 +38,19 @@ impl SolidField {
                     ("", &[ThreadHand, Representation]),
                     ("", &[RadialDepth, CornerRadius]),
                     ("", &[RadialClearance, AxialClearance]),
+                ]
+            } else if kind == SolidFormKind::MoveCopy {
+                &[
+                    ("Translation", &[TranslationX, TranslationY, TranslationZ]),
+                    ("Rotation", &[RotationX, RotationY, RotationZ]),
+                    ("Rotation pivot", &[PivotX, PivotY, PivotZ]),
+                    ("Direction", &[DirectionX, DirectionY, DirectionZ]),
+                    (
+                        "Axis",
+                        &[SecondDirectionX, SecondDirectionY, SecondDirectionZ],
+                    ),
+                    ("From point", &[FromX, FromY, FromZ]),
+                    ("To point", &[ToX, ToY, ToZ]),
                 ]
             } else if kind.is_pattern() {
                 &[

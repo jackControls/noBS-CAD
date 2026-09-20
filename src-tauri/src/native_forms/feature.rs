@@ -30,6 +30,9 @@ mod threads;
 use threads::ThreadFields;
 mod holes;
 use holes::HoleFields;
+mod move_copy;
+use move_copy::MoveFields;
+pub(crate) use move_copy::MoveMode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SolidFormKind {
@@ -43,6 +46,7 @@ pub(crate) enum SolidFormKind {
     Shell,
     ExternalThread,
     Hole,
+    MoveCopy,
     Combine,
     OffsetPlane,
     Midplane,
@@ -65,6 +69,7 @@ impl SolidFormKind {
             FeatureKind::Shell => Self::Shell,
             FeatureKind::ExternalThread => Self::ExternalThread,
             FeatureKind::Hole => Self::Hole,
+            FeatureKind::MoveCopy => Self::MoveCopy,
             FeatureKind::Combine => Self::Combine,
             FeatureKind::ConstructionPlane => Self::OffsetPlane,
             FeatureKind::Mirror => Self::Mirror,
@@ -90,6 +95,7 @@ impl SolidFormKind {
             Self::Shell => "Shell",
             Self::ExternalThread => "External Thread",
             Self::Hole => "Hole",
+            Self::MoveCopy => "Move/Copy",
             Self::Combine => "Combine",
             Self::OffsetPlane => "Offset Plane",
             Self::Midplane => "Midplane",
@@ -112,6 +118,7 @@ impl SolidFormKind {
             Self::Shell => "solid_shell",
             Self::ExternalThread => "solid_external_thread",
             Self::Hole => "solid_hole",
+            Self::MoveCopy => "solid_move_copy",
             Self::Combine => "solid_combine",
             Self::OffsetPlane => "construction_plane_offset",
             Self::Midplane => "construction_plane_midplane",
@@ -134,6 +141,8 @@ pub(crate) struct FormModel<'a> {
     pub scene: &'a SolidSceneDto,
     pub datum_planes: &'a [nbcad_solid::DatumPlaneDefinitionDto],
     pub parameters: &'a [ParameterValue],
+    pub assembly: Option<&'a nbcad_sketch::AssemblyDocumentDto>,
+    pub assembly_solution: Option<&'a nbcad_sketch::AssemblySolutionDto>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -187,6 +196,27 @@ pub(crate) enum SolidField {
     SecondEnabled,
     Count,
     SecondCount,
+    MoveMode,
+    MoveObjectType,
+    Copy,
+    TranslationX,
+    TranslationY,
+    TranslationZ,
+    RotationX,
+    RotationY,
+    RotationZ,
+    PivotX,
+    PivotY,
+    PivotZ,
+    FromX,
+    FromY,
+    FromZ,
+    ToX,
+    ToY,
+    ToZ,
+    FromPoint,
+    ToPoint,
+    PivotPoint,
     HoleSupport,
     HolePositions,
     HoleStyle,
@@ -312,6 +342,7 @@ pub(crate) struct SolidForm {
     patterns: Option<PatternFields>,
     thread: Option<ThreadFields>,
     hole: Option<HoleFields>,
+    move_copy: Option<MoveFields>,
 }
 
 impl SolidForm {
@@ -348,6 +379,7 @@ impl SolidForm {
             patterns: None,
             thread: None,
             hole: None,
+            move_copy: None,
         }
     }
 
@@ -361,6 +393,8 @@ impl SolidForm {
             form.rib = Some(RibFields::new(model.document.settings.units));
         } else if matches!(kind, SolidFormKind::Fillet | SolidFormKind::Chamfer) {
             form.edges = Some(EdgeFields::new(kind, model.document.settings.units));
+        } else if kind == SolidFormKind::MoveCopy {
+            form.move_copy = Some(MoveFields::new(model.document.settings.units));
         } else if kind == SolidFormKind::Hole {
             form.hole = Some(HoleFields::new(model.document.settings.units));
         } else if kind == SolidFormKind::ExternalThread {
@@ -379,6 +413,9 @@ impl SolidForm {
         form
     }
     pub(crate) fn kind(&self) -> SolidFormKind {
+        if self.move_copy.is_some() {
+            return SolidFormKind::MoveCopy;
+        }
         if self.hole.is_some() {
             return SolidFormKind::Hole;
         }
@@ -540,6 +577,11 @@ impl SolidForm {
         model: &FormModel<'_>,
     ) -> Result<(), String> {
         self.editing(model)?;
+        if let Some(fields) = &mut self.move_copy {
+            fields.set(field, value, self.feature.is_some())?;
+            self.changed();
+            return Ok(());
+        }
         if let Some(hole) = &mut self.hole {
             hole.set(field, value, model)?;
             self.changed();
@@ -928,6 +970,9 @@ impl SolidForm {
     }
 
     pub(crate) fn fields(&self, model: &FormModel<'_>) -> Vec<SolidFieldView> {
+        if self.move_copy.is_some() {
+            return self.move_fields(model);
+        }
         if self.hole.is_some() {
             return self.hole_fields(model);
         }
@@ -1089,6 +1134,9 @@ impl SolidForm {
         &self,
         model: &FormModel<'_>,
     ) -> Result<(&'static str, Value), Vec<(SolidField, String)>> {
+        if self.move_copy.is_some() {
+            return self.move_payload(model);
+        }
         if self.hole.is_some() {
             return self.hole_payload(model);
         }

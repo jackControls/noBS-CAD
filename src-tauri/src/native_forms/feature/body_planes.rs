@@ -28,6 +28,9 @@ impl SolidFormKind {
 }
 impl SolidForm {
     pub(crate) fn selected_bodies(&self) -> &[BodyId] {
+        if let Some(f) = &self.move_copy {
+            return &f.bodies;
+        }
         if let Some(fields) = &self.patterns {
             return &fields.bodies;
         }
@@ -43,6 +46,11 @@ impl SolidForm {
     ) -> Result<(), String> {
         self.editing(model)?;
         validate_targets(&bodies, model)?;
+        if let Some(f) = &mut self.move_copy {
+            f.select(bodies, model);
+            self.changed();
+            return Ok(());
+        }
         if let Some(fields) = &mut self.patterns {
             fields.bodies = bodies;
             self.changed();
