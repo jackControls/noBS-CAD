@@ -5469,6 +5469,9 @@ export function Viewport() {
     let previewSeq = 0;
     /** Last cursor position in sketch coords (commit/drag-end fallback). */
     let lastSketchPoint: Vec2 | null = null;
+    /** Whether the pointer is currently over the viewport surface. A cursor
+     * marker may only be refreshed for a pointer that is really there. */
+    let pointerOverSurface = false;
     /** Active modal nav-tool drag (NavBar Orbit/Pan/Zoom/Zoom Window). */
     let navDrag: {
       tool: 'orbit' | 'pan' | 'zoom' | 'zoomWindow';
@@ -7046,6 +7049,68 @@ export function Viewport() {
       previewLine.visible = true;
     };
 
+    /** Armed tool, no run yet: the cursor advertises what its first pick would
+     * acquire. This is the cursor state a tool has before its first point, and
+     * the state a finished run must return to. */
+    const previewArmedHover = (
+      state: ViewportState,
+      p: Vec2,
+      pointer: { clientX: number; clientY: number; ctrlKey: boolean; metaKey: boolean },
+    ) => {
+      const inferenceOverride = pointer.ctrlKey || pointer.metaKey;
+      if (state.activeTool === 'point') {
+        const placement = acquirePointPlacement(p, inferenceOverride);
+        clearGroup(acquireGroup);
+        if (placement.extension) {
+          addAlignmentGuide(
+            acquireGroup,
+            [
+              placement.extension.from.x,
+              placement.extension.from.y,
+              0.13,
+              placement.extension.to.x,
+              placement.extension.to.y,
+              0.13,
+            ],
+          );
+        }
+        const acquired = acquireCreateSnap(p, false, null, inferenceOverride);
+        const placementKind =
+          placement.coincidentWith !== null || placement.extension
+            ? 'curve'
+            : nativeSnapKind(acquired.target.kind);
+        showSnapMarker(placement.position, placementKind);
+        const rect = surface.domElement.getBoundingClientRect();
+        showChips(
+          placement.coincidentWith === null ? [] : ['coincident'],
+          pointer.clientX - rect.left,
+          pointer.clientY - rect.top,
+        );
+        return;
+      }
+      const acquired = acquireToolSnap(state.activeTool, p, {
+        suppressRelations: inferenceOverride,
+      });
+      showSnapMarker(acquired.point, nativeSnapKind(acquired.target.kind));
+    };
+
+    /** Put the cursor back into the armed, first-pick state after a run ends:
+     * without this the marker stays blank at the finished shape's last pick
+     * until the pointer happens to move again, which reads as a cursor the
+     * completed run left behind. */
+    const refreshArmedHover = () => {
+      const state = store.getState();
+      if (!pointerOverSurface) return;
+      if (state.mode !== 'sketch' || state.navTool !== 'select') return;
+      if (state.activeTool === null || !lastSketchPoint) return;
+      previewArmedHover(state, lastSketchPoint, {
+        clientX: lastPointerClient?.x ?? 0,
+        clientY: lastPointerClient?.y ?? 0,
+        ctrlKey: false,
+        metaKey: false,
+      });
+    };
+
     const endToolRun = () => {
       toolRun = null;
       // A preview already in flight (its snap resolves a tick later) must not
@@ -7058,6 +7123,7 @@ export function Viewport() {
       hideSnapMarker();
       hideChips();
       store.getState().hideDynInput();
+      refreshArmedHover();
     };
 
     const reportToolError = (error: unknown, fallback = t('view.errorSketchOperationFailed')) => {
@@ -10906,6 +10972,7 @@ export function Viewport() {
       const p = pointerToSketch(e);
       if (!p) return;
       lastSketchPoint = p;
+      pointerOverSurface = true;
 
       // Live cursor readout in sketch mm (bottom-right status strip).
       const readout = readoutRef.current;
@@ -10983,41 +11050,7 @@ export function Viewport() {
 
       if (state.activeTool !== null && engine) {
         // No run yet: still show the snap marker for the first point.
-        const inferenceOverride = e.ctrlKey || e.metaKey;
-        if (state.activeTool === 'point') {
-          const placement = acquirePointPlacement(p, inferenceOverride);
-          clearGroup(acquireGroup);
-          if (placement.extension) {
-            addAlignmentGuide(
-              acquireGroup,
-              [
-                placement.extension.from.x,
-                placement.extension.from.y,
-                0.13,
-                placement.extension.to.x,
-                placement.extension.to.y,
-                0.13,
-              ],
-            );
-          }
-          const acquired = acquireCreateSnap(p, false, null, inferenceOverride);
-          const placementKind =
-            placement.coincidentWith !== null || placement.extension
-              ? 'curve'
-              : nativeSnapKind(acquired.target.kind);
-          showSnapMarker(placement.position, placementKind);
-          const rect = surface.domElement.getBoundingClientRect();
-          showChips(
-            placement.coincidentWith === null ? [] : ['coincident'],
-            e.clientX - rect.left,
-            e.clientY - rect.top,
-          );
-          return;
-        }
-        const acquired = acquireToolSnap(state.activeTool, p, {
-          suppressRelations: inferenceOverride,
-        });
-        showSnapMarker(acquired.point, nativeSnapKind(acquired.target.kind));
+        previewArmedHover(state, p, e);
         return;
       }
 
@@ -11038,6 +11071,7 @@ export function Viewport() {
     const onPointerLeave = () => {
       jointHoverPickGeneration += 1;
       const state = store.getState();
+      pointerOverSurface = false;
       if (jointMotionDrag || mechanismDrag) {
         surface.domElement.style.cursor = 'grabbing';
         return;
@@ -11696,8 +11730,13 @@ export function Viewport() {
       if (modTool) endModTool();
       // A create tool may be armed before it has produced a local toolRun.
       // Dimension editing is a complete mode switch, so retire the store's
-      // active tool as well as any in-progress local transaction.
+      // active tool as well as any in-progress local transaction. The cursor
+      // then carries no command, so the marker and badge go too — ending the
+      // run just refreshed them for the still-armed tool.
       store.getState().setActiveTool(null);
+      hideSnapMarker();
+      hideChips();
+      hideActiveToolCursor();
       const currentState = store.getState();
       const currentDim = currentState.activeSketch?.dimensions.find(
         (candidate) => candidate.constraint_id === dimId,

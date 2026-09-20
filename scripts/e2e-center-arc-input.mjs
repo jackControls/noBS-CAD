@@ -426,6 +426,56 @@ try {
     `the deferred pick still sweeps a quarter turn: ${swept.start_angle} .. ${swept.end_angle}`,
   );
 
+  console.log('7. A finished run hands the cursor back to its armed tool');
+  await arm('arcCenter');
+  const cursorState = () =>
+    page.evaluate(() => {
+      const badge = document.querySelector('[data-testid="active-tool-cursor"]');
+      const transient = window.__nativeViewportTransient();
+      return {
+        marker: transient.marker ? transient.marker.kind : null,
+        badge: badge ? getComputedStyle(badge).display !== 'none' : false,
+        badgeIcon: badge?.dataset.activeToolIcon ?? null,
+      };
+    });
+  await clickSketch(frame.center.x, frame.center.y);
+  await moveSketch(frame.center.x + 6, frame.center.y);
+  const beforeFirstPick = await cursorState();
+  assert.ok(
+    beforeFirstPick.marker !== null,
+    'an armed tool advertises its first pick before any point is placed',
+  );
+  const beforeCommit = (await sketch()).entities.filter((entity) => entity.kind === 'arc').length;
+  await clickSketch(frame.center.x + 6, frame.center.y);
+  await moveSketch(frame.center.x + 4, frame.center.y + 4);
+  await clickSketch(frame.center.x + 4, frame.center.y + 4);
+  await page.waitForFunction(
+    (count) =>
+      window.__appStore.getState().activeSketch.entities.filter(
+        (entity) => entity.kind === 'arc',
+      ).length === count + 1,
+    beforeCommit,
+  );
+  // Read the cursor with NO pointer move between the commit and this point:
+  // the finished run must already be back to the armed, first-pick state.
+  const afterCommit = await cursorState();
+  assert.equal(
+    (await state()).activeTool,
+    'arcCenter',
+    'the tool stays armed until Esc, as the line tool does',
+  );
+  assert.ok(
+    afterCommit.marker !== null,
+    `the committed run must leave a live acquisition marker, got ${afterCommit.marker}`,
+  );
+  assert.equal(afterCommit.badge, true, 'the armed command badge stays on the cursor');
+  assert.equal(
+    afterCommit.badgeIcon,
+    beforeFirstPick.badgeIcon,
+    'the cursor keeps the same command identity it had before the first pick',
+  );
+  await cancel();
+
   assert.deepEqual(pageErrors, []);
   console.log('center-arc input: all checks passed');
 } finally {
