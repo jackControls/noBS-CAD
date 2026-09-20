@@ -1,3 +1,10 @@
+## 2026-09-20
+
+- Deepened [Technic-style envelope](machine-design/concepts/technic-envelope.md) with open-source **LDraw LDU** brick/stud/Technic nominals (1 LDU ≈ 0.4 mm; stud pitch 20 LDU / 8 mm; brick 24 LDU / 9.6 mm; plate 8 LDU / 3.2 mm; stud/hole class 12 LDU / 4.8 mm; axle length modules N×8 mm) plus MIT Technic.scad print-oriented hole bias; kept unofficial / trademark / measure-first tone.
+- Added SOURCES ids `ldraw-ffs`, `ldraw-opls`, `technic-scad` (distill) and link-only `stegu-ldu`, `cailliau-lego-dims`.
+- Help goldens H85–H87 for LDU / stud pitch / Technic hole diameter discoverability.
+- Spec↔MCP align: ADR 0006 index → Accepted; `mcp-harness` cad_help-first.
+
 ## 2026-09-20 — Shared reference geometry (followers / named parents)
 
 - Seeded `concepts.shared-reference-geometry`: prefer named shared references
@@ -7,11 +14,6 @@
   cross-links; VERIFY after param change via solid_scene / compare / section.
 - Soft pointers: geometry-naming, datum-sketch-plane-choice; index + taxonomy H;
   Design Ops guidance; goldens H82+ + Rust BM25 queries.
-
-## 2026-09-20 — Technic envelope ↔ open LDraw nominals + Spec↔MCP align
-
-- Deepened `technic-envelope` with LDraw LDU→mm + Technic.scad starting constants (unofficial; calipers/VERIFY first).
-- Registered `ldraw-ffs`, `ldraw-opls`, `technic-scad` in SOURCES; ADR 0006 index → Accepted; `mcp-harness` cad_help-first.
 
 ## 2026-09-20 — Geometry naming (bodies / faces / scripts / STEP)
 

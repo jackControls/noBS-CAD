@@ -1649,28 +1649,42 @@
       "id": "machine-design.concepts.technic-envelope",
       "path": "knowledge/machine-design/concepts/technic-envelope.md",
       "title": "Technic-style beam and pin envelope (unofficial)",
-      "description": "Approximate public pitch / pin envelope notes for LEGO-Technic-compatible experimentation — unofficial, not licensed dims; verify before commit.",
+      "description": "Open-source LDraw nominals (LDU→mm) for brick/Technic-compatible envelopes — unofficial, not a LEGO Group spec; measure and coupon before commit.",
       "status": "draft",
       "topics": [
         "mechanisms",
         "joints",
-        "dfam"
+        "dfam",
+        "lego",
+        "technic"
       ],
       "keywords": [
         "Technic",
-        "beam pitch",
-        "pin diameter",
+        "Lego",
+        "LEGO",
+        "LDraw",
+        "LDU",
         "stud pitch",
-        "axle envelope",
-        "unofficial"
+        "brick height",
+        "plate height",
+        "stud diameter",
+        "anti-stud",
+        "beam hole pitch",
+        "pin diameter",
+        "axle cross-section",
+        "axle length",
+        "printed Technic hole"
       ],
       "related_recipes": [
         "repeated-bracket-assembly"
       ],
       "sources": [
+        "ldraw-ffs",
+        "ldraw-opls",
+        "technic-scad",
         "doe-3d"
       ],
-      "snippet": "Forum folklore is common for pin diameter and beam pitch. Prefer: physical calipers → coupon → lock. Numbers below are approximate public community figures for orientation only. | Quantity | Approximate community figure…"
+      "snippet": "LEGO® and Technic are trademarks of the LEGO Group, which does not sponsor or endorse this help page. Prefer purchased pins/axles when clutch and wear matter. Open CAD libraries publish design grids (exact LDU counts). …"
     },
     {
       "id": "machine-design.concepts.tolerance-stackup-intro",

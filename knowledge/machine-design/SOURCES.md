@@ -38,6 +38,8 @@ Policy narrative: [`docs/machine-design-distill-vs-link.md`](https://github.com/
 | `oqmd` | OQMD | https://oqmd.org/ | cc-by-4.0 | DFT complement |
 | `cod` | Crystallography Open Database | https://www.crystallography.net/cod/ | cc0 | Crystal structures |
 | `commons-gdt` | Wikimedia Commons GD&T diagrams | https://commons.wikimedia.org/wiki/Category:Geometric_dimensioning_and_tolerancing | varies | Prefer CC0/PD; check each file |
+| `ldraw-ffs` | LDraw File Format Specification (LDU) | https://www.ldraw.org/article/218.html | open-spec (LDraw.org) | LDU definition + brick/plate/stud LDU table; real-world 0.4 mm approx; distill numbers, do not paste large format prose |
+| `ldraw-opls` | LDraw Official Parts Library Specifications | https://www.ldraw.org/article/512.html | open-spec (LDraw.org) | 1 stud = 20 LDU dimension language; library authoring rules — cite, thin paraphrase |
 
 ## Link-only (NC, SA, proprietary, murky)
 
@@ -54,8 +56,6 @@ Policy narrative: [`docs/machine-design-distill-vs-link.md`](https://github.com/
 | `mechanics-map` | Mechanics Map | https://mechanicsmap.org/ | cc-by-sa | **Link-only** until SA policy |
 | `wikipedia-gdt` | Wikipedia GD&T | https://en.wikipedia.org/wiki/Geometric_dimensioning_and_tolerancing | cc-by-sa | Short paraphrase only; large reuse → SA |
 | `freecad-wiki` | FreeCAD documentation wiki | https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/License.md | cc-by-3.0 | Pattern reference; prefer cite over fork |
-| `ldraw-ffs` | LDraw File Format Specification | https://www.ldraw.org/article/218.html | verify | LDU definition (≈0.4 mm); cite URL; **not** a LEGO Group spec — unofficial for product design |
-| `ldraw-opls` | LDraw Official Parts Library Specs | https://www.ldraw.org/article/512.html | verify | Stud/LDU dimension language for library parts; cite URL; unofficial for product design |
 | `asme-y14` | ASME Y14.5 / Y14.41 / Y14.46 | https://www.asme.org/codes-standards | proprietary | Purchase/read; link-out |
 | `iso-gps` | ISO 1101 / GPS (ISO/TC 213) | https://www.iso.org/committee/54924.html | proprietary | Link-out |
 | `iso-286` | ISO 286 / preferred fits | https://www.iso.org/ | proprietary | Link-out fit charts |
@@ -65,6 +65,8 @@ Policy narrative: [`docs/machine-design-distill-vs-link.md`](https://github.com/
 | `boothroyd` | Boothroyd-Dewhurst DFA tables | proprietary | proprietary | Link-out only |
 | `vendor-cad-help` | Onshape / SolidWorks / Autodesk help | vendor | proprietary | Paraphrase only |
 | `prusa-kb` | Prusa Knowledge Base (design/print notes) | https://help.prusa3d.com/ | vendor | **Link-only**; material/profile specific — not a universal mm chart |
+| `stegu-ldu` | Empirical findings regarding the length of 1 LDU (Gustafsson) | https://itn-web.it.liu.se/~stegu76/lego/LDUlength.pdf | verify | Community metrology note; **link-only** until license confirmed |
+| `cailliau-lego-dims` | Cailliau — Lego Dimensions (reverse-engineering notes) | https://www.cailliau.org/Alphabetical/L/Lego/Dimensions/ | verify | Independent RE narrative; **link-only** (verify license before distill) |
 
 ## In-repo recipe ids (not third-party text)
 
