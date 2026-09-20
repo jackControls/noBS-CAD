@@ -241,13 +241,13 @@ fn edit(
             crate::native_editor::EditorCommand::Edit(feature.name.clone()),
             || handle.validate_action(action),
         ),
-        FeatureKind::Extrude | FeatureKind::Revolve => build::reduce(
+        FeatureKind::Extrude | FeatureKind::Revolve | FeatureKind::Sweep | FeatureKind::Loft => build::reduce(
             engine,
             bridge,
             world,
             &action.context,
             &build::BuildCommand::Open {
-                kind: if feature.kind==FeatureKind::Revolve {build::BuildKind::Revolve} else {build::BuildKind::Extrude},
+                kind: match feature.kind {FeatureKind::Revolve=>build::BuildKind::Revolve,FeatureKind::Sweep=>build::BuildKind::Sweep,FeatureKind::Loft=>build::BuildKind::Loft,_=>build::BuildKind::Extrude},
                 feature_id: Some(id),
             },
             &ControlInput::Click,

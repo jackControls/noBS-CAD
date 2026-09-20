@@ -109,6 +109,9 @@ requires an explicitly selected blank document and fresh output filenames;
 it does not launch or close a desktop window, discard work or upload evidence.
 
 The corresponding `native-build` suite uses the same arguments and safety
-checks. It drives native Revolve profile and axis selection, creation, history
-editing, close/Cancel, Undo/Redo, rendered capture and Save. Kernel-backed form
-tests also exercise invalid values, reference ownership and coplanar axes.
+checks. It drives native Revolve, Sweep and Loft reference selection, creation,
+history editing, close/Cancel, Undo/Redo, rendered capture and Save. Each case
+is saved before the next blank tab is created. Loft's support datum and second
+sketch are seeded through the shared MCP contract while their native editing
+is still being migrated. Kernel-backed form tests also exercise invalid values,
+reference ownership, connected paths, ordered sections and coplanar axes.

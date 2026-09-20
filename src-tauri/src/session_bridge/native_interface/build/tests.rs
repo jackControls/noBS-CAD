@@ -120,6 +120,207 @@ fn maximum_z(fixture: &Fixture) -> f32 {
 }
 
 #[test]
+fn sweep_and_loft_native_forms_create_edit_cancel_and_undo_exact_solids() {
+    let _lock = super::super::super::tests::TEST_LOCK.lock().unwrap();
+    for kind in [BuildKind::Sweep, BuildKind::Loft] {
+        let fixture = Fixture::new();
+        let owner = sketch(&fixture);
+        let mutate = |op, args| {
+            fixture
+                .bridge
+                .apply_native_mutation(&fixture.engine, &owner, op, &args, || Ok(()))
+                .unwrap()
+        };
+        let definition_method = if kind == BuildKind::Sweep {
+            "sweep_definitions"
+        } else {
+            "loft_definitions"
+        };
+        if kind == BuildKind::Sweep {
+            mutate("sketch_begin", json!({"type":"origin_plane","plane":"xz"}));
+            mutate(
+                "sketch_add_line",
+                json!({"from":{"x":0.,"y":0.},"to_raw":{"x":0.,"y":30.},"ctrl_held":true}),
+            );
+        } else {
+            mutate(
+                "construction_plane_offset",
+                json!({"name":"Top section","reference":{"type":"origin_plane","plane":"xy"},"distance":30.}),
+            );
+            let datum = fixture
+                .engine
+                .document_snapshot()
+                .features
+                .last()
+                .unwrap()
+                .id
+                .0;
+            let definitions =
+                parse_engine_envelope(fixture.engine.engine_call("datum_plane_definitions", ""))
+                    .unwrap();
+            let datum_id = definitions
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|d| d["feature_id"] == datum)
+                .unwrap()["datum_id"]
+                .clone();
+            mutate(
+                "sketch_begin",
+                json!({"type":"datum_plane","datum_id":datum_id}),
+            );
+            mutate(
+                "sketch_add_rectangle",
+                json!({"mode":"two_point","p1":{"x":2.,"y":2.},"p2":{"x":18.,"y":10.},"ctrl_held":true}),
+            );
+        }
+        mutate("sketch_finish", json!({}));
+        let mut app = scene(&fixture, &owner);
+        let open_kind = |world: &mut World, feature_id| {
+            reduce(
+                &fixture.engine,
+                &fixture.bridge,
+                world,
+                &owner,
+                &BuildCommand::Open { kind, feature_id },
+                &ControlInput::Click,
+                || Ok(()),
+            )
+            .unwrap()["form_id"]
+                .as_u64()
+                .unwrap()
+        };
+        let id = open_kind(app.world_mut(), None);
+        assert!(!panel(app.world()).unwrap().can_apply);
+        let before = exported(&fixture);
+        let pick = if kind == BuildKind::Sweep {
+            action(
+                &fixture,
+                app.world_mut(),
+                &owner,
+                id,
+                BuildControl::Pick(BuildField::Path),
+                ControlInput::Click,
+            )
+            .unwrap();
+            let snapshot = model_snapshot(&fixture.engine);
+            let path = snapshot
+                .profile_catalog
+                .iter()
+                .find(|s| s.sketch_name == "Sketch2")
+                .unwrap();
+            BuildPick::Path(PathRefDto {
+                sketch_name: path.sketch_name.clone(),
+                entity_ids: vec![path.path_curves[0].entity_id()],
+            })
+        } else {
+            BuildPick::Profiles(vec![
+                ProfileRefDto {
+                    sketch_name: "Sketch1".into(),
+                    profile_index: 0,
+                },
+                ProfileRefDto {
+                    sketch_name: "Sketch2".into(),
+                    profile_index: 0,
+                },
+            ])
+        };
+        accept_pick(
+            &fixture.engine,
+            &fixture.bridge,
+            app.world_mut(),
+            &owner,
+            id,
+            pick,
+            || Ok(()),
+        )
+        .unwrap();
+        assert!(
+            panel(app.world()).unwrap().can_apply,
+            "{} fields invalid",
+            kind.label()
+        );
+        assert_eq!(
+            exported(&fixture),
+            before,
+            "References must not mutate geometry"
+        );
+        let created = action(
+            &fixture,
+            app.world_mut(),
+            &owner,
+            id,
+            BuildControl::Apply,
+            ControlInput::Click,
+        )
+        .unwrap();
+        assert!(
+            created["form_error"].is_null() && created["render_error"].is_null(),
+            "{created}"
+        );
+        assert_eq!(fixture.engine.viewport_snapshot().2.bodies.len(), 1);
+        assert!(fixture.engine.viewport_snapshot().2.errors.is_empty());
+        assert!((maximum_z(&fixture) - 30.).abs() < 1e-4);
+        let feature = fixture
+            .engine
+            .document_snapshot()
+            .features
+            .last()
+            .unwrap()
+            .id
+            .0;
+        let definitions =
+            || parse_engine_envelope(fixture.engine.engine_call(definition_method, "")).unwrap();
+        let original = definitions();
+        let edited_field = if kind == BuildKind::Sweep {
+            BuildField::ForceC1
+        } else {
+            BuildField::Ruled
+        };
+        let prop = if kind == BuildKind::Sweep {
+            "force_c1"
+        } else {
+            "ruled"
+        };
+        let id = open_kind(app.world_mut(), Some(feature));
+        field(&fixture, app.world_mut(), &owner, id, edited_field, "true");
+        action(
+            &fixture,
+            app.world_mut(),
+            &owner,
+            id,
+            BuildControl::Cancel,
+            ControlInput::Click,
+        )
+        .unwrap();
+        assert_eq!(definitions(), original);
+        let id = open_kind(app.world_mut(), Some(feature));
+        field(&fixture, app.world_mut(), &owner, id, edited_field, "true");
+        action(
+            &fixture,
+            app.world_mut(),
+            &owner,
+            id,
+            BuildControl::Apply,
+            ControlInput::Click,
+        )
+        .unwrap();
+        assert_eq!(definitions()[0][prop], true);
+        let undone = fixture
+            .bridge
+            .apply_native_history(&fixture.engine, &owner, false, || Ok(()))
+            .unwrap();
+        assert_eq!(definitions()[0][prop], false);
+        fixture
+            .bridge
+            .apply_native_history(&fixture.engine, &undone.context, true, || Ok(()))
+            .unwrap();
+        assert_eq!(definitions()[0][prop], true);
+        assert_eq!(definitions()[0]["feature_id"], feature);
+    }
+}
+
+#[test]
 fn revolve_controls_commit_edit_cancel_and_undo_a_real_parametric_solid() {
     let _lock = super::super::super::tests::TEST_LOCK.lock().unwrap();
     let fixture = Fixture::new();

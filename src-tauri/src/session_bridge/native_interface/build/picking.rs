@@ -48,6 +48,24 @@ pub(crate) fn handle_canvas_pick(
         let (_,camera,presentation,_) = native_viewport::interface_view_snapshot(world);
         let camera = bevy::math::DVec3::from_array(camera.position.map(f64::from));
         let mut nearest = hit.as_ref().map(|hit| f64::from(hit.distance)).unwrap_or(f64::INFINITY);
+        if matches!(target,BuildField::Path|BuildField::Guide) {
+            let mut candidate=None;
+            let mut distance=f64::INFINITY;
+            for sketch in &editor.snapshot.viewport.finished_sketches {
+                if presentation.hidden_sketch_names.contains(&sketch.name) {continue;}
+                let Some(catalog)=editor.snapshot.viewport.profile_catalog.iter().find(|s|s.sketch_name==sketch.name) else {continue};
+                let entities:Vec<_>=sketch.entities.iter().filter(|entity|catalog.path_curves.iter().any(|c|c.entity_id()==entity.id().0)).cloned().collect();
+                let Some(id)=crate::native_editor::selection::hit(&entities,point,false,|p|
+                    native_viewport::interface_world_point(world,&owner.document_id,sketch.basis.to_3d([p.x,p.y])).ok().flatten()) else {continue};
+                let Some(local)=native_viewport::interface_sketch_point(world,&owner.document_id,point,sketch.basis)? else {continue};
+                let depth=camera.distance(bevy::math::DVec3::from_array(sketch.basis.to_3d([local.x,local.y])));
+                if depth<distance {distance=depth;candidate=Some((sketch.name.clone(),id.0));}
+            }
+            let (name,id)=candidate.ok_or("Pick a visible sketch curve for this path")?;
+            let mut path=editor.form.path(target).filter(|p|p.sketch_name==name).cloned().unwrap_or(PathRefDto {sketch_name:name,entity_ids:vec![]});
+            if let Some(index)=path.entity_ids.iter().position(|item|*item==id) {path.entity_ids.remove(index);} else {path.entity_ids.push(id);}
+            return Ok(BuildPick::Path(path));
+        }
         if target==BuildField::AxisLine {
             let model=editor.snapshot.model(editor.form.source());
             let cursor=bevy::math::Vec2::from_array(point);
@@ -85,17 +103,20 @@ pub(crate) fn handle_canvas_pick(
             }
         }
         if let Some(profile) = profile {
-            let mut profiles=match editor.form.source() {
-                ProfileSource::Profiles {sketch_name,indices} if *sketch_name==profile.sketch_name => indices.iter().map(|index|ProfileRefDto {sketch_name:sketch_name.clone(),profile_index:*index}).collect(),
-                _=>Vec::new(),
-            };
+            let mut profiles=editor.form.selected_profiles();
+            if editor.form.kind()!=BuildKind::Loft {profiles.retain(|p|p.sketch_name==profile.sketch_name);}
+            if editor.form.kind()==BuildKind::Sweep && profiles.first()!=Some(&profile) {profiles.clear();}
             if let Some(index)=profiles.iter().position(|p|p==&profile) {profiles.remove(index);} else {profiles.push(profile);}
             return Ok(BuildPick::Profiles(profiles));
         }
         let hit = hit.ok_or("No selectable feature reference at this point")?;
-        if hit.occurrence_id.is_some() { return Err("Select a part-local reference; occurrence-local Extrude editing is not available yet".into()); }
+        if hit.occurrence_id.is_some() { return Err("Open the component before selecting its references".into()); }
         match target {
-            BuildField::Targets => Ok(BuildPick::Bodies(vec![BodyId(hit.body_id)])),
+            BuildField::Targets => {
+                let mut targets=editor.form.targets().to_vec();let id=BodyId(hit.body_id);
+                if let Some(index)=targets.iter().position(|item|*item==id) {targets.remove(index);} else {targets.push(id);}
+                Ok(BuildPick::Bodies(targets))
+            },
             BuildField::Source | BuildField::StopFace => Ok(BuildPick::Face(PlanarFaceSourceDto {body_id:BodyId(hit.body_id),face_id:FaceId(hit.face_id)})),
             _ => Err("This feature field does not accept canvas references".into()),
         }

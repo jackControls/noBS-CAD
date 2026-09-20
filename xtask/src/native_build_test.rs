@@ -20,6 +20,137 @@ fn edit_feature(client: &mut Client, label: &str) -> Result<()> {
     Ok(())
 }
 
+fn path_case(client: &mut Client, out: &std::path::Path, kind: &str) -> Result<Value> {
+    let project = out.join(format!("native-{}.nbcad", kind.to_lowercase()));
+    let capture = out.join(format!("native-{}.png", kind.to_lowercase()));
+    ensure!(
+        !project.exists() && !capture.exists(),
+        "Existing {kind} evidence must be preserved"
+    );
+    let new = control(client, "New document", None)?;
+    let session = new["active_session_id"]
+        .as_str()
+        .context("New document session missing")?;
+    client.call("cad_attach", json!({"session_id":session}))?;
+    control(client, "Sketch on XY", None)?;
+    control(client, "Rectangle", None)?;
+    click(client, [-8., -6.], false)?;
+    click(client, [8., 6.], false)?;
+    control(client, "Finish sketch", None)?;
+    if kind == "Sweep" {
+        control(client, "Sketch on XZ", None)?;
+        control(client, "Line", None)?;
+        for world in [[0., 0., 0.], [0., 0., 30.]] {
+            ui(
+                client,
+                json!({"action":"viewport","gesture":"click","world":world}),
+            )?;
+        }
+        control(client, "Finish sketch", None)?;
+    } else {
+        // Datum editing has its own parity work. Seed this support through the
+        // real MCP/engine contract; all Loft selections and edits below use UI.
+        let datum=client.call("construction_plane_offset",json!({"name":"Upper section","reference":{"type":"origin_plane","plane":"xy"},"distance":30.}))?;
+        let datum_id = datum["planes"]
+            .as_array()
+            .and_then(|p| p.last())
+            .context("New datum missing")?["datum_id"]
+            .clone();
+        ensure!(datum_id.is_number(), "Datum id missing: {datum}");
+        client.call(
+            "sketch_begin",
+            json!({"type":"datum_plane","datum_id":datum_id}),
+        )?;
+        client.call("sketch_add_rectangle",json!({"mode":"two_point","p1":{"x":-5.,"y":-4.},"p2":{"x":5.,"y":4.},"ctrl_held":true}))?;
+        client.call("sketch_finish", json!({}))?;
+    }
+    control(client, "Isometric", None)?;
+    control(client, kind, None)?;
+    ui(
+        client,
+        json!({"action":"viewport","gesture":"click","world":[2.,1.,0.]}),
+    )?;
+    if kind == "Sweep" {
+        control(client, "Select path curves", None)?;
+        ui(
+            client,
+            json!({"action":"viewport","gesture":"click","world":[0.,0.,15.]}),
+        )?;
+    } else {
+        ui(
+            client,
+            json!({"action":"viewport","gesture":"click","world":[1.,1.,30.]}),
+        )?;
+    }
+    // Required optional references disable OK until supplied, while switching
+    // that option off restores a usable form without losing accepted sections.
+    control(client, "Use guide rail", None)?;
+    let blocked = ui(client, json!({"action":"inspect"}))?;
+    ensure!(
+        controls(&blocked).any(|c| c["label"] == format!("Apply {kind}") && c["disabled"] == true),
+        "Empty guide should block Apply"
+    );
+    control(client, "Use guide rail", None)?;
+    ui(
+        client,
+        json!({"action":"capture","path":out.join(format!("{}-form.png",kind.to_lowercase()))}),
+    )?;
+    control(client, &format!("Apply {kind}"), None)?;
+    let method = format!("solid_{}_definitions", kind.to_lowercase());
+    let before = client.call(&method, json!({}))?;
+    ensure!(
+        before.as_array().is_some_and(|d| d.len() == 1),
+        "Expected a single {kind} feature: {before}"
+    );
+    let feature = before[0]["name"].as_str().context("Feature name missing")?;
+    let field = if kind == "Sweep" {
+        "Force C1 continuity"
+    } else {
+        "Ruled surfaces"
+    };
+    let prop = if kind == "Sweep" { "force_c1" } else { "ruled" };
+    edit_feature(client, feature)?;
+    control(client, field, None)?;
+    control(client, &format!("Close {kind}"), None)?;
+    ensure!(
+        client.call(&method, json!({}))? == before,
+        "Cancel changed {kind}"
+    );
+    edit_feature(client, feature)?;
+    control(client, field, None)?;
+    control(client, &format!("Apply {kind}"), None)?;
+    ensure!(
+        client.call(&method, json!({}))?[0][prop] == true,
+        "Edit did not update {kind}"
+    );
+    control(client, "Undo", None)?;
+    ensure!(
+        client.call(&method, json!({}))?[0][prop] == false,
+        "Undo failed for {kind}"
+    );
+    control(client, "Redo", None)?;
+    ensure!(
+        client.call(&method, json!({}))?[0][prop] == true,
+        "Redo failed for {kind}"
+    );
+    let scene = client.call("solid_scene", json!({}))?;
+    ensure!(
+        scene["errors"].as_array().is_some_and(Vec::is_empty)
+            && scene["bodies"].as_array().is_some_and(|b| b.len() == 1),
+        "Invalid {kind} solid: {scene}"
+    );
+    control(client, "Isometric", None)?;
+    ui(client, json!({"action":"capture","path":capture}))?;
+    ui(
+        client,
+        json!({"action":"file","command":"save","path":project}),
+    )?;
+    println!("PASS: {kind} native reference picking, validation, Apply, edit, Cancel, Undo/Redo and Save");
+    Ok(
+        json!({"feature":kind,"definitions":client.call(&method,json!({}))?,"capture":capture,"project":project}),
+    )
+}
+
 pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
     let Fixture {
         mut client,
@@ -111,11 +242,14 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
         &mut client,
         json!({"action":"file","command":"save","path":project}),
     )?;
+    let revolve = revolve(&mut client)?;
+    let sweep = path_case(&mut client, &out, "Sweep")?;
+    let loft = path_case(&mut client, &out, "Loft")?;
     fs::write(
         &report,
         serde_json::to_vec_pretty(&json!({"status":"passed","server":server,"session":session,
         "checks":["profile_pick","axis_line_pick","axis_preset","revolve_apply","history_edit","close_cancel","undo_redo","render_capture","save"],
-        "definitions":revolve(&mut client)?,"capture":capture,"project":project}))?,
+        "definitions":revolve,"capture":capture,"project":project,"sweep":sweep,"loft":loft}))?,
     )?;
     println!("PASS: native build saved; report {}", report.display());
     Ok(())

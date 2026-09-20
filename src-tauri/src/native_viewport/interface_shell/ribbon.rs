@@ -68,6 +68,8 @@ pub(super) fn css_mix(foreground: Color, background: Color, opacity: f32) -> Col
 pub(crate) enum Icon {
     Extrude,
     Revolve,
+    Sweep,
+    Loft,
     Sketch,
     Line,
     MidpointLine,
@@ -125,6 +127,8 @@ impl Icon {
         match self {
             Self::Extrude => source!("extrude"),
             Self::Revolve => source!("revolve"),
+            Self::Sweep => source!("sweep"),
+            Self::Loft => source!("loft"),
             Self::Sketch => source!("sketch"),
             Self::Line => source!("line"),
             Self::MidpointLine => source!("midpointLine"),

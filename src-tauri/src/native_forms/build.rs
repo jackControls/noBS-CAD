@@ -9,23 +9,31 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 mod revolve;
 use revolve::RevolveFields;
+mod paths;
+use paths::PathFields;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BuildKind {
     Extrude,
     Revolve,
+    Sweep,
+    Loft,
 }
 impl BuildKind {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Extrude => "Extrude",
             Self::Revolve => "Revolve",
+            Self::Sweep => "Sweep",
+            Self::Loft => "Loft",
         }
     }
     pub(crate) fn operation(self) -> &'static str {
         match self {
             Self::Extrude => "solid_extrude",
             Self::Revolve => "solid_revolve",
+            Self::Sweep => "solid_sweep",
+            Self::Loft => "solid_loft",
         }
     }
 }
@@ -59,6 +67,15 @@ pub(crate) enum BuildField {
     DirectionX,
     DirectionY,
     Angle,
+    Path,
+    Guide,
+    GuideEnabled,
+    CenterlineEnabled,
+    Orientation,
+    Transition,
+    ForceC1,
+    Ruled,
+    Continuity,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,6 +164,7 @@ pub(crate) struct BuildForm {
     phase: Phase,
     engine_error: Option<String>,
     revolve: Option<RevolveFields>,
+    paths: Option<PathFields>,
 }
 
 impl BuildForm {
@@ -173,6 +191,7 @@ impl BuildForm {
             phase: Phase::Editing,
             engine_error: None,
             revolve: None,
+            paths: None,
         }
     }
 
@@ -180,10 +199,15 @@ impl BuildForm {
         let mut form = Self::new(model);
         if kind == BuildKind::Revolve {
             form.revolve = Some(RevolveFields::new(model.document.settings.units));
+        } else if matches!(kind, BuildKind::Sweep | BuildKind::Loft) {
+            form.paths = Some(PathFields::new(kind));
         }
         form
     }
     pub(crate) fn kind(&self) -> BuildKind {
+        if let Some(paths) = &self.paths {
+            return paths.kind;
+        }
         if self.revolve.is_some() {
             BuildKind::Revolve
         } else {
@@ -305,6 +329,23 @@ impl BuildForm {
         self.editing(model)?;
         if matches!(
             field,
+            BuildField::GuideEnabled
+                | BuildField::CenterlineEnabled
+                | BuildField::Orientation
+                | BuildField::Transition
+                | BuildField::ForceC1
+                | BuildField::Ruled
+                | BuildField::Continuity
+        ) {
+            self.paths
+                .as_mut()
+                .ok_or("This feature has no path options")?
+                .set(field, value)?;
+            self.changed();
+            return Ok(());
+        }
+        if matches!(
+            field,
             BuildField::Axis
                 | BuildField::OriginX
                 | BuildField::OriginY
@@ -355,8 +396,8 @@ impl BuildForm {
         model: &FormModel<'_>,
     ) -> Result<(), String> {
         self.editing(model)?;
-        if self.revolve.is_some() && matches!(source, ProfileSource::Face(_)) {
-            return Err("Revolve needs closed sketch profiles".into());
+        if self.kind() != BuildKind::Extrude && matches!(source, ProfileSource::Face(_)) {
+            return Err("This feature needs closed sketch profiles".into());
         }
         if source != ProfileSource::None {
             validate_source(&source, model)?;
@@ -542,8 +583,8 @@ impl BuildForm {
 
     pub(crate) fn prepare_preview(&self, model: &FormModel<'_>) -> Result<PreviewTicket, String> {
         self.editing(model)?;
-        if self.revolve.is_some() {
-            return Err("Revolve uses axis/reference highlighting".into());
+        if self.kind() != BuildKind::Extrude {
+            return Err("This feature uses reference highlighting".into());
         }
         let request = self.request(model).map_err(first_error)?;
         Ok(PreviewTicket {
@@ -626,6 +667,9 @@ impl BuildForm {
     }
 
     pub(crate) fn fields(&self, model: &FormModel<'_>) -> Vec<BuildFieldView> {
+        if self.paths.is_some() {
+            return self.path_fields(model);
+        }
         if self.revolve.is_some() {
             return self.revolve_fields(model);
         }
@@ -757,6 +801,9 @@ impl BuildForm {
         &self,
         model: &FormModel<'_>,
     ) -> Result<(&'static str, Value), Vec<(BuildField, String)>> {
+        if self.paths.is_some() {
+            return self.path_payload(model);
+        }
         if self.revolve.is_some() {
             return self.revolve_payload(model);
         }

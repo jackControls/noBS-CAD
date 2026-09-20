@@ -6,7 +6,10 @@ use std::collections::HashMap;
 use bevy::prelude::{Resource, World};
 use nbcad_core::{BodyId, DocumentDto};
 use nbcad_interface::{ControlInput, DocumentContext};
-use nbcad_solid::{ExtrudeDefinitionDto, PlanarFaceSourceDto, ProfileRefDto, RevolveDefinitionDto};
+use nbcad_solid::{
+    ExtrudeDefinitionDto, LoftDefinitionDto, PathRefDto, PlanarFaceSourceDto, ProfileRefDto,
+    RevolveDefinitionDto, SweepDefinitionDto,
+};
 use serde_json::{json, Value};
 
 use super::{check_owner, finish_mutation, model_snapshot, workspace::DocumentReceipt};
@@ -59,6 +62,7 @@ pub(crate) enum BuildPick {
     Bodies(Vec<BodyId>),
     Face(PlanarFaceSourceDto),
     AxisLine { sketch_name: String, entity_id: u64 },
+    Path(PathRefDto),
 }
 
 pub(crate) struct BuildPanel {
@@ -231,8 +235,8 @@ fn update_preview(editor: &mut Editor, world: &mut World) -> Result<(), String> 
     let model = editor.snapshot.model(editor.form.source());
     // Invalid text remains the actual field draft, but must not leave a
     // stale last-valid extrusion appearing to describe the invalid input.
-    let (next, notice) = if editor.form.kind() == BuildKind::Revolve {
-        match preview::revolve_references(&editor.form, &model) {
+    let (next, notice) = if editor.form.kind() != BuildKind::Extrude {
+        match preview::references(&editor.form, &model, &editor.snapshot.viewport) {
             Ok(value) => (value, None),
             Err(e) => (ViewportPreview::default(), Some(e)),
         }
@@ -278,29 +282,11 @@ fn apply_pick(editor: &mut Editor, pick: BuildPick) -> Result<(), String> {
     let model = editor.snapshot.model(editor.form.source());
     match (editor.pick_target, pick) {
         (Some(BuildField::Source), BuildPick::Profiles(profiles)) => {
-            if profiles.is_empty() {
-                return editor.form.set_source(ProfileSource::None, &model);
-            }
-            let first = profiles
-                .first()
-                .ok_or("Select at least one closed profile")?;
-            if profiles
-                .iter()
-                .any(|profile| profile.sketch_name != first.sketch_name)
-            {
-                return Err("Extrude source profiles must belong to one sketch".into());
-            }
-            editor.form.set_source(
-                ProfileSource::Profiles {
-                    sketch_name: first.sketch_name.clone(),
-                    indices: profiles
-                        .iter()
-                        .map(|profile| profile.profile_index)
-                        .collect(),
-                },
-                &model,
-            )
+            editor.form.set_profiles(profiles, &model)
         }
+        (Some(field @ (BuildField::Path | BuildField::Guide)), BuildPick::Path(path)) => editor
+            .form
+            .set_path(field, (!path.entity_ids.is_empty()).then_some(path), &model),
         (Some(BuildField::Source), BuildPick::Face(face)) => {
             editor.form.set_source(ProfileSource::Face(face), &model)
         }
@@ -439,7 +425,31 @@ fn reduce_owned(
                 return Err("The rendered design is not current".into());
             }
             let model = snapshot.model(&ProfileSource::None);
-            let form = if let (BuildKind::Revolve, Some(id)) = (kind, feature_id) {
+            let form = if let (BuildKind::Sweep, Some(id)) = (kind, feature_id) {
+                let definitions: Vec<SweepDefinitionDto> = serde_json::from_value(
+                    parse_engine_envelope(engine.engine_call("sweep_definitions", ""))?,
+                )
+                .map_err(|e| e.to_string())?;
+                BuildForm::edit_sweep(
+                    definitions
+                        .iter()
+                        .find(|d| d.feature_id.0 == *id)
+                        .ok_or("The selected Sweep no longer exists")?,
+                    &model,
+                )?
+            } else if let (BuildKind::Loft, Some(id)) = (kind, feature_id) {
+                let definitions: Vec<LoftDefinitionDto> = serde_json::from_value(
+                    parse_engine_envelope(engine.engine_call("loft_definitions", ""))?,
+                )
+                .map_err(|e| e.to_string())?;
+                BuildForm::edit_loft(
+                    definitions
+                        .iter()
+                        .find(|d| d.feature_id.0 == *id)
+                        .ok_or("The selected Loft no longer exists")?,
+                    &model,
+                )?
+            } else if let (BuildKind::Revolve, Some(id)) = (kind, feature_id) {
                 let definitions: Vec<RevolveDefinitionDto> = serde_json::from_value(
                     parse_engine_envelope(engine.engine_call("revolve_definitions", ""))?,
                 )
@@ -627,6 +637,8 @@ fn reduce_owned(
                         | BuildField::Targets
                         | BuildField::StopFace
                         | BuildField::AxisLine
+                        | BuildField::Path
+                        | BuildField::Guide
                 ) {
                     return Err("This field is not a geometry reference".into());
                 }
@@ -634,10 +646,13 @@ fn reduce_owned(
                 editor.choice_field = None;
             }
             BuildControl::Clear(field) => match field {
-                BuildField::Source => editor.form.set_source(ProfileSource::None, &model)?,
+                BuildField::Source => editor.form.set_profiles(Vec::new(), &model)?,
                 BuildField::Targets => editor.form.set_targets(Vec::new(), &model)?,
                 BuildField::StopFace => editor.form.set_stop_face(None, &model)?,
                 BuildField::AxisLine => editor.form.set_axis(None, &model)?,
+                BuildField::Path | BuildField::Guide => {
+                    editor.form.set_path(*field, None, &model)?
+                }
                 _ => return Err("This field is not a geometry reference".into()),
             },
             BuildControl::Apply | BuildControl::Cancel => unreachable!(),
@@ -656,6 +671,26 @@ fn reduce_owned(
                 .iter()
                 .any(|r| r.field == BuildField::AxisLine && r.visible)
                 .then_some(BuildField::AxisLine);
+        }
+        if matches!(
+            action,
+            BuildControl::Field(BuildField::GuideEnabled | BuildField::CenterlineEnabled)
+        ) {
+            editor.pick_target = editor
+                .form
+                .fields(&model)
+                .iter()
+                .find(|r| {
+                    r.visible
+                        && r.field
+                            == if matches!(action, BuildControl::Field(BuildField::GuideEnabled)) {
+                                BuildField::Guide
+                            } else {
+                                BuildField::Path
+                            }
+                })
+                .map(|r| r.field)
+                .or(Some(BuildField::Source));
         }
         update_preview(editor, world)?;
         Ok(json!({"form_id":form_id,"edited":true}))

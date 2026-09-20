@@ -3168,7 +3168,9 @@ fn near(a: Point2Dto, b: Point2Dto) -> bool {
     (a.x - b.x).hypot(a.y - b.y) <= 1e-5
 }
 
-fn ordered_path(
+/// Resolve an ordered selection to the same connected path used for replay.
+/// Editors can reject missing or disconnected curves before invoking the kernel.
+pub fn ordered_path(
     sketch: &ProfileCatalogItemDto,
     entity_ids: &[u64],
 ) -> Result<Vec<KernelCurveDto>, SolidError> {

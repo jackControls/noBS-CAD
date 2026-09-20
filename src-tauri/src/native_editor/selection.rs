@@ -13,7 +13,7 @@ fn segment_distance(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
     (p[0] - a[0] - t * d[0]).hypot(p[1] - a[1] - t * d[1])
 }
 
-pub(super) fn hit(
+pub(crate) fn hit(
     entities: &[EntityDto],
     cursor: [f32; 2],
     points: bool,

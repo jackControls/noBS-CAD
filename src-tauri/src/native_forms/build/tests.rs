@@ -2,6 +2,118 @@ use super::*;
 use nbcad_core::{Document, FaceId, Feature, UnitSystem};
 
 #[test]
+fn sweep_paths_preserve_curve_order_validate_connectivity_and_ignore_disabled_guides() {
+    use nbcad_solid::{PathRefDto, ProfileRefDto, SweepRequest};
+    let mut fixture = Fixture::new();
+    fixture.profiles[0].path_curves = serde_json::from_value(json!([
+        {"kind":"line","entity_id":20,"start":{"x":0.,"y":0.},"end":{"x":10.,"y":0.}},
+        {"kind":"line","entity_id":21,"start":{"x":20.,"y":0.},"end":{"x":10.,"y":0.}},
+        {"kind":"line","entity_id":22,"start":{"x":50.,"y":0.},"end":{"x":60.,"y":0.}}
+    ]))
+    .unwrap();
+    let model = fixture.model();
+    let mut form = BuildForm::new_kind(BuildKind::Sweep, &model);
+    form.set_profiles(
+        vec![ProfileRefDto {
+            sketch_name: "Sketch1".into(),
+            profile_index: 0,
+        }],
+        &model,
+    )
+    .unwrap();
+    let path = |ids| {
+        Some(PathRefDto {
+            sketch_name: "Sketch1".into(),
+            entity_ids: ids,
+        })
+    };
+    assert!(form
+        .set_path(BuildField::Path, path(vec![20, 20]), &model)
+        .is_err());
+    assert!(form
+        .set_path(BuildField::Path, path(vec![90]), &model)
+        .is_err());
+    form.set_path(BuildField::Path, path(vec![20, 22]), &model)
+        .unwrap();
+    assert!(!form.can_apply(&model));
+    form.set_path(BuildField::Path, path(vec![20, 21]), &model)
+        .unwrap();
+    form.set_value(BuildField::GuideEnabled, "true", &model)
+        .unwrap();
+    assert!(!form.can_apply(&model));
+    form.set_value(BuildField::GuideEnabled, "false", &model)
+        .unwrap();
+    for (field, value) in [
+        (BuildField::Orientation, "fixed"),
+        (BuildField::Transition, "round_corner"),
+        (BuildField::ForceC1, "true"),
+    ] {
+        form.set_value(field, value, &model).unwrap();
+    }
+    let ticket = form.prepare_apply(&model).unwrap();
+    let request: SweepRequest = serde_json::from_value(ticket.arguments().clone()).unwrap();
+    assert_eq!(request.path_entity_ids, vec![20, 21]);
+    assert!(request.guide_rail.is_none());
+    assert!(request.force_c1);
+    assert_eq!(request.orientation, nbcad_solid::SweepOrientation::Fixed);
+    assert_eq!(
+        request.transition,
+        nbcad_solid::SweepTransition::RoundCorner
+    );
+    assert_eq!(ticket.operation(), "solid_sweep");
+}
+
+#[test]
+fn loft_keeps_cross_sketch_section_order_and_edit_identity_without_silent_repair() {
+    use nbcad_solid::{EditLoftRequest, LoftDefinitionDto, ProfileRefDto};
+    let mut fixture = Fixture::new();
+    let mut second = fixture.profiles[0].clone();
+    second.sketch_name = "Section2".into();
+    second.basis.origin[2] = 30.;
+    fixture.profiles.push(second);
+    fixture
+        .document
+        .features
+        .push(Feature::new(FeatureId(10), "Loft", FeatureKind::Loft));
+    let model = fixture.model();
+    let sections = vec![
+        ProfileRefDto {
+            sketch_name: "Section2".into(),
+            profile_index: 0,
+        },
+        ProfileRefDto {
+            sketch_name: "Sketch1".into(),
+            profile_index: 0,
+        },
+    ];
+    let mut form = BuildForm::new_kind(BuildKind::Loft, &model);
+    assert!(form
+        .set_profiles(vec![sections[0].clone(), sections[0].clone()], &model)
+        .is_err());
+    form.set_profiles(sections.clone(), &model).unwrap();
+    assert!(form.can_apply(&model));
+    form.set_value(BuildField::CenterlineEnabled, "true", &model)
+        .unwrap();
+    assert!(!form.can_apply(&model));
+    form.set_value(BuildField::CenterlineEnabled, "false", &model)
+        .unwrap();
+    assert!(form.can_apply(&model));
+    let d:LoftDefinitionDto=serde_json::from_value(json!({"feature_id":10,"name":"Loft","sections":sections,"ruled":true,"continuity":"g2","operation":"new_body","target_body_ids":[],"new_body_id":10})).unwrap();
+    let mut edit = BuildForm::edit_loft(&d, &model).unwrap();
+    let ticket = edit.prepare_apply(&model).unwrap();
+    let payload: EditLoftRequest = serde_json::from_value(ticket.arguments().clone()).unwrap();
+    assert_eq!(payload.feature_id, FeatureId(10));
+    assert_eq!(payload.loft.sections, sections);
+    assert!(payload.loft.ruled);
+    assert_eq!(payload.loft.continuity, nbcad_solid::LoftContinuity::G2);
+    let mut broken = d;
+    broken.sections[0].sketch_name = "Deleted".into();
+    let edit = BuildForm::edit_loft(&broken, &model).unwrap();
+    assert!(!edit.can_apply(&model));
+    assert_eq!(edit.selected_profiles()[0].sketch_name, "Deleted");
+}
+
+#[test]
 fn revolve_preserves_axis_identity_and_rejects_non_coplanar_references() {
     let mut fixture = Fixture::new();
     let mut axis = fixture.profiles[0].clone();

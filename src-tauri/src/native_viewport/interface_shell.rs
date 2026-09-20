@@ -1013,6 +1013,18 @@ pub(crate) fn caption_size(world: &mut World, entity: Entity, size: f32) {
     }
 }
 
+/// Reference cards reserve room for the separate clear control and explanatory
+/// line. Keep the actual accessible name intact for keyboard/MCP selection.
+pub(crate) fn reference_caption(world: &mut World, entity: Entity) {
+    let label=world.get::<InterfaceLabel>(entity).unwrap().0;
+    let assets=world.resource::<ViewportUiAssets>().clone();
+    let theme=world.get::<InterfaceButtonStyle>(entity).unwrap().0;
+    let bounds=Node {position_type:PositionType::Absolute,left:px(8.),right:px(62.),top:px(5.),height:px(26.),overflow:Overflow::clip(),..default()};
+    if world.get::<Node>(label)!=Some(&bounds) {
+        world.entity_mut(label).insert((bounds,theme.text(&assets,12.,FontWeight::NORMAL)));
+    }
+}
+
 /// A dimension label remains a real inspectable button, painted in the same
 /// color as its extension lines. Field/dialog styles are unaffected.
 #[cfg(feature = "dev-bevy-host")]

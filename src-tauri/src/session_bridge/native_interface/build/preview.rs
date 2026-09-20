@@ -8,23 +8,20 @@ use crate::native_viewport::{ViewportArrow, ViewportLineLayer, ViewportModel, Vi
 
 const MAX_SEGMENTS: usize = 100_000;
 
-pub(super) fn revolve_references(
+pub(super) fn references(
     form: &crate::native_forms::BuildForm,
     model: &crate::native_forms::FormModel<'_>,
+    viewport: &ViewportModel,
 ) -> Result<ViewportPreview, String> {
     let mut segments = Vec::new();
-    if let crate::native_forms::ProfileSource::Profiles {
-        sketch_name,
-        indices,
-    } = form.source()
-    {
+    for selected in form.selected_profiles() {
         if let Some(sketch) = model
             .profiles
             .iter()
-            .find(|s| s.sketch_name == *sketch_name)
+            .find(|s| s.sketch_name == selected.sketch_name)
         {
             for profile in sketch.profiles.iter().filter(|p| {
-                indices.contains(&p.index) || p.parent_index.is_some_and(|id| indices.contains(&id))
+                p.index == selected.profile_index || p.parent_index == Some(selected.profile_index)
             }) {
                 for (a, b) in profile
                     .points
@@ -41,11 +38,33 @@ pub(super) fn revolve_references(
             }
         }
     }
+    for path in form.selected_paths() {
+        if let Some(sketch) = viewport
+            .finished_sketches
+            .iter()
+            .find(|s| s.name == path.sketch_name)
+        {
+            for entity in sketch
+                .entities
+                .iter()
+                .filter(|e| path.entity_ids.contains(&e.id().0))
+            {
+                for pair in curve_points(entity).windows(2) {
+                    if segments.len() / 6 >= MAX_SEGMENTS {
+                        return Err("Selected paths are too large to preview".into());
+                    }
+                    for point in pair {
+                        segments.extend(sketch.basis.to_3d([point.x, point.y]).map(|v| v as f32));
+                    }
+                }
+            }
+        }
+    }
     if let Some(axis) = form.revolution_axis(model)? {
         segments.extend(axis.into_iter().flatten().map(|v| v as f32));
     }
     if segments.iter().any(|v| !v.is_finite()) {
-        return Err("Revolve reference exceeds the renderer's range".into());
+        return Err("Feature reference exceeds the renderer's range".into());
     }
     Ok(ViewportPreview {
         lines: vec![ViewportLineLayer {
@@ -56,6 +75,35 @@ pub(super) fn revolve_references(
         }],
         ..Default::default()
     })
+}
+
+fn curve_points(entity: &nbcad_sketch::EntityDto) -> Vec<nbcad_sketch::Vec2> {
+    use nbcad_sketch::{EntityDto, Vec2};
+    let (center, radius, start, sweep) = match entity {
+        EntityDto::Line { start, end, .. } => return vec![*start, *end],
+        EntityDto::Spline { tessellation, .. } => return tessellation.clone(),
+        EntityDto::Circle { center, radius, .. } => (*center, *radius, 0., std::f64::consts::TAU),
+        EntityDto::Arc {
+            center,
+            radius,
+            start_angle,
+            end_angle,
+            ..
+        } => (
+            *center,
+            *radius,
+            *start_angle,
+            (end_angle - start_angle).rem_euclid(std::f64::consts::TAU),
+        ),
+        _ => return vec![],
+    };
+    let steps = ((sweep * 30.).ceil() as usize).clamp(12, 192);
+    (0..=steps)
+        .map(|i| {
+            let a = start + sweep * i as f64 / steps as f64;
+            center + Vec2::new(a.cos(), a.sin()) * radius
+        })
+        .collect()
 }
 
 pub(super) fn build(

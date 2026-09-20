@@ -10,7 +10,7 @@ pub(crate) use palette::PaletteCommand;
 mod constraints;
 mod forms;
 pub(crate) mod mcp;
-mod selection;
+pub(crate) mod selection;
 mod sketch;
 pub(crate) use forms::FormKind;
 mod interaction;

@@ -290,6 +290,14 @@ fn synchronize_owned(
                     super::BuildField::AxisLine => "AXIS LINE",
                     super::BuildField::Targets => "TARGET BODIES",
                     super::BuildField::StopFace => "STOP FACE",
+                    super::BuildField::Path => {
+                        if panel.kind == super::BuildKind::Loft {
+                            "CENTERLINE"
+                        } else {
+                            "PATH"
+                        }
+                    }
+                    super::BuildField::Guide => "GUIDE RAIL",
                     _ => "REFERENCE",
                 };
                 label(
@@ -322,8 +330,8 @@ fn synchronize_owned(
             node(
                 0.,
                 y - state.scroll,
-                if reference { inner - 62. } else { inner },
-                30.,
+                inner,
+                if reference { 62. } else { 30. },
             ),
             BuildCommand::Control {
                 form_id: panel.form_id,
@@ -333,6 +341,31 @@ fn synchronize_owned(
             &assets,
         )?;
         if reference {
+            interface_shell::reference_caption(world, state.controls[&key].0);
+            label(
+                world,
+                state,
+                &mut live_labels,
+                &format!("{key}-hint"),
+                body,
+                camera,
+                match row.field {
+                    super::BuildField::Source if panel.kind == super::BuildKind::Loft => {
+                        "Click sections in order; click again to remove."
+                    }
+                    super::BuildField::Source => "Click a profile in the viewport.",
+                    super::BuildField::AxisLine => "Click a straight line on the profile plane.",
+                    super::BuildField::Path | super::BuildField::Guide => {
+                        "Click connected curves to add or remove."
+                    }
+                    super::BuildField::Targets => "Click bodies to add or remove.",
+                    _ => "Click a planar face in the viewport.",
+                },
+                node(8., y + 32. - state.scroll, inner - 16., 24.),
+                theme,
+                &assets,
+                false,
+            );
             let mut clear = InterfaceControl::button(
                 "solid/build",
                 match row.field {
@@ -340,6 +373,8 @@ fn synchronize_owned(
                     super::BuildField::AxisLine => "Clear axis line",
                     super::BuildField::Targets => "Clear target bodies",
                     super::BuildField::StopFace => "Clear stop face",
+                    super::BuildField::Path => "Clear path curves",
+                    super::BuildField::Guide => "Clear guide curves",
                     _ => "Clear reference",
                 },
             );
@@ -352,7 +387,7 @@ fn synchronize_owned(
                 body,
                 camera,
                 clear,
-                node(inner - 58., y - state.scroll, 58., 30.),
+                node(inner - 54., y + 5. - state.scroll, 48., 22.),
                 BuildCommand::Control {
                     form_id: panel.form_id,
                     action: BuildControl::Clear(row.field),
@@ -361,7 +396,7 @@ fn synchronize_owned(
                 &assets,
             )?;
         }
-        y += 36.;
+        y += if reference { 68. } else { 36. };
         if panel.choice_field == Some(row.field) {
             if let Field::Choice { value, options } = &row.value {
                 for (index, option) in options.iter().enumerate() {
@@ -541,10 +576,18 @@ fn widget(
         };
         system.apply(world);
         world.entity_mut(parent).add_child(entity);
-        if matches!(control.field, Field::Choice {..}) {
-            let glyph=interface_shell::ribbon::compact_glyph(world,entity,interface_shell::ribbon::Icon::Chevron,0.,10.);
-            let mut bounds=world.get::<Node>(glyph).unwrap().clone();
-            bounds.left=Val::Auto;bounds.right=px(8.);bounds.top=px(10.);
+        if matches!(control.field, Field::Choice { .. }) {
+            let glyph = interface_shell::ribbon::compact_glyph(
+                world,
+                entity,
+                interface_shell::ribbon::Icon::Chevron,
+                0.,
+                10.,
+            );
+            let mut bounds = world.get::<Node>(glyph).unwrap().clone();
+            bounds.left = Val::Auto;
+            bounds.right = px(8.);
+            bounds.top = px(10.);
             world.entity_mut(glyph).insert(bounds);
         }
         bind_command(world, entity, NativeCommand::Build(command.clone()))?;
@@ -622,10 +665,10 @@ fn content_height(panel: &super::BuildPanel) -> f32 {
             height += 96.;
             continue;
         }
-        height += if matches!(row.value, Field::Toggle(_)) {
-            36.
-        } else {
-            56.
+        height += match row.value {
+            Field::Toggle(_) => 36.,
+            Field::None => 88.,
+            _ => 56.,
         };
         if panel.choice_field == Some(row.field) {
             if let Field::Choice { options, .. } = &row.value {

@@ -32,22 +32,8 @@ const GLYPHS: Record<string, ReactNode> = {
   // Solid construction: a profile, transformation path, and result.
   extrude: <SharedRibbonGlyph id="extrude" />,
   revolve: <SharedRibbonGlyph id="revolve" />,
-  sweep: (
-    <>
-      <path d="M3.5 15.5l3-2 3 2-3 2-3-2z" />
-      <path d="M9.5 15.5c3.5 0 3-8 8.5-8" />
-      <ellipse cx="19.5" cy="7.5" rx="2" ry="3" />
-      <path d="M15.5 6.5L18 7.5l-2 1.7" />
-    </>
-  ),
-  loft: (
-    <>
-      <ellipse cx="12" cy="4.5" rx="4" ry="1.8" />
-      <ellipse cx="12" cy="12" rx="7" ry="2.5" />
-      <ellipse cx="12" cy="20" rx="5" ry="2" />
-      <path d="M8 4.5L5 12l2 8M16 4.5l3 7.5-2 8" />
-    </>
-  ),
+  sweep: <SharedRibbonGlyph id="sweep" />,
+  loft: <SharedRibbonGlyph id="loft" />,
   rib: (
     <>
       <path d="M3 18l7 3 11-5-7-3-11 5z" />
