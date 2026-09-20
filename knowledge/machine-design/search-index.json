@@ -729,7 +729,7 @@
       "id": "machine-design.concepts.design-hygiene-requirements-bom",
       "path": "knowledge/machine-design/concepts/design-hygiene-requirements-bom.md",
       "title": "Requirements → embodiment → BOM (CAD-time)",
-      "description": "CAD-time hygiene — name requirements, pick embodiment, decide purchased vs print, assign BOM roles before freezing mates.",
+      "description": "CAD-time hygiene — name requirements, pick embodiment, make-vs-buy, BOM roles matching the CAD tree, and VERIFY before freezing mates (no ERP lecture).",
       "status": "draft",
       "topics": [
         "design-hygiene",
@@ -752,8 +752,12 @@
         "BOM role",
         "phantom",
         "reference designator",
+        "fastener kit",
+        "indentured BOM",
         "VERIFY table",
-        "freeze geometry"
+        "freeze geometry",
+        "standardize parts",
+        "buy before invent"
       ],
       "related_recipes": [
         "mounting-plate",
@@ -763,7 +767,9 @@
       ],
       "sources": [
         "doe-3d",
-        "nasa-fastener"
+        "nasa-fastener",
+        "nwtc-guns-dfm",
+        "palni-dfma"
       ],
       "snippet": "Before mating geometry freezes, name what must be true, how the CAD embodiment realizes it, and which items are purchased vs printed / machined in-house. Help stays CAD-time roles — not a Stage-Gate or ERP lecture. Attr…"
     },

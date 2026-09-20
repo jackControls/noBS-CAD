@@ -92,7 +92,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 
 | Topic | Status | Id / title |
 |-------|--------|------------|
-| Requirements → embodiment → BOM / purchased parts | **seeded (partial)** | `machine-design.concepts.design-hygiene-requirements-bom` — [design-hygiene-requirements-bom](concepts/design-hygiene-requirements-bom.md); also [research-before-commit](../concepts/research-before-commit.md), [am-hardware-pocket-research](concepts/am-hardware-pocket-research.md) |
+| Requirements → embodiment → BOM / purchased parts | **seeded** (requirements/BOM distill) | `machine-design.concepts.design-hygiene-requirements-bom` — [design-hygiene-requirements-bom](concepts/design-hygiene-requirements-bom.md) make-vs-buy / BOM roles / VERIFY freeze; also [research-before-commit](../concepts/research-before-commit.md), [am-hardware-pocket-research](concepts/am-hardware-pocket-research.md) |
 
 ## G. Assembly validation
 
@@ -126,6 +126,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Deep key stress / groove charts | shafts page seeded (roles only); numeric charts **TODO** |
 | Deep spring-rate / coupling misalignment charts | springs-couplings seeded (roles only); numeric charts **TODO** (datasheets) |
 | Deep cam-law / belt-tension / chain-tension / tooth / Geneva-slot charts | mechanisms hub + linkages/cams/belts/chains/Geneva **seeded (partial)**; printed-gears DFAM seeded (no module-strength tables); numeric charts stay datasheet / `mit-272` |
+| Deep ERP / PLM / Stage-Gate BOM workflows | design-hygiene **seeded** (CAD-time roles + VERIFY); ERP/indenture dumps **out** |
 | Materials allowables tables | **planned** (no MatWeb); vocabulary seeded |
 | Deep fastener torque / proof-load / K-factor charts | fasteners-joints **seeded** (preload/clamp + torque-as-install + friction/lube roles); numeric tables stay NASA RP-1228 / datasheet |
 | More MCP `prompts` (beyond `help_search`) | design-flow prompts still pages + skills ([HUMAN_HELP](../../docs/agentic/HUMAN_HELP.md)) |

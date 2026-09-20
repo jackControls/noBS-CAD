@@ -1200,7 +1200,7 @@ mod tests {
     }
 
     #[test]
-        fn fastener_clearance_counterbore_searchable() {
+    fn fastener_clearance_counterbore_searchable() {
         let store = HelpStore::bundled();
         for query in [
             "fastener clearance counterbore",
@@ -1813,6 +1813,9 @@ mod tests {
             "requirements embodiment BOM purchased",
             "purchased vs print BOM roles",
             "make vs buy COTS SKU freeze geometry",
+            "reference designator BOM phantom",
+            "VERIFY table freeze mates purchased",
+            "standardize fastener kit BOM",
         ] {
             let hits = store.search(query, Some(5));
             assert!(

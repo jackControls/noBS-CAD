@@ -83,7 +83,7 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Chains & sprockets | `machine-design.concepts.mechanisms-chains-sprockets` | Chains and sprockets |
 | Printed gears (FDM DFAM) | `machine-design.concepts.am-printed-gears-dfam` | Printed gears — FDM DFAM |
 | Intermittent / Geneva | `machine-design.concepts.mechanisms-intermittent-geneva` | Intermittent motion / Geneva |
-| Requirements → BOM hygiene | `machine-design.concepts.design-hygiene-requirements-bom` | Requirements → embodiment → BOM |
+| Requirements → BOM hygiene | `machine-design.concepts.design-hygiene-requirements-bom` | Requirements → embodiment → make-vs-buy → BOM roles |
 
 Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 
@@ -148,7 +148,7 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [Chains & sprockets](machine-design/concepts/mechanisms-chains-sprockets.md) - Center distance, wrap, tension path; purchased pitch.
 - [Printed gears (FDM DFAM)](machine-design/concepts/am-printed-gears-dfam.md) - Orientation vs tooth load; min tooth vs nozzle; backlash coupon; no module-strength tables.
 - [Intermittent / Geneva](machine-design/concepts/mechanisms-intermittent-geneva.md) - Index/dwell/lock-arc roles; envelopes; VERIFY purchased indexer or analyzed cam.
-- [Requirements → BOM hygiene](machine-design/concepts/design-hygiene-requirements-bom.md) - Requirements → embodiment → purchased vs print → BOM roles.
+- [Requirements → BOM hygiene](machine-design/concepts/design-hygiene-requirements-bom.md) - Requirements → embodiment → make-vs-buy → BOM roles / VERIFY freeze (CAD-time; no ERP dumps).
 
 - [DFM process guidelines](machine-design/concepts/dfm-process-guidelines.md) - Molding, cast, sheet, weld, EDM, CNC.
 - [AM snap-fits](machine-design/concepts/am-snap-fit.md) - Cantilever clips, latches, living hinges (sizing).

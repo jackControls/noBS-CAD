@@ -1,3 +1,15 @@
+## 2026-09-20 — Design hygiene requirements/BOM deepen
+
+- Deepened `machine-design.concepts.design-hygiene-requirements-bom`: make-vs-buy
+  per body, BOM roles (purchased / fab / phantom / fastener kit), reference
+  designator tree↔BOM↔balloon, VERIFY table + freeze-too-early anti-patterns;
+  DOE Module 3D standardize / buy-before-invent distill (`doe-3d`) plus NWTC /
+  PALNI DFM–DFA and `nasa-fastener` for purchased hardware lines — **no** ERP /
+  Stage-Gate lecture.
+- Taxonomy F → seeded (requirements/BOM distill); Still-thin → ERP dumps out.
+  Index quick-lookup + bullet. Goldens H91–H93; Rust BM25 queries.
+- Rebuilt search-index.json; MCP embed via install script (no Cursor Uninstall/Add).
+
 ## 2026-09-20 — Fasteners preload / torque deepen (NASA RP-1228)
 
 - Deepened `machine-design.concepts.fasteners-joints`: preload / clamp load,
