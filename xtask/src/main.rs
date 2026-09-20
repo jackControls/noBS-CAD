@@ -9,6 +9,7 @@ mod install_mcp;
 mod native_body_test;
 mod native_build_test;
 mod native_fixture;
+mod native_hole_test;
 mod native_planes_test;
 mod native_refine_test;
 mod native_sketch_test;

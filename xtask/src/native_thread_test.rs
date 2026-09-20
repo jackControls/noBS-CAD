@@ -1,63 +1,10 @@
 //! External-thread parity through an existing native window's actual MCP controls.
-use crate::native_fixture::{begin_sketch, control, controls, edit_feature, start, ui};
-use crate::replay::Client;
+use crate::native_fixture::{
+    begin_sketch, capture, control, controls, edit_feature, field, start, ui,
+};
 use anyhow::{ensure, Context, Result};
-use serde_json::{json, Value};
-use std::{fs, path::Path};
-
-fn field(client: &mut Client, label: &str, value: Option<&str>) -> Result<Value> {
-    // Expanded custom profiles scroll naturally; drive those same scroll buttons.
-    // Search current position, then from top to bottom, never hidden controls.
-    for pass in 0..2 {
-        if pass == 1 {
-            for _ in 0..12 {
-                let state = ui(client, json!({"action":"inspect"}))?;
-                if !controls(&state)
-                    .any(|c| c["label"] == "Scroll feature up" && c["disabled"] == false)
-                {
-                    break;
-                }
-                control(client, "Scroll feature up", None)?;
-            }
-        }
-        for _ in 0..12 {
-            let state = ui(client, json!({"action":"inspect"}))?;
-            let found: Vec<_> = controls(&state)
-                .filter(|c| {
-                    c["disabled"] == false
-                        && c["label"]
-                            .as_str()
-                            .is_some_and(|s| s == label || s.starts_with(&format!("{label}: ")))
-                })
-                .collect();
-            if found.len() == 1 {
-                return ui(
-                    client,
-                    if let Some(v) = value {
-                        json!({"action":"set_value","target":found[0]["id"],"value":v})
-                    } else {
-                        json!({"action":"click","target":found[0]["id"]})
-                    },
-                );
-            }
-            ensure!(found.is_empty(), "Ambiguous thread control {label}");
-            if !controls(&state)
-                .any(|c| c["label"] == "Scroll feature down" && c["disabled"] == false)
-            {
-                break;
-            }
-            control(client, "Scroll feature down", None)?;
-        }
-    }
-    anyhow::bail!("No visible, enabled thread control {label}")
-}
-fn capture(client: &mut Client, out: &Path, name: &str) -> Result<()> {
-    ui(
-        client,
-        json!({"action":"capture","path":out.join(format!("{name}.png"))}),
-    )?;
-    Ok(())
-}
+use serde_json::json;
+use std::fs;
 
 pub(super) fn run(args: impl Iterator<Item = String>) -> Result<()> {
     let mut fixture = start(args, "native-thread")?;

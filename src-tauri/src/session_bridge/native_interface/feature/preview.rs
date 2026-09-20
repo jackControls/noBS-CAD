@@ -49,6 +49,16 @@ pub(super) fn references(
         basis
     };
     let mut arrows = Vec::new();
+    if let Some((hole, basis, depth)) = form.hole_guide(model) {
+        hole_guides(
+            &hole,
+            basis,
+            depth,
+            &mut segments,
+            &mut triangles,
+            &mut arrows,
+        )?;
+    }
     if let Some((cylinder, range)) = form.thread_guide(model) {
         use bevy::math::DVec3;
         let origin = DVec3::new(cylinder.origin.x, cylinder.origin.y, cylinder.origin.z);
@@ -171,6 +181,14 @@ pub(super) fn references(
             face.body_id,
             &[face.face_id],
             [1., 0.80, 0.25, 0.35],
+        )?);
+    }
+    if let Some(face) = form.hole_support() {
+        triangles.push(face_fill(
+            model.scene,
+            face.body_id,
+            &[face.face_id],
+            [1., 0.80, 0.25, 0.18],
         )?);
     }
     if let Some((body, faces)) = form.selected_faces() {
@@ -632,4 +650,105 @@ fn scale(a: [f64; 3], scale: f64) -> [f64; 3] {
 }
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+// Analytic drill guides retain the original panel's in-place preview. The
+// committed cut still goes through the shared kernel and fit validation.
+fn hole_guides(
+    hole: &nbcad_solid::HoleRequest,
+    basis: PlaneBasis,
+    depth: f64,
+    segments: &mut Vec<f32>,
+    triangles: &mut Vec<crate::native_viewport::ViewportTriangleLayer>,
+    arrows: &mut Vec<ViewportArrow>,
+) -> Result<(), String> {
+    use nbcad_solid::{HoleBottomStyle, HoleExtent, HoleStyle};
+    let radius = hole.diameter * 0.5;
+    let mut levels = vec![(0., radius), (depth, radius)];
+    match hole.style {
+        HoleStyle::Simple => (),
+        HoleStyle::Counterbore => {
+            levels = vec![
+                (0., hole.counterbore_diameter * 0.5),
+                (hole.counterbore_depth, hole.counterbore_diameter * 0.5),
+                (hole.counterbore_depth, radius),
+                (depth, radius),
+            ]
+        }
+        HoleStyle::Countersink => {
+            let outer = hole.countersink_diameter * 0.5;
+            let sink_depth =
+                (outer - radius) / (hole.countersink_angle_deg.to_radians() * 0.5).tan();
+            levels = vec![(0., outer), (sink_depth, radius), (depth, radius)];
+        }
+    }
+    if matches!(hole.extent, HoleExtent::Distance { .. })
+        && hole.bottom_style == HoleBottomStyle::DrillPoint
+    {
+        levels.push((
+            depth + radius / (hole.drill_point_angle_deg.to_radians() * 0.5).tan(),
+            0.,
+        ));
+    }
+    if hole
+        .positions
+        .len()
+        .checked_mul(levels.len() * 48)
+        .is_none_or(|n| n > MAX_SEGMENTS / 2)
+    {
+        return Err("Too many hole guides to preview together".into());
+    }
+    let sign = if hole.flip { 1. } else { -1. };
+    let mut fill = Vec::new();
+    for position in &hole.positions {
+        let center = basis.to_3d([position.position.x, position.position.y]);
+        let point = |z: f64, r: f64, i: usize| -> [f32; 3] {
+            let a = std::f64::consts::TAU * i as f64 / 48.;
+            std::array::from_fn(|j| {
+                (center[j]
+                    + sign * z * basis.normal[j]
+                    + r * (a.cos() * basis.u[j] + a.sin() * basis.v[j])) as f32
+            })
+        };
+        for &(z, r) in &levels {
+            for i in 0..48 {
+                segments.extend(point(z, r, i));
+                segments.extend(point(z, r, i + 1));
+            }
+        }
+        for level in levels.windows(2) {
+            let (za, ra) = level[0];
+            let (zb, rb) = level[1];
+            for i in 0..48 {
+                let [a, b, c, d] = [
+                    point(za, ra, i),
+                    point(za, ra, i + 1),
+                    point(zb, rb, i + 1),
+                    point(zb, rb, i),
+                ];
+                fill.extend([a, b, c, a, c, d].into_iter().flatten());
+                if i % 12 == 0 {
+                    segments.extend(a);
+                    segments.extend(d);
+                }
+            }
+        }
+        arrows.push(ViewportArrow {
+            start: center.map(|v| v as f32),
+            end: point(depth, 0., 0),
+            color: [0.45, 0.72, 1., 1.],
+            width: 2.,
+            xray: true,
+        });
+    }
+    if fill.iter().chain(segments.iter()).any(|v| !v.is_finite()) {
+        return Err("The hole preview exceeds the renderer's range".into());
+    }
+    triangles.push(crate::native_viewport::ViewportTriangleLayer {
+        color: [0.45, 0.72, 1., 0.14],
+        positions: fill,
+        xray: true,
+        ..Default::default()
+    });
+    Ok(())
 }

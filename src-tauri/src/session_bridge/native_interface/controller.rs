@@ -1061,7 +1061,7 @@ fn synchronize(
             x: (width - 336.).max(side) as f64,
             y: (top + 12.) as f64,
             width: 320_f32.min(width - side).max(1.) as f64,
-            height: (height - top - bottom - 24.).clamp(1.,580.) as f64,
+            height: (height - top - bottom - 24.).max(1.) as f64,
         },
     )?;
     crate::native_editor::synchronize_controls(
@@ -1164,7 +1164,7 @@ fn synchronize(
             320.,34.,48.,
         ),
     ];
-    for (key,kind,x) in [("sweep",feature::SolidFormKind::Sweep,370.),("loft",feature::SolidFormKind::Loft,420.),("rib",feature::SolidFormKind::Rib,470.),("solid-fillet",feature::SolidFormKind::Fillet,530.),("solid-chamfer",feature::SolidFormKind::Chamfer,580.),("solid-shell",feature::SolidFormKind::Shell,630.),("combine",feature::SolidFormKind::Combine,690.),("offset-plane",feature::SolidFormKind::OffsetPlane,750.),("midplane",feature::SolidFormKind::Midplane,800.),("angle-plane",feature::SolidFormKind::AnglePlane,850.),("solid-mirror",feature::SolidFormKind::Mirror,910.),("split-body",feature::SolidFormKind::SplitBody,960.),("solid-rectangular-pattern",feature::SolidFormKind::RectangularPattern,1010.),("solid-circular-pattern",feature::SolidFormKind::CircularPattern,1060.),("external-thread",feature::SolidFormKind::ExternalThread,1110.)] {
+    for (key,kind,x) in [("sweep",feature::SolidFormKind::Sweep,370.),("loft",feature::SolidFormKind::Loft,420.),("rib",feature::SolidFormKind::Rib,470.),("solid-fillet",feature::SolidFormKind::Fillet,530.),("solid-chamfer",feature::SolidFormKind::Chamfer,580.),("solid-shell",feature::SolidFormKind::Shell,630.),("combine",feature::SolidFormKind::Combine,690.),("offset-plane",feature::SolidFormKind::OffsetPlane,750.),("midplane",feature::SolidFormKind::Midplane,800.),("angle-plane",feature::SolidFormKind::AnglePlane,850.),("solid-mirror",feature::SolidFormKind::Mirror,910.),("split-body",feature::SolidFormKind::SplitBody,960.),("solid-rectangular-pattern",feature::SolidFormKind::RectangularPattern,1010.),("solid-circular-pattern",feature::SolidFormKind::CircularPattern,1060.),("external-thread",feature::SolidFormKind::ExternalThread,1110.),("hole",feature::SolidFormKind::Hole,1160.)] {
         rows.push((key.into(),kind.label().into(),NativeCommand::Feature(feature::FeatureCommand::Open {kind,feature_id:None}),
             presentation.mode==native_viewport::ViewportMode::Sketch||feature::panel(world).is_some(),x,34.,48.));
     }
@@ -1321,8 +1321,8 @@ fn synchronize(
         }
     });
     for (key, label, command, disabled, x, y, width) in rows {
-        let is_extrude = matches!(key.as_str(), "extrude" | "revolve" | "sweep" | "loft" | "rib" | "solid-fillet" | "solid-chamfer" | "solid-shell" | "combine" | "offset-plane" | "midplane" | "angle-plane" | "solid-mirror" | "split-body" | "solid-rectangular-pattern" | "solid-circular-pattern" | "external-thread");
-        let build_icon = match key.as_str() {"revolve"=>interface_shell::ribbon::Icon::Revolve,"sweep"=>interface_shell::ribbon::Icon::Sweep,"loft"=>interface_shell::ribbon::Icon::Loft,"rib"=>interface_shell::ribbon::Icon::Rib,"solid-fillet"=>interface_shell::ribbon::Icon::Fillet,"solid-chamfer"=>interface_shell::ribbon::Icon::Chamfer,"solid-shell"=>interface_shell::ribbon::Icon::Shell,"external-thread"=>interface_shell::ribbon::Icon::ExternalThread,"combine"=>interface_shell::ribbon::Icon::Combine,"offset-plane"=>interface_shell::ribbon::Icon::OffsetPlane,"midplane"=>interface_shell::ribbon::Icon::Midplane,"angle-plane"=>interface_shell::ribbon::Icon::AnglePlane,"solid-mirror"=>interface_shell::ribbon::Icon::Mirror,"split-body"=>interface_shell::ribbon::Icon::SplitBody,"solid-rectangular-pattern"=>interface_shell::ribbon::Icon::RectangularPattern,"solid-circular-pattern"=>interface_shell::ribbon::Icon::CircularPattern,_=>interface_shell::ribbon::Icon::Extrude};
+        let is_extrude = matches!(key.as_str(), "extrude" | "revolve" | "sweep" | "loft" | "rib" | "solid-fillet" | "solid-chamfer" | "solid-shell" | "combine" | "offset-plane" | "midplane" | "angle-plane" | "solid-mirror" | "split-body" | "solid-rectangular-pattern" | "solid-circular-pattern" | "external-thread" | "hole");
+        let build_icon = match key.as_str() {"revolve"=>interface_shell::ribbon::Icon::Revolve,"sweep"=>interface_shell::ribbon::Icon::Sweep,"loft"=>interface_shell::ribbon::Icon::Loft,"rib"=>interface_shell::ribbon::Icon::Rib,"solid-fillet"=>interface_shell::ribbon::Icon::Fillet,"solid-chamfer"=>interface_shell::ribbon::Icon::Chamfer,"solid-shell"=>interface_shell::ribbon::Icon::Shell,"external-thread"=>interface_shell::ribbon::Icon::ExternalThread,"hole"=>interface_shell::ribbon::Icon::Hole,"combine"=>interface_shell::ribbon::Icon::Combine,"offset-plane"=>interface_shell::ribbon::Icon::OffsetPlane,"midplane"=>interface_shell::ribbon::Icon::Midplane,"angle-plane"=>interface_shell::ribbon::Icon::AnglePlane,"solid-mirror"=>interface_shell::ribbon::Icon::Mirror,"split-body"=>interface_shell::ribbon::Icon::SplitBody,"solid-rectangular-pattern"=>interface_shell::ribbon::Icon::RectangularPattern,"solid-circular-pattern"=>interface_shell::ribbon::Icon::CircularPattern,_=>interface_shell::ribbon::Icon::Extrude};
         let is_body = key.starts_with("body-") || key.starts_with("visibility-");
         let surface = command_group(&command);
         let entity = if let Some(entity) = state.controls.get(&key) {

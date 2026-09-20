@@ -102,6 +102,7 @@ impl ThreadSurface {
 #[derive(Debug)]
 pub(super) struct ThreadFields {
     pub surface: Option<ThreadSurface>,
+    external: bool,
     standard: HoleThreadStandard,
     series: HoleThreadSeries,
     preset: String,
@@ -136,13 +137,27 @@ impl ThreadFields {
             .iter()
             .find(|p| p.id == "metric_coarse-6-1")
             .unwrap();
-        Self::from_thread(preset.external(), false, units)
+        Self::from_thread(preset.external(), false, units, true)
     }
-    fn from_thread(t: HoleThreadDto, flip: bool, units: UnitSystem) -> Self {
+    pub fn new_internal(units: UnitSystem) -> Self {
+        let preset = presets()
+            .iter()
+            .find(|p| p.id == "metric_coarse-6-1")
+            .unwrap();
+        let mut fields = Self::from_thread(preset.thread.clone(), false, units, false);
+        fields.representation = HoleThreadRepresentation::Modeled;
+        fields.depth = length(8., units);
+        fields
+    }
+    pub fn from_thread(t: HoleThreadDto, flip: bool, units: UnitSystem, external: bool) -> Self {
         let preset = presets()
             .iter()
             .find(|p| {
-                let v = p.external();
+                let v = if external {
+                    p.external()
+                } else {
+                    p.thread.clone()
+                };
                 v.standard == t.standard
                     && v.series == t.series
                     && v.nominal_diameter == t.nominal_diameter
@@ -160,6 +175,7 @@ impl ThreadFields {
         });
         Self {
             surface: None,
+            external,
             standard: t.standard,
             series: t.series,
             preset,
@@ -186,7 +202,11 @@ impl ThreadFields {
             .iter()
             .find(|p| p.id == id)
             .ok_or("Choose an available thread size")?;
-        let t = p.external();
+        let t = if self.external {
+            p.external()
+        } else {
+            p.thread.clone()
+        };
         self.standard = t.standard;
         self.series = t.series;
         self.preset = p.id.clone();
@@ -197,6 +217,17 @@ impl ThreadFields {
         Ok(())
     }
     fn match_diameter(&mut self, diameter: f64, current_series_only: bool, units: UnitSystem) {
+        if !self.external {
+            let id = presets()
+                .iter()
+                .find(|p| p.thread.series == self.series)
+                .ok_or("No sizes in the selected series")
+                .unwrap()
+                .id
+                .clone();
+            self.use_preset(&id, units).unwrap();
+            return;
+        }
         let matches = |p: &&super::thread_sizes::Preset| {
             (p.thread.nominal_diameter - diameter).abs() <= (diameter.abs() * 0.002).max(0.01)
         };
@@ -396,7 +427,8 @@ impl SolidForm {
         };
         let mut form = Self::new_kind(SolidFormKind::ExternalThread, model);
         form.feature = Some(feature_id);
-        let mut fields = ThreadFields::from_thread(thread, flip, model.document.settings.units);
+        let mut fields =
+            ThreadFields::from_thread(thread, flip, model.document.settings.units, true);
         fields.surface = Some(ThreadSurface::resolve(
             PlanarFaceSourceDto { body_id, face_id },
             model,
@@ -424,39 +456,15 @@ impl SolidForm {
         }) {
             issues.push((F::Cylinder, "The edited thread no longer exists".into()));
         }
-        let mut number = |field, v: &MeasurementInput| match v
-            .evaluate(model.document.settings.units, model.parameters)
-        {
-            Ok(v) => v,
-            Err(e) => {
-                issues.push((field, e));
-                0.
+        let thread = match f.evaluate(model) {
+            Ok(value) => value,
+            Err(errors) => {
+                issues.extend(errors);
+                return Err(issues);
             }
         };
-        let d = number(F::Diameter, &f.diameter);
-        let p = number(F::Pitch, &f.pitch);
-        let depth = (!f.full).then(|| number(F::Distance, &f.depth));
-        let rounded_profile =
-            (f.standard == HoleThreadStandard::CustomTrapezoidal).then(|| RoundedThreadProfile {
-                radial_depth: number(F::RadialDepth, &f.rounded[0]),
-                corner_radius: number(F::CornerRadius, &f.rounded[1]),
-                radial_clearance: number(F::RadialClearance, &f.rounded[2]),
-                axial_clearance: number(F::AxialClearance, &f.rounded[3]),
-            });
-        let thread = HoleThreadDto {
-            standard: f.standard,
-            series: f.series,
-            designation: f.designation.trim().into(),
-            class: f.class.trim().into(),
-            nominal_diameter: d,
-            pitch: p,
-            threads_per_inch: (f.standard == HoleThreadStandard::UnifiedInch).then_some(25.4 / p),
-            hand: f.hand,
-            depth,
-            representation: f.representation,
-            tap_drill_designation: None,
-            rounded_profile,
-        };
+        let d = thread.nominal_diameter;
+        let depth = thread.depth;
         if let Err(e) = nbcad_solid::validate_external_thread(
             &thread,
             f.surface
@@ -513,10 +521,83 @@ impl SolidForm {
         })
     }
     pub(super) fn thread_fields(&self, model: &FormModel<'_>) -> Vec<SolidFieldView> {
+        self.thread.as_ref().unwrap().fields(
+            &self.thread_request(model).err().unwrap_or_default(),
+            self.phase == Phase::Editing && self.check_model(model).is_ok(),
+        )
+    }
+    pub(crate) fn feature_notes(&self) -> Vec<String> {
+        if let Some(f) = &self.thread {
+            f.notes()
+        } else {
+            self.hole_notes()
+        }
+    }
+}
+
+impl ThreadFields {
+    pub fn preset_drill(&self) -> Option<f64> {
+        presets()
+            .iter()
+            .find(|p| p.id == self.preset)
+            .map(|p| p.drill)
+    }
+    pub fn evaluate(
+        &self,
+        model: &FormModel<'_>,
+    ) -> Result<HoleThreadDto, Vec<(SolidField, String)>> {
         use SolidField as F;
-        let f = self.thread.as_ref().unwrap();
-        let errors = self.thread_request(model).err().unwrap_or_default();
-        let editable = self.phase == Phase::Editing && self.check_model(model).is_ok();
+        let f = self;
+        let mut issues = Vec::new();
+        let mut number = |field, v: &MeasurementInput| match v
+            .evaluate(model.document.settings.units, model.parameters)
+        {
+            Ok(v) => v,
+            Err(e) => {
+                issues.push((field, e));
+                0.
+            }
+        };
+        let d = number(F::Diameter, &f.diameter);
+        let p = number(F::Pitch, &f.pitch);
+        let depth = (!f.full).then(|| number(F::Distance, &f.depth));
+        let rounded_profile =
+            (f.standard == HoleThreadStandard::CustomTrapezoidal).then(|| RoundedThreadProfile {
+                radial_depth: number(F::RadialDepth, &f.rounded[0]),
+                corner_radius: number(F::CornerRadius, &f.rounded[1]),
+                radial_clearance: number(F::RadialClearance, &f.rounded[2]),
+                axial_clearance: number(F::AxialClearance, &f.rounded[3]),
+            });
+        let thread = HoleThreadDto {
+            standard: f.standard,
+            series: f.series,
+            designation: f.designation.trim().into(),
+            class: f.class.trim().into(),
+            nominal_diameter: d,
+            pitch: p,
+            threads_per_inch: (f.standard == HoleThreadStandard::UnifiedInch).then_some(25.4 / p),
+            hand: f.hand,
+            depth,
+            representation: f.representation,
+            tap_drill_designation: (!f.external)
+                .then(|| {
+                    presets()
+                        .iter()
+                        .find(|p| p.id == f.preset)
+                        .and_then(|p| p.thread.tap_drill_designation.clone())
+                })
+                .flatten(),
+            rounded_profile,
+        };
+        if issues.is_empty() {
+            Ok(thread)
+        } else {
+            Err(issues)
+        }
+    }
+    pub fn fields(&self, errors: &[(SolidField, String)], editable: bool) -> Vec<SolidFieldView> {
+        use SolidField as F;
+        let f = self;
         let custom = f.preset == "custom";
         let rounded = f.standard == HoleThreadStandard::CustomTrapezoidal;
         let text = |v: &str| Field::Text {
@@ -544,9 +625,26 @@ impl SolidForm {
         let mut sizes: Vec<_> = presets()
             .iter()
             .filter(|p| p.thread.series == f.series)
-            .map(|p| (p.id.clone(), p.external().designation))
+            .map(|p| {
+                (
+                    p.id.clone(),
+                    if f.external {
+                        p.external().designation
+                    } else {
+                        p.thread.designation.clone()
+                    },
+                )
+            })
             .collect();
-        sizes.push(("custom".into(), "Custom shaft".into()));
+        sizes.push((
+            "custom".into(),
+            if f.external {
+                "Custom shaft"
+            } else {
+                "Custom thread"
+            }
+            .into(),
+        ));
         let mut rows = vec![
             (
                 F::Cylinder,
@@ -560,7 +658,12 @@ impl SolidForm {
             ),
             (
                 F::ThreadStandard,
-                "Standard".into(),
+                if f.external {
+                    "Standard"
+                } else {
+                    "Thread standard"
+                }
+                .into(),
                 choices(
                     key(f.standard),
                     pairs(&[
@@ -593,7 +696,12 @@ impl SolidForm {
             ),
             (
                 F::ThreadPreset,
-                "Size and pitch".into(),
+                if f.external {
+                    "Size and pitch"
+                } else {
+                    "Thread size"
+                }
+                .into(),
                 choices(f.preset.clone(), sizes),
                 true,
                 true,
@@ -608,7 +716,12 @@ impl SolidForm {
             (F::Pitch, "Pitch".into(), text(f.pitch.text()), custom, true),
             (
                 F::ThreadClass,
-                "Tolerance class".into(),
+                if f.external {
+                    "Tolerance class"
+                } else {
+                    "Internal class"
+                }
+                .into(),
                 text(&f.class),
                 custom,
                 !rounded,
@@ -648,7 +761,12 @@ impl SolidForm {
             ),
             (
                 F::Representation,
-                "Representation".into(),
+                if f.external {
+                    "Representation"
+                } else {
+                    "Geometry"
+                }
+                .into(),
                 choices(
                     key(f.representation),
                     pairs(&[
@@ -661,14 +779,24 @@ impl SolidForm {
             ),
             (
                 F::FullThread,
-                "Thread the full cylindrical surface".into(),
+                if f.external {
+                    "Thread the full cylindrical surface"
+                } else {
+                    "Thread full cylindrical hole depth"
+                }
+                .into(),
                 Field::Toggle(f.full),
                 true,
                 true,
             ),
             (
                 F::Distance,
-                "Thread length".into(),
+                if f.external {
+                    "Thread length"
+                } else {
+                    "Thread depth"
+                }
+                .into(),
                 text(f.depth.text()),
                 !f.full,
                 true,
@@ -695,10 +823,11 @@ impl SolidForm {
             })
             .collect()
     }
-    pub(crate) fn thread_notes(&self) -> Vec<String> {
-        let Some(f) = &self.thread else {
-            return vec![];
-        };
+}
+
+impl ThreadFields {
+    pub fn notes(&self) -> Vec<String> {
+        let f = self;
         let mut notes = Vec::new();
         if let Some(s) = &f.surface {
             notes.push(format!(

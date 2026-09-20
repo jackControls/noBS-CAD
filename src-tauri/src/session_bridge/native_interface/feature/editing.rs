@@ -107,6 +107,7 @@ impl SessionBridgeState {
                 | "solid_edit_chamfer"
                 | "solid_edit_shell"
                 | "solid_edit_external_thread"
+                | "solid_edit_hole"
                 | "solid_edit_combine"
                 | "construction_plane_edit_offset"
                 | "construction_plane_edit_midplane"
@@ -188,6 +189,7 @@ fn prepare(
     let stage = Arc::new(Stage::new(engine, &receipt, id)?);
     let definitions = parse_engine_envelope(stage.engine.engine_call(
         match kind {
+            SolidFormKind::Hole => "hole_definitions",
             SolidFormKind::Fillet => "fillet_definitions",
             SolidFormKind::Chamfer => "chamfer_definitions",
             SolidFormKind::ExternalThread
@@ -209,7 +211,9 @@ fn prepare(
         .and_then(|items| items.iter().find(|d| d["feature_id"].as_u64() == Some(id)))
         .ok_or("The feature no longer exists")?;
     let snapshot = Snapshot::capture(&stage.engine, receipt)?;
-    let form = if kind == SolidFormKind::ExternalThread {
+    let form = if kind == SolidFormKind::Hole {
+        SolidForm::edit_hole(definition, &snapshot.model(None))?
+    } else if kind == SolidFormKind::ExternalThread {
         SolidForm::edit_thread(definition, &snapshot.model(None))?
     } else if kind.is_pattern() {
         SolidForm::edit_pattern(definition, &snapshot.model(None))?
@@ -249,6 +253,8 @@ fn install(
         SolidField::FirstPlane
     } else if prepared.form.kind() == SolidFormKind::Combine {
         SolidField::TargetBody
+    } else if prepared.form.kind() == SolidFormKind::Hole {
+        SolidField::HolePositions
     } else if prepared.form.kind() == SolidFormKind::ExternalThread {
         SolidField::Cylinder
     } else if prepared.form.kind() == SolidFormKind::Shell {
@@ -271,6 +277,7 @@ fn install(
         hovered_face: None,
         hovered_body: None,
         hovered_plane: None,
+        hovered_point: None,
         #[cfg(feature = "dev-bevy-host")]
         offset_drag: None,
     };

@@ -395,6 +395,8 @@ fn synchronize_owned(
                     super::SolidField::Edges => "EDGES",
                     super::SolidField::Faces => "FACES TO REMOVE",
                     super::SolidField::Cylinder => "CYLINDRICAL SURFACE",
+                    super::SolidField::HoleSupport => "SUPPORT FACE",
+                    super::SolidField::HolePositions => "POSITIONS",
                     super::SolidField::TargetBody => "TARGET BODY",
                     super::SolidField::Bodies if panel.kind == super::SolidFormKind::SplitBody => {
                         "BODY TO SPLIT"
@@ -482,6 +484,12 @@ fn synchronize_owned(
                     }
                     super::SolidField::Source => "Click a profile in the viewport.",
                     super::SolidField::Edges => "Click edges to add or remove from this body.",
+                    super::SolidField::HoleSupport => {
+                        "Select a planar face for the hole direction."
+                    }
+                    super::SolidField::HolePositions => {
+                        "Pick sketch points or click on the support face."
+                    }
                     super::SolidField::Cylinder => {
                         "Choose an exterior cylinder; hole walls are rejected."
                     }
@@ -524,6 +532,8 @@ fn synchronize_owned(
             let mut clear = InterfaceControl::button(
                 panel.kind.group(),
                 match row.field {
+                    super::SolidField::HoleSupport => "Clear support face",
+                    super::SolidField::HolePositions => "Clear hole positions",
                     super::SolidField::Source => "Clear source profiles",
                     super::SolidField::AxisLine => "Clear axis line",
                     super::SolidField::Targets => "Clear target bodies",

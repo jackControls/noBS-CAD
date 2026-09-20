@@ -18,6 +18,8 @@ pub(crate) fn hover_references(
                 e.pick_target,
                 Some(
                     SolidField::Edges
+                        | SolidField::HoleSupport
+                        | SolidField::HolePositions
                         | SolidField::Cylinder
                         | SolidField::Faces
                         | SolidField::TargetBody
@@ -35,6 +37,16 @@ pub(crate) fn hover_references(
         };
         with_receipt(&services.bridge, &services.engine, owner, |receipt| {
             check_revision(editor, &receipt)?;
+            if editor.pick_target == Some(SolidField::HolePositions) {
+                let next = point.and_then(|p| hole_point(world, editor, owner, p).map(|(_, p)| p));
+                if next != editor.hovered_point
+                    || native_viewport::interface_preview_revision(world) != editor.preview_revision
+                {
+                    editor.hovered_point = next;
+                    update_preview(editor, world)?;
+                }
+                return Ok(true);
+            }
             if matches!(
                 editor.pick_target,
                 Some(SolidField::FirstPlane | SolidField::SecondPlane)
@@ -86,7 +98,7 @@ pub(crate) fn hover_references(
             }
             if matches!(
                 editor.pick_target,
-                Some(SolidField::Faces | SolidField::Cylinder)
+                Some(SolidField::Faces | SolidField::Cylinder | SolidField::HoleSupport)
             ) {
                 let next = hit
                     .filter(|hit| editor.snapshot.source_local(hit.body_id, hit.occurrence_id))
@@ -204,6 +216,14 @@ pub(crate) fn handle_canvas_pick(
                         }
                     }
                     return Ok(FeaturePick::Plane(plane));
+                }
+                if target == SolidField::HolePositions {
+                    if let Some((reference, point)) = hole_point(world, editor, owner, point) {
+                        return Ok(FeaturePick::HolePosition {
+                            point,
+                            reference: Some(reference),
+                        });
+                    }
                 }
                 let hit = native_viewport::interface_pick(
                     world,
@@ -457,6 +477,27 @@ pub(crate) fn handle_canvas_pick(
                     return Err("Open the component before selecting its references".into());
                 }
                 match target {
+                    SolidField::HoleSupport => Ok(FeaturePick::HoleSupport {
+                        face: PlanarFaceSourceDto {
+                            body_id: BodyId(hit.body_id),
+                            face_id: FaceId(hit.face_id),
+                        },
+                        point: Some(hit.point.map(f64::from)),
+                    }),
+                    SolidField::HolePositions => {
+                        if editor.form.hole_support()
+                            != Some(PlanarFaceSourceDto {
+                                body_id: BodyId(hit.body_id),
+                                face_id: FaceId(hit.face_id),
+                            })
+                        {
+                            return Err("Click the support face or a visible sketch point".into());
+                        }
+                        Ok(FeaturePick::HolePosition {
+                            point: hit.point.map(f64::from),
+                            reference: None,
+                        })
+                    }
                     SolidField::Bodies => {
                         let id = BodyId(hit.body_id);
                         let mut bodies = editor.form.selected_bodies().to_vec();
@@ -532,6 +573,46 @@ pub(crate) fn handle_canvas_pick(
         value["handled"] = json!(true);
         Some(value)
     })
+}
+
+/// The catalog carries every engine-supported point kind, including arc ends and
+/// spline fit points. Selection uses the same projection as the visible sketch.
+fn hole_point(
+    world: &World,
+    editor: &Editor,
+    owner: &DocumentContext,
+    cursor: [f32; 2],
+) -> Option<(nbcad_solid::SketchPointRefDto, [f64; 3])> {
+    let (_, _, view, _) = native_viewport::interface_view_snapshot(world);
+    let mut best: Option<(f32, nbcad_solid::SketchPointRefDto, [f64; 3])> = None;
+    for sketch in &editor.snapshot.viewport.profile_catalog {
+        if view.hidden_sketch_names.contains(&sketch.sketch_name) {
+            continue;
+        }
+        for p in &sketch.reference_points {
+            let point = sketch.basis.to_3d([p.position.x, p.position.y]);
+            let Some(pixel) =
+                native_viewport::interface_world_point(world, &owner.document_id, point)
+                    .ok()
+                    .flatten()
+            else {
+                continue;
+            };
+            let distance = (pixel[0] - cursor[0]).hypot(pixel[1] - cursor[1]);
+            if distance <= 9. && best.as_ref().is_none_or(|(d, _, _)| distance < *d) {
+                best = Some((
+                    distance,
+                    nbcad_solid::SketchPointRefDto {
+                        sketch_name: sketch.sketch_name.clone(),
+                        entity_id: p.entity_id,
+                        point: p.point.clone(),
+                    },
+                    point,
+                ));
+            }
+        }
+    }
+    best.map(|(_, r, p)| (r, p))
 }
 
 #[cfg(test)]

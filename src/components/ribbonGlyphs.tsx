@@ -1,4 +1,5 @@
 import externalThread from '../assets/ribbon-icons/externalThread.svg?raw';
+import hole from '../assets/ribbon-icons/hole.svg?raw';
 import rib from '../assets/ribbon-icons/rib.svg?raw';
 import shell from '../assets/ribbon-icons/shell.svg?raw';
 import combine from '../assets/ribbon-icons/combine.svg?raw';
@@ -48,7 +49,7 @@ import collinear from '../assets/ribbon-icons/collinear.svg?raw';
 import symmetry from '../assets/ribbon-icons/symmetry.svg?raw';
 import dimension from '../assets/ribbon-icons/dim.svg?raw';
 
-const sources = { externalThread, splitBody, plane, midplane, planeAngle, combine, shell, dimension, trim, extend, break: breakGlyph, offset, fillet, chamfer, moveCopy, mirror, select, rectPattern, circPattern, hv, fix, midpointC, coincident, tangent, equal, parallel, perpendicular, concentric, collinear, symmetry, extrude, revolve, sweep, loft, rib, line, midpointLine, rect, circle, arc, slot, sketch, spline, point, finish, cancel, chevron };
+const sources = { externalThread, hole, splitBody, plane, midplane, planeAngle, combine, shell, dimension, trim, extend, break: breakGlyph, offset, fillet, chamfer, moveCopy, mirror, select, rectPattern, circPattern, hv, fix, midpointC, coincident, tangent, equal, parallel, perpendicular, concentric, collinear, symmetry, extrude, revolve, sweep, loft, rib, line, midpointLine, rect, circle, arc, slot, sketch, spline, point, finish, cancel, chevron };
 const content = Object.fromEntries(Object.entries(sources).map(([id, svg]) => [id, svg.replace(/^<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '')]));
 const strokes = Object.fromEntries(Object.entries(sources).map(([id, svg]) => [id, Number(svg.match(/stroke-width="([\d.]+)"/)?.[1] ?? 1.6)]));
 

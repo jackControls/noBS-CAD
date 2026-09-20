@@ -4145,7 +4145,7 @@ fn support_face_basis(
         .ok_or_else(|| SolidError::InvalidExtent("Hole support face must be planar".to_string()))
 }
 
-fn validate_hole(request: &HoleRequest) -> Result<(), SolidError> {
+pub fn validate_hole(request: &HoleRequest) -> Result<(), SolidError> {
     validate_positive(request.diameter, "hole diameter")?;
     let legacy_position;
     let positions = if request.positions.is_empty() {
@@ -4445,7 +4445,7 @@ fn hole_positions(definition: &HoleDefinitionDto) -> Vec<HolePositionDto> {
     }
 }
 
-fn hole_reference_center(
+pub fn hole_reference_center(
     reference: &SketchPointRefDto,
     catalog: &[ProfileCatalogItemDto],
     active_features: &BTreeSet<FeatureId>,

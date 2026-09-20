@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 pub(super) struct Preset {
     pub id: String,
     pub thread: HoleThreadDto,
+    pub drill: f64,
 }
 
 pub(super) fn presets() -> &'static [Preset] {
@@ -38,6 +39,7 @@ pub(super) fn presets() -> &'static [Preset] {
             for (d, p, drill) in rows {
                 result.push(Preset {
                     id: format!("{key}-{d}-{p}"),
+                    drill,
                     thread: HoleThreadDto {
                         standard: HoleThreadStandard::IsoMetric,
                         series,
@@ -59,9 +61,10 @@ pub(super) fn presets() -> &'static [Preset] {
             ("unc", HoleThreadSeries::Unc, sizes.unc),
             ("unf", HoleThreadSeries::Unf, sizes.unf),
         ] {
-            for (size, d, tpi, _, drill) in rows {
+            for (size, d, tpi, drill_diameter, drill) in rows {
                 result.push(Preset {
                     id: format!("{key}-{size}-{tpi}"),
+                    drill: drill_diameter * 25.4,
                     thread: HoleThreadDto {
                         standard: HoleThreadStandard::UnifiedInch,
                         series,
@@ -106,13 +109,17 @@ impl Preset {
 mod tests {
     use super::*;
     #[test]
-    fn every_embedded_size_has_a_unique_id_and_valid_external_fit() {
+    fn every_embedded_size_has_a_unique_id_and_valid_internal_and_external_fit() {
         let mut ids = std::collections::HashSet::new();
         assert_eq!(presets().len(), 95);
         for p in presets() {
             assert!(ids.insert(&p.id));
             let t = p.external();
             nbcad_solid::validate_external_thread(&t, t.nominal_diameter).unwrap();
+            let hole: nbcad_solid::HoleRequest=serde_json::from_value(serde_json::json!({
+                "body_id":1,"face_id":1,"position":{"x":0.,"y":0.},"diameter":p.drill,"thread":p.thread
+            })).unwrap();
+            nbcad_solid::validate_hole(&hole).unwrap();
         }
         let m6 = presets()
             .iter()

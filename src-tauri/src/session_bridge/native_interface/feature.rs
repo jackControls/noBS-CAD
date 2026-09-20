@@ -79,6 +79,14 @@ pub(crate) enum FeaturePick {
     Profiles(Vec<ProfileRefDto>),
     Bodies(Vec<BodyId>),
     Face(PlanarFaceSourceDto),
+    HoleSupport {
+        face: PlanarFaceSourceDto,
+        point: Option<[f64; 3]>,
+    },
+    HolePosition {
+        point: [f64; 3],
+        reference: Option<nbcad_solid::SketchPointRefDto>,
+    },
     AxisLine {
         sketch_name: String,
         entity_id: u64,
@@ -221,6 +229,7 @@ struct Editor {
     hovered_face: Option<(BodyId, nbcad_core::FaceId)>,
     hovered_body: Option<BodyId>,
     hovered_plane: Option<nbcad_core::PlaneRef>,
+    hovered_point: Option<[f64; 3]>,
     #[cfg(feature = "dev-bevy-host")]
     offset_drag: Option<manipulator::Drag>,
 }
@@ -290,7 +299,7 @@ pub(crate) fn panel(world: &World) -> Option<FeaturePanel> {
         busy: editor.form.is_busy(),
         error: editor.form.engine_error().map(str::to_owned),
         preview_notice: editor.preview_notice.clone(),
-        notes: editor.form.thread_notes(),
+        notes: editor.form.feature_notes(),
         pick_target: editor.pick_target,
         choice_field: editor.choice_field,
     })
@@ -455,6 +464,22 @@ fn update_preview(editor: &mut Editor, world: &mut World) -> Result<(), String> 
             }
         }
     }
+    if let Some(point) = editor
+        .hovered_point
+        .filter(|_| editor.pick_target == Some(SolidField::HolePositions))
+    {
+        let (_, camera, _, _) = native_viewport::interface_view_snapshot(world);
+        let distance = (0..3)
+            .map(|i| (camera.position[i] as f64 - point[i]).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        next.points.push(native_viewport::ViewportPointLayer {
+            color: [1., 0.7, 0.2, 1.],
+            radius: (distance * 0.003) as f32,
+            hollow: false,
+            positions: point.into_iter().map(|v| v as f32).collect(),
+        });
+    }
     native_viewport::apply_interface_preview(world, &model.owner.document_id, next)?;
     editor.preview_revision = native_viewport::interface_preview_revision(world);
     editor.preview_notice = notice;
@@ -529,6 +554,14 @@ fn apply_pick(editor: &mut Editor, pick: FeaturePick) -> Result<(), String> {
             Some(field @ (SolidField::TargetBody | SolidField::ToolBodies)),
             FeaturePick::Bodies(bodies),
         ) => editor.form.set_combine_bodies(field, bodies, &model),
+        (Some(SolidField::HoleSupport), FeaturePick::HoleSupport { face, point }) => {
+            editor.form.set_hole_support(Some(face), point, &model)?;
+            editor.pick_target = Some(SolidField::HolePositions);
+            Ok(())
+        }
+        (Some(SolidField::HolePositions), FeaturePick::HolePosition { point, reference }) => {
+            editor.form.set_hole_position(point, reference, &model)
+        }
         (Some(SolidField::Cylinder), FeaturePick::Face(face)) => {
             editor.form.set_thread_face(Some(face), &model)?;
             editor.pick_target = None;
@@ -670,6 +703,7 @@ fn reduce_owned(
                 kind,
                 SolidFormKind::Fillet
                     | SolidFormKind::Chamfer
+                    | SolidFormKind::Hole
                     | SolidFormKind::ExternalThread
                     | SolidFormKind::Shell
                     | SolidFormKind::Combine
@@ -788,6 +822,8 @@ fn reduce_owned(
                     SolidField::Edges
                 } else if *kind == SolidFormKind::Combine {
                     SolidField::TargetBody
+                } else if *kind == SolidFormKind::Hole {
+                    SolidField::HoleSupport
                 } else if *kind == SolidFormKind::ExternalThread {
                     SolidField::Cylinder
                 } else if *kind == SolidFormKind::Shell {
@@ -804,6 +840,7 @@ fn reduce_owned(
                 hovered_face: None,
                 hovered_body: None,
                 hovered_plane: None,
+                hovered_point: None,
                 #[cfg(feature = "dev-bevy-host")]
                 offset_drag: None,
             };
@@ -856,7 +893,9 @@ fn reduce_owned(
                         apply_pick(&mut editor, FeaturePick::Bodies(bodies[1..].to_vec()))?;
                     }
                 }
-            } else if feature_id.is_none() && *kind == SolidFormKind::ExternalThread {
+            } else if feature_id.is_none()
+                && matches!(kind, SolidFormKind::ExternalThread | SolidFormKind::Hole)
+            {
                 let (_, _, presentation, _) = native_viewport::interface_view_snapshot(world);
                 if let ([body], [face]) = (
                     presentation.selected_body_ids.as_slice(),
@@ -868,10 +907,22 @@ fn reduce_owned(
                     {
                         apply_pick(
                             &mut editor,
-                            FeaturePick::Face(PlanarFaceSourceDto {
-                                body_id: BodyId(*body),
-                                face_id: nbcad_core::FaceId(*face),
-                            }),
+                            if *kind == SolidFormKind::Hole {
+                                FeaturePick::HoleSupport {
+                                    face: PlanarFaceSourceDto {
+                                        body_id: BodyId(*body),
+                                        face_id: nbcad_core::FaceId(*face),
+                                    },
+                                    point: presentation
+                                        .selected_surface_point
+                                        .map(|p| [p.x, p.y, p.z]),
+                                }
+                            } else {
+                                FeaturePick::Face(PlanarFaceSourceDto {
+                                    body_id: BodyId(*body),
+                                    face_id: nbcad_core::FaceId(*face),
+                                })
+                            },
                         )?;
                     }
                 }
@@ -987,6 +1038,16 @@ fn reduce_owned(
             );
         }
         check_revision(editor, &receipt)?;
+        // A form action leaves the canvas: do not retain a hit from the last
+        // pointer move, including when MCP focuses or edits a field directly.
+        let had_hover = editor.hovered_point.take().is_some()
+            | editor.hovered_edge.take().is_some()
+            | editor.hovered_face.take().is_some()
+            | editor.hovered_body.take().is_some()
+            | editor.hovered_plane.take().is_some();
+        if had_hover {
+            update_preview(editor, world)?;
+        }
         let model = editor.snapshot.model(editor.form.parameter_sketch());
         match action {
             #[cfg(feature = "dev-bevy-host")]
@@ -1082,6 +1143,8 @@ fn reduce_owned(
                 if !matches!(
                     field,
                     SolidField::Source
+                        | SolidField::HoleSupport
+                        | SolidField::HolePositions
                         | SolidField::Cylinder
                         | SolidField::Faces
                         | SolidField::TargetBody
@@ -1121,6 +1184,14 @@ fn reduce_owned(
                 SolidField::TargetBody | SolidField::ToolBodies => {
                     editor.form.set_combine_bodies(*field, Vec::new(), &model)?
                 }
+                SolidField::HoleSupport => {
+                    editor.form.set_hole_support(None, None, &model)?;
+                    editor.pick_target = Some(*field);
+                }
+                SolidField::HolePositions => {
+                    editor.form.clear_hole_positions(&model)?;
+                    editor.pick_target = Some(*field);
+                }
                 SolidField::Cylinder => {
                     editor.form.set_thread_face(None, &model)?;
                     editor.pick_target = Some(*field);
@@ -1153,14 +1224,16 @@ fn reduce_owned(
                 .any(|r| r.field == SolidField::AxisLine && r.visible)
                 .then_some(SolidField::AxisLine);
         }
-        if matches!(
-            action,
-            FeatureControl::Field(SolidField::Extent)
-                | FeatureControl::Choose {
-                    field: SolidField::Extent,
-                    ..
-                }
-        ) {
+        if editor.form.kind() != SolidFormKind::Hole
+            && matches!(
+                action,
+                FeatureControl::Field(SolidField::Extent)
+                    | FeatureControl::Choose {
+                        field: SolidField::Extent,
+                        ..
+                    }
+            )
+        {
             let to_face = editor
                 .form
                 .fields(&model)

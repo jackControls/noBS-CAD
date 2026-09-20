@@ -167,3 +167,57 @@ pub(super) fn edit_feature(client: &mut Client, name: &str, context_menu: bool) 
     }
     Ok(())
 }
+
+pub(super) fn field(client: &mut Client, label: &str, value: Option<&str>) -> Result<Value> {
+    // Expanded custom profiles scroll naturally; drive those same scroll buttons.
+    // Search current position, then from top to bottom, never hidden controls.
+    for pass in 0..2 {
+        if pass == 1 {
+            for _ in 0..12 {
+                let state = ui(client, json!({"action":"inspect"}))?;
+                if !controls(&state)
+                    .any(|c| c["label"] == "Scroll feature up" && c["disabled"] == false)
+                {
+                    break;
+                }
+                control(client, "Scroll feature up", None)?;
+            }
+        }
+        for _ in 0..12 {
+            let state = ui(client, json!({"action":"inspect"}))?;
+            let found: Vec<_> = controls(&state)
+                .filter(|c| {
+                    c["disabled"] == false
+                        && c["label"]
+                            .as_str()
+                            .is_some_and(|s| s == label || s.starts_with(&format!("{label}: ")))
+                })
+                .collect();
+            if found.len() == 1 {
+                return ui(
+                    client,
+                    if let Some(v) = value {
+                        json!({"action":"set_value","target":found[0]["id"],"value":v})
+                    } else {
+                        json!({"action":"click","target":found[0]["id"]})
+                    },
+                );
+            }
+            ensure!(found.is_empty(), "Ambiguous feature control {label}");
+            if !controls(&state)
+                .any(|c| c["label"] == "Scroll feature down" && c["disabled"] == false)
+            {
+                break;
+            }
+            control(client, "Scroll feature down", None)?;
+        }
+    }
+    anyhow::bail!("No visible, enabled feature control {label}")
+}
+pub(super) fn capture(client: &mut Client, out: &std::path::Path, name: &str) -> Result<()> {
+    ui(
+        client,
+        json!({"action":"capture","path":out.join(format!("{name}.png"))}),
+    )?;
+    Ok(())
+}

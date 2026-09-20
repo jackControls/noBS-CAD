@@ -37,14 +37,7 @@ const GLYPHS: Record<string, ReactNode> = {
   rib: <SharedRibbonGlyph id="rib" />,
 
   // Solid refinement and body operations use section diagrams.
-  hole: (
-    <>
-      <ellipse cx="12" cy="7" rx="7.5" ry="3" />
-      <ellipse cx="12" cy="7" rx="2.3" ry="1" />
-      <path d="M4.5 7v8c0 1.6 3.4 3 7.5 3s7.5-1.4 7.5-3V7" />
-      <path d="M12 8v11" strokeDasharray="2 2" />
-    </>
-  ),
+  hole: <SharedRibbonGlyph id="hole" />,
   externalThread: <SharedRibbonGlyph id="externalThread" />,
   fillet: <SharedRibbonGlyph id="fillet" />,
   chamfer: <SharedRibbonGlyph id="chamfer" />,
