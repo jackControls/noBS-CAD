@@ -103,7 +103,13 @@ impl SessionBridgeState {
         use crate::session_bridge::{bump_engine_revision, native_history::HistoryState};
         if !matches!(
             operation,
-            "solid_edit_fillet" | "solid_edit_chamfer" | "solid_edit_shell" | "solid_edit_combine"
+            "solid_edit_fillet"
+                | "solid_edit_chamfer"
+                | "solid_edit_shell"
+                | "solid_edit_combine"
+                | "construction_plane_edit_offset"
+                | "construction_plane_edit_midplane"
+                | "construction_plane_edit_at_angle"
         ) || arguments["feature_id"].as_u64() != Some(stage.feature_id)
         {
             return Err("This prepared model belongs to another feature edit".into());
@@ -180,6 +186,9 @@ fn prepare(
             SolidFormKind::Fillet => "fillet_definitions",
             SolidFormKind::Chamfer => "chamfer_definitions",
             SolidFormKind::Shell | SolidFormKind::Combine => "body_feature_definitions",
+            SolidFormKind::OffsetPlane | SolidFormKind::Midplane | SolidFormKind::AnglePlane => {
+                "datum_plane_definitions"
+            }
             _ => return Err("This feature has no topology editor".into()),
         },
         "",
@@ -189,7 +198,9 @@ fn prepare(
         .and_then(|items| items.iter().find(|d| d["feature_id"].as_u64() == Some(id)))
         .ok_or("The feature no longer exists")?;
     let snapshot = Snapshot::capture(&stage.engine, receipt)?;
-    let form = if kind == SolidFormKind::Combine {
+    let form = if kind.is_plane() {
+        SolidForm::edit_plane(definition, &snapshot.model(None))?
+    } else if kind == SolidFormKind::Combine {
         SolidForm::edit_combine(definition, &snapshot.model(None))?
     } else if kind == SolidFormKind::Shell {
         SolidForm::edit_shell(definition, &snapshot.model(None))?
@@ -215,7 +226,9 @@ fn install(
         .last_id
         .checked_add(1)
         .ok_or("Feature identities exhausted")?;
-    let pick_target = Some(if prepared.form.kind() == SolidFormKind::Combine {
+    let pick_target = Some(if prepared.form.kind().is_plane() {
+        SolidField::FirstPlane
+    } else if prepared.form.kind() == SolidFormKind::Combine {
         SolidField::TargetBody
     } else if prepared.form.kind() == SolidFormKind::Shell {
         SolidField::Faces
@@ -236,6 +249,9 @@ fn install(
         hovered_edge: None,
         hovered_face: None,
         hovered_body: None,
+        hovered_plane: None,
+        #[cfg(feature = "dev-bevy-host")]
+        offset_drag: None,
     };
     native_viewport::apply_interface_edit_model(world, editor.snapshot.viewport.clone())?;
     if let Err(error) = update_preview(&mut editor, world) {

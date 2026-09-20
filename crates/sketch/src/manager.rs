@@ -4824,6 +4824,16 @@ fn resolve_datum_source(
         }
     };
 
+    construction_plane_basis(source, resolve, |body, edge| solids.edge_points(body, edge))
+}
+
+/// The same validated construction geometry serves history replay and native
+/// previews. Callers resolve only references from their coherent model snapshot.
+pub fn construction_plane_basis(
+    source: &mut DatumPlaneSourceDto,
+    resolve: impl Fn(PlaneRef) -> Result<PlaneBasis, SessionError>,
+    edge_points: impl Fn(BodyId, nbcad_core::EdgeId) -> Option<Vec<Point3Dto>>,
+) -> Result<PlaneBasis, SessionError> {
     match source {
         DatumPlaneSourceDto::Offset {
             reference,
@@ -4875,8 +4885,7 @@ fn resolve_datum_source(
                 ));
             }
             let basis = resolve(*reference)?;
-            let points = solids
-                .edge_points(*body_id, *edge_id)
+            let points = edge_points(*body_id, *edge_id)
                 .filter(|points| points.len() >= 2)
                 .or_else(|| axis_points.map(|points| points.to_vec()))
                 .ok_or_else(|| {

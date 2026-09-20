@@ -291,6 +291,14 @@ fn synchronize_owned(
                     super::SolidField::Faces => "FACES TO REMOVE",
                     super::SolidField::TargetBody => "TARGET BODY",
                     super::SolidField::ToolBodies => "TOOL BODIES",
+                    super::SolidField::FirstPlane
+                        if panel.kind == super::SolidFormKind::Midplane =>
+                    {
+                        "FIRST REFERENCE"
+                    }
+                    super::SolidField::FirstPlane => "REFERENCE PLANE",
+                    super::SolidField::SecondPlane => "SECOND REFERENCE",
+                    super::SolidField::AxisEdge => "STRAIGHT AXIS EDGE",
                     super::SolidField::AxisLine => "AXIS LINE",
                     super::SolidField::Targets => "TARGET BODIES",
                     super::SolidField::StopFace => "STOP FACE",
@@ -362,9 +370,17 @@ fn synchronize_owned(
                     }
                     super::SolidField::Source => "Click a profile in the viewport.",
                     super::SolidField::Edges => "Click edges to add or remove from this body.",
-                    super::SolidField::Faces => "Click faces on one body to add or remove openings.",
+                    super::SolidField::Faces => {
+                        "Click faces on one body to add or remove openings."
+                    }
                     super::SolidField::TargetBody => "Click the body that will receive the result.",
-                    super::SolidField::ToolBodies => "The target stays separate from the tool bodies.",
+                    super::SolidField::ToolBodies => {
+                        "The target stays separate from the tool bodies."
+                    }
+                    super::SolidField::FirstPlane | super::SolidField::SecondPlane => {
+                        "Choose in the browser or click a planar face."
+                    }
+                    super::SolidField::AxisEdge => "Choose a straight edge on the reference plane.",
                     super::SolidField::AxisLine => "Click a straight line on the profile plane.",
                     super::SolidField::Path if panel.kind == super::SolidFormKind::Rib => {
                         "Click centerline curves to add or remove."
@@ -526,6 +542,66 @@ fn synchronize_owned(
         theme,
         &assets,
     )?;
+    if let Some(anchor) = super::manipulator::anchor(world) {
+        let viewport = world
+            .get_resource::<NativeInterfaceHandle>()
+            .and_then(|handle| handle.frame())
+            .and_then(|frame| {
+                frame
+                    .canvases
+                    .iter()
+                    .find(|c| c.name == "viewport")
+                    .map(|c| c.bounds)
+            });
+        if let (Some(canvas), Some(row)) = (
+            viewport,
+            panel
+                .fields
+                .iter()
+                .find(|r| r.field == super::SolidField::Distance),
+        ) {
+            let min_x = canvas.x as f32 + 8.;
+            let x =
+                (canvas.x as f32 + anchor[0] + 24.).clamp(min_x, (area.x as f32 - 150.).max(min_x));
+            let min_y = canvas.y as f32 + 8.;
+            let y = (canvas.y as f32 + anchor[1] + 8.).clamp(
+                min_y,
+                (canvas.y as f32 + canvas.height as f32 - 42.).max(min_y),
+            );
+            let mut control = InterfaceControl::button(panel.kind.group(), "Offset plane distance");
+            control.field = row.value.clone();
+            control.disabled = panel.busy;
+            label(
+                world,
+                state,
+                &mut live_labels,
+                "offset-caption",
+                root,
+                camera,
+                "OFFSET",
+                node(x - area.x as f32, y - area.y as f32 - 19., 132., 18.),
+                theme,
+                &assets,
+                false,
+            );
+            widget(
+                world,
+                state,
+                &mut live_controls,
+                "offset-distance",
+                root,
+                camera,
+                control,
+                node(x - area.x as f32, y - area.y as f32, 132., 30.),
+                FeatureCommand::Control {
+                    form_id: panel.form_id,
+                    action: FeatureControl::Field(super::SolidField::Distance),
+                },
+                theme,
+                &assets,
+            )?;
+        }
+    }
     state.controls.retain(|key, (entity, _)| {
         if live_controls.contains(key) {
             true

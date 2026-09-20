@@ -144,9 +144,16 @@ fn complete(
                 });
             let completion = if matches {
                 let mut editor = state.editor.take().unwrap();
-                editor
-                    .form
-                    .apply_succeeded(ticket, &result.context, result.engine_revision)
+                let view = if editor.form.kind().is_plane() {
+                    plane_view(world, &result.context, false, None)
+                } else {
+                    Ok(())
+                };
+                let form =
+                    editor
+                        .form
+                        .apply_succeeded(ticket, &result.context, result.engine_revision);
+                form.and(view)
             } else {
                 Ok(())
             };

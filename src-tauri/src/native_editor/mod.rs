@@ -522,6 +522,27 @@ pub(crate) fn process_one(
     let Some(frame) = handle.frame() else {
         return Ok(json!({"handled":false}));
     };
+    if frame.modal_stack.is_empty() && event.context.as_ref() == Some(&frame.context) {
+        use crate::session_bridge::native_interface::feature::manipulator::{self,Pointer};
+        let phase=match &event.event {
+            WindowEvent::CursorMoved(_) => Some(Pointer::Move),
+            WindowEvent::MouseButtonInput(b) if b.button == MouseButton::Left => Some(if b.state == ButtonState::Pressed {Pointer::Press} else {Pointer::Release}),
+            WindowEvent::CursorLeft(_) => Some(Pointer::Cancel),
+            WindowEvent::WindowFocused(e) if !e.focused => Some(Pointer::Cancel),
+            _=>None,
+        };
+        if let Some(phase)=phase {
+            let point=event.cursor.and_then(|p| {
+                let canvas=frame.canvases.iter().find(|c|c.name=="viewport")?;
+                let a=canvas.bounds;
+                if matches!(phase,Pointer::Press) && (handle.owns_pointer([p.x as f64,p.y as f64]) || p.x<a.x as f32 || p.y<a.y as f32 || p.x>=(a.x+a.width) as f32 || p.y>=(a.y+a.height) as f32) {return None;}
+                Some([p.x-a.x as f32,p.y-a.y as f32])
+            });
+            if manipulator::pointer(world,services,&frame.context,phase,point)? {
+                return Ok(json!({"handled":true,"offset_drag":true}));
+            }
+        }
+    }
     let next = stamp(
         &services.engine,
         &services.bridge,

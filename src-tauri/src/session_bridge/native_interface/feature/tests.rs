@@ -2,6 +2,7 @@ use super::super::tests::Fixture;
 use super::*;
 use crate::native_viewport::{ViewportLineLayer, ViewportPresentation};
 mod combine;
+mod planes;
 
 fn sketch(fixture: &Fixture) -> DocumentContext {
     let owner = fixture.owner();

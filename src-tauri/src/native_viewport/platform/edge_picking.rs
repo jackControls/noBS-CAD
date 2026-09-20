@@ -18,7 +18,8 @@ fn project(
     );
     pixel.is_finite().then_some((pixel, depth))
 }
-pub(super) fn pick(
+#[cfg(test)]
+fn pick(
     scene: &SolidSceneDto,
     camera: ViewportCamera,
     viewport: (f32, f32),
@@ -26,6 +27,18 @@ pub(super) fn pick(
     hidden: &[u64],
     poses: &[BodyPoseDto],
     instances: &[InstanceBodyPoseDto],
+) -> Option<NativePick> {
+    pick_edges(scene, camera, viewport, cursor, hidden, poses, instances, false)
+}
+pub(super) fn pick_edges(
+    scene: &SolidSceneDto,
+    camera: ViewportCamera,
+    viewport: (f32, f32),
+    cursor: [f32; 2],
+    hidden: &[u64],
+    poses: &[BodyPoseDto],
+    instances: &[InstanceBodyPoseDto],
+    straight: bool,
 ) -> Option<NativePick> {
     let basis = camera_projection(camera, viewport)?;
     let cursor = Vec2::from_array(cursor);
@@ -58,7 +71,7 @@ pub(super) fn pick(
                 .collect()
         };
         for (occurrence, transform) in placements {
-            for edge in body.edges.iter().filter(|edge| edge.refinable) {
+            for edge in body.edges.iter().filter(|edge| if straight { edge_is_straight(edge) } else { edge.refinable }) {
                 let mut best = None;
                 for pair in edge.points.windows(2) {
                     let [mut a, mut b] = [&pair[0], &pair[1]].map(|p| {

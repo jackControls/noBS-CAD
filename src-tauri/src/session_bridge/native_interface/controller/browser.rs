@@ -185,6 +185,21 @@ pub(crate) fn reduce(
     }
     match command {
         BrowserCommand::Select(_) => {
+            if let Some(panel) = feature::panel(world).filter(|p| matches!(p.pick_target,
+                Some(feature::SolidField::FirstPlane | feature::SolidField::SecondPlane))) {
+                use nbcad_core::{FaceId,PlaneRef};
+                let plane = match node.kind {
+                    Kind::OriginPlaneXy => Some(PlaneRef::ORIGIN_PLANES[0]),
+                    Kind::OriginPlaneXz => Some(PlaneRef::ORIGIN_PLANES[1]),
+                    Kind::OriginPlaneYz => Some(PlaneRef::ORIGIN_PLANES[2]),
+                    Kind::ConstructionPlane => node.reference_id.map(|id| PlaneRef::DatumPlane {datum_id:FaceId(id)}),
+                    _ => None,
+                };
+                if let Some(plane) = plane {
+                    return feature::accept_pick(engine,bridge,world,&action.context,panel.form_id,
+                        feature::FeaturePick::Plane(plane),||handle.validate_action(action));
+                }
+            }
             if crate::native_editor::support::picking(world) {
                 use nbcad_core::{FaceId, PlaneRef};
                 let plane = match node.kind {

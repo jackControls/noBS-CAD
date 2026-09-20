@@ -15,6 +15,69 @@ pub(super) fn references(
 ) -> Result<ViewportPreview, String> {
     let mut segments = Vec::new();
     let mut triangles = Vec::new();
+    let mut plane_lines = Vec::new();
+    let axis_center = form.plane_axis().and_then(|(body, edge)| {
+        let edge = model
+            .scene
+            .bodies
+            .iter()
+            .find(|b| b.id == body)?
+            .edges
+            .iter()
+            .find(|e| e.id == edge)?;
+        let a = edge.points.first()?;
+        let b = edge.points.last()?;
+        Some([(a.x + b.x) * 0.5, (a.y + b.y) * 0.5, (a.z + b.z) * 0.5])
+    });
+    // A plane is infinite; center its finite display patch on the selected
+    // axis while preserving its actual equation and saved coordinate origin.
+    let centered = |mut basis: PlaneBasis| {
+        if let Some(point) = axis_center {
+            basis.origin = basis.to_3d(basis.to_2d(point));
+        }
+        basis
+    };
+    let mut arrows = Vec::new();
+    if let Some((basis, distance)) = form.plane_offset(model) {
+        arrows.push(ViewportArrow {
+            start: basis.origin.map(|v| v as f32),
+            end: std::array::from_fn(|i| (basis.origin[i] + basis.normal[i] * distance) as f32),
+            color: [1., 0.72, 0.15, 1.],
+            width: 3.,
+            xray: true,
+        });
+    }
+    for basis in form.plane_guides(model) {
+        plane_quad(
+            centered(basis),
+            [0.35, 0.65, 1., 0.12],
+            &mut triangles,
+            &mut plane_lines,
+        )?;
+    }
+    if let Some(basis) = form.plane_preview(model)? {
+        plane_quad(
+            centered(basis),
+            [1., 0.72, 0.15, 0.26],
+            &mut triangles,
+            &mut plane_lines,
+        )?;
+    }
+    if let Some((body, edge)) = form.plane_axis() {
+        if let Some(edge) = model
+            .scene
+            .bodies
+            .iter()
+            .find(|b| b.id == body)
+            .and_then(|b| b.edges.iter().find(|e| e.id == edge))
+        {
+            for pair in edge.points.windows(2) {
+                for point in pair {
+                    segments.extend([point.x as f32, point.y as f32, point.z as f32]);
+                }
+            }
+        }
+    }
     for (field, color) in [
         (
             crate::native_forms::SolidField::TargetBody,
@@ -106,18 +169,20 @@ pub(super) fn references(
     if segments.iter().any(|v| !v.is_finite()) {
         return Err("Feature reference exceeds the renderer's range".into());
     }
+    plane_lines.push(ViewportLineLayer {
+        color: if form.selected_edges().is_some() {
+            [1., 0.88, 0.35, 1.]
+        } else {
+            [0.45, 0.72, 1., 1.]
+        },
+        width: 3.,
+        segments,
+        ..Default::default()
+    });
     Ok(ViewportPreview {
         triangles,
-        lines: vec![ViewportLineLayer {
-            color: if form.selected_edges().is_some() {
-                [1., 0.88, 0.35, 1.]
-            } else {
-                [0.45, 0.72, 1., 1.]
-            },
-            width: 3.,
-            segments,
-            ..Default::default()
-        }],
+        arrows,
+        lines: plane_lines,
         ..Default::default()
     })
 }
@@ -186,6 +251,39 @@ pub(super) fn face_fill(
         color,
         ..Default::default()
     })
+}
+
+fn plane_quad(
+    basis: PlaneBasis,
+    color: [f32; 4],
+    triangles: &mut Vec<crate::native_viewport::ViewportTriangleLayer>,
+    lines: &mut Vec<ViewportLineLayer>,
+) -> Result<(), String> {
+    let points = [[-40., -40.], [40., -40.], [40., 40.], [-40., 40.]]
+        .map(|p| basis.to_3d(p).map(|v| v as f32));
+    if points.iter().flatten().any(|v| !v.is_finite()) {
+        return Err("Construction preview exceeds renderer range".into());
+    }
+    let mut segments = Vec::with_capacity(24);
+    for i in 0..4 {
+        segments.extend(points[i]);
+        segments.extend(points[(i + 1) % 4]);
+    }
+    lines.push(ViewportLineLayer {
+        segments,
+        color: [color[0], color[1], color[2], 1.],
+        width: 2.,
+        ..Default::default()
+    });
+    triangles.push(crate::native_viewport::ViewportTriangleLayer {
+        positions: [0, 1, 2, 0, 2, 3]
+            .into_iter()
+            .flat_map(|i| points[i])
+            .collect(),
+        color,
+        ..Default::default()
+    });
+    Ok(())
 }
 
 fn curve_points(entity: &nbcad_sketch::EntityDto) -> Vec<nbcad_sketch::Vec2> {

@@ -19,6 +19,8 @@ mod shell;
 use shell::ShellFields;
 mod combine;
 use combine::CombineFields;
+mod planes;
+use planes::PlaneFields;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SolidFormKind {
@@ -31,6 +33,9 @@ pub(crate) enum SolidFormKind {
     Chamfer,
     Shell,
     Combine,
+    OffsetPlane,
+    Midplane,
+    AnglePlane,
 }
 impl SolidFormKind {
     pub(crate) fn from_feature_kind(kind: FeatureKind) -> Option<Self> {
@@ -44,6 +49,7 @@ impl SolidFormKind {
             FeatureKind::Chamfer => Self::Chamfer,
             FeatureKind::Shell => Self::Shell,
             FeatureKind::Combine => Self::Combine,
+            FeatureKind::ConstructionPlane => Self::OffsetPlane,
             _ => return None,
         })
     }
@@ -62,6 +68,9 @@ impl SolidFormKind {
             Self::Chamfer => "Chamfer",
             Self::Shell => "Shell",
             Self::Combine => "Combine",
+            Self::OffsetPlane => "Offset Plane",
+            Self::Midplane => "Midplane",
+            Self::AnglePlane => "Plane at Angle",
         }
     }
     pub(crate) fn operation(self) -> &'static str {
@@ -75,6 +84,9 @@ impl SolidFormKind {
             Self::Chamfer => "solid_chamfer",
             Self::Shell => "solid_shell",
             Self::Combine => "solid_combine",
+            Self::OffsetPlane => "construction_plane_offset",
+            Self::Midplane => "construction_plane_midplane",
+            Self::AnglePlane => "construction_plane_at_angle",
         }
     }
 }
@@ -87,6 +99,7 @@ pub(crate) struct FormModel<'a> {
     pub document: &'a DocumentDto,
     pub profiles: &'a [ProfileCatalogItemDto],
     pub scene: &'a SolidSceneDto,
+    pub datum_planes: &'a [nbcad_solid::DatumPlaneDefinitionDto],
     pub parameters: &'a [ParameterValue],
 }
 
@@ -127,6 +140,9 @@ pub(crate) enum SolidField {
     TargetBody,
     ToolBodies,
     KeepTools,
+    FirstPlane,
+    SecondPlane,
+    AxisEdge,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -220,6 +236,7 @@ pub(crate) struct SolidForm {
     edges: Option<EdgeFields>,
     shell: Option<ShellFields>,
     combine: Option<CombineFields>,
+    planes: Option<PlaneFields>,
 }
 
 impl SolidForm {
@@ -251,6 +268,7 @@ impl SolidForm {
             edges: None,
             shell: None,
             combine: None,
+            planes: None,
         }
     }
 
@@ -268,10 +286,15 @@ impl SolidForm {
             form.shell = Some(ShellFields::new(model.document.settings.units));
         } else if kind == SolidFormKind::Combine {
             form.combine = Some(CombineFields::default());
+        } else if kind.is_plane() {
+            form.planes = Some(PlaneFields::new(kind, model.document.settings.units));
         }
         form
     }
     pub(crate) fn kind(&self) -> SolidFormKind {
+        if let Some(planes) = &self.planes {
+            return planes.kind;
+        }
         if self.combine.is_some() {
             return SolidFormKind::Combine;
         }
@@ -418,6 +441,11 @@ impl SolidForm {
         model: &FormModel<'_>,
     ) -> Result<(), String> {
         self.editing(model)?;
+        if let Some(planes) = &mut self.planes {
+            planes.set(field, value)?;
+            self.changed();
+            return Ok(());
+        }
         if let Some(combine) = &mut self.combine {
             combine.set(field, value)?;
             self.changed();
@@ -786,6 +814,9 @@ impl SolidForm {
     }
 
     pub(crate) fn fields(&self, model: &FormModel<'_>) -> Vec<SolidFieldView> {
+        if self.planes.is_some() {
+            return self.plane_fields(model);
+        }
         if self.combine.is_some() {
             return self.combine_fields(model);
         }
@@ -932,6 +963,9 @@ impl SolidForm {
         &self,
         model: &FormModel<'_>,
     ) -> Result<(&'static str, Value), Vec<(SolidField, String)>> {
+        if self.planes.is_some() {
+            return self.plane_payload(model);
+        }
         if self.combine.is_some() {
             return self.combine_payload(model);
         }

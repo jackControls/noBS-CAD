@@ -93,27 +93,9 @@ const GLYPHS: Record<string, ReactNode> = {
   ),
 
   // Datum/reference and evaluation diagrams.
-  plane: (
-    <>
-      <path d="M3 14l9-5 9 5-9 5-9-5z" />
-      <path d="M12 4v16" strokeDasharray="2 2" />
-      <path d="M9.5 6.5L12 4l2.5 2.5" />
-    </>
-  ),
-  midplane: (
-    <>
-      <path d="M3 8l9-4 9 4-9 4-9-4z" />
-      <path d="M3 16l9-4 9 4-9 4-9-4z" />
-      <path d="M3 12h18" strokeDasharray="2 2" />
-    </>
-  ),
-  planeAngle: (
-    <>
-      <path d="M3 18h18L12 13 3 18z" />
-      <path d="M5 18L15 5l6 3-10 7" />
-      <path d="M9 16a5 5 0 0 1 2-4" strokeDasharray="2 2" />
-    </>
-  ),
+  plane: <SharedRibbonGlyph id="plane" />,
+  midplane: <SharedRibbonGlyph id="midplane" />,
+  planeAngle: <SharedRibbonGlyph id="planeAngle" />,
   axis: (
     <>
       <path d="M4 17l16-10" strokeDasharray="2 2" />

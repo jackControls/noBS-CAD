@@ -155,3 +155,14 @@ bodies in the isolated kernel, including tools consumed by the result. Native
 engine tests check exact boolean volumes and restoration; the `native-body`
 Rust MCP fixture checks rendered selection, choices, exact bounds, editing,
 Cancel, Undo/Redo and saving each case before opening another blank document.
+
+Offset Plane, Midplane and Plane at Angle use the same native transaction and
+the existing `solid/reference` catalog group. Browser/canvas references, straight
+axis picking, typed units and formulas, offset dragging and its on-canvas field
+all change a draft until Apply. The shared sketch engine supplies the plane
+calculation to both the preview and saved history. Angled display patches are
+centered on their selected edge without changing the saved plane coordinates.
+The isolated editor restores dependent sketches and solids in one Undo step.
+`cargo xtask test-mcp native-planes` checks these controls, invalid input, exact
+plane placement, history editing, Cancel, Undo/Redo, dependent sketches, captures
+and Save. Kernel tests also verify dependent-solid rebuilds and exact restoration.

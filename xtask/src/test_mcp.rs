@@ -20,6 +20,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     if suite == "native-body" {
         return crate::native_body_test::run(args);
     }
+    if suite == "native-planes" {
+        return crate::native_planes_test::run(args);
+    }
     if suite == "playback" {
         return crate::playback_test::run(&args.collect::<Vec<_>>()).map_err(anyhow::Error::msg);
     }

@@ -296,6 +296,7 @@ impl Fixture {
             document: &self.document,
             profiles: &self.profiles,
             scene: &self.scene,
+            datum_planes: &[],
             parameters: &[],
         }
     }

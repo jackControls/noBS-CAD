@@ -74,7 +74,7 @@ pub use expr::{
 pub use geometry::Vec2;
 // Native tool previews share these exact constructions with committed geometry.
 pub use geomops::{slot::slot_capsule, spline::tessellate_spline};
-pub use manager::SketchManager;
+pub use manager::{construction_plane_basis, SketchManager};
 pub use nbcad_assembly::{
     approximate_pair_result, broad_phase_interference_pairs, contact_violation_score,
     ApplyJointMotionsRequestDto, AssemblyDiagnosticDto, AssemblyDiagnosticKindDto,

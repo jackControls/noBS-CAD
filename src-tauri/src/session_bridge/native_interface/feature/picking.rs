@@ -21,6 +21,9 @@ pub(crate) fn hover_references(
                         | SolidField::Faces
                         | SolidField::TargetBody
                         | SolidField::ToolBodies
+                        | SolidField::FirstPlane
+                        | SolidField::SecondPlane
+                        | SolidField::AxisEdge
                 )
             ) && !e.form.is_busy()
         }) else {
@@ -28,13 +31,29 @@ pub(crate) fn hover_references(
         };
         with_receipt(&services.bridge, &services.engine, owner, |receipt| {
             check_revision(editor, &receipt)?;
+            if matches!(
+                editor.pick_target,
+                Some(SolidField::FirstPlane | SolidField::SecondPlane)
+            ) {
+                let next = point
+                    .map(|p| native_viewport::interface_support_pick(world, &owner.document_id, p))
+                    .transpose()?
+                    .flatten();
+                if editor.hovered_plane != next {
+                    editor.hovered_plane = next;
+                    plane_view(world, owner, true, next)?;
+                }
+                return Ok(true);
+            }
             let hit = point
                 .map(|p| {
                     native_viewport::interface_pick(
                         world,
                         &owner.document_id,
                         p,
-                        if editor.pick_target == Some(SolidField::Edges) {
+                        if editor.pick_target == Some(SolidField::AxisEdge) {
+                            NativePickPurpose::StraightEdge
+                        } else if editor.pick_target == Some(SolidField::Edges) {
                             NativePickPurpose::RefinableEdge
                         } else {
                             NativePickPurpose::Geometry
@@ -84,7 +103,10 @@ pub(crate) fn hover_references(
                         .find(|b| b.id == body)?
                         .edges
                         .iter()
-                        .find(|e| e.id == edge && e.refinable)?;
+                        .find(|e| {
+                            e.id == edge
+                                && (e.refinable || editor.pick_target == Some(SolidField::AxisEdge))
+                        })?;
                     Some((body, edge))
                 });
             if next == editor.hovered_edge
@@ -152,16 +174,46 @@ pub(crate) fn handle_canvas_pick(
                         "The model changed; reopen the feature before selecting references".into(),
                     );
                 }
+                if matches!(target, SolidField::FirstPlane | SolidField::SecondPlane) {
+                    let plane =
+                        native_viewport::interface_support_pick(world, &owner.document_id, point)?
+                            .ok_or("Choose a visible reference plane or planar face")?;
+                    if matches!(plane, nbcad_core::PlaneRef::PlanarFace { .. }) {
+                        let hit = native_viewport::interface_pick(
+                            world,
+                            &owner.document_id,
+                            point,
+                            NativePickPurpose::Geometry,
+                        )?
+                        .ok_or("The reference face is no longer visible")?;
+                        if !editor.snapshot.source_local(hit.body_id, hit.occurrence_id) {
+                            return Err("Open the component before selecting its references".into());
+                        }
+                    }
+                    return Ok(FeaturePick::Plane(plane));
+                }
                 let hit = native_viewport::interface_pick(
                     world,
                     &owner.document_id,
                     point,
-                    if target == SolidField::Edges {
+                    if target == SolidField::AxisEdge {
+                        NativePickPurpose::StraightEdge
+                    } else if target == SolidField::Edges {
                         NativePickPurpose::RefinableEdge
                     } else {
                         NativePickPurpose::Geometry
                     },
                 )?;
+                if target == SolidField::AxisEdge {
+                    let hit = hit.ok_or("Pick a straight edge on the reference plane")?;
+                    if !editor.snapshot.source_local(hit.body_id, hit.occurrence_id) {
+                        return Err("Open the component before selecting its axis".into());
+                    }
+                    return Ok(FeaturePick::AxisEdge(
+                        BodyId(hit.body_id),
+                        nbcad_core::EdgeId(hit.edge_id.ok_or("Pick a straight edge")?),
+                    ));
+                }
                 if target == SolidField::Edges {
                     let hit = hit.ok_or("Pick an edge on a visible body")?;
                     if !editor.snapshot.source_local(hit.body_id, hit.occurrence_id) {
