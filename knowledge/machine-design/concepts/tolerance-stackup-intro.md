@@ -5,7 +5,7 @@ description: Citation-only intro to dimensional loops — identify the stack, wo
 status: draft
 updated: 2026-09-20
 topics: gdt, fits, manufacturing, inspection
-keywords: tolerance stack-up, stackup, dimensional loop, worst case, RSS, statistical tolerancing, accumulation, gap analysis, assembly tolerance
+keywords: tolerance stack-up, dimensional loop, worst case, RSS, gap analysis
 related_recipes: turbine-fit-coupons, d-screw-vise-fit
 sources: nist-gdt-1, nist-gdt-2, iso-286, asme-y14
 ---
@@ -35,7 +35,7 @@ charts, bilateral tables, or closed numeric stacks you can copy into a drawing.
 5. **Decide** — open a tolerance, change the locate scheme, add adjustment, or
    coupon the critical joint.
 
-## Checklist for agents
+## Checklist
 
 1. Write the **functional requirement** in one sentence before any math.
 2. List contributors in a VERIFY table
@@ -63,14 +63,3 @@ Printed shrink and anisotropy are **process contributors**, not CAD decoration.
 Qualify mating features with coupons before treating a stack as closed
 (`turbine-fit-coupons`). Pair with [locating schemes](locating-scheme-dof.md)
 so you are not stacking six fighting locators.
-
-## Anti-patterns
-
-- Publishing a “stack-up table” scraped from a proprietary handbook into help
-- Treating nominal CAD clearance as the as-built gap
-- Mixing radial and diametral allowances in one loop
-  ([fits](fits-clearances.md))
-- Claiming RSS without process capability data
-
-Related: [GD&T intro](gdt-intro.md), [research before commit](../../concepts/research-before-commit.md),
-[unit systems / formula dims](../../concepts/unit-systems-mm-default.md).

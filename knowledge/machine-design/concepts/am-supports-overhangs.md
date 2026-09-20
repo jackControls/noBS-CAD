@@ -58,12 +58,3 @@ cooling and speed are sane. Long unsupported floors sag. Design:
   instead of printing a hollow with an unsupported ceiling.
 - Use ribs/gussets that also act as print aides
   ([ribs & draft](am-ribs-gussets-draft.md)).
-
-## Anti-patterns
-
-- “The slicer will support it” as the only plan for a sealed cavity
-- Support welded onto a bearing seat or insert boss ID
-- Ignoring cleanup damage in the wall-probe budget
-  ([adversarial mesh audit](../../concepts/adversarial-mesh-audit.md))
-
-Related: [DFM process guidelines](dfm-process-guidelines.md).

@@ -47,13 +47,6 @@ RP-1228 (public domain) plus DFM checklists. No torque/load tables here.
 8. **VERIFY** — torque, buckling, and backdrive claims need cited methods —
    not Help prose ([research before commit](../../concepts/research-before-commit.md)).
 
-## Anti-patterns
-
-- Publishing clamp load from CAD helix geometry alone
-- Mixing lead and pitch in agent plans (“4 mm pitch” when the lead is 4 mm)
-- Printed nut without a wear/replacement story
-- Ignoring guide constraint so the screw bends as a shaft
-
 ## Live examples
 
 - `d-screw-vise` — interrupted helical screw, wear nut, thrust stack

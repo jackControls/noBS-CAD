@@ -35,19 +35,12 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 
 | Topic | Id | Title |
 |-------|----|-------|
-| MCP tenacity / blank-doc scripts | `concepts.agent-mcp-workflow` | Agent MCP workflow |
+| MCP workflow (help / focus / inspect / edit / sessions) | `concepts.agent-mcp-workflow` | MCP workflow |
 | VERIFY before freeze | `concepts.research-before-commit` | Research before commit |
 | Review shot pack | `concepts.validate-before-show` | Validate before show |
 | Mesh / wall probe audit | `concepts.adversarial-mesh-audit` | Adversarial mesh audit |
 | Assembly overlap @ pose | `concepts.assembly-interference` | Assembly interference check |
-| Inspect between mutates | `concepts.inspect-between-mutates` | Inspect between mutates |
-| Edit history discipline | `concepts.edit-history-not-delete-rebuild` | Edit history — do not delete-rebuild |
-| Export preflight 3MF/STL | `concepts.export-preflight-3mf-stl` | Export preflight — 3MF vs STL |
-| Unit systems / mm | `concepts.unit-systems-mm-default` | Unit systems — mm default |
-| Soft disclosure / focus packs | `concepts.soft-disclosure-focus-packs` | Soft disclosure, focus packs |
-| Attach vs headless sessions | `concepts.attach-vs-headless-sessions` | Attach vs headless sessions |
-| Parametric formulas / driven dims | `concepts.parametric-formulas-driven-dims` | Parametric formulas & driven dims |
-| Selection / topology ids (MCP) | `concepts.selection-topology-ids-mcp` | Selection & topology ids for MCP |
+| Export / print / 3MF vs STL | `concepts.export-print` | Export and print |
 
 ### Machine design (seeded highlights)
 
@@ -79,22 +72,13 @@ Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 - [Product stance](concepts/product-stance.md) - Local-first mechanical CAD priorities.
 - [Architecture](concepts/architecture.md) - Kernel, shell, and project-file boundaries.
 - [MCP harness](concepts/mcp-harness.md) - Headless/live routing and engineering resources.
-- [Agent MCP workflow](concepts/agent-mcp-workflow.md) - Tenacity, cad_help-first, soft focus, recipes.
+- [MCP workflow](concepts/agent-mcp-workflow.md) - Help-first, soft focus, inspect, edit, sessions, units.
 - [Research before commit](concepts/research-before-commit.md) - VERIFY table and local help before freezing geometry.
 - [Assembly interference check](concepts/assembly-interference.md) - Geometric overlap/clearance at solved poses vs fit classes.
 - [Validate before show](concepts/validate-before-show.md) - Mandatory review shot pack; reject blank/inside-solid frames.
 - [Adversarial mesh audit](concepts/adversarial-mesh-audit.md) - Manifold, wall probes, shards; printable-solid gate.
-- [Inspect between mutates](concepts/inspect-between-mutates.md) - `solid_scene` discipline between geometry writes.
-- [Edit history not delete-rebuild](concepts/edit-history-not-delete-rebuild.md) - Prefer `solid_edit_*` over remodel.
-- [Export preflight 3MF vs STL](concepts/export-preflight-3mf-stl.md) - AM format choice + preflight checklist.
-- [Unit systems mm default](concepts/unit-systems-mm-default.md) - mm default; formula dim pitfalls.
-- [Soft disclosure / focus packs](concepts/soft-disclosure-focus-packs.md) - Soft focus packs; `cad_list_all_tools` for planning.
-- [Attach vs headless sessions](concepts/attach-vs-headless-sessions.md) - Headless goldens vs explicit attach/refresh/detach.
-- [Parametric formulas / driven dims](concepts/parametric-formulas-driven-dims.md) - Driving vs driven dims; formula pitfalls.
-- [Selection / topology ids for MCP](concepts/selection-topology-ids-mcp.md) - Capture Body/Face/Edge ids before mutates.
-
+- [Export & print](concepts/export-print.md) - Interchange, 3MF vs STL, mesh preflight, qualification boundaries.
 - [Contribution process](concepts/process.md) - Lightweight contribution and review expectations.
-- [Export & print](concepts/export-print.md) - Interchange, print export and qualification boundaries.
 - [Gear identification and compatible pairs](concepts/gears.md) - Module/DP, OD limits, pressure angle, ratio changes and mounting.
 - [Additive workholding](concepts/additive-workholding.md) - Captured guides, assembly access, D-flat roots and qualification.
 - [Small wind rotors and low-speed generators](concepts/small-wind-generators.md) - Power, startup, gearing, motor dimensions and measured loads.

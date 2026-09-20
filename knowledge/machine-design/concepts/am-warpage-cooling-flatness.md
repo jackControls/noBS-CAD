@@ -5,7 +5,7 @@ description: Keep large FDM plates and lids flatter — orientation, ribbing, co
 status: draft
 updated: 2026-09-20
 topics: dfam, am, fdm, print, enclosures
-keywords: warpage, warp, curling, flatness, large plate FDM, cooling, bed adhesion, residual stress, elephant foot, dish plate, ribbed plate, print flatness, enclosure base warp
+keywords: warpage, curling, flatness, large plate FDM, cooling, bed adhesion
 related_recipes: mounting-plate, garden-bench, turbine-fit-coupons
 sources: nwtc-guns-dfm, doe-3d
 ---
@@ -60,16 +60,3 @@ Print a representative **span** (not a 20 mm square) with the real rib and boss
 density. Measure flatness / rock on a surface plate or known flat, then check
 the hole pattern against the mating part. Pair with
 [fit coupons map](fit-coupons-recipes-map.md).
-
-## Anti-patterns
-
-- Solid 100% infill bricks “for strength” that warp harder
-- One-sided deep rib forests under a show face
-- Trusting CAD flatness after a 300 mm print with no measure
-- Torquing a warped lid into a gasket until the boss cracks
-- Ignoring anisotropy: a plate loaded across layers fails differently than it
-  warps
-
-Related: [enclosure lid / seal](am-enclosure-lid-gasket-labyrinth.md),
-[DFM process guidelines](dfm-process-guidelines.md),
-[adversarial mesh audit](../../concepts/adversarial-mesh-audit.md).

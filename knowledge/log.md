@@ -1,5 +1,15 @@
 # noBS CAD knowledge update log
 
+## 2026-09-20 — Purge MCP ops micro-pages (golden-path rewrite)
+
+Merged MCP ops Concepts into `concepts/agent-mcp-workflow.md` (help, soft focus,
+inspect, topology ids, solid_edit_*, units/drivers, headless vs attach). Folded
+3MF/STL preflight into `concepts/export-print.md`. Deleted micro-pages and
+uncommitted expansion drafts (anti-patterns, AM mirror, draft-injection-vs-AM,
+STEP import). Stripped Anti-patterns sections corpus-wide; tone is golden-path.
+Wire goldens retargeted; embeds updated (reinstall MCP for live cad_help).
+
+
 ## 2026-09-20 — AM/mechanical Concept wave (searchable KB)
 
 Added heat-set inserts, fastener clearance/counterbore, ribs/gussets/draft,

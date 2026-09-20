@@ -23,7 +23,7 @@ Fixtures/results: `modeling-goldens.json`, `modeling-golden-results.md` under `/
 
 Record: server revision, elapsed_ms, pass/fail/skip, tool error strings. Prefer honest SKIP over inventing geometry APIs.
 
-## Help MCP wire (H1–H8 core; H9–H46 corpus)
+## Help MCP wire (H1–H8 core; H9–H46 corpus; ops merged)
 
 In-process BM25 unit tests live in `crates/help`. **Wire** goldens exercise the installed stdio binary the Cursor client uses (`tools/call` `cad_help`).
 
@@ -48,15 +48,15 @@ Fixtures/results stay under `/workspace/cad-design-ops/evals/` (`help-goldens.js
 | H8 | search `fillet` | some hit `related_recipes` includes `fillet-basics` |
 | H35 | search `interference fit shaft hole` | top/any `fits-clearances` |
 | H36 | search `datum sketch plane coordinate system MCP` | `datum-sketch-plane-choice` |
-| H37 | search `inspect between mutates solid_scene` | `inspect-between-mutates` |
+| H37 | search `inspect between mutates solid_scene` | `agent-mcp-workflow` |
 | H38 | search `hole wizard vs modeled hole` | `hole-wizard-vs-modeled` |
-| H39 | search `edit history not delete-rebuild` | `edit-history-not-delete-rebuild` |
-| H40 | search `export preflight 3MF vs STL` | `export-preflight-3mf-stl` |
-| H41 | search `unit systems mm default formula dims` | `unit-systems-mm-default` |
-| H42 | search `soft disclosure focus packs cad_list_all_tools` | `soft-disclosure-focus-packs` |
-| H43 | search `attach vs headless sessions cad_attach` | `attach-vs-headless-sessions` |
-| H44 | search `parametric formulas driven dimensions pitfalls` | `parametric-formulas-driven-dims` |
-| H45 | search `selection topology ids MCP mutates face_id` | `selection-topology-ids-mcp` |
+| H39 | search `solid_edit fillet edit history` | `agent-mcp-workflow` |
+| H40 | search `export preflight 3MF vs STL` | `export-print` |
+| H41 | search `unit systems mm default soft focus` | `agent-mcp-workflow` |
+| H42 | search `cad_list_all_tools soft disclosure focus packs` | `agent-mcp-workflow` |
+| H43 | search `cad_attach headless sessions` | `agent-mcp-workflow` |
+| H44 | search `driving dimensions solid_edit parametric` | `agent-mcp-workflow` |
+| H45 | search `face_id edge_id topology solid_scene` | `agent-mcp-workflow` |
 | H46 | search `power screws lead screws pitch backdrive` | `power-screws-lead-screws` |
 
-Caps **confirmed** 2026-09-19 (H1–H8 core); corpus through **H46** (2026-09-20): search default 5 / max 10, snippet ~280, get 12 KiB, topics page 50. Locked in `docs/machine-design-help-search.md`. Retune only from honest FAIL notes — do not silently weaken goldens.
+Caps **confirmed** 2026-09-19 (H1–H8 core); corpus through **H46** (2026-09-20 purge retune): search default 5 / max 10, snippet ~280, get 12 KiB, topics page 50. Locked in `docs/machine-design-help-search.md`. Retune only from honest FAIL notes — do not silently weaken goldens.

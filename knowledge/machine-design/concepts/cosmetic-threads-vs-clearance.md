@@ -5,7 +5,7 @@ description: When CAD helix / cosmetic threads are display aids versus when you 
 status: draft
 updated: 2026-09-20
 topics: threads, fasteners, manufacturing, cad, dfm
-keywords: cosmetic thread, modeled thread, helix, thread display, tap drill, clearance hole, major diameter, pitch diameter, thread engagement, CAD thread, visual thread
+keywords: cosmetic thread, modeled thread, tap drill, clearance hole, thread engagement
 related_recipes: d-screw-vise, mounting-plate
 sources: nasa-fastener, nwtc-guns-dfm, vendor-cad-help
 ---
@@ -61,14 +61,3 @@ when you explicitly accept printed-thread limits.
    display-only.
 4. For special helical features (leadscrews, printed worms), treat them as
    **mechanism design** with coupons — not as fastener cosmetics.
-
-## Anti-patterns
-
-- Boolean of a library “M3 thread” solid into FDM as the mating feature
-- Using cosmetic **major** as clearance diameter
-- Assuming CAD thread engagement equals rated strength
-- Shipping STL/3MF with unresolved thread display facets as functional walls
-
-Related: [fasteners & joints](fasteners-joints.md),
-[fits & clearances](fits-clearances.md),
-[research before commit](../../concepts/research-before-commit.md).

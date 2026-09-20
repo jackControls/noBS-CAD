@@ -5,7 +5,7 @@ description: FDM min wall, thin-wall traps, layer-line anisotropy, and bed-face 
 status: draft
 updated: 2026-09-20
 topics: dfam, am, fdm, dfm, print
-keywords: wall thickness, thin wall, min wall, FDM, layer lines, anisotropy, print orientation, overhang, support, nozzle, draft vs anisotropy
+keywords: thin wall, min wall, FDM, anisotropy, print orientation, overhang
 related_recipes: turbine-fit-coupons
 sources: nwtc-guns-dfm, doe-3d
 ---

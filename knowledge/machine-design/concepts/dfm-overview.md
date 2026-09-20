@@ -65,12 +65,6 @@ Flagship recipes are manufacturing **candidates**. Replay and drawings are
 software evidence. Fit coupons bridge to a specific printer and material
 ([fit coupons map](fit-coupons-recipes-map.md)).
 
-## Anti-patterns
-
-- Detailing fillets and GD&T before naming a process
-- Inventing custom fasteners when catalog hardware works
-- Treating flagship recipe replay as shop qualification
-
 ## Further reading (link only)
 
 - [UArk Jensen](https://uark.pressbooks.pub/mechanicaldesign/) — CC BY-NC

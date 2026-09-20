@@ -77,7 +77,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Fillet vs chamfer | **seeded** | `machine-design.concepts.fillet-chamfer` — [fillet-chamfer](concepts/fillet-chamfer.md) |
 | Alignment nubs vs pins | **seeded** | `machine-design.concepts.alignment-nubs-pins` — [alignment-nubs-pins](concepts/alignment-nubs-pins.md) |
 | Locating schemes / DOF | **seeded** | `machine-design.concepts.locating-scheme-dof` — [locating-scheme-dof](concepts/locating-scheme-dof.md) |
-| Draft vs layer anisotropy | **cross-linked** | draft on [am-ribs-gussets-draft](concepts/am-ribs-gussets-draft.md); anisotropy on [am-thin-walls](concepts/am-thin-walls.md) — no separate page |
+| Draft vs layer anisotropy | **seeded (partial)** | [am-ribs-gussets-draft](concepts/am-ribs-gussets-draft.md), [am-thin-walls](concepts/am-thin-walls.md), [dfm-process-guidelines](concepts/dfm-process-guidelines.md) |
 | Living hinge sizing | **deepened on** | [am-snap-fit](concepts/am-snap-fit.md) (HIT; not a separate page) |
 
 ## F. Design hygiene
@@ -96,20 +96,14 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Adversarial mesh / wall probe audit | **seeded** | `concepts.adversarial-mesh-audit` — [adversarial-mesh-audit](../concepts/adversarial-mesh-audit.md) |
 
 
-## H. CAD program / mechanical agent ops
+## H. CAD program / mechanical ops
 
 | Topic | Status | Id / title |
 |-------|--------|------------|
-| Datum / CS / sketch plane choice (MCP) | **seeded** | `machine-design.concepts.datum-sketch-plane-choice` — [datum-sketch-plane-choice](concepts/datum-sketch-plane-choice.md) |
-| Inspect between mutates / `solid_scene` | **seeded** | `concepts.inspect-between-mutates` — [inspect-between-mutates](../concepts/inspect-between-mutates.md) |
+| MCP workflow (help / focus / inspect / edit / sessions / units) | **seeded** | `concepts.agent-mcp-workflow` — [agent-mcp-workflow](../concepts/agent-mcp-workflow.md) |
+| Datum / CS / sketch plane choice | **seeded** | `machine-design.concepts.datum-sketch-plane-choice` — [datum-sketch-plane-choice](concepts/datum-sketch-plane-choice.md) |
 | Hole feature vs modeled / patterns | **seeded** | `machine-design.concepts.hole-wizard-vs-modeled` — [hole-wizard-vs-modeled](concepts/hole-wizard-vs-modeled.md) |
-| Edit history not delete-rebuild | **seeded** | `concepts.edit-history-not-delete-rebuild` — [edit-history-not-delete-rebuild](../concepts/edit-history-not-delete-rebuild.md) |
-| Export preflight / 3MF vs STL | **seeded** | `concepts.export-preflight-3mf-stl` — [export-preflight-3mf-stl](../concepts/export-preflight-3mf-stl.md) (pair with [export-print](../concepts/export-print.md), [adversarial-mesh-audit](../concepts/adversarial-mesh-audit.md)) |
-| Unit systems / mm / formula dims | **seeded** | `concepts.unit-systems-mm-default` — [unit-systems-mm-default](../concepts/unit-systems-mm-default.md) |
-| Soft disclosure / focus packs | **seeded** | `concepts.soft-disclosure-focus-packs` — [soft-disclosure-focus-packs](../concepts/soft-disclosure-focus-packs.md) |
-| Attach vs headless sessions | **seeded** | `concepts.attach-vs-headless-sessions` — [attach-vs-headless-sessions](../concepts/attach-vs-headless-sessions.md) |
-| Parametric formulas / driven dims | **seeded** | `concepts.parametric-formulas-driven-dims` — [parametric-formulas-driven-dims](../concepts/parametric-formulas-driven-dims.md) |
-| Selection / topology ids (MCP) | **seeded** | `concepts.selection-topology-ids-mcp` — [selection-topology-ids-mcp](../concepts/selection-topology-ids-mcp.md) |
+| Export / print / 3MF vs STL | **seeded** | `concepts.export-print` — [export-print](../concepts/export-print.md) (pair with [adversarial-mesh-audit](../concepts/adversarial-mesh-audit.md)) |
 | Power screws / lead screws | **seeded** | `machine-design.concepts.power-screws-lead-screws` — [power-screws-lead-screws](concepts/power-screws-lead-screws.md) |
 
 ## Still thin / planned (honest)

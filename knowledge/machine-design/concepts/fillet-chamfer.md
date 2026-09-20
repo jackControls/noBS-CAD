@@ -52,19 +52,12 @@ checklists (public domain). Confirm with your shop or print profile.
 3. Do not use a fillet to hide an undersized wall or an impossible undercut.
 4. Prefer **edit history** (`solid_edit_fillet` / `solid_edit_chamfer`) over
    delete-rebuild — see
-   [edit history not delete-rebuild](../../concepts/edit-history-not-delete-rebuild.md).
+   [MCP workflow](../../concepts/agent-mcp-workflow.md).
 5. Recipe: `fillet-basics` on a blank document for the product fillet op.
-
-## Anti-patterns
-
-- Filleting every edge “because SolidWorks tutorials do”
-- Chamfering a stress-critical internal corner that needed a radius
-- Changing radius by deleting the feature and remodeling the solid from scratch
 
 ## Sibling concepts
 
 Stress vs lead-in is the decision; process decides the geometry. For AM upper edges prefer chamfer until a coupon proves a fillet.
-
 
 ## Decision checklist (expanded)
 
@@ -81,4 +74,4 @@ Walk this before a cosmetic blend pass:
 
 Related: [DFM overview](dfm-overview.md),
 [agent MCP workflow](../../concepts/agent-mcp-workflow.md),
-[inspect between mutates](../../concepts/inspect-between-mutates.md).
+[MCP workflow](../../concepts/agent-mcp-workflow.md).

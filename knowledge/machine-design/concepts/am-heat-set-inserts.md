@@ -60,14 +60,3 @@ is for the **cold pilot**; the knurl melts into plastic.
   before committing the housing.
 - Keep melt heat away from thin cavity walls and snap beams
   ([AM snap-fits](am-snap-fit.md)).
-
-## Anti-patterns
-
-- Using finished **thread major** as the printed pilot
-- Paper-thin boss walls after the pilot cut
-- Heat-setting into a **through-hole** with no flange stop or backside support
-- Mixing insert and self-tap strategies on the same critical joint without a BOM
-  note
-
-Related: [Fastener clearance & counterbore](fastener-clearance-counterbore.md),
-[Fasteners and joints](fasteners-joints.md), [fits](fits-clearances.md).

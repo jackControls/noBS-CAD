@@ -5,7 +5,7 @@ description: Cantilever clips, latches, and living hinges for FDM — role-based
 status: draft
 updated: 2026-09-20
 topics: dfam, am, snap-fit, fdm, joints
-keywords: snap fit, cantilever, clip, latch, living hinge, hinge sizing, flexure, barb, seat, pocket depth, beam thickness, hinge web, hinge span
+keywords: snap fit, cantilever, latch, living hinge, flexure, barb, seat
 related_recipes: turbine-fit-coupons, fillet-basics
 sources: nwtc-guns-dfm, doe-3d, palni-dfma
 ---

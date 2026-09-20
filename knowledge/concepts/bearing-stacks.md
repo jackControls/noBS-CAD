@@ -5,7 +5,7 @@ description: Purchased bearing seats, press-fit hubs, shaft lead-in, shoulders, 
 status: stable
 updated: 2026-09-20
 topics: bearings, machine-elements, fits, am, dfm
-keywords: bearing seat, press fit hub, hub lead-in, shaft shoulder, bearing bore, journal, inner race, outer race, spacer stack, shaft collar, H7, interference seat, slip fit housing
+keywords: bearing seat, press fit hub, lead-in, shaft shoulder, spacer stack, interference seat
 related_recipes: turbine-fit-coupons, vertical-axis-turbine, d-screw-vise-fit, revolved-spacer
 sources: nasa-bearing, nist-gdt-2
 ---

@@ -57,16 +57,6 @@ owns the thread.
 - Heat-set inserts and nut traps solve different access problems; do not mix
   roles on one joint without a BOM note.
 
-## Anti-patterns
-
-- Circular “nut-ish” holes that let the nut spin
-- Pocket depth < nut thickness so the screw pulls the nut into plastic
-- Paper-thin floors under the trap
-- Modeling cosmetic threads in the plastic instead of dropping in a nut —
-  [cosmetic threads](cosmetic-threads-vs-clearance.md)
-- No insertion path once the enclosure is closed
-
-
 ## VERIFY checklist (before freezing the pocket)
 
 - [ ] Nut SKU named (thread, across-flats, thickness, locking style)

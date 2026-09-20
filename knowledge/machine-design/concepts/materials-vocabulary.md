@@ -79,7 +79,7 @@ Materials **vocabulary** is not an allowables table. Before quoting a number:
 7. **CTE / galvanic / chemical** called out when mixed stacks exist.
 8. **Mass/density** only after envelope is real; density does not fix a bad load path.
 
-## Agent checklist (freeze gate)
+## Freeze gate
 
 - [ ] Process named (stock / print / mold / fab)
 - [ ] Environment and load story named

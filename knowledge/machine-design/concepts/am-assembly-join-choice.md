@@ -5,7 +5,7 @@ description: When FDM enclosures should use screws, solvent/glue, ultrasonic-sty
 status: draft
 updated: 2026-09-20
 topics: dfam, am, fdm, joints, fasteners, enclosures, dfa
-keywords: glue joint AM, solvent weld, ultrasonic weld plastic, screw assembly FDM, when not to snap, permanent bond enclosure, serviceable joint, adhesive boss, plastic weld AM, join choice DFMA
+keywords: glue joint, solvent weld, screw assembly, snap vs glue, DFMA join
 related_recipes: turbine-fit-coupons, d-screw-vise, mounting-plate
 sources: palni-dfma, nwtc-guns-dfm, doe-3d, nasa-fastener
 ---
@@ -61,15 +61,3 @@ Name clearance vs insert vs trap per hole
 ([fastener clearance](fastener-clearance-counterbore.md),
 [heat-set](am-heat-set-inserts.md),
 [captive nut](captive-nut-hex-trap.md)). Mix roles only with a BOM note.
-
-## Anti-patterns
-
-- Defaulting to snaps because “3D printed parts snap”
-- Glue as repair for a joint that needed service
-- Ultrasonic language on a desktop FDM BOM with no process owner
-- Sealed lid held only by friction detents
-- No coupon for the chosen join class before committing the housing
-
-Related: [enclosure lid / seal](am-enclosure-lid-gasket-labyrinth.md),
-[research before commit](../../concepts/research-before-commit.md),
-[fit coupons map](fit-coupons-recipes-map.md).

@@ -44,7 +44,7 @@ Even then, name the **intent** in a note or VERIFY table.
 4. Use hole feature **multi-point** positions when available — one feature, many
    points — over duplicated independent holes you will forget to edit.
 5. After pattern: `solid_scene` inspect
-   ([inspect between mutates](../../concepts/inspect-between-mutates.md)).
+   ([MCP workflow](../../concepts/agent-mcp-workflow.md)).
 6. Do not mix cosmetic helix major with drill size.
 
 ## Edit, do not delete-rebuild
@@ -52,19 +52,12 @@ Even then, name the **intent** in a note or VERIFY table.
 Changing diameter, depth, or points: use **`solid_edit_hole`** and
 `solid_hole_definitions` to read back. Deleting the solid and re-subtracting
 circles loses ids and review history
-([edit history](../../concepts/edit-history-not-delete-rebuild.md)).
+([MCP workflow](../../concepts/agent-mcp-workflow.md)).
 
 ## AM notes
 
 Printed holes shrink; coupon clearance holes beside the plate. Heat-set pilots
 are not clearance holes ([heat-set inserts](am-heat-set-inserts.md)).
-
-## Anti-patterns
-
-- “M3 hole” with no role
-- Boolean forest of cylinders for a bolt pattern
-- Patterning before the first hole role is verified
-- Treating cosmetic threads as tap drill geometry
 
 ## Sibling pages
 

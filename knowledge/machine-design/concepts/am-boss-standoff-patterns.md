@@ -5,7 +5,7 @@ description: PCB and plate standoff patterns for FDM — boss pairs, height matc
 status: draft
 updated: 2026-09-20
 topics: dfam, am, fdm, fasteners, hardware, enclosures
-keywords: standoff, boss to boss, PCB standoff, stand-off pattern, mounting boss grid, spacer boss, stacked boss, through standoff, heat-set boss pair, FDM standoff height, bolt circle bosses
+keywords: standoff, PCB standoff, mounting boss, boss grid, heat-set boss
 related_recipes: mounting-plate, turbine-fit-coupons, garden-bench
 sources: nasa-fastener, nwtc-guns-dfm, doe-3d
 ---
@@ -55,15 +55,3 @@ charts are **link-out / measure**.
   ([thin walls](am-thin-walls.md)).
 - For large plates, standoff grids interact with warpage —
   [warpage & flatness](am-warpage-cooling-flatness.md).
-
-## Anti-patterns
-
-- Copying a board outline without VERIFY of hole Ø and PCD
-- Four identical press-fits (overconstraint) instead of locate + clearance
-- Mixing heat-set and self-tap randomly across the same pattern
-- Tall skinny bosses with no fillet into a thin floor
-- Using cosmetic threads in the boss as the real joint —
-  [cosmetic threads](cosmetic-threads-vs-clearance.md)
-
-Related: [captive nut traps](captive-nut-hex-trap.md),
-[fits](fits-clearances.md), [fit coupons map](fit-coupons-recipes-map.md).

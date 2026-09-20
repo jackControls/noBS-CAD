@@ -63,13 +63,4 @@ Prefer local `cad_help` / `nbcad://knowledge/...` before inventing geometry
 joint with section/inner shots and
 [adversarial mesh audit](../../concepts/adversarial-mesh-audit.md) before export.
 Inspect between mutates with `solid_scene`
-([inspect between mutates](../../concepts/inspect-between-mutates.md)).
-
-## Anti-patterns
-
-- Designing ornate barbs before the slide channel works
-- Using the detent as the structural clamp
-- Printing the retainer flat so layers peel under clamp load
-
-Related: [AM snap-fits](am-snap-fit.md), [DFM overview](dfm-overview.md),
-[AM assembly join choice](am-assembly-join-choice.md).
+([MCP workflow](../../concepts/agent-mcp-workflow.md)).

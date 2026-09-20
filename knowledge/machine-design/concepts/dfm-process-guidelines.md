@@ -77,3 +77,5 @@ Query **draft angle**, **bend radius**, or **pocket depth** here first;
 use DFAM pages when the answer is print-orientation-specific.
 
 Related: [DFM overview](dfm-overview.md), [taxonomy](../taxonomy.md).
+
+Molding draft vs FDM orientation: [AM ribs, gussets, and draft](am-ribs-gussets-draft.md).

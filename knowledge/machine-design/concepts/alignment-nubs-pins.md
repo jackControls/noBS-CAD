@@ -56,14 +56,3 @@ Do not “add pins” when you need short AM locators, or vice versa.
    ([adversarial mesh audit](../../concepts/adversarial-mesh-audit.md))?
 4. Are locator faces distinct from **retention** (snaps/detents) and **clamp**
    faces ([clamshell retainer](am-clamshell-retainer.md))?
-
-## Anti-patterns
-
-- Wedding-cake cylinder stacks sold as “nubs”
-- Open sock floors / paper-thin crescent walls around socks
-- Using load-bearing snaps as the only locator
-- Copying Technic/LEGO pin envelopes without locking the system pitch — out of
-  scope here (specialized; defer)
-
-Related: [AM snap-fits](am-snap-fit.md), [fits & clearances](fits-clearances.md),
-[fillet vs chamfer](fillet-chamfer.md) (lead-ins on entry).

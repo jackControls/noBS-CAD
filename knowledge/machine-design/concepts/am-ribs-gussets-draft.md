@@ -64,12 +64,3 @@ expecting it to fix a part that bends across weak layer bonds.
 
 Sudden thick-to-thin jumps trap heat (molding) and create stress risers at layer
 bonds (FDM). Prefer even walls with local ribs over a “solid brick then pocket.”
-
-## Anti-patterns
-
-- Filling a box solid “for strength”
-- Knife-edge ribs below process min wall
-- Gusset-free tall bosses that snap at the root
-- Ignoring draft on long printed slides / clamshell rails
-
-Related: [DFM overview](dfm-overview.md), [AM clamshell retainer](am-clamshell-retainer.md).

@@ -5,7 +5,7 @@ description: Clearance fit, transition fit, and interference fit (press fit) as 
 status: draft
 updated: 2026-09-20
 topics: fits, gdt, manufacturing, clearances
-keywords: clearance fit, transition fit, interference fit, press fit, running fit, locational fit, fit class, allowance, radial clearance, diametral clearance, shaft hole fit, hole basis, coupon
+keywords: clearance fit, transition fit, interference fit, press fit, allowance, radial clearance, coupon
 related_recipes: turbine-fit-coupons, d-screw-vise-fit
 sources: nist-gdt-2, iso-286, asme-b4
 ---

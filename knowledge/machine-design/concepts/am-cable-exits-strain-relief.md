@@ -5,7 +5,7 @@ description: Design wire windows and cable exits for FDM enclosures so insulatio
 status: draft
 updated: 2026-09-20
 topics: enclosures, cables, dfam, am, fdm
-keywords: wire window, cable exit, strain relief, grommet, lead exit, cord grip, slot, bushing, insulation, flex relief, wire channel, AM enclosure wiring
+keywords: cable exit, strain relief, grommet, wire window, cord grip
 related_recipes: turbine-fit-coupons, mounting-plate
 sources: nwtc-guns-dfm, doe-3d, palni-dfma
 ---
@@ -60,14 +60,3 @@ insulation and print walls together.
   ([clamshell retainer](am-clamshell-retainer.md)).
 
 Say which role carries pull, bend, and twist. One feature rarely does all three.
-
-## Anti-patterns
-
-- Slitting a wall after the design “worked” without wiring
-- Sharp rectangular punches that cut jackets on first flex
-- Exit through a wall already thinned by a deep actuator pocket
-- Relying on friction in a smooth hole with no clamp or grommet
-- Routing hot melt (heat-set) next to a thin cable window
-
-Related: [AM snap-fits](am-snap-fit.md) (doors that trap cables),
-[research before commit](../../concepts/research-before-commit.md).

@@ -5,7 +5,7 @@ description: FDM grille, slot, and louver design for airflow vs finger/tool ingr
 status: draft
 updated: 2026-09-20
 topics: enclosures, dfam, am, fdm, print
-keywords: ventilation grille, vent slots, louvers, finger trap, finger guard, IP open, airflow opening, bar pitch, slot width, safety opening, FDM grille, mesh vent, cooling vents enclosure
+keywords: ventilation grille, finger trap, louvers, bar pitch, slot width, airflow
 related_recipes: mounting-plate, turbine-fit-coupons
 sources: nwtc-guns-dfm, doe-3d
 ---
@@ -59,15 +59,3 @@ When the vent faces a fan, blade, or mains path, treat the grille as a
 - Prefer purchased certified guards when the hazard is serious; printed plastic
   is a prototype / low-energy pattern unless qualified.
 - Keep tool access intentional (service hatch) separate from the fixed grille.
-
-## Anti-patterns
-
-- Bars thinner than one reliable extrusion width after chamfer
-- Decorative lattices with trapped support that cannot be cleaned
-- Vent through a wall already thinned by a deep pocket or wire window
-- Claiming IP / UL finger-probe compliance from an unmeasured slot sketch
-- Placing vents where exhaust reheats the inlet (layout, not just hole size)
-
-Related: [cable exits](am-cable-exits-strain-relief.md),
-[enclosure lid / seal](am-enclosure-lid-gasket-labyrinth.md),
-[ribs & gussets](am-ribs-gussets-draft.md).

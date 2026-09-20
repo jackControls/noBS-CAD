@@ -804,38 +804,6 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/machine-design/concepts/hole-wizard-vs-modeled.md"),
     },
     KnowledgeFile {
-        path: "concepts/inspect-between-mutates.md",
-        text: include_str!("../../../knowledge/concepts/inspect-between-mutates.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/edit-history-not-delete-rebuild.md",
-        text: include_str!("../../../knowledge/concepts/edit-history-not-delete-rebuild.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/export-preflight-3mf-stl.md",
-        text: include_str!("../../../knowledge/concepts/export-preflight-3mf-stl.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/unit-systems-mm-default.md",
-        text: include_str!("../../../knowledge/concepts/unit-systems-mm-default.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/soft-disclosure-focus-packs.md",
-        text: include_str!("../../../knowledge/concepts/soft-disclosure-focus-packs.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/attach-vs-headless-sessions.md",
-        text: include_str!("../../../knowledge/concepts/attach-vs-headless-sessions.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/parametric-formulas-driven-dims.md",
-        text: include_str!("../../../knowledge/concepts/parametric-formulas-driven-dims.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/selection-topology-ids-mcp.md",
-        text: include_str!("../../../knowledge/concepts/selection-topology-ids-mcp.md"),
-    },
-    KnowledgeFile {
         path: "machine-design/concepts/power-screws-lead-screws.md",
         text: include_str!("../../../knowledge/machine-design/concepts/power-screws-lead-screws.md"),
     },
@@ -1471,22 +1439,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn inspect_between_mutates_solid_scene_searchable() {
-        let store = HelpStore::bundled();
-        for query in [
-            "inspect between mutates solid_scene",
-            "solid_scene discipline between writes",
-            "blind mutate feature errors inspect",
-        ] {
-            let hits = store.search(query, Some(5));
-            assert!(
-                hits.iter().any(|h| h.id.contains("inspect-between-mutates")),
-                "expected inspect-between-mutates for {query}, got {:?}",
-                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
-            );
-        }
-    }
 
     #[test]
     fn hole_wizard_vs_modeled_searchable() {
@@ -1500,126 +1452,6 @@ mod tests {
             assert!(
                 hits.iter().any(|h| h.id.contains("hole-wizard-vs-modeled")),
                 "expected hole-wizard-vs-modeled for {query}, got {:?}",
-                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
-            );
-        }
-    }
-
-    #[test]
-    fn edit_history_not_delete_rebuild_searchable() {
-        let store = HelpStore::bundled();
-        for query in [
-            "edit history not delete-rebuild",
-            "solid_edit_fillet prefer edit feature",
-            "fillet-basics edit extrude not remodel",
-        ] {
-            let hits = store.search(query, Some(5));
-            assert!(
-                hits.iter().any(|h| h.id.contains("edit-history-not-delete-rebuild")),
-                "expected edit-history-not-delete-rebuild for {query}, got {:?}",
-                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
-            );
-        }
-    }
-
-    #[test]
-    fn export_preflight_3mf_vs_stl_searchable() {
-        let store = HelpStore::bundled();
-        for query in [
-            "export preflight 3MF vs STL",
-            "3MF vs STL for AM print package",
-            "mesh preflight prefer 3MF",
-        ] {
-            let hits = store.search(query, Some(5));
-            assert!(
-                hits.iter().any(|h| h.id.contains("export-preflight-3mf-stl")),
-                "expected export-preflight-3mf-stl for {query}, got {:?}",
-                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
-            );
-        }
-    }
-
-    #[test]
-    fn unit_systems_mm_formula_dims_searchable() {
-        let store = HelpStore::bundled();
-        for query in [
-            "unit systems mm default formula dims",
-            "millimetre project units inch mix",
-            "formula dimension pitfalls parametric",
-        ] {
-            let hits = store.search(query, Some(5));
-            assert!(
-                hits.iter().any(|h| h.id.contains("unit-systems-mm-default")),
-                "expected unit-systems-mm-default for {query}, got {:?}",
-                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
-            );
-        }
-    }
-
-
-    #[test]
-    fn soft_disclosure_focus_packs_searchable() {
-        let store = HelpStore::bundled();
-        for query in [
-            "soft disclosure focus packs cad_list_all_tools",
-            "cad_set_focus focus pack dynamic disclosure",
-            "out of focus tools stay callable list_all_tools",
-        ] {
-            let hits = store.search(query, Some(5));
-            assert!(
-                hits.iter().any(|h| h.id.contains("soft-disclosure-focus-packs")),
-                "expected soft-disclosure-focus-packs for {query}, got {:?}",
-                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
-            );
-        }
-    }
-
-    #[test]
-    fn attach_vs_headless_sessions_searchable() {
-        let store = HelpStore::bundled();
-        for query in [
-            "attach vs headless sessions cad_attach",
-            "cad_list_sessions snapshot bridge detach",
-            "headless document vs live attach UUID",
-        ] {
-            let hits = store.search(query, Some(5));
-            assert!(
-                hits.iter().any(|h| h.id.contains("attach-vs-headless-sessions")),
-                "expected attach-vs-headless-sessions for {query}, got {:?}",
-                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
-            );
-        }
-    }
-
-    #[test]
-    fn parametric_formulas_driven_dims_searchable() {
-        let store = HelpStore::bundled();
-        for query in [
-            "parametric formulas driven dimensions pitfalls",
-            "driving vs driven dimension solid_edit",
-            "expression tree formula dimension MCP",
-        ] {
-            let hits = store.search(query, Some(5));
-            assert!(
-                hits.iter().any(|h| h.id.contains("parametric-formulas-driven-dims")),
-                "expected parametric-formulas-driven-dims for {query}, got {:?}",
-                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
-            );
-        }
-    }
-
-    #[test]
-    fn selection_topology_ids_mcp_searchable() {
-        let store = HelpStore::bundled();
-        for query in [
-            "selection topology ids MCP mutates",
-            "face_id edge_id solid_scene before fillet",
-            "stable body face edge ids for hole",
-        ] {
-            let hits = store.search(query, Some(5));
-            assert!(
-                hits.iter().any(|h| h.id.contains("selection-topology-ids-mcp")),
-                "expected selection-topology-ids-mcp for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
         }
@@ -1643,9 +1475,44 @@ mod tests {
     }
 
     #[test]
+    fn agent_mcp_workflow_ops_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "cad_help tenacity soft focus",
+            "inspect between mutates solid_scene",
+            "cad_attach headless sessions",
+            "solid_edit fillet topology face_id",
+            "unit systems mm default",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("agent-mcp-workflow")),
+                "expected agent-mcp-workflow for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn export_print_3mf_stl_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "export preflight 3MF vs STL",
+            "3MF print package mesh preflight",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("export-print")),
+                "expected export-print for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn check_corpus_ok() {
         let n = check_corpus().expect("corpus check");
-        assert!(n >= 52);
+        assert!(n >= 44);
     }
 
     #[test]
@@ -1679,14 +1546,6 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/fit-coupons-recipes-map.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/datum-sketch-plane-choice.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/hole-wizard-vs-modeled.md"));
-        assert!(files.iter().any(|f| f.path == "concepts/inspect-between-mutates.md"));
-        assert!(files.iter().any(|f| f.path == "concepts/edit-history-not-delete-rebuild.md"));
-        assert!(files.iter().any(|f| f.path == "concepts/export-preflight-3mf-stl.md"));
-        assert!(files.iter().any(|f| f.path == "concepts/unit-systems-mm-default.md"));
-        assert!(files.iter().any(|f| f.path == "concepts/soft-disclosure-focus-packs.md"));
-        assert!(files.iter().any(|f| f.path == "concepts/attach-vs-headless-sessions.md"));
-        assert!(files.iter().any(|f| f.path == "concepts/parametric-formulas-driven-dims.md"));
-        assert!(files.iter().any(|f| f.path == "concepts/selection-topology-ids-mcp.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/power-screws-lead-screws.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));

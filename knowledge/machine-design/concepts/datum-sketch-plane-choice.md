@@ -38,14 +38,14 @@ Use `datum_plane_create` / edit tools when:
 
 Do **not** create datum planes to paper over a wrong first sketch — fix the
 sketch plane or edit the feature
-([edit history](../../concepts/edit-history-not-delete-rebuild.md)).
+([MCP workflow](../../concepts/agent-mcp-workflow.md)).
 
 ## Sketch plane checklist (MCP one-step)
 
 1. **State the plane** in the plan (“rectangle on XY, extrude +Z”).
 2. Confirm with `solid_scene` / document inspect that the intended face or
    origin plane is selected — see
-   [inspect between mutates](../../concepts/inspect-between-mutates.md).
+   [MCP workflow](../../concepts/agent-mcp-workflow.md).
 3. Sketch closed profile; finish sketch before extrude/revolve.
 4. Check extrude **direction** (into air vs into material) before long chains.
 5. Prefer **sketch on planar face** only when that face already exists and is
@@ -59,14 +59,6 @@ sketch plane or edit the feature
   ([GD&T intro](gdt-intro.md), [locating schemes](locating-scheme-dof.md)).
 
 Do not invent ASME datum frames from a random construction plane.
-
-## Anti-patterns
-
-- Sketching on a side face “because it was picked” without stating intent
-- Extruding through the part then boolean-fixing instead of flipping direction
-- Creating five offset planes instead of editing one feature
-- Mixing inch mental math on a mm document
-  ([unit systems](../../concepts/unit-systems-mm-default.md))
 
 ## Related recipes
 

@@ -5,21 +5,21 @@ description: Generic VERIFY pattern for purchased actuators and patterned fasten
 status: draft
 updated: 2026-09-20
 topics: hardware, research, dfam, fasteners, am
-keywords: servo, horn, spline, bolt circle, PCD, mounting pattern, actuator pocket, hardware envelope, datasheet, VERIFY table, purchased part, motor mount, flange pattern
+keywords: servo, horn, spline, bolt circle, PCD, hardware envelope, VERIFY
 related_recipes: turbine-fit-coupons, mounting-plate, d-screw-vise
 sources: nasa-fastener, nwtc-guns-dfm, doe-3d
 ---
 
 # Hardware pocket research (servo, horn, spline, bolt circle)
 
-Agents often carve a “servo pocket” or “horn clearance” from memory, then
-discover the real spline, boss height, or bolt **pitch circle diameter (PCD)**
-after geometry froze. Treat every purchased actuator or patterned mount as a
-**research-before-commit** problem — not a guessable box.
+Purchased actuators and patterned mounts are a
+[research-before-commit](../../concepts/research-before-commit.md) problem:
+name the SKU, measure critical dims (spline, boss height, bolt **PCD**), then
+model the pocket.
 
 **Attribution:** process habit only (DFM / joint hygiene). Vendor drawings and
-datasheets are **link-out / measure** — do not invent servo or horn dimensions
-from this page.
+datasheets are link-out / measure — dimensions on this page are method, not a
+catalog.
 
 ## Mechanism class first
 
@@ -30,7 +30,7 @@ from this page.
 | **Flange / face mount** | Bolt count, PCD / pattern, clearance vs tap vs insert in the **case** |
 | **Shaft / D-flat** | Journal Ø, flat length, retention (set screw, clip, press) |
 
-Do not model a generic “servo-shaped” cavity. Name the **SKU** (or measured
+Model from a named **SKU** (or measured
 sample) in the VERIFY table — see
 [research before commit](../../concepts/research-before-commit.md).
 
@@ -71,14 +71,3 @@ Record numbers with units and source (datasheet rev, caliper note, coupon).
   [clamshell retainer](am-clamshell-retainer.md)).
 - Keep melt heat (heat-set inserts) away from thin pocket walls —
   [heat-set inserts](am-heat-set-inserts.md).
-
-## Anti-patterns
-
-- Freezing a pocket from a forum “standard servo” size without a SKU
-- Modeling horn swing as a cylinder that ignores screw heads and wire
-- Matching PCD visually from a photo without measuring
-- Clearance holes in both halves with nothing threaded / inserted
-- Wiring exit as an afterthought slit that shreds insulation
-
-Related: [fits & clearances](fits-clearances.md),
-[validate before show](../../concepts/validate-before-show.md).

@@ -5,7 +5,7 @@ description: Generic FDM enclosure lid strategies — flat gasket seat, printed 
 status: draft
 updated: 2026-09-20
 topics: enclosures, dfam, am, fdm, seals, joints
-keywords: enclosure lid, gasket seat, labyrinth seal, dust seal, crush lip, tongue and groove, O-ring groove AM, lid rebate, weather lip, light-tight seam, FDM enclosure seal, mating flange
+keywords: enclosure lid, gasket seat, labyrinth seal, crush lip, O-ring groove, mating flange
 related_recipes: turbine-fit-coupons, mounting-plate
 sources: nwtc-guns-dfm, doe-3d, palni-dfma
 ---
@@ -61,14 +61,3 @@ splash; elastomers and clamp load do sealing work.
 - Coupon: print a short arc of the seal, clamp with the real stack, check dust
   / light / water spray as appropriate. Do not scale a 20 mm coupon to a
   300 mm lid without a flatness plan ([warpage & flatness](am-warpage-cooling-flatness.md)).
-
-## Anti-patterns
-
-- Screws through a gasket with no compression stop (over-crush → leak + take-set)
-- Interrupted labyrinth at every screw boss (“comb” of leaks)
-- Modeling an O-ring as a CAD torus boolean instead of a groove + BOM line
-- Relying on snap beams alone for a sealed service lid
-- Sharp rectangular gasket grooves that nick foam on first install
-
-Related: [assembly join choice](am-assembly-join-choice.md),
-[fits](fits-clearances.md), [hardware pocket research](am-hardware-pocket-research.md).

@@ -61,13 +61,6 @@ roles — see [alignment nubs vs pins](alignment-nubs-pins.md).
    implied center-distance tolerance — if not, add float.
 5. Datum language on drawings: see [GD&T intro](gdt-intro.md).
 
-## Anti-patterns
-
-- Four tight dowels at rectangle corners “because symmetry”
-- Using snap beams as the only locate **and** retain
-- Ignoring that a long tongue-and-groove already removed the DOF your nubs fight
-
-
 ## Assembly / AM locate checklist
 
 1. Sketch the **6 DOF** and mark which feature owns each.
