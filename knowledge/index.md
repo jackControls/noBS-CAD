@@ -76,7 +76,7 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | DFAM / FDM overview | `machine-design.concepts.dfam-fdm-overview` | DFAM for FDM overview |
 | FDM holes / printed fits | `machine-design.concepts.am-fdm-holes-fit-allowances` | FDM holes and printed-fit allowances |
 | FDM load / layers / infill | `machine-design.concepts.am-fdm-load-layers-infill` | FDM load path vs layer orientation / infill roles |
-| Mechanisms overview | `machine-design.concepts.mechanisms-overview` | Mechanisms overview (CAD-time hub) |
+| Mechanisms overview | `machine-design.concepts.mechanisms-overview` | Motion class → family → navigate children / CAD-vs-catalog |
 | Linkages / mobility | `machine-design.concepts.mechanisms-linkages-mobility` | Linkages and mobility |
 | Cams | `machine-design.concepts.mechanisms-cams` | Cams (CAD-time) |
 | Belts & pulleys | `machine-design.concepts.mechanisms-belts-pulleys` | Belts and pulleys |
@@ -141,7 +141,7 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [DFAM for FDM overview](machine-design/concepts/dfam-fdm-overview.md) - Additive FDM golden path hub; links seeded AM Concepts.
 - [FDM holes / printed-fit allowances](machine-design/concepts/am-fdm-holes-fit-allowances.md) - Role-based printed hole fits; coupons over universal tables.
 - [FDM load / layers / infill](machine-design/concepts/am-fdm-load-layers-infill.md) - Load path vs bed face; shells vs infill; coupons, no % strength tables.
-- [Mechanisms overview](machine-design/concepts/mechanisms-overview.md) - Motion class → element family → envelopes/DOFs → VERIFY.
+- [Mechanisms overview](machine-design/concepts/mechanisms-overview.md) - Motion class → element family → navigate children / CAD-vs-catalog → VERIFY (no tooth/cam/belt charts).
 - [Linkages / mobility](machine-design/concepts/mechanisms-linkages-mobility.md) - Joints/DOFs first; four-bar / slider-crank envelopes.
 - [Cams (CAD-time)](machine-design/concepts/mechanisms-cams.md) - Rise–dwell–return story; base circle / PA as VERIFY.
 - [Belts & pulleys](machine-design/concepts/mechanisms-belts-pulleys.md) - Center distance, wrap, tension path; purchased profiles.

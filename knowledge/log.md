@@ -1,3 +1,14 @@
+## 2026-09-20 — Mechanisms overview hub deepen
+
+- Deepened `machine-design.concepts.mechanisms-overview`: CAD-time vocabulary
+  (motion class / element family / soft sync / CAD-vs-catalog), navigate-by-need
+  table to child Concepts, prefer/anti-pattern tables, golden-path step to open
+  the right child; MIT OCW `mit-272` + DOE buy-before-invent — **no** tooth /
+  cam / belt / Geneva-slot charts.
+- Taxonomy C → seeded (hub navigation / roles distill); Still-thin → charts stay
+  datasheet. Index quick-lookup + bullet. Goldens H94–H96; Rust BM25 queries.
+- Rebuilt search-index.json; MCP embed via install script (no Cursor Uninstall/Add).
+
 ## 2026-09-20 — Design hygiene requirements/BOM deepen
 
 - Deepened `machine-design.concepts.design-hygiene-requirements-bom`: make-vs-buy

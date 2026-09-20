@@ -49,7 +49,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 
 | Topic | Status | Id / title |
 |-------|--------|------------|
-| Mechanisms overview (hub) | **seeded (partial)** | `machine-design.concepts.mechanisms-overview` — [mechanisms-overview](concepts/mechanisms-overview.md) |
+| Mechanisms overview (hub) | **seeded** (hub navigation / roles distill) | `machine-design.concepts.mechanisms-overview` — [mechanisms-overview](concepts/mechanisms-overview.md) motion class → family → navigate children / CAD-vs-catalog |
 | Linkages / mobility | **seeded** | `machine-design.concepts.mechanisms-linkages-mobility` — [mechanisms-linkages-mobility](concepts/mechanisms-linkages-mobility.md) |
 | Cams (CAD-time) | **seeded** | `machine-design.concepts.mechanisms-cams` — [mechanisms-cams](concepts/mechanisms-cams.md) |
 | Belts & pulleys | **seeded** | `machine-design.concepts.mechanisms-belts-pulleys` — [mechanisms-belts-pulleys](concepts/mechanisms-belts-pulleys.md) |
@@ -125,7 +125,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Deep bearing L10 / capacity charts | bearings-hubs-seats seeded (VERIFY→catalog); L10 tables stay datasheet |
 | Deep key stress / groove charts | shafts page seeded (roles only); numeric charts **TODO** |
 | Deep spring-rate / coupling misalignment charts | springs-couplings seeded (roles only); numeric charts **TODO** (datasheets) |
-| Deep cam-law / belt-tension / chain-tension / tooth / Geneva-slot charts | mechanisms hub + linkages/cams/belts/chains/Geneva **seeded (partial)**; printed-gears DFAM seeded (no module-strength tables); numeric charts stay datasheet / `mit-272` |
+| Deep cam-law / belt-tension / chain-tension / tooth / Geneva-slot charts | mechanisms hub **seeded** (navigation + CAD-vs-catalog roles); linkages/cams/belts/chains/Geneva seeded; printed-gears DFAM seeded (no module-strength tables); numeric charts stay datasheet / `mit-272` |
 | Deep ERP / PLM / Stage-Gate BOM workflows | design-hygiene **seeded** (CAD-time roles + VERIFY); ERP/indenture dumps **out** |
 | Materials allowables tables | **planned** (no MatWeb); vocabulary seeded |
 | Deep fastener torque / proof-load / K-factor charts | fasteners-joints **seeded** (preload/clamp + torque-as-install + friction/lube roles); numeric tables stay NASA RP-1228 / datasheet |

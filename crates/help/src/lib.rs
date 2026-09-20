@@ -1677,6 +1677,9 @@ mod tests {
             "mechanisms overview motion class",
             "rotary to linear mechanism hub",
             "mechanism element family envelopes DOF",
+            "navigate mechanism soft sync CAD owns",
+            "CAD owns centers catalog tooth cam belt",
+            "motion class element family purchased indexer",
         ] {
             let hits = store.search(query, Some(5));
             assert!(
