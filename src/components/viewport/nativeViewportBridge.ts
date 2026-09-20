@@ -1831,13 +1831,35 @@ function previewKey(preview: NativeViewportTransient): string {
   ].join(':');
 }
 
+// TEMP DIAGNOSTIC (remove): how the native preview channel is doing.
+const previewDiagnostics = { sends: 0, failures: 0, lastError: '-' };
+
+/** TEMP DIAGNOSTIC (remove). */
+export function nativeViewportPreviewDiagnostics(): {
+  sends: number;
+  failures: number;
+  lastError: string;
+  pendingFailed: boolean;
+} {
+  return {
+    sends: previewDiagnostics.sends,
+    failures: previewDiagnostics.failures,
+    lastError: previewDiagnostics.lastError,
+    pendingFailed: lastPreviewKey === null,
+  };
+}
+
 function pumpPreview(): void {
   if (previewInFlight || !pendingPreview) return;
   const preview = pendingPreview;
   pendingPreview = null;
   previewInFlight = true;
+  previewDiagnostics.sends += 1;
   void invoke('native_viewport_set_preview', { preview })
-    .catch(() => undefined)
+    .catch((error) => {
+      previewDiagnostics.failures += 1;
+      previewDiagnostics.lastError = String(error).slice(0, 160);
+    })
     .finally(() => {
       previewInFlight = false;
       pumpPreview();
