@@ -170,7 +170,6 @@ import {
   pickNativeViewport,
   syncNativeViewportCamera,
   syncNativeViewportPreview,
-  nativeViewportPreviewDiagnostics,
   type NativeViewportPick,
   type NativeViewportLinePattern,
   type NativeViewportSnapKind,
@@ -440,8 +439,6 @@ export function Viewport() {
   const containerRef = useRef<HTMLDivElement>(null);
   const apiRef = useRef<ViewportCameraApi | null>(null);
   const readoutRef = useRef<HTMLDivElement>(null);
-  /** TEMP DIAGNOSTIC (remove): on-screen native cursor-HUD report. */
-  const diagRef = useRef<HTMLDivElement>(null);
   const chipsRef = useRef<HTMLDivElement>(null);
   const toolCursorRef = useRef<HTMLDivElement>(null);
   const planeTagRef = useRef<HTMLDivElement>(null);
@@ -5479,15 +5476,6 @@ export function Viewport() {
       y: number;
     } | null = null;
     let previewSeq = 0;
-    // TEMP DIAGNOSTIC (remove once the native cursor-HUD freeze is understood):
-    // counters the on-screen readout reports.
-    let diagMoves = 0;
-    let diagLeaves = 0;
-    let diagTicks = 0;
-    let diagCollections = 0;
-    let diagHudSrc: [number, number] | null = null;
-    let diagHudAt = 0;
-    let diagHoverAt = 0;
     /** Last cursor position in sketch coords (commit/drag-end fallback). */
     let lastSketchPoint: Vec2 | null = null;
     /** Whether the pointer is currently over the viewport surface. A cursor
@@ -7086,7 +7074,6 @@ export function Viewport() {
       p: Vec2,
       pointer: { clientX: number; clientY: number; ctrlKey: boolean; metaKey: boolean },
     ) => {
-      diagHoverAt = performance.now();
       const inferenceOverride = pointer.ctrlKey || pointer.metaKey;
       if (state.activeTool === 'point') {
         const placement = acquirePointPlacement(p, inferenceOverride);
@@ -10497,8 +10484,6 @@ export function Viewport() {
         ? localY + gap
         : localY - gap;
       activeToolCursorScreen = [centerX, centerY];
-      diagHudSrc = [event.clientX, event.clientY];
-      diagHudAt = performance.now();
       // The badge lives in the native HUD when the native viewport is active,
       // so the frame request belongs here, before the browser-only branch.
       wakeCursorHud();
@@ -10627,7 +10612,6 @@ export function Viewport() {
     };
     const onPointerMove = (e: PointerEvent) => {
       wakeControllerFrame();
-      diagMoves += 1;
       const state = store.getState();
 
       // CAM point-pick sessions own the pointer: hover-highlight the nearest
@@ -11153,7 +11137,6 @@ export function Viewport() {
 
     const onPointerLeave = () => {
       jointHoverPickGeneration += 1;
-      diagLeaves += 1;
       const state = store.getState();
       pointerOverSurface = false;
       if (jointMotionDrag || mechanismDrag) {
@@ -13500,7 +13483,6 @@ export function Viewport() {
     let lastTime = performance.now();
     const tick = () => {
       raf = 0;
-      diagTicks += 1;
       const now = performance.now();
       const dt = Math.min(0.1, (now - lastTime) / 1000);
       lastTime = now;
@@ -13591,7 +13573,6 @@ export function Viewport() {
       // Active-sketch annotations are the only camera-projected transient data
       // and therefore keep the camera-frequency collection path.
       if (native && (nativeTransientDirty || sketchGroup.visible)) {
-        diagCollections += 1;
         syncNativeViewportPreview(collectNativeViewportTransient());
         nativeTransientDirty = false;
       }
@@ -13610,42 +13591,6 @@ export function Viewport() {
     };
     wakeControllerFrame();
 
-    // TEMP DIAGNOSTIC (remove): a poll, not a frame, so it still reports when
-    // the render loop has stopped.
-    const diagNode = diagRef.current;
-    const diagTimer = window.setInterval(() => {
-      if (!diagNode) return;
-      const live = store.getState();
-      const transient = collectNativeViewportTransient();
-      const badge = toolCursorRef.current;
-      diagNode.style.display = 'block';
-      const now = performance.now();
-      const rect = surface.domElement.getBoundingClientRect();
-      const round2 = (value: number | null | undefined) =>
-        value === null || value === undefined ? '-' : Math.round(value);
-      const pair = (value: { x: number; y: number } | null | undefined) =>
-        value ? `${round2(value.x)},${round2(value.y)}` : '-';
-      diagNode.textContent = [
-        `mv ${diagMoves} lv ${diagLeaves} tick ${diagTicks} collect ${diagCollections}`,
-        `native ${nativeViewportIsActive() ? 1 : 0} vis ${document.visibilityState} raf ${raf}`,
-        `tool ${live.activeTool ?? '-'} run ${toolRun ? 1 : 0} dyn ${live.dynInput.active ? 1 : 0}`,
-        `hud ${activeToolCursorScreen
-          ? activeToolCursorScreen.map((value) => Math.round(value)).join(',')
-          : '-'} src ${diagHudSrc ? diagHudSrc.map((value) => Math.round(value)).join(',') : '-'}`
-          + ` age ${diagHudAt ? Math.round(now - diagHudAt) : -1}`,
-        `rect ${Math.round(rect.left)},${Math.round(rect.top)}`
-          + ` ${Math.round(rect.width)}x${Math.round(rect.height)}`,
-        `marker ${transient.marker ? transient.marker.kind : '-'}`
-          + ` @${transient.marker ? transient.marker.position.map((v) => Math.round(v)).join(',') : '-'}`
-          + ` hover ${diagHoverAt ? Math.round(now - diagHoverAt) : -1}`
-          + ` ann ${transient.annotations.filter((entry) => entry.kind === 'tool').length}`,
-        `ptr ${pair(lastPointerClient)} p ${pair(lastSketchPoint)}`
-          + ` dom ${badge ? getComputedStyle(badge).display : '-'}`,
-        `send ${nativeViewportPreviewDiagnostics().sends}`
-          + ` fail ${nativeViewportPreviewDiagnostics().failures}`
-          + ` err ${nativeViewportPreviewDiagnostics().lastError}`,
-      ].join('\n');
-    }, 500);
 
     // Open may have arrived while Drawings had the viewport unmounted. Fit the
     // matching model before publishing the camera or drawing its first frame.
@@ -13657,8 +13602,6 @@ export function Viewport() {
       preservedCameraSnapshot = api.getSnapshot();
       holeDefinitionsRequest += 1;
       cancelAnimationFrame(raf);
-      window.clearInterval(diagTimer);
-      if (diagNode) diagNode.style.display = 'none';
       resizeObserver.disconnect();
       unsub();
       unsubscribeOpenedFraming();
@@ -13803,14 +13746,6 @@ export function Viewport() {
       <DimensionEditor />
       <DofChip />
       <SelectionReadout />
-      {/* TEMP DIAGNOSTIC (remove): native cursor-HUD report. */}
-      <div
-        ref={diagRef}
-        data-testid="cursor-hud-diagnostic"
-        data-native-viewport-overlay
-        className="pointer-events-none absolute left-2 top-2 z-30 whitespace-pre rounded border border-edge bg-header/90 px-2 py-1 font-mono text-[10px] leading-tight tabular-nums text-mute"
-        style={{ display: 'none' }}
-      />
       {/* Cursor readout (bottom-right status strip, sketch mm). */}
       <div
         ref={readoutRef}

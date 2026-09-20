@@ -490,6 +490,11 @@ pub enum ViewportConstraintIcon {
     Fix,
     Midpoint,
     Concentric,
+    /// A point glued to an arc's implicit start/end. Every variant here must
+    /// stay in step with `ConstraintIconKind` in
+    /// `src/sketch/constraintIcons.tsx`: an unknown variant makes serde reject
+    /// the whole transient preview, which freezes the cursor HUD on screen.
+    ArcEndpoint,
     Collinear,
     Symmetry,
 }

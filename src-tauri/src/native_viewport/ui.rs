@@ -1054,6 +1054,16 @@ pub(crate) fn spawn_constraint_icon(
                     (12.0, 13.0, 12.0, 18.0),
                 ],
                 ViewportConstraintIcon::Concentric => &[],
+                // The shared glyph is an arc from (4,18) to its endpoint dot at
+                // (19,10), radius 10: six chords keep it smooth at this size.
+                ViewportConstraintIcon::ArcEndpoint => &[
+                    (4.0, 18.0, 4.78, 14.72),
+                    (4.78, 14.72, 6.61, 11.89),
+                    (6.61, 11.89, 9.27, 9.83),
+                    (9.27, 9.83, 12.47, 8.76),
+                    (12.47, 8.76, 15.84, 8.82),
+                    (15.84, 8.82, 18.99, 10.0),
+                ],
                 ViewportConstraintIcon::Collinear => &[
                     (3.0, 18.0, 9.0, 14.0),
                     (10.5, 13.0, 15.0, 10.0),
@@ -1102,6 +1112,9 @@ pub(crate) fn spawn_constraint_icon(
                 }
                 ViewportConstraintIcon::Collinear => {
                     spawn_icon_dot(canvas, 12.0, 10.0, 2.4, scale, color);
+                }
+                ViewportConstraintIcon::ArcEndpoint => {
+                    spawn_icon_dot(canvas, 19.0, 10.0, 2.4, scale, color);
                 }
                 _ => {}
             }
