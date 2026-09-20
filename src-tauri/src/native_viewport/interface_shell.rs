@@ -23,6 +23,7 @@ use super::ui::{ViewportUiAssets, ViewportUiTheme};
 
 #[cfg(feature = "dev-bevy-host")]
 pub(crate) mod fields;
+pub(crate) mod ranges;
 pub(crate) mod ribbon;
 
 const MAX_PENDING_ACTIONS: usize = 64;
@@ -336,6 +337,16 @@ impl NativeInterfaceHandle {
     }
 
     #[cfg(feature = "dev-bevy-host")]
+    pub(crate) fn assistive_edit(&self,original:&NativeInterfaceAction,input:ControlInput)->Result<(),String>{
+        let mut shared=self.shared.lock().map_err(|_|"Native interface lock poisoned")?;
+        if current_context(&shared)?!=original.context{return Err("Native interface document changed".into());}
+        shared.registry.validate_resolved(&original.control,&original.context).map_err(|e|e.to_string())?;
+        enqueue(&mut shared,original.control.key,input,&original.context)?;
+        set_focus(&mut shared,Some(original.control.key))?;
+        drop(shared);(self.wake)();Ok(())
+    }
+
+    #[cfg(feature = "dev-bevy-host")]
     pub(crate) fn resolve_retained(
         &self,
         key: ControlKey,
@@ -423,6 +434,10 @@ impl NativeInterfaceHandle {
             .actions
             .drain(..)
             .collect())
+    }
+
+    pub(crate) fn take_next_action(&self)->Result<Option<NativeInterfaceAction>,String>{
+        Ok(self.shared.lock().map_err(|_|"Native interface lock poisoned")?.actions.pop_front())
     }
 
     #[cfg(feature = "dev-bevy-host")]
@@ -641,7 +656,12 @@ impl NativeInterfaceHandle {
                 .any(|(_, rect)| contains_point(*rect, position))
             || has_modal(&shared);
         match phase {
-            PointerPhase::Move => shared.hovered = key,
+            PointerPhase::Move => {
+                shared.hovered = key;
+                if let Some(capture)=shared.capture.clone().filter(|c|c.button==PointerButton::Primary) {
+                    enqueue_range(&mut shared,&capture,&context,position[0])?;
+                }
+            },
             PointerPhase::Leave => shared.hovered = None,
             PointerPhase::Cancel => {
                 shared.hovered = None;
@@ -657,14 +677,19 @@ impl NativeInterfaceHandle {
                     set_focus(&mut shared, Some(key))?;
                     shared.capture = Some(Capture {
                         resolved,
-                        context,
+                        context:context.clone(),
                         button,
                     });
+                    if button==PointerButton::Primary {
+                        let capture=shared.capture.clone().unwrap();
+                        enqueue_range(&mut shared,&capture,&context,position[0])?;
+                    }
                 }
             }
             PointerPhase::Up => {
                 if let Some(capture) = shared.capture.take() {
-                    if capture.context == context
+                    let range=capture.button==PointerButton::Primary && enqueue_range(&mut shared,&capture,&context,position[0])?;
+                    if !range && capture.context == context
                         && capture.button == button
                         && Some(capture.resolved.key) == key
                     {
@@ -934,6 +959,32 @@ fn enqueue(
     Ok(())
 }
 
+/// Pointer drags retain their original binding/owner. Coalesce only adjacent
+/// values for that same slider, preserving intervening commands and avoiding a
+/// backlog of obsolete preview poses while the render/kernel worker is busy.
+fn enqueue_range(shared:&mut Shared,capture:&Capture,context:&DocumentContext,x:f64)->Result<bool,String>{
+    let Some(control)=shared.registry.frame().controls.iter().find(|c|c.key==capture.resolved.key)else{return Ok(false);};
+    let Some(value)=ranges::pointer_value(control,x)else{return Ok(false);};
+    if capture.context!=*context{return Err("Slider belongs to an earlier document".into());}
+    let validate=shared.registry.validate_resolved(&capture.resolved,context);
+    if let Err(error)=validate {
+        // A captured gesture may outlive a temporary worker busy state. Retain
+        // its latest value, then revalidate normally when the reducer consumes
+        // it. Never bypass a changed binding, document or modal owner.
+        if error!=nbcad_interface::ControlError::Disabled{return Err(error.to_string());}
+    }
+    if let Some(last)=shared.actions.back().filter(|a|a.context==*context && a.control.key==capture.resolved.key && a.control.binding()==capture.resolved.binding() && matches!(a.control.input,ControlInput::SetValue(_))) {
+        if let Err(error)=shared.registry.validate_resolved(&last.control,context) {
+            if error!=nbcad_interface::ControlError::Disabled{return Err(error.to_string());}
+        }
+        shared.actions.pop_back();
+    }
+    if shared.actions.len()>=MAX_PENDING_ACTIONS{return Err("Native interface is busy; wait for the pending command".into());}
+    let mut resolved=capture.resolved.clone();resolved.input=ControlInput::SetValue(value.to_string());
+    shared.actions.push_back(NativeInterfaceAction{context:context.clone(),control:resolved});
+    Ok(true)
+}
+
 fn hit(shared: &Shared, point: [f64; 2]) -> Option<ControlKey> {
     shared
         .hit_order
@@ -1008,7 +1059,11 @@ pub(crate) fn compact_label(world: &mut World, entity: Entity, inset: f32) {
 
 pub(crate) fn caption_size(world: &mut World, entity: Entity, size: f32) {
     let size = bevy::text::FontSize::Px(size);
-    let label = world.get::<InterfaceLabel>(entity).unwrap().0;
+    // Sliders and editable text render their own content and have no button
+    // caption. Shared panel styling must not assume every control is a button.
+    let Some(label) = world.get::<InterfaceLabel>(entity).map(|label| label.0) else {
+        return;
+    };
     if let Some(mut font) = world.get_mut::<TextFont>(label) {
         if font.font_size != size {
             font.font_size = size;

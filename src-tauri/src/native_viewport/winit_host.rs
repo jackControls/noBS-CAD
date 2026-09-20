@@ -171,6 +171,7 @@ pub(crate) fn build(configure: impl FnOnce(&mut App, NativeInterfaceHandle)) -> 
     submission::install(&mut app);
     configure(&mut app, handle);
     super::interface_shell::fields::install(&mut app);
+    super::interface_shell::ranges::install(&mut app);
     app
 }
 

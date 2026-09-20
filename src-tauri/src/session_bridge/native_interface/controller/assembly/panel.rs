@@ -137,6 +137,9 @@ impl Paint<'_> {
                     | Command::Add(_)
                     | Command::Rename(..)
                     | Command::ApplyTransform(..)
+                    | Command::Motion(
+                        motion::Action::Demo | motion::Action::Revert | motion::Action::Save
+                    )
                     | Command::Inspect(
                         inspect::Action::Check
                             | inspect::Action::Swept
@@ -886,14 +889,28 @@ pub(super) fn paint(
         for j in &a.joints {
             p.button(
                 &format!("joint-{}", j.id.0),
-                &format!("Edit joint {}", j.name),
+                &format!("Joint {}", j.name),
                 Some(&j.name),
-                Command::Joint(joint::Command::Open(Some(j.id.0))),
+                Command::Motion(motion::Action::Select(j.id.0)),
                 8.,
                 y,
-                width - 64.,
+                width - 88.,
                 28.,
                 Some(Icon::Joint),
+                blocked,
+                Some(motion::selected(&state.motion) == Some(j.id.0)),
+                Field::None,
+            )?;
+            p.button(
+                &format!("joint-{}-edit", j.id.0),
+                &format!("Edit joint {}", j.name),
+                Some(""),
+                Command::Joint(joint::Command::Open(Some(j.id.0))),
+                width - 76.,
+                y,
+                22.,
+                28.,
+                Some(Icon::Pencil),
                 blocked,
                 None,
                 Field::None,
@@ -944,6 +961,7 @@ pub(super) fn paint(
             );
             y += 40.;
         }
+        motion::panel::paint(&mut p, &state.motion, &mut y, width, blocked)?;
     }
     state.max_scroll = (y - (height - 88.)).max(0.);
     state.scroll = state.scroll.min(state.max_scroll);

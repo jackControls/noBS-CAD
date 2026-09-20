@@ -1,7 +1,7 @@
 use super::*;
 use crate::session_bridge::native_interface::tests::Fixture;
 
-fn stock(f: &Fixture) {
+pub(in super::super) fn stock(f: &Fixture) {
     for i in 0..2 {
         for (op, args) in [
             ("sketch_begin", json!({"type":"origin_plane","plane":"xy"})),
@@ -21,7 +21,7 @@ fn stock(f: &Fixture) {
         }
     }
 }
-fn picked(f: &Fixture, a: &AssemblyDocumentDto) -> [Option<Connector>; 2] {
+pub(in super::super) fn picked(f: &Fixture, a: &AssemblyDocumentDto) -> [Option<Connector>; 2] {
     let scene = f.engine.viewport_snapshot().2;
     std::array::from_fn(|i| {
         let b = &scene.bodies[i];

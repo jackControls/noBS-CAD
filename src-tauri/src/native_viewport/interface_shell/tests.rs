@@ -122,6 +122,62 @@ fn click(handle: &NativeInterfaceHandle) -> Result<(), String> {
 }
 
 #[test]
+fn range_drag_uses_real_bounds_coalesces_and_rejects_rebound_controls() {
+    let (mut app, handle, entity, _) = fixture();
+    let mut control = app.world_mut().get_mut::<InterfaceControl>(entity).unwrap();
+    control.role = "slider".into();
+    control.field = Field::Range {
+        value: 0.,
+        min: 0.,
+        max: 10.,
+        step: 1.,
+    };
+    drop(control);
+    app.update();
+    handle
+        .pointer(PointerPhase::Down, [140., 140.], PointerButton::Primary)
+        .unwrap();
+    for x in 141..195 {
+        handle
+            .pointer(PointerPhase::Move, [x as f64, 140.], PointerButton::Primary)
+            .unwrap();
+    }
+    handle
+        .pointer(PointerPhase::Up, [600., 140.], PointerButton::Primary)
+        .unwrap();
+    let actions = handle.take_actions().unwrap();
+    assert_eq!(actions.len(), 1);
+    assert_eq!(
+        actions[0].control.input,
+        ControlInput::SetValue("10".into())
+    );
+    handle.validate_action(&actions[0]).unwrap();
+    // A kernel preview can temporarily disable controls during a drag. The
+    // release value stays queued and cannot apply until the control is enabled.
+    handle.pointer(PointerPhase::Down,[140.,140.],PointerButton::Primary).unwrap();
+    app.world_mut().get_mut::<InterfaceControl>(entity).unwrap().disabled=true;app.update();
+    handle.pointer(PointerPhase::Move,[170.,140.],PointerButton::Primary).unwrap();
+    handle.pointer(PointerPhase::Up,[600.,140.],PointerButton::Primary).unwrap();
+    let actions=handle.take_actions().unwrap();assert_eq!(actions.len(),1);
+    assert!(handle.validate_action(&actions[0]).is_err());
+    app.world_mut().get_mut::<InterfaceControl>(entity).unwrap().disabled=false;app.update();
+    handle.validate_action(&actions[0]).unwrap();
+    handle
+        .pointer(PointerPhase::Down, [140., 140.], PointerButton::Primary)
+        .unwrap();
+    handle.take_actions().unwrap();
+    app.world_mut()
+        .get_mut::<InterfaceControl>(entity)
+        .unwrap()
+        .binding += 1;
+    app.update();
+    assert!(handle
+        .pointer(PointerPhase::Move, [160., 140.], PointerButton::Primary)
+        .is_err());
+    assert!(handle.take_actions().unwrap().is_empty());
+}
+
+#[test]
 fn painted_panel_blocks_geometry_and_underlying_controls_but_not_its_children() {
     let (mut app, handle, button, _) = fixture();
     let panel = app

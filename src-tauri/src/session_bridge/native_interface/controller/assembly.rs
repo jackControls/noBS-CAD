@@ -12,6 +12,7 @@ use nbcad_sketch::{
 use std::collections::HashSet;
 mod inspect;
 pub(crate) mod joint;
+pub(crate) mod motion;
 mod panel;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -30,6 +31,7 @@ pub(crate) enum EditField {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Command {
+    Motion(motion::Action),
     Tab(Tab),
     Inspect(inspect::Action),
     Joint(joint::Command),
@@ -137,6 +139,7 @@ impl Draft {
 }
 #[derive(Resource)]
 struct Browser {
+    motion: motion::State,
     tab: Tab,
     inspect: inspect::State,
     enabled: bool,
@@ -158,6 +161,7 @@ struct Browser {
 impl Default for Browser {
     fn default() -> Self {
         Self {
+            motion: default(),
             tab: Tab::Structure,
             inspect: default(),
             enabled: false,
@@ -281,10 +285,23 @@ pub(crate) fn reduce(
     action: &NativeInterfaceAction,
     command: &Command,
 ) -> Result<Value, String> {
-    if let Command::Joint(command) = command {
+    let joint_command = match command {
+        Command::Joint(command) => Some(command.clone()),
+        Command::Motion(motion::Action::Select(id))
+            if matches!(action.control.input, ControlInput::DoubleClick) =>
+        {
+            Some(joint::Command::Open(Some(*id)))
+        }
+        _ => None,
+    };
+    if let Some(command) = joint_command {
+        bridge.with_native_document_receipt(engine, &action.context, |revision| {
+            handle.validate_action(action)?;
+            motion::cancel(world, &action.context, revision)
+        })?;
         world.init_resource::<Browser>();
         world.resource_mut::<Browser>().enabled = true;
-        return joint::reduce(world, handle, engine, bridge, action, command);
+        return joint::reduce(world, handle, engine, bridge, action, &command);
     }
     let receipt = bridge.native_document_receipt(engine, &action.context)?;
     bridge
@@ -299,6 +316,9 @@ pub(crate) fn reduce(
                 .is_some()
         {
             return Err("Finish the active sketch before opening the assembly browser".into());
+        }
+        if !enabled {
+            motion::cancel(world, &action.context, receipt.revision)?;
         }
         world.init_resource::<Browser>();
         world.resource_mut::<Browser>().enabled = *enabled;
@@ -319,6 +339,27 @@ pub(crate) fn reduce(
             .clone()
             .ok_or("Assembly structure is unavailable")?;
         let input = &action.control.input;
+        if let Command::Motion(command) = command {
+            if feature::panel(world).is_some()
+                || joint::active(world)
+                || native_viewport::interface_geometry(world)
+                    .active_sketch
+                    .is_some()
+            {
+                return Err("Finish the active modeling command before moving joints".into());
+            }
+            return motion::reduce(
+                world,
+                engine,
+                bridge,
+                &receipt.owner,
+                receipt.revision,
+                &mut state.motion,
+                &a,
+                command,
+                input,
+            );
+        }
         if let Command::Inspect(command) = command {
             if feature::panel(world).is_some()
                 || joint::active(world)
@@ -439,6 +480,10 @@ pub(crate) fn reduce(
         let mut request = None;
         match *command {
             Command::Tab(tab) => {
+                if tab != state.tab {
+                    motion::restore(world, &mut state.motion, &receipt.owner)?;
+                    state.motion.changed(&a);
+                }
                 state.tab = tab;
                 state.scroll = 0.;
             }
@@ -456,6 +501,8 @@ pub(crate) fn reduce(
                         || handle.validate_action(action),
                     );
                 }
+                motion::restore(world, &mut state.motion, &receipt.owner)?;
+                state.motion = default();
                 select(world, &receipt.owner, &a, id)?;
             }
             Command::Expand(id) => {
@@ -617,7 +664,11 @@ pub(crate) fn reduce(
                     json!({if definition {"component"} else {"occurrence"}:patch}),
                 ));
             }
-            Command::Show(_) | Command::Edit(..) | Command::Joint(_) | Command::Inspect(_) => {
+            Command::Show(_)
+            | Command::Edit(..)
+            | Command::Joint(_)
+            | Command::Inspect(_)
+            | Command::Motion(_) => {
                 unreachable!()
             }
         }
@@ -677,6 +728,7 @@ pub(crate) fn synchronize(
             state.parents_open = false;
             state.definitions_open = false;
             state.inspect = default();
+            state.motion = default();
         }
         if state.assembly.is_none() || state.revision != revision {
             let a = services
@@ -696,6 +748,7 @@ pub(crate) fn synchronize(
             {
                 state.definition = a.component_structure.definitions.first().map(|d| d.id.0);
             }
+            state.motion.changed(&a);
             state.assembly = Some(Arc::new(a));
             state.revision = revision;
             state.draft = None;

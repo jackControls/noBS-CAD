@@ -370,7 +370,7 @@ fn synchronize_owned(
         control.field = row.value.clone();
         let action;
         match &row.value {
-            Field::Text { .. } | Field::Choice { .. } => {
+            Field::Text { .. } | Field::Choice { .. } | Field::Range { .. } => {
                 label(
                     world,
                     state,
@@ -848,7 +848,9 @@ fn widget(
         let mut system = SystemState::<Commands>::new(world);
         let entity = {
             let mut commands = system.get_mut(world).map_err(|e| e.to_string())?;
-            if matches!(control.field, Field::Text { .. }) {
+            if matches!(control.field, Field::Range { .. }) {
+                interface_shell::ranges::spawn(&mut commands,camera,node.clone(),control.clone(),theme)
+            } else if matches!(control.field, Field::Text { .. }) {
                 fields::spawn_text_field(
                     &mut commands,
                     camera,
@@ -899,6 +901,10 @@ fn widget(
     if matches!(control.field, Field::Text { .. }) {
         control.text_editing = true;
         control.role = "textbox".into();
+    }
+    if matches!(control.field, Field::Range { .. }) {
+        control.role="slider".into();
+        control.owned_keys=["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Home","End"].map(KeyChord::plain).into();
     }
     if world.get::<InterfaceControl>(entity) != Some(&control) {
         world.entity_mut(entity).insert(control);

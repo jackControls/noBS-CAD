@@ -3,6 +3,10 @@ use super::*;
 
 pub fn specs() -> Vec<ToolSpec> {
     let id = json!({"type":"integer","minimum":1});
+    let motion = object_schema(
+        json!({"joint_id":id,"angle_offset_deg":{"type":"number"},"linear_offset_mm":{"type":"number"},"secondary_angle_offset_deg":{"type":"number"},"tertiary_angle_offset_deg":{"type":"number"},"secondary_linear_offset_mm":{"type":"number"}}),
+        &["joint_id", "angle_offset_deg", "linear_offset_mm"],
+    );
     let mut contact = json!({
         "name":{"type":"string","minLength":1},
         "occurrence_a":id,"body_a":id,"occurrence_b":id,"body_b":id,
@@ -16,6 +20,12 @@ pub fn specs() -> Vec<ToolSpec> {
     contact["id"] = id.clone();
     contact["enabled"] = json!({"type":"boolean"});
     vec![
+        ToolSpec::direct("assembly_preview_joint_coordinates","Preview joint motion",
+            "Solve all five supported joint coordinates without changing saved joint intent or source geometry. Returns the solved component poses and diagnostics.",
+            "assembly_preview_joint_coordinates",Payload::Object,object_schema(json!({"motion":motion}), &["motion"])),
+        ToolSpec::direct("assembly_set_joint_coordinates","Save joint position",
+            "Persist joint coordinates using the same solver and limits as the live motion controls. Rotations are degrees and translations are millimetres.",
+            "assembly_set_joint_coordinates",Payload::Object,object_schema(json!({"motion":motion}), &["motion"])),
         ToolSpec::direct("assembly_swept_collision_check", "Check swept assembly collisions",
             "Check exact placed B-reps throughout a persisted motion study. Read-only; rates are 1–240 Hz with at most 100,001 samples. Results are sampled collision intervals, not a continuous collision proof.",
             "assembly_swept_collision_check", Payload::Object,

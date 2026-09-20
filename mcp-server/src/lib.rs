@@ -1454,6 +1454,7 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "assembly_solution"
             | "assembly_interference_check"
             | "assembly_swept_collision_check"
+            | "assembly_preview_joint_coordinates"
             | "solid_tessellate"
             | "solid_extrude_definitions"
             | "solid_revolve_definitions"

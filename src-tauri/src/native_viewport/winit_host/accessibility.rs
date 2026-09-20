@@ -5,7 +5,7 @@
 use super::super::interface_shell::{
     InterfaceLayout, NativeInterfaceAction, NativeInterfaceHandle,
 };
-use accesskit::{Action, Node, Role, Toggled};
+use accesskit::{Action, ActionData, Node, Role, Toggled};
 use bevy::{
     a11y::{AccessibilityNode, AccessibilitySystems, ActionRequest},
     input_focus::{FocusCause, InputFocus},
@@ -149,6 +149,23 @@ fn publish(world: &mut World) {
                 node.set_read_only();
             }
         }
+        if let Field::Range {
+            value,
+            min,
+            max,
+            step,
+        } = control.field
+        {
+            node.set_numeric_value(value);
+            node.set_min_numeric_value(min);
+            node.set_max_numeric_value(max);
+            node.set_numeric_value_step(step);
+            if !control.disabled {
+                node.add_action(Action::SetValue);
+                node.add_action(Action::Increment);
+                node.add_action(Action::Decrement);
+            }
+        }
         if control.action.is_some() {
             node.add_action(Action::Click);
             node.add_action(Action::Focus);
@@ -196,6 +213,24 @@ fn apply_requests(
         let Ok(AccessibleBinding(Some(action))) = bindings.get(entity) else {
             continue;
         };
+        let edit = match (&request.action, &request.data) {
+            (Action::SetValue, Some(ActionData::NumericValue(value))) => {
+                Some(nbcad_interface::ControlInput::SetValue(value.to_string()))
+            }
+            (Action::Increment, _) => Some(nbcad_interface::ControlInput::Key(
+                nbcad_interface::KeyChord::plain("ArrowRight"),
+            )),
+            (Action::Decrement, _) => Some(nbcad_interface::ControlInput::Key(
+                nbcad_interface::KeyChord::plain("ArrowLeft"),
+            )),
+            _ => None,
+        };
+        if let Some(edit) = edit {
+            if let Err(error) = handle.assistive_edit(action, edit) {
+                eprintln!("Native accessibility edit rejected: {error}");
+            }
+            continue;
+        }
         let activate = match request.action {
             Action::Click => true,
             Action::Focus => false,
@@ -271,6 +306,25 @@ mod tests {
         assert_eq!(read(&app).value(), Some("12 mm"));
         assert!(read(&app).is_read_only());
         assert_eq!(read(&app).toggled(), None);
+        {
+            let mut widget = app
+                .world_mut()
+                .get_mut::<InterfaceControl>(control)
+                .unwrap();
+            widget.role = "slider".into();
+            widget.field = Field::Range {
+                value: 2.,
+                min: 0.,
+                max: 5.,
+                step: 0.1,
+            };
+        }
+        app.update();
+        assert_eq!(read(&app).role(), Role::Slider);
+        assert_eq!(read(&app).numeric_value(), Some(2.));
+        assert_eq!(read(&app).min_numeric_value(), Some(0.));
+        assert_eq!(read(&app).max_numeric_value(), Some(5.));
+        assert!(read(&app).supports_action(Action::SetValue));
     }
 
     #[test]

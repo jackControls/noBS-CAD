@@ -12,6 +12,26 @@ use std::collections::HashSet;
 mod tests {
     use super::*;
     #[test]
+    fn range_controls_survive_panel_styling_and_refresh_without_button_labels() {
+        let mut world = World::new();
+        world.init_resource::<ViewportUiAssets>();
+        let camera = world.spawn_empty().id();
+        let mut widgets = Widgets::default();
+        let mut control = InterfaceControl::button("assembly/joints", "Rotation");
+        control.field = nbcad_interface::Field::Range { value: 0., min: -30., max: 30., step: 1. };
+        let mut previous = None;
+        for value in [0., 20., -30.] {
+            control.field = nbcad_interface::Field::Range { value, min: -30., max: 30., step: 1. };
+            let entity = widgets.button(&mut world, camera, "angle", control.clone(), None,
+                NativeCommand::ClearSelection, rect(0.,0.,180.,28.),None,35).unwrap();
+            interface_shell::caption_size(&mut world, entity, 10.);
+            assert!(world.get::<interface_shell::ranges::NativeRange>(entity).is_some());
+            assert_eq!(world.get::<InterfaceControl>(entity).unwrap().role, "slider");
+            if let Some(previous) = previous {assert_eq!(entity, previous);}
+            previous = Some(entity);
+        }
+    }
+    #[test]
     fn text_controls_are_real_retained_editors_with_the_value_visible() {
         let mut world = World::new();
         world.init_resource::<ViewportUiAssets>();
@@ -144,14 +164,37 @@ impl Widgets {
         let assets = world.resource::<ViewportUiAssets>().clone();
         let theme = ViewportUiTheme::from_palette(&ViewportPalette::default());
         let text_field = matches!(control.field, nbcad_interface::Field::Text { .. });
+        let range = matches!(control.field, nbcad_interface::Field::Range { .. });
         if text_field {
             control.text_editing = true;
             control.role = "textbox".into();
         }
+        if range {
+            control.role = "slider".into();
+            control.text_editing = false;
+            control.owned_keys = [
+                "ArrowLeft",
+                "ArrowRight",
+                "ArrowUp",
+                "ArrowDown",
+                "Home",
+                "End",
+            ]
+            .map(nbcad_interface::KeyChord::plain)
+            .into();
+        }
         let entity = if let Some((entity, _, _)) = self.controls.get(key) {
             *entity
         } else {
-            let entity = if text_field {
+            let entity = if range {
+                interface_shell::ranges::spawn(
+                    &mut world.commands(),
+                    camera,
+                    bounds.clone(),
+                    control.clone(),
+                    theme,
+                )
+            } else if text_field {
                 interface_shell::fields::spawn_text_field(
                     &mut world.commands(),
                     camera,
@@ -172,7 +215,7 @@ impl Widgets {
             };
             world.flush();
             bind_command(world, entity, command.clone())?;
-            if !text_field {
+            if !text_field && !range {
                 compact_label(
                     world,
                     entity,

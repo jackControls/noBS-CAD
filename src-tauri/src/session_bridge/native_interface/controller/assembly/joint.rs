@@ -7,7 +7,7 @@ use crate::native_viewport::{
 use nbcad_sketch::{AssemblySolutionDto, JointConnectorDto, OccurrenceId};
 pub(super) mod panel;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Action {

@@ -18,6 +18,7 @@ pub fn is_live_engine_query(method: &str) -> bool {
             | "drawing_projection"
             | "assembly_document"
             | "assembly_swept_collision_check"
+            | "assembly_preview_joint_coordinates"
             | "eval_expression"
             | "preview_segment"
             | "preview_segment_locked"
@@ -730,6 +731,12 @@ pub static MUTATES: &[MutateSpec] = &[
     MutateSpec {
         name: "assembly_set_joint_motion",
         engine_method: "assembly_set_joint_motion",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_set_joint_coordinates",
+        engine_method: "assembly_set_joint_coordinates",
         payload: PayloadKind::Object,
         execution: ExecutionKind::Direct,
     },

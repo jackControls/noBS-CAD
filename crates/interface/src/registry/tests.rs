@@ -47,6 +47,95 @@ fn registry(controls: Vec<Control>) -> SurfaceRegistry {
     registry.replace(context(), frame(controls)).unwrap();
     registry
 }
+
+#[test]
+fn ranges_share_finite_bounds_keyboard_steps_and_live_validation() {
+    let mut slider = button(1, "Motion time");
+    slider.role = "slider".into();
+    slider.field = Field::Range {
+        value: 2.,
+        min: 0.,
+        max: 5.,
+        step: 0.1,
+    };
+    let mut r = registry(vec![slider.clone()]);
+    let context = context();
+    let inspected = r.inspect().unwrap();
+    let c = &inspected["surfaces"][0]["controls"][0];
+    assert_eq!(c["value"], 2.);
+    assert_eq!(c["min"], 0.);
+    assert_eq!(c["max"], 5.);
+    assert_eq!(c["step"], 0.1);
+    for value in ["NaN", "inf", "-0.1", "5.1", "nonsense"] {
+        assert_eq!(
+            r.resolve_key(
+                ControlKey(1),
+                ControlInput::SetValue(value.into()),
+                &context
+            )
+            .unwrap_err(),
+            ControlError::InvalidValue
+        );
+    }
+    for (key, value) in [
+        ("Home", 0.),
+        ("End", 5.),
+        ("ArrowRight", 2.1),
+        ("ArrowLeft", 1.9),
+    ] {
+        let action = r
+            .resolve_key(
+                ControlKey(1),
+                ControlInput::Key(KeyChord::plain(key)),
+                &context,
+            )
+            .unwrap();
+        let ControlInput::SetValue(actual) = action.input else {
+            panic!("Range key was not normalized");
+        };
+        assert!((actual.parse::<f64>().unwrap() - value).abs() < 1e-12);
+    }
+    let action = r
+        .resolve_key(ControlKey(1), ControlInput::SetValue("4".into()), &context)
+        .unwrap();
+    slider.field = Field::Range {
+        value: 1.,
+        min: 0.,
+        max: 3.,
+        step: 0.1,
+    };
+    r.replace(context.clone(), frame(vec![slider.clone()]))
+        .unwrap();
+    assert_eq!(
+        r.validate_resolved(&action, &context),
+        Err(ControlError::InvalidValue)
+    );
+    for bad in [
+        Field::Range {
+            value: 0.,
+            min: 0.,
+            max: 0.,
+            step: 1.,
+        },
+        Field::Range {
+            value: 0.,
+            min: 0.,
+            max: 1.,
+            step: 0.,
+        },
+        Field::Range {
+            value: f64::NAN,
+            min: 0.,
+            max: 1.,
+            step: 0.1,
+        },
+    ] {
+        slider.field = bad;
+        assert!(r
+            .replace(context.clone(), frame(vec![slider.clone()]))
+            .is_err());
+    }
+}
 fn target(snapshot: &Value, label: &str) -> String {
     snapshot["surfaces"]
         .as_array()

@@ -17,6 +17,7 @@ pub enum ControlError {
     NotEditable,
     ReadOnly,
     OptionUnavailable,
+    InvalidValue,
     InspectionExhausted,
 }
 
@@ -38,6 +39,9 @@ impl fmt::Display for ControlError {
             }
             Self::ReadOnly => formatter.write_str("Field is read-only"),
             Self::OptionUnavailable => formatter.write_str("Option is unavailable"),
+            Self::InvalidValue => {
+                formatter.write_str("Value must be finite and within the control's range")
+            }
             Self::InspectionExhausted => {
                 formatter.write_str("Interface inspection identifiers are exhausted")
             }
@@ -152,6 +156,17 @@ impl SurfaceRegistry {
             match &control.field {
                 Field::None => (),
                 Field::Toggle(checked) => value["value"] = json!(checked),
+                Field::Range {
+                    value: current,
+                    min,
+                    max,
+                    step,
+                } => {
+                    value["value"] = json!(current);
+                    value["min"] = json!(min);
+                    value["max"] = json!(max);
+                    value["step"] = json!(step);
+                }
                 Field::Text {
                     value: text,
                     selection,
@@ -258,12 +273,47 @@ impl SurfaceRegistry {
         if !self.in_active_modal(control) {
             return Err(ControlError::ModalBlocked);
         }
+        let input = if let (
+            Field::Range {
+                value,
+                min,
+                max,
+                step,
+            },
+            ControlInput::Key(key),
+        ) = (&control.field, &input)
+        {
+            if !key.ctrl && !key.meta && !key.alt {
+                let delta = step * if key.shift { 10. } else { 1. };
+                let next = match key.key.as_str() {
+                    "Home" => Some(*min),
+                    "End" => Some(*max),
+                    "ArrowUp" | "ArrowRight" => Some((value + delta).clamp(*min, *max)),
+                    "ArrowDown" | "ArrowLeft" => Some((value - delta).clamp(*min, *max)),
+                    _ => None,
+                };
+                next.map(|v| ControlInput::SetValue(v.to_string()))
+                    .unwrap_or(input)
+            } else {
+                input
+            }
+        } else {
+            input
+        };
         if let ControlInput::SetValue(value) = &input {
             match &control.field {
                 Field::Text {
                     read_only: true, ..
                 } => return Err(ControlError::ReadOnly),
                 Field::Text { .. } => (),
+                Field::Range { min, max, .. } => {
+                    let value = value
+                        .parse::<f64>()
+                        .map_err(|_| ControlError::InvalidValue)?;
+                    if !value.is_finite() || value < *min || value > *max {
+                        return Err(ControlError::InvalidValue);
+                    }
+                }
                 Field::Choice { options, .. }
                     if options
                         .iter()
@@ -324,6 +374,12 @@ impl SurfaceRegistry {
                     || (ordinary
                         && matches!(control.field, Field::Choice { .. })
                         && matches!(key, "ArrowUp" | "ArrowDown" | "Home" | "End"))
+                    || (ordinary
+                        && matches!(control.field, Field::Range { .. })
+                        && matches!(
+                            key,
+                            "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" | "Home" | "End"
+                        ))
             })
         {
             Ok(KeyboardRoute::Widget)
@@ -423,6 +479,26 @@ fn validate(context: &DocumentContext, frame: &SurfaceFrame) -> Result<(), Contr
             let mut values = HashSet::new();
             if options.iter().any(|option| !values.insert(&option.value)) {
                 return Err(invalid("Choice option values must be unique"));
+            }
+        }
+        if let Field::Range {
+            value,
+            min,
+            max,
+            step,
+        } = control.field
+        {
+            if [value, min, max, step, max - min]
+                .iter()
+                .any(|v| !v.is_finite())
+                || min >= max
+                || value < min
+                || value > max
+                || step <= 0.
+            {
+                return Err(invalid(
+                    "Numeric ranges need finite bounds, an in-range value and a positive step",
+                ));
             }
         }
     }

@@ -484,11 +484,8 @@ fn update_inner(
         }
     }
 
-    for action in handle.take_actions()? {
-        if worker::busy(world) {
-            state.status = "Modeling is in progress; later input was not applied".into();
-            break;
-        }
+    while !worker::busy(world) {
+        let Some(action)=handle.take_next_action()? else {break;};
         if let Err(error) = apply_queued_control(world, handle, services, state, &action) {
             files::dialog_error(world, &error);
             state.status = error;
@@ -591,6 +588,11 @@ fn update_inner(
             Ok(())
         })?;
         if view::pending(world) { handle.request_redraw(); }
+    }
+    if assembly::motion::active(world) && state.pending.is_none() && !state.close_pending && !state.exit_after_receipt && !files::awaiting(world) {
+        let owner=bridge.native_document_context(&state.window_id,engine)?;
+        assembly::motion::tick(world,handle,services,&owner)?;
+        if worker::busy(world) {return maintain_busy_window(world,handle,state);}
     }
     synchronize(world, handle, services, state)
 }
@@ -1603,6 +1605,7 @@ fn decorate(
 fn command_group(command: &NativeCommand) -> &'static str {
     match command {
         NativeCommand::Sketch(_) => "sketch/draw",
+        NativeCommand::Assembly(assembly::Command::Inspect(_)) => "assembly/inspect",
         NativeCommand::Assembly(_) => "assembly/joints",
         NativeCommand::Feature(feature::FeatureCommand::Open { kind, .. }) => kind.group(),
         NativeCommand::Feature(_) => "document/history",

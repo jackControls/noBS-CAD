@@ -60,6 +60,12 @@ pub enum Field {
         options: Vec<ChoiceOption>,
     },
     Toggle(bool),
+    Range {
+        value: f64,
+        min: f64,
+        max: f64,
+        step: f64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1987,6 +1987,8 @@
             "assembly_delete_joint",
             "assembly_set_joint_enabled",
             "assembly_set_joint_motion",
+            "assembly_set_joint_coordinates",
+            "assembly_preview_joint_coordinates",
             "assembly_create_gear_relation",
             "assembly_update_gear_relation",
             "assembly_delete_gear_relation"

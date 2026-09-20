@@ -127,8 +127,8 @@ pub(super) fn run(args: impl Iterator<Item = String>) -> Result<()> {
         if kind == "planar" {
             axes.push("Y slide");
         }
-        for axis in axes {
-            let angular = axis.contains("rotation") || axis == "Rotation travel";
+        for axis in &axes {
+            let angular = axis.contains("rotation") || *axis == "Rotation travel";
             field(
                 c,
                 &format!("{axis} offset"),
@@ -192,6 +192,7 @@ pub(super) fn run(args: impl Iterator<Item = String>) -> Result<()> {
             assembly(c)? == made,
             "Redo did not restore the joint exactly"
         );
+        motion(c, kind, &axes, &made, &fixture.out)?;
         browser(c, &format!("Edit joint Native {kind}"))?;
         field(c, "Joint name", Some("Cancelled name"))?;
         control(c, "Cancel joint", None)?;
@@ -232,5 +233,98 @@ pub(super) fn run(args: impl Iterator<Item = String>) -> Result<()> {
             serde_json::to_string_pretty(&json!({"passed":passed}))?,
         )?;
     }
+    Ok(())
+}
+
+// Exercise the same visible coordinate editors for every supported joint kind.
+fn motion(
+    c: &mut Client,
+    kind: &str,
+    axes: &[&str],
+    saved: &Value,
+    out: &std::path::Path,
+) -> Result<()> {
+    browser(c, &format!("Joint Native {kind}"))?;
+    if axes.is_empty() {
+        ensure!(
+            !controls(&ui(c, json!({"action":"inspect"}))?).any(|v| v["label"] == "Demo motion"),
+            "Rigid joint offered motion"
+        );
+        return Ok(());
+    }
+    let field = |c: &mut Client, label: &str, value: Option<&str>| {
+        panel_field(
+            c,
+            label,
+            value,
+            "Scroll assembly up",
+            "Scroll assembly down",
+        )
+    };
+    let source = c.call("solid_scene", json!({}))?;
+    for axis in axes {
+        let label = format!("{axis} slider");
+        field(c, &label, Some("0"))?;
+        let inspected = ui(c, json!({"action":"inspect"}))?;
+        let range = controls(&inspected)
+            .find(|v| v["label"] == label)
+            .context("Native motion slider missing")?;
+        ensure!(range["role"] == "slider", "Motion used a fake slider");
+        let id = range["id"].clone();
+        ui(c, json!({"action":"key","target":id,"key":"End"}))?;
+        let fresh = ui(c, json!({"action":"inspect"}))?;
+        let id = controls(&fresh)
+            .find(|v| v["label"] == label)
+            .context("Motion slider lost after End")?["id"]
+            .clone();
+        ui(c, json!({"action":"key","target":id,"key":"Home"}))?;
+        field(
+            c,
+            &format!("{axis} position"),
+            Some(if axis.contains("rotation") || *axis == "Rotation travel" {
+                "20 deg"
+            } else {
+                "3 mm"
+            }),
+        )?;
+        ensure!(
+            assembly(c)? == *saved,
+            "{kind}: preview persisted coordinates"
+        );
+    }
+    capture(c, out, &format!("joint-{kind}-motion"))?;
+    field(c, "Revert joint position", None)?;
+    ensure!(
+        assembly(c)? == *saved,
+        "{kind}: Revert changed saved position"
+    );
+    field(c, &format!("{} slider", axes[0]), Some("0"))?;
+    field(c, "Save joint position", None)?;
+    let moved = assembly(c)?;
+    ensure!(moved != *saved, "{kind}: Save did not persist coordinates");
+    control(c, "Undo", None)?;
+    ensure!(assembly(c)? == *saved, "{kind}: motion Undo failed");
+    control(c, "Redo", None)?;
+    ensure!(assembly(c)? == moved, "{kind}: motion Redo failed");
+    control(c, "Undo", None)?;
+    browser(c, &format!("Joint Native {kind}"))?;
+    field(c, "Demo motion", None)?;
+    // The asynchronous demo must restore its original pose and stop by itself.
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    loop {
+        let state = ui(c, json!({"action":"inspect"}))?;
+        if controls(&state).any(|v| v["label"] == "Demo motion") {
+            break;
+        }
+        ensure!(
+            std::time::Instant::now() < until,
+            "{kind}: demo did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    ensure!(
+        assembly(c)? == *saved && c.call("solid_scene", json!({}))? == source,
+        "{kind}: motion demo changed geometry or intent"
+    );
     Ok(())
 }
