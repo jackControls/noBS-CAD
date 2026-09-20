@@ -1,0 +1,13 @@
+// Part A fragment — shared id namespace with the root; prefix ids.
+{
+  "name": "Part A stock",
+  "steps": [
+    { "id": "a_size", "let": { "a_width": 40 } },
+    {
+      "id": "a_mark",
+      "note": "Stock width comes from the collection; agents using mode fast skip this caption.",
+      "chapter": "Part A",
+      "duration_ms": 400
+    }
+  ]
+}

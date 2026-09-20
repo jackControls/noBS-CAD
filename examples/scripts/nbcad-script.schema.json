@@ -48,6 +48,13 @@
       "additionalProperties": {
         "$ref": "#/$defs/value"
       }
+    },
+    "includes": {
+      "type": "array",
+      "description": "Relative collection fragments composed before steps/checks. Expanded by the host loader; the Rust parser rejects unresolved includes.",
+      "items": {
+        "$ref": "#/$defs/include_entry"
+      }
     }
   },
   "$defs": {
@@ -343,8 +350,21 @@
       ],
       "allOf": [
         {
-          "if": {"required": ["orbit_degrees"]},
-          "then": {"required": ["view"], "properties": {"view": {"const": "current"}}}
+          "if": {
+            "required": [
+              "orbit_degrees"
+            ]
+          },
+          "then": {
+            "required": [
+              "view"
+            ],
+            "properties": {
+              "view": {
+                "const": "current"
+              }
+            }
+          }
         },
         {
           "if": {
@@ -457,6 +477,61 @@
           ]
         }
       ]
+    },
+    "include_entry": {
+      "description": "Relative path to a .collection.jsonc or .nbcad.jsonc fragment.",
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "collection_document": {
+      "description": "Fragment composed via includes. Not a full version-1 script.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "steps"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        },
+        "includes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/include_entry"
+          }
+        }
+      }
     }
   }
 }

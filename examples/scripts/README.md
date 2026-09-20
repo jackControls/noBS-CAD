@@ -82,3 +82,10 @@ chapters, step counts and the actual operation list come from the source. Declar
 the operation the lesson teaches; do not advertise every incidental setup command
 as a hover lesson. Use existing native CI and replay tests, without an all-tools
 percentage gate or an additional runner.
+
+<!-- Add a bullet near the other recipe links in examples/scripts/README.md -->
+
+- [Compose box from collection](compose-box.nbcad.jsonc): tiny root script that
+  `includes` [collections/box-stock.collection.jsonc](collections/box-stock.collection.jsonc).
+  Demonstrates part-file isolation; run with an absolute `path` and `mode: "fast"`.
+

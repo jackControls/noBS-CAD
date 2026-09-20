@@ -25,3 +25,10 @@ are subsequent stack changes that use this interpreter.
 Run the host-neutral tests with `cargo test -p nbcad-script`. They exercise JSONC
 parsing, references, preflight, failure stopping, mode equivalence and the existing
 bench verification helpers without requiring OpenCASCADE or a desktop session.
+
+## Collections
+
+A root script may declare `includes` (relative `.collection.jsonc` / `.nbcad.jsonc`
+fragments). Hosts expand them with `parse_with_includes` / `flatten_includes` before
+execution. The crate never opens files itself. Fast mode still skips presentation
+steps contributed by collections.

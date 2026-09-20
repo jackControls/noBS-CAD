@@ -17,6 +17,7 @@ mod interface;
 mod knowledge;
 mod session;
 mod stdio;
+mod script_export;
 
 pub use stdio::{prepare_desktop_stdio, run_desktop_stdio, run_stdio, shutdown_desktop_stdio};
 
@@ -223,6 +224,8 @@ struct CadServer {
     pending_recompute_transaction: Option<u64>,
     /// Forward record of successful mutating `tools/call` entries for `cad_script`.
     tool_trace: Vec<Value>,
+    /// Expanded source from last successful cad_interface script.
+    last_script_source: Option<String>,
     /// Scripts use authoritative live results without rebuilding a second
     /// OCCT model after each mutation. Snapshot reads still refresh on demand.
     script_running: bool,
@@ -251,6 +254,7 @@ impl CadServer {
             loaded_snapshot_json: None,
             pending_recompute_transaction: None,
             tool_trace: Vec::new(),
+            last_script_source: None,
             script_running: false,
             script_progress: None,
             live_snapshot_dirty: false,
@@ -531,6 +535,8 @@ impl CadServer {
                     self.execute_interface(&arguments)?
                 } else if arguments["action"] == "script" {
                     self.execute_script(&arguments)?
+                } else if arguments["action"] == "export_script" {
+                    self.export_script(&arguments)?
                 } else if arguments["action"] == "open_recipe" {
                     // Source-editor delivery is independent of the CAD model.
                     // The window receipt includes active_session_id, but this
@@ -734,6 +740,9 @@ impl CadServer {
                     Err(error) => result = Err(format!("Playback completion failed: {error}")),
                 }
             }
+        }
+        if result.is_ok() {
+            self.last_script_source = Some(source);
         }
         result
     }
@@ -1083,7 +1092,51 @@ impl CadServer {
     }
 
     /// Clear `tool_trace` and seed `cad_load_project_model` with the loaded model JSON.
+
+    fn export_script(&mut self, arguments: &Value) -> Result<Value, String> {
+        let name = arguments
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("Exported model");
+        let from = arguments
+            .get("from")
+            .and_then(Value::as_str)
+            .unwrap_or("auto");
+        if !matches!(from, "auto" | "last_script" | "session_trace") {
+            return Err("export_script from must be auto, last_script, or session_trace".into());
+        }
+        let prefer_script = matches!(from, "auto" | "last_script");
+        if prefer_script {
+            if let Some(source) = &self.last_script_source {
+                return script_export::export_script_result(
+                    source.clone(),
+                    "lossless_authored",
+                    vec![
+                        "Source is the expanded JSONC last successfully run via action script in this process.",
+                        "Comments may be absent if includes were flattened; commands and refs match the replay.",
+                        "cad_script remains the forward MCP call dump — not this JSONC export.",
+                    ],
+                );
+            }
+            if from == "last_script" {
+                return Err("No last_script source in this process; run action script first".into());
+            }
+        }
+        let source = script_export::session_trace_to_v1_source(&self.tool_trace, name)?;
+        script_export::export_script_result(
+            source,
+            "lossy_session_trace",
+            vec![
+                "Built from this process tool_trace with literal arguments (no $select/$project, no notes).",
+                "Prefer hand-authored JSONC for durable recipes; use this for scratch replay of a blank-session MCP build.",
+                "cad_load_project_model attach baselines are omitted; UI-only history is not reverse-engineered.",
+                "cad_script remains the forward MCP call dump — not this JSONC export.",
+            ],
+        )
+    }
+
     fn seed_script_baseline_from_model(&mut self, model_json: &str) {
+        self.last_script_source = None;
         self.tool_trace.clear();
         self.tool_trace.push(json!({
             "name": "cad_load_project_model",
@@ -3788,7 +3841,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ),
         ToolSpec::control(
             "cad_interface", "Explore and drive the product interface",
-            "Catalog returns shared product groups and typed operations. Execute runs an operation by group and name with identical arguments/results headlessly or live. Recipes lists committed native examples without running them. Open_recipe queues a built-in recipe in the live Scripts source editor, preserving edited source with Save/Discard/Cancel; it never runs commands or replaces the model. Script runs one versioned JSONC command file selected by recipe ID, source or an absolute .nbcad.jsonc path in the current blank document; Rust sequences every operation, stops on failure, and runs final checks by default. Mode fast has no presentation delays; present requires an attached desktop. Presentation provides configure/note/pause/resume/step/stop/status/finish/dismiss/show and speed controls shared with native playback. View supports timed orientation and focus on an active sketch, body, or component. Launch connects a new desktop. Inspect returns rendered controls with fresh opaque target IDs for click/set_value/key. Window close requests guarded application exit; the reply acknowledges the request, not process termination. No selectors or executable script evaluation.",
+            "Catalog returns shared product groups and typed operations. Execute runs an operation by group and name with identical arguments/results headlessly or live. Recipes lists committed native examples without running them. Open_recipe queues a built-in recipe in the live Scripts source editor, preserving edited source with Save/Discard/Cancel; it never runs commands or replaces the model. Script runs one versioned JSONC command file Export_script emits version-1 .nbcad.jsonc from last successful script source (lossless_authored) or session tool_trace (lossy_session_trace). Distinct from cad_script's forward call dump. selected by recipe ID, source or an absolute .nbcad.jsonc path in the current blank document; Rust sequences every operation, stops on failure, and runs final checks by default. Mode fast has no presentation delays; present requires an attached desktop. Presentation provides configure/note/pause/resume/step/stop/status/finish/dismiss/show and speed controls shared with native playback. View supports timed orientation and focus on an active sketch, body, or component. Launch connects a new desktop. Inspect returns rendered controls with fresh opaque target IDs for click/set_value/key. Window close requests guarded application exit; the reply acknowledges the request, not process termination. No selectors or executable script evaluation.",
             object_schema(json!({
                 "session_id":{"type":"string"},
                 "action":{"type":"string","enum":["catalog","recipes","open_recipe","execute","script","presentation","launch","view","inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
@@ -3865,7 +3918,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::control(
             "cad_script",
             "Dump forward MCP script",
-            "Return this process's successful mutating tool-call sequence as JSON { calls: [{ name, arguments }] }. Portable modeling ops only — skips session-control reads (cad_attach/cad_refresh/cad_detach), inspect/export helpers, failed calls, and cad_script itself. After attach/refresh, the trace baseline is cad_load_project_model with the loaded model_json (refresh replaces that baseline). Does not reverse-engineer STEP feature history.",
+            "Return this process's successful mutating tool-call sequence as JSON { calls: [{ name, arguments }] }. Portable modeling ops only — skips session-control reads (cad_attach/cad_refresh/cad_detach), inspect/export helpers, failed calls, and cad_script itself. After attach/refresh, the trace baseline is cad_load_project_model with the loaded model_json (refresh replaces that baseline). Does not reverse-engineer STEP feature history. For version-1 .nbcad.jsonc export see cad_interface action export_script.",
             empty_schema(),
         ),
         ToolSpec::control(

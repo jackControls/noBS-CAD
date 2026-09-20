@@ -5,23 +5,32 @@ use nbcad_script::MAX_SCRIPT_BYTES;
 
 /// Load an authored text script, never executable code or a model snapshot.
 pub fn script_source(arguments: &Value) -> Result<String, String> {
-    if let Some(recipe) = arguments.get("recipe") {
-        if arguments.get("source").is_some() || arguments.get("path").is_some() {
-            return Err("script requires exactly one of recipe, source or path".into());
-        }
-        return Ok(
-            nbcad_recipes::find(recipe.as_str().ok_or("recipe must be an ID string")?)?
-                .source
-                .into(),
-        );
-    }
+    let recipe = arguments.get("recipe");
     let source = arguments.get("source");
     let path = arguments.get("path");
-    let source = match (source, path) {
-        (Some(source), None) => source
-            .as_str()
-            .ok_or("script source must be text")?
-            .to_owned(),
+    let present = [recipe, source, path]
+        .into_iter()
+        .filter(|v| v.is_some())
+        .count();
+    if present != 1 {
+        return Err("script requires exactly one of recipe, source or path".into());
+    }
+    if let Some(recipe) = recipe {
+        let id = recipe.as_str().ok_or("recipe must be an ID string")?;
+        let recipe = nbcad_recipes::find(id)?;
+        let text: String = recipe.source.into();
+        if nbcad_script::has_unresolved_includes(&text)? {
+            return Err(format!(
+                "bundled recipe {id} has unresolved includes; flatten at catalog build time"
+            ));
+        }
+        return Ok(text);
+    }
+    let (source, root_path): (String, Option<&std::path::Path>) = match (source, path) {
+        (Some(source), None) => (
+            source.as_str().ok_or("script source must be text")?.to_owned(),
+            None,
+        ),
         (None, Some(path)) => {
             let path = path.as_str().ok_or("script path must be a string")?;
             let file = std::path::Path::new(path);
@@ -33,14 +42,51 @@ pub fn script_source(arguments: &Value) -> Result<String, String> {
             if !metadata.is_file() || metadata.len() > MAX_SCRIPT_BYTES as u64 {
                 return Err("script must be a regular file no larger than 16 MiB".into());
             }
-            std::fs::read_to_string(file).map_err(|e| format!("read script {path}: {e}"))?
+            let text =
+                std::fs::read_to_string(file).map_err(|e| format!("read script {path}: {e}"))?;
+            (text, Some(file))
         }
         _ => return Err("script requires exactly one of source or path".into()),
     };
     if source.len() > MAX_SCRIPT_BYTES {
         return Err("script exceeds 16 MiB".into());
     }
-    Ok(source)
+    expand_includes_if_needed(&source, root_path)
+}
+
+fn expand_includes_if_needed(
+    source: &str,
+    root_path: Option<&std::path::Path>,
+) -> Result<String, String> {
+    if !nbcad_script::has_unresolved_includes(source)? {
+        return Ok(source.to_owned());
+    }
+    let root_path = root_path.ok_or(
+        "Scripts with includes require an absolute path root so collections can be loaded",
+    )?;
+    let base = root_path
+        .parent()
+        .ok_or("script path has no parent directory")?;
+    let base_canon = std::fs::canonicalize(base)
+        .map_err(|e| format!("canonicalize script base {}: {e}", base.display()))?;
+
+    nbcad_script::flatten_includes(source, |rel| {
+        nbcad_script::validate_include_path(rel)?;
+        let joined = base.join(rel);
+        let canon = std::fs::canonicalize(&joined)
+            .map_err(|e| format!("read include {rel}: {e}"))?;
+        if !canon.starts_with(&base_canon) {
+            return Err(format!("include {rel} escapes script base directory"));
+        }
+        if !canon.is_file() {
+            return Err(format!("include {rel} is not a file"));
+        }
+        let meta = std::fs::metadata(&canon).map_err(|e| e.to_string())?;
+        if meta.len() > MAX_SCRIPT_BYTES as u64 {
+            return Err(format!("include {rel} exceeds 16 MiB"));
+        }
+        std::fs::read_to_string(&canon).map_err(|e| format!("read include {rel}: {e}"))
+    })
 }
 
 /// The renderer and API consume the same product-owned grouping data.

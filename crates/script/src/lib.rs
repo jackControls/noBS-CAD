@@ -7,6 +7,11 @@ use std::{
     time::Instant,
 };
 mod manufacturing;
+mod includes;
+pub use includes::{
+    flatten_includes, has_unresolved_includes, parse_with_includes, validate_include_path,
+    MAX_INCLUDE_DEPTH,
+};
 
 /// Shared limit for files, source text, the desktop picker and MCP.
 pub const MAX_SCRIPT_BYTES: usize = 16 * 1024 * 1024;
@@ -38,6 +43,16 @@ impl Script {
         }
         let document: Value = serde_json::from_str(&strip_jsonc(source)?)
             .map_err(|e| format!("Invalid script JSONC: {e}"))?;
+        if document
+            .get("includes")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+        {
+            return Err(
+                "Script has unresolved includes; use parse_with_includes with a file loader"
+                    .into(),
+            );
+        }
         if document["version"] != 1 {
             return Err("Unsupported script version; expected 1".into());
         }
@@ -366,7 +381,7 @@ fn validate_presentation_step(step: &Value) -> Result<(), String> {
 
 /// Comments become spaces, preserving serde's original line/column diagnostics.
 /// JSON strings are never changed. Trailing commas are accepted for easy edits.
-fn strip_jsonc(source: &str) -> Result<String, String> {
+pub(crate) fn strip_jsonc(source: &str) -> Result<String, String> {
     let mut bytes = source.as_bytes().to_vec();
     let (mut i, mut string, mut escape) = (0, false, false);
     while i < bytes.len() {
