@@ -6209,6 +6209,14 @@ export function Viewport() {
       slot: ['width'],
     };
 
+    /** Creation tools whose picks acquire midpoints: line midpoints,
+     * support-face edge midpoints and the projected face boundary. The line
+     * flow has always had it; the center-point arc is the same kind of pick.
+     * Every hover/preview/commit path must agree, or the cursor would show no
+     * marker while the committed point still moved. */
+    const toolAcquiresMidpoints = (tool: ToolId | null): boolean =>
+      tool === 'line' || tool === 'midpointLine' || tool === 'arcCenter';
+
     /** Raw typed text of locked fields (formulas pass through, D9). */
     const dynTexts = (): Record<string, string | undefined> => {
       const fields = store.getState().dynInput.fields;
@@ -7701,15 +7709,9 @@ export function Viewport() {
       }
       startSnapPending = true;
       const seq = ++startSeq;
-      // Midpoint acquisition on the first pick: line endpoints have always
-      // had it, and the center-point-arc centre is the same kind of pick
-      // (support-face edge midpoints included). Other creation tools stay
-      // point/endpoint only.
-      const firstPickAcquiresMidpoints =
-        tool === 'line' || tool === 'midpointLine' || tool === 'arcCenter';
       void snapCursorInfo(
         p,
-        !inferenceOverride && firstPickAcquiresMidpoints,
+        !inferenceOverride && toolAcquiresMidpoints(tool),
         inferenceOverride,
       )
         .then((preview) => {
@@ -10906,7 +10908,7 @@ export function Viewport() {
         }
         const acquired = acquireCreateSnap(
           p,
-          !inferenceOverride && (state.activeTool === 'line' || state.activeTool === 'midpointLine'),
+          !inferenceOverride && toolAcquiresMidpoints(state.activeTool),
           null,
           inferenceOverride,
         );
