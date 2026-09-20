@@ -74,7 +74,8 @@ Do **not** maintain separate agent vs user articles.
 ### Architecture
 
 ```text
-cad_help / help_search
+tool cad_help  (MCP spine: search | get | topics)
+prompt help_search  (optional; frames a contextual query → cad_help)
         │
         ▼
    nbcad_help::HelpStore
@@ -186,7 +187,7 @@ Optional: boost `related_recipes` when the caller passes active recipe context.
    (“clearance fit”, “draft angle”), HTML render helper **or** documented
    webview pipeline
 2. MCP — `cad_help` + caps + allowlist tests
-3. Tauri — `help_search` / `help_get`; Help panel (palette + article); nucleo
+3. Tauri — desktop invoke `help_search` / `help_get` (not the MCP prompt); Help panel (palette + article); nucleo
 4. CI — `build:help-index` freshness; `check:help-sources`; exclude
    SOURCES/taxonomy unless `searchable`
 5. When growth bar trips — Tantivy impl of `SearchIndex`; keep API stable
