@@ -5558,6 +5558,12 @@ export function Viewport() {
     /** Picked entities render highlighted so modify tools feel alive (M1d). */
     const picksGroup = new CAD.Group();
     previewGroup.add(picksGroup);
+    /** Points the active creation run has already picked. Until it commits they
+     * are not sketch entities, so without this the only thing marking them was
+     * the cursor's own acquisition marker, which moves on with the pointer —
+     * an arc's centre and first endpoint left no trace on screen. */
+    const runPicksGroup = new CAD.Group();
+    previewGroup.add(runPicksGroup);
     /** Valid target under a modify-tool cursor (magnetic acquisition). */
     const acquireGroup = new CAD.Group();
     previewGroup.add(acquireGroup);
@@ -7122,6 +7128,47 @@ export function Viewport() {
       });
     };
 
+    /** Mark every point the active creation run has picked so far, so a pick
+     * leaves something on screen the moment it lands. */
+    const renderRunPicks = () => {
+      clearGroup(runPicksGroup);
+      if (!toolRun || toolRun.points.length === 0) return;
+      const positions: number[] = [];
+      for (const point of toolRun.points) positions.push(point.x, point.y, 0.14);
+      const geometry = new CAD.BufferGeometry();
+      geometry.setAttribute('position', new CAD.Float32BufferAttribute(positions, 3));
+      const halo = new CAD.Points(
+        geometry,
+        new CAD.PointsMaterial({
+          size: 9,
+          sizeAttenuation: false,
+          color: COLOR_PICK_HALO,
+          transparent: true,
+          opacity: 0.55,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      halo.renderOrder = 12;
+      halo.userData.nativePointHollow = true;
+      runPicksGroup.add(halo);
+      const markers = new CAD.Points(
+        geometry,
+        new CAD.PointsMaterial({
+          size: 5,
+          sizeAttenuation: false,
+          color: COLOR_SELECTED,
+          transparent: true,
+          opacity: 0.98,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      markers.renderOrder = 13;
+      runPicksGroup.add(markers);
+      wakeCursorHud();
+    };
+
     const endToolRun = () => {
       toolRun = null;
       // A preview already in flight (its snap resolves a tick later) must not
@@ -7131,6 +7178,7 @@ export function Viewport() {
       setPreviewPositions(null);
       clearGroup(trackingGuideGroup);
       clearGroup(acquireGroup);
+      clearGroup(runPicksGroup);
       hideSnapMarker();
       hideChips();
       store.getState().hideDynInput();
@@ -7859,6 +7907,9 @@ export function Viewport() {
           break;
         }
       }
+      // Each pick leaves its marker behind at once, including the ones that do
+      // not touch the engine yet (an arc's centre and first endpoint).
+      renderRunPicks();
     };
 
     /** Start (or single-shot commit for Point) a tool run at `p`. Fast
@@ -7911,6 +7962,7 @@ export function Viewport() {
                 : null,
           };
           showSnapMarker(snapped, nativeSnapKind(preview.snap.kind));
+          renderRunPicks();
           const fields = TOOL_FIELDS[tool];
           // Slot arms its width field only after the second center is picked —
           // before that the field has no meaning.

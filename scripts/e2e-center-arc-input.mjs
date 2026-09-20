@@ -69,6 +69,13 @@ const previewPointCounts = () =>
   page.evaluate(() =>
     window.__nativeViewportTransient().lines.map((layer) => layer.segments.length / 6),
   );
+/** How many points each transient point layer marks. The run's own picks ride
+ * their own layer, so a pick that leaves exactly one (or two) marked points is
+ * the run marking what it has picked so far. */
+const markedPickCounts = () =>
+  page.evaluate(() =>
+    window.__nativeViewportTransient().points.map((layer) => layer.positions.length / 3),
+  );
 
 /** 20 x 15 x 10 body, sketch hosted on its top face. */
 async function faceSketch() {
@@ -370,6 +377,12 @@ try {
   await arm('arcCenter');
   await clickSketch(frame.center.x, frame.center.y);
   await moveSketch(frame.center.x + 6, frame.center.y);
+  // The centre is not a sketch entity yet, so the run has to mark it itself.
+  const afterCentre = await markedPickCounts();
+  assert.ok(
+    afterCentre.includes(1),
+    `the centre pick must leave a marker of its own, got ${JSON.stringify(afterCentre)}`,
+  );
   // While the radius is undefined the closed circle IS the radius affordance.
   const radiusGuide = Math.max(0, ...(await previewPointCounts()));
   assert.ok(
@@ -377,6 +390,12 @@ try {
     `the radius guide is a closed circle, got ${radiusGuide} points`,
   );
   await clickSketch(frame.center.x + 6, frame.center.y);
+  // ... and the first endpoint joins it, without waiting for a pointer move.
+  const afterStartPick = await markedPickCounts();
+  assert.ok(
+    afterStartPick.includes(2),
+    `the first endpoint pick must add its own marker, got ${JSON.stringify(afterStartPick)}`,
+  );
   // The radius is fixed by this pick, so the circle must retire at once —
   // without waiting for the next pointer move. Leaving it on screen is what
   // read as "I had just placed the first endpoint and it drew the whole
