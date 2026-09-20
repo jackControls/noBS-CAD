@@ -4906,6 +4906,12 @@ fn draw_cad_gizmos(
     }
 
     if let Some(sketch) = &model.active_sketch {
+        // Reference geometry first: both passes share the sketch gizmo group
+        // and offset, so submission order decides what a coincident authored
+        // curve covers.
+        if !state.hide_projected_geometry {
+            draw_projected_edges(&mut sketch_gizmos, sketch, rgb(palette.0.projected));
+        }
         draw_sketch(
             &mut sketch_gizmos,
             sketch,
@@ -5426,6 +5432,55 @@ fn draw_sketch<Config, ColorFor>(
             color,
             !sketch_entity_style(entity).1,
         );
+    }
+}
+
+/// Draw the support-face boundary projected into the active sketch.
+///
+/// This is reference geometry the user cannot pick, hover, grip or constrain,
+/// so it gets its own color and sits just under the authored sketch strokes
+/// (`FINISHED_SKETCH_OFFSET`). The circular carrier is used when the body edge
+/// carried one, keeping a projected arc analytic instead of faceted by its
+/// tessellation.
+fn draw_projected_edges<Config: GizmoConfigGroup>(
+    gizmos: &mut Gizmos<Config>,
+    sketch: &SketchDto,
+    color: Color,
+) {
+    for edge in &sketch.projected_edges {
+        if let Some(circle) = edge.circle {
+            let start = edge.points.first().copied();
+            let end = edge.points.last().copied();
+            if let (Some(start), Some(end)) = (start, end) {
+                let start_angle = (start.y - circle.center.y).atan2(start.x - circle.center.x);
+                let mut sweep = (end.y - circle.center.y).atan2(end.x - circle.center.x)
+                    - start_angle;
+                while sweep <= 0.0 {
+                    sweep += std::f64::consts::TAU;
+                }
+                if circle.closed {
+                    sweep = std::f64::consts::TAU;
+                }
+                let segments = ((sweep.abs() * 20.0).ceil() as usize).clamp(12, 128);
+                draw_parametric_curve(gizmos, segments, color, |ratio| {
+                    let angle = start_angle + sweep * ratio;
+                    sketch_world(
+                        &sketch.basis,
+                        circle.center.x + circle.radius * angle.cos(),
+                        circle.center.y + circle.radius * angle.sin(),
+                        FINISHED_SKETCH_OFFSET,
+                    )
+                });
+                continue;
+            }
+        }
+        for pair in edge.points.windows(2) {
+            gizmos.line(
+                sketch_world(&sketch.basis, pair[0].x, pair[0].y, FINISHED_SKETCH_OFFSET),
+                sketch_world(&sketch.basis, pair[1].x, pair[1].y, FINISHED_SKETCH_OFFSET),
+                color,
+            );
+        }
     }
 }
 

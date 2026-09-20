@@ -18,9 +18,9 @@ use crate::dto::{
     AddConstraintResult, AddLineResult, CircleMode, ConstraintDesc, ConstraintDto,
     CurveCrossingRequest, DeleteEntityResult, DofDto, DragPhase, EntityDesc, EntityDto, Inference,
     LineIntersectionRequest, LineTrackingRequest, LockedCircleRequest, LockedRectangleRequest,
-    LockedSegmentRequest, MovePointRequest, MovePointResult, PreviewDto, RectangleMode,
-    ReferenceMidpointDto, SketchDto, SlotMode, SlotRequest, SnapTarget, SplineRequest, ToolResult,
-    TrackingAxis, TrackingGuideDto, UndoResult,
+    LockedSegmentRequest, MovePointRequest, MovePointResult, PreviewDto, ProjectedEdgeDto,
+    RectangleMode, ReferenceMidpointDto, SketchDto, SlotMode, SlotRequest, SnapTarget,
+    SplineRequest, ToolResult, TrackingAxis, TrackingGuideDto, UndoResult,
 };
 use crate::entity::{Entity, EntityId};
 use crate::geometry::Vec2;
@@ -282,6 +282,11 @@ pub struct SketchSession {
     /// Runtime external references derived from the support face. These are
     /// rebuilt from stable edge ids when a face-hosted sketch is opened.
     reference_midpoints: Vec<(EdgeId, Vec2)>,
+    /// Support-face boundary edges projected into sketch coordinates. Runtime
+    /// only, like `reference_midpoints`: rebuilt from stable edge ids whenever
+    /// a face-hosted sketch is opened or the body is recomputed. Published in
+    /// the session DTO for the viewport and for `profile_catalog_item`.
+    projected_edges: Vec<ProjectedEdgeDto>,
     undo: Vec<Command>,
     redo: Vec<Command>,
     /// Pre-drag snapshot captured on `DragPhase::Begin`; committed as one
@@ -334,6 +339,7 @@ impl SketchSession {
             grid_step: GRID_STEP_MM,
             snap_tolerance: SNAP_TOLERANCE_MM,
             reference_midpoints: Vec::new(),
+            projected_edges: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
             pending_drag: None,
@@ -385,6 +391,18 @@ impl SketchSession {
         if changed {
             self.recompute();
         }
+    }
+
+    /// Install the support-face boundary projections for this sketch. Like the
+    /// reference midpoints these are runtime external references: the project
+    /// file never carries them, and the manager rebuilds them from stable edge
+    /// ids whenever the face is re-read.
+    pub fn set_projected_edges(&mut self, projected: Vec<ProjectedEdgeDto>) {
+        self.projected_edges = projected;
+    }
+
+    pub fn projected_edges(&self) -> &[ProjectedEdgeDto] {
+        &self.projected_edges
     }
 
     /// Convert a midpoint snap into the durable relation committed with the
@@ -463,6 +481,7 @@ impl SketchSession {
             grid_step: GRID_STEP_MM,
             snap_tolerance: SNAP_TOLERANCE_MM,
             reference_midpoints: Vec::new(),
+            projected_edges: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
             pending_drag: None,
@@ -562,6 +581,13 @@ impl SketchSession {
                 {
                     return (midpoint, SnapTarget::ReferenceMidpoint { edge });
                 }
+                if let Some((edge, position)) = self.nearest_projected_edge_point(raw) {
+                    if !exclude_position
+                        .is_some_and(|excluded| position.distance(excluded) <= MERGE_EPS)
+                    {
+                        return (position, SnapTarget::ProjectedEdge { edge, position });
+                    }
+                }
             }
         }
 
@@ -580,6 +606,37 @@ impl SketchSession {
 
     fn snap(&self, raw: Vec2) -> (Vec2, SnapTarget) {
         self.snap_inner(raw, true, false, None)
+    }
+
+    /// Nearest point on the projected support-face boundary within snap range.
+    ///
+    /// This is what lets a line or arc endpoint land exactly on the face edge
+    /// the sketch was created from: the projection is reference geometry, so
+    /// the acquisition is geometric and commits no durable relation.
+    fn nearest_projected_edge_point(&self, raw: Vec2) -> Option<(EdgeId, Vec2)> {
+        self.projected_edges
+            .iter()
+            .flat_map(|edge| {
+                edge.points
+                    .windows(2)
+                    .map(move |pair| (edge.edge_id, pair[0], pair[1]))
+            })
+            .filter_map(|(edge_id, a, b)| {
+                let direction = b - a;
+                let length2 = direction.x * direction.x + direction.y * direction.y;
+                if length2 <= f64::EPSILON {
+                    return None;
+                }
+                let parameter = (((raw.x - a.x) * direction.x + (raw.y - a.y) * direction.y)
+                    / length2)
+                    .clamp(0.0, 1.0);
+                let position =
+                    Vec2::new(a.x + direction.x * parameter, a.y + direction.y * parameter);
+                let distance = position.distance(raw);
+                (distance <= self.snap_tolerance).then_some((edge_id, position, distance))
+            })
+            .min_by(|left, right| left.2.total_cmp(&right.2))
+            .map(|(edge_id, position, _)| (edge_id, position))
     }
 
     /// Creation-tool snap with a temporary inference override. Ctrl/Cmd
@@ -618,12 +675,14 @@ impl SketchSession {
             }
             SnapTarget::Midpoint { .. }
             | SnapTarget::ReferenceMidpoint { .. }
+            | SnapTarget::ProjectedEdge { .. }
             | SnapTarget::Curve { .. }
             | SnapTarget::Intersection { .. } => {
                 // Exact geometric acquisition wins over directional
                 // inference. Commit persists the corresponding midpoint or
                 // point-on-carrier relation instead of only storing this
-                // sampled coordinate.
+                // sampled coordinate. A projected support-face edge is
+                // runtime reference geometry, so it adds no relation.
             }
             SnapTarget::Grid | SnapTarget::None => {
                 if !ctrl_held {
@@ -1409,6 +1468,7 @@ impl SketchSession {
             }
             SnapTarget::Midpoint { .. }
             | SnapTarget::ReferenceMidpoint { .. }
+            | SnapTarget::ProjectedEdge { .. }
             | SnapTarget::Curve { .. } => EndpointResolution::New(coords),
             SnapTarget::Intersection { .. } => match self.sketch.nearest_point(coords, MERGE_EPS) {
                 Some((id, _)) => EndpointResolution::Existing(id),
@@ -1839,6 +1899,7 @@ impl SketchSession {
             | SnapTarget::None
             | SnapTarget::Midpoint { .. }
             | SnapTarget::ReferenceMidpoint { .. }
+            | SnapTarget::ProjectedEdge { .. }
             | SnapTarget::Curve { .. } => EndpointResolution::New(preview.snapped_to),
             SnapTarget::Intersection { .. } => {
                 self.resolve_endpoint(preview.snapped_to, preview.snap)
@@ -5135,6 +5196,7 @@ impl SketchSession {
                     position: *position,
                 })
                 .collect(),
+            projected_edges: self.projected_edges.clone(),
             dimensions: self.dimension_dtos(),
             dimension_style: self.dimension_style,
             dof: DofDto {

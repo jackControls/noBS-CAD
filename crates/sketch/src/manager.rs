@@ -38,7 +38,7 @@ use nbcad_core::{
     FeatureId, FeatureKind, FeatureStatus, PlaneBasis, PlaneRef, DEFAULT_MATERIAL_NAME,
 };
 use nbcad_solid::{
-    canonicalize_profile_curves, extract_closed_loops_allow_open, BodyFeatureDefinitionDto,
+    canonicalize_profile_curves, extract_bounded_faces, BodyFeatureDefinitionDto,
     BodyFeatureRequestDto, CommitKernelRequest, DatumPlaneDefinitionDto, DatumPlaneRequest,
     DatumPlaneSourceDto, DatumPlaneUpdateDto, DeleteFeatureRequest, EditBodyFeatureRequest,
     EditDatumPlaneRequest, EditExtrudeRequest, EditHoleRequest, EditLoftRequest,
@@ -63,10 +63,10 @@ use crate::dto::{
     FilletRequest, LockedCircleRequest, LockedRectangleRequest, LockedSegmentRequest,
     MidpointLineRequest, MirrorRequest, MoveCopyRequest, MoveDimensionRequest, MovePointRequest,
     MovePointResult, OffsetPreviewDto, OffsetRequest, PointRequest, PolygonRequest, PreviewDto,
-    ProjectVisibilityDto, RectangleRequest, RectangularPatternRequest, ScaleRequest,
-    SegmentRequest, SetDimensionModeRequest, SetDimensionStyleRequest, SetGridSnapRequest,
-    SetGridStepRequest, SketchDto, SlotRequest, SplineRequest, ToggleFixBatchRequest, ToolResult,
-    TrimPreviewDto, TrimRequest, UndoResult,
+    ProjectVisibilityDto, ProjectedEdgeDto, RectangleRequest, RectangularPatternRequest,
+    ScaleRequest, SegmentRequest, SetDimensionModeRequest, SetDimensionStyleRequest,
+    SetGridSnapRequest, SetGridStepRequest, SketchDto, SlotRequest, SplineRequest,
+    ToggleFixBatchRequest, ToolResult, TrimPreviewDto, TrimRequest, UndoResult,
 };
 use crate::entity::EntityId;
 use crate::project::{
@@ -523,9 +523,7 @@ impl SketchManager {
             &name,
         );
         let mut session = SketchSession::new(name, plane, basis, self.grid_snap);
-        if let PlaneRef::PlanarFace { face_id } = plane {
-            session.set_reference_midpoints(support_edge_midpoints(&self.solids, face_id, basis));
-        }
+        self.install_support_references(&mut session, plane, basis);
         // Palette "Snap" master state applies to new sessions too.
         session.set_grid_snap(self.grid_snap);
         session.set_grid_step(self.grid_step)?;
@@ -597,15 +595,9 @@ impl SketchManager {
         let mut f = self.finished.remove(index);
         f.session.set_grid_snap(self.grid_snap);
         f.session.set_grid_step(self.grid_step)?;
-        if let PlaneRef::PlanarFace { face_id } = f.session.plane() {
-            f.session.set_reference_midpoints(support_edge_midpoints(
-                &self.solids,
-                face_id,
-                f.session.basis(),
-            ));
-        } else {
-            f.session.set_reference_midpoints(Vec::new());
-        }
+        let plane = f.session.plane();
+        let basis = f.session.basis();
+        self.install_support_references(&mut f.session, plane, basis);
         let dto = f.session.dto();
         self.active_feature_id = Some(f.feature_id);
         self.active = Some(f.session);
@@ -3679,6 +3671,7 @@ impl SketchManager {
         }
         let active = self.active_feature_ids();
         let datum_errors = self.refresh_datum_planes(&active);
+        self.refresh_projected_face_boundaries(&active);
         for error in &scene.errors {
             self.document.set_feature_status(
                 error.feature_id,
@@ -4242,6 +4235,74 @@ impl SketchManager {
         }
     }
 
+    /// Install the runtime external references a face-hosted sketch needs:
+    /// support-edge snap midpoints and the projected support-face boundary.
+    ///
+    /// Both are rebuilt from stable ids, so a sketch that leaves the face must
+    /// clear them rather than keep stale support geometry. The projected
+    /// boundary is what lets geometry drawn against a face edge close a region
+    /// (see `profile_catalog_item`).
+    fn install_support_references(
+        &self,
+        session: &mut SketchSession,
+        plane: PlaneRef,
+        basis: PlaneBasis,
+    ) {
+        if let PlaneRef::PlanarFace { face_id } = plane {
+            session.set_reference_midpoints(support_edge_midpoints(&self.solids, face_id, basis));
+            session.set_projected_edges(projected_face_boundary_edges(
+                &self.solids,
+                face_id,
+                basis,
+            ));
+        } else {
+            session.set_reference_midpoints(Vec::new());
+            session.set_projected_edges(Vec::new());
+        }
+    }
+
+    /// Rebuild the projected support-face boundary of every active face-hosted
+    /// sketch after a kernel commit. A recompute is exactly when the stable
+    /// edge ids resolve to new tessellation, and a sketch loaded from a project
+    /// file has no projections until this runs.
+    ///
+    /// A sketch whose stage is masked by a later topology writer keeps its
+    /// previous projection, matching how datum sketches keep their basis.
+    fn refresh_projected_face_boundaries(&mut self, active: &BTreeSet<FeatureId>) {
+        let mut refreshed = Vec::new();
+        for (index, finished) in self.finished.iter().enumerate() {
+            if !active.contains(&finished.feature_id)
+                || !self.scene_matches_history_stage(finished.feature_id)
+            {
+                continue;
+            }
+            let PlaneRef::PlanarFace { face_id } = finished.session.plane() else {
+                continue;
+            };
+            refreshed.push((
+                index,
+                projected_face_boundary_edges(&self.solids, face_id, finished.session.basis()),
+            ));
+        }
+        for (index, projected) in refreshed {
+            self.finished[index].session.set_projected_edges(projected);
+        }
+        let active_projection = match &self.active {
+            Some(session) => match session.plane() {
+                PlaneRef::PlanarFace { face_id } => Some(projected_face_boundary_edges(
+                    &self.solids,
+                    face_id,
+                    session.basis(),
+                )),
+                _ => None,
+            },
+            None => None,
+        };
+        if let (Some(session), Some(projected)) = (&mut self.active, active_projection) {
+            session.set_projected_edges(projected);
+        }
+    }
+
     fn ensure_no_active_sketch(&self, action: &str) -> Result<(), SessionError> {
         if self.active.is_some() {
             Err(SessionError::Solid(format!(
@@ -4725,6 +4786,140 @@ fn support_edge_midpoints(
             None
         })
         .collect()
+}
+
+/// Project the boundary edges of a support face into sketch coordinates.
+///
+/// Only the face's own edges (`FaceDto::edge_keys`) are projected: a coplanar
+/// edge belonging to a neighbouring face is not part of the region the user
+/// selected as the sketch plane. Scenes that publish no boundary keys (some
+/// imported or assembly bodies) fall back to every coplanar edge, which is the
+/// same set the snap references use.
+///
+/// The result is runtime geometry, rebuilt from stable edge ids on every
+/// open/recompute, never persisted.
+fn projected_face_boundary_edges(
+    solids: &SolidDocument,
+    face_id: FaceId,
+    basis: PlaneBasis,
+) -> Vec<ProjectedEdgeDto> {
+    let Some(body) = solids
+        .scene()
+        .bodies
+        .iter()
+        .find(|body| body.faces.iter().any(|face| face.id == face_id))
+    else {
+        return Vec::new();
+    };
+    let boundary_keys = body
+        .faces
+        .iter()
+        .find(|face| face.id == face_id)
+        .map(|face| face.edge_keys.clone())
+        .unwrap_or_default();
+    let mut candidates = body
+        .edges
+        .iter()
+        .filter(|edge| {
+            edge.points.len() >= 2
+                && (boundary_keys.is_empty() || boundary_keys.iter().any(|key| *key == edge.key))
+                && edge.points.iter().all(|point| {
+                    dot3(sub3(point3_array(*point), basis.origin), basis.normal).abs() <= 1e-4
+                })
+        })
+        .collect::<Vec<_>>();
+    // Deterministic ids: the reserved-range index follows the stable edge
+    // order, so a recompute keeps the same projection ids.
+    candidates.sort_by_key(|edge| edge.id.0);
+    candidates
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, edge)| {
+            let points = edge
+                .points
+                .iter()
+                .map(|point| {
+                    let local = basis.to_2d(point3_array(*point));
+                    crate::geometry::Vec2::new(local[0], local[1])
+                })
+                .collect::<Vec<_>>();
+            let span = points
+                .windows(2)
+                .map(|pair| pair[0].distance(pair[1]))
+                .sum::<f64>();
+            if span <= 1e-9 {
+                return None;
+            }
+            let circle = edge.circle.as_ref().and_then(|circle| {
+                let center = basis.to_2d(point3_array(circle.center));
+                let center = crate::geometry::Vec2::new(center[0], center[1]);
+                let radius_tolerance = (circle.radius * 1e-4).max(1e-4);
+                let sampled = points.first().map(|point| point.distance(center))?;
+                ((sampled - circle.radius).abs() <= radius_tolerance).then_some(
+                    crate::dto::ProjectedCircleDto {
+                        center,
+                        radius: circle.radius,
+                        closed: circle.closed,
+                    },
+                )
+            });
+            Some(ProjectedEdgeDto {
+                id: PROJECTED_EDGE_ID_BASE + index as u64,
+                edge_id: edge.id,
+                points,
+                circle,
+            })
+        })
+        .collect()
+}
+
+/// Recover the kernel boundary curve of one projected-edge group.
+///
+/// The projection carries the exact circle when the body edge is circular, so
+/// the kernel still receives one analytic arc instead of its tessellation
+/// chords. Anything else stays a straight line (two samples) or an explicit
+/// polyline.
+fn projected_profile_curve(
+    projected: &ProjectedEdgeDto,
+    entity_id: u64,
+    path: &[Point2Dto],
+    tolerance: f64,
+) -> ProfileCurveDto {
+    let start = path[0];
+    let end = *path.last().unwrap_or(&start);
+    if let Some(circle) = projected.circle {
+        if circle.closed && point2_distance(start, end) <= tolerance {
+            return ProfileCurveDto::Circle {
+                entity_id,
+                source_entity_ids: vec![entity_id],
+                center: Point2Dto::new(circle.center.x, circle.center.y),
+                radius: circle.radius,
+            };
+        }
+        // Every polyline sample lies on the analytic circle, so the middle
+        // sample describes the same arc the projection was cut from.
+        let mid = path[path.len() / 2];
+        return ProfileCurveDto::Arc {
+            entity_id,
+            source_entity_ids: vec![entity_id],
+            start,
+            mid,
+            end,
+        };
+    }
+    if path.len() == 2 {
+        return ProfileCurveDto::Line {
+            entity_id,
+            source_entity_ids: vec![entity_id],
+            start,
+            end,
+        };
+    }
+    ProfileCurveDto::Polyline {
+        entity_id,
+        source_entity_ids: vec![entity_id],
+        points: path.to_vec(),
+    }
 }
 
 fn body_feature_kind(request: &BodyFeatureRequestDto) -> (FeatureKind, &'static str) {
@@ -5323,6 +5518,16 @@ impl Default for SketchManager {
     }
 }
 
+/// Sketch-curve segment ids are `curve id * SEGMENT_ID_STRIDE + piece index`
+/// (see `push_polyline_segments` and `ordered_profile_curves`).
+const SEGMENT_ID_STRIDE: u64 = 1_000;
+
+/// Reserved id range for projected support-face boundary edges. Keeping these
+/// ids above every authored entity id makes the noding dedupe (`min` of two
+/// coincident segment ids) preserve authored provenance when a projected edge
+/// and a drawn curve overlap.
+const PROJECTED_EDGE_ID_BASE: u64 = 1 << 40;
+
 fn profile_catalog_item(sketch: &SketchDto, feature_id: FeatureId) -> ProfileCatalogItemDto {
     const PROFILE_TOLERANCE: f64 = 1e-5;
     // The constraint solver deliberately collapses a fully consumed fillet
@@ -5330,6 +5535,7 @@ fn profile_catalog_item(sketch: &SketchDto, feature_id: FeatureId) -> ProfileCat
     // Do not turn that numerical remnant into a microscopic solid face.
     const CONSUMED_LINE_TOLERANCE: f64 = 1e-3;
     let mut segments = Vec::new();
+    let mut projected_segments = BTreeSet::new();
     let mut lines = Vec::new();
     let mut path_curves = Vec::new();
     let mut reference_points = Vec::new();
@@ -5487,11 +5693,55 @@ fn profile_catalog_item(sketch: &SketchDto, feature_id: FeatureId) -> ProfileCat
         }
     }
 
+    // Projected support-face boundary edges join the segment graph so a region
+    // the user drew against the face boundary can close. They carry reserved
+    // segment ids, which keeps them recognisable through noding: a piece that
+    // also carries authored geometry keeps the smaller authored id and is
+    // therefore treated as authored.
+    debug_assert!(
+        sketch
+            .entities
+            .iter()
+            .map(|entity| entity.id().0)
+            .max()
+            .unwrap_or(0)
+            < PROJECTED_EDGE_ID_BASE,
+        "authored entity ids must stay below the reserved projected id range"
+    );
+    for edge in sketch.projected_edges.iter() {
+        debug_assert!(
+            edge.id >= PROJECTED_EDGE_ID_BASE,
+            "projected boundary ids must use the reserved range"
+        );
+        let projected_id = edge.id;
+        for (piece, pair) in edge.points.windows(2).enumerate() {
+            let a = Point2Dto::new(pair[0].x, pair[0].y);
+            let b = Point2Dto::new(pair[1].x, pair[1].y);
+            if point2_distance(a, b) <= PROFILE_TOLERANCE {
+                continue;
+            }
+            let id = projected_id * SEGMENT_ID_STRIDE + piece as u64;
+            projected_segments.insert(id);
+            segments.push(Segment2 { id, a, b });
+        }
+    }
+
     let (loops, profile_error) = if segments.is_empty() {
         (Vec::new(), None)
     } else {
-        match extract_closed_loops_allow_open(&segments, PROFILE_TOLERANCE) {
-            Ok(loops) => (loops, None),
+        match extract_bounded_faces(&segments, PROFILE_TOLERANCE, &projected_segments) {
+            // A face bounded only by projected support geometry seals the
+            // planar subdivision, but the user never drew it: it must not
+            // become a selectable profile, and it must not absorb the shapes
+            // drawn inside it as holes.
+            Ok(faces) => (
+                faces
+                    .into_iter()
+                    .filter(|face| face.authored_edges > 0)
+                    .map(|face| face.points)
+                    .collect::<Vec<_>>(),
+                None,
+            ),
             Err(error) => (Vec::new(), Some(error.to_string())),
         }
     };
@@ -5769,6 +6019,20 @@ fn ordered_profile_curves(
     groups
         .into_iter()
         .filter_map(|(entity_id, path)| {
+            let start = path[0];
+            let end = *path.last()?;
+            // Projected support-face boundary: no authored entity owns these
+            // samples, so recover the curve from the projection itself and
+            // keep its exact circle when the body edge carried one.
+            if let Some(projected) = sketch
+                .projected_edges
+                .iter()
+                .find(|edge| edge.id == entity_id)
+            {
+                return Some(projected_profile_curve(
+                    projected, entity_id, &path, tolerance,
+                ));
+            }
             let entity = sketch.entities.iter().find(|entity| match entity {
                 crate::dto::EntityDto::Point { id, .. }
                 | crate::dto::EntityDto::Line { id, .. }
@@ -5776,8 +6040,6 @@ fn ordered_profile_curves(
                 | crate::dto::EntityDto::Arc { id, .. }
                 | crate::dto::EntityDto::Spline { id, .. } => id.0 == entity_id,
             })?;
-            let start = path[0];
-            let end = *path.last()?;
             Some(match entity {
                 crate::dto::EntityDto::Line { .. } => ProfileCurveDto::Line {
                     entity_id,
@@ -9286,6 +9548,7 @@ mod project_tests {
             },
             can_undo: false,
             can_redo: false,
+            projected_edges: Vec::new(),
         };
 
         assert!(consumed_trim_carrier_ids(&sketch, 1e-3).is_empty());

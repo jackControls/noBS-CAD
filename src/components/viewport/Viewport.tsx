@@ -547,6 +547,9 @@ export function Viewport() {
     const COLOR_PICK_NORMAL = interactionThemeColor('--cad-pick-normal', '#86a9c7');
     const COLOR_PICK_HALO = interactionThemeColor('--cad-pick-halo', '#ffffff');
     const COLOR_SKETCH = interactionThemeColor('--sketchline', '#86a9c7');
+    /** Support-face boundary projected into the active sketch. Read-only
+     * reference geometry: never hoverable, selectable or constrained. */
+    const COLOR_PROJECTED = interactionThemeColor('--cad-projected', '#c08cf5');
     const COLOR_DEFINED = interactionThemeColor('--cad-defined', '#e8e9ec');
     const COLOR_HOVER = interactionThemeColor('--cad-pick-hover', '#00f5ff');
     const COLOR_ACCENT = interactionThemeColor('--accent', '#7463d8');
@@ -1365,7 +1368,13 @@ export function Viewport() {
 
     let snapMarkerKind: NativeViewportSnapKind = 'grid';
     const nativeSnapKind = (kind: SnapTarget['kind']): NativeViewportSnapKind =>
-      kind === 'none' ? 'grid' : kind === 'intersection' ? 'point' : kind;
+      kind === 'none'
+        ? 'grid'
+        : kind === 'intersection'
+          ? 'point'
+          : kind === 'projected_edge'
+            ? 'reference_midpoint'
+            : kind;
     const showSnapMarker = (
       point: Vec2,
       kind: NativeViewportSnapKind = 'grid',
@@ -3716,9 +3725,33 @@ export function Viewport() {
       }
     };
 
+    /// Draw the support-face boundary projected into this sketch.
+    ///
+    /// Read-only reference geometry: never registered for picking, hovering,
+    /// grips or constraints. It is submitted before the authored curves at the
+    /// same render order and slightly lower depth, so a drawn curve that lies
+    /// on the face edge stays visible on top of it.
+    const rebuildProjectedEdges = (sketch: SketchDto) => {
+      if (!store.getState().palette.projectedGeometries) return;
+      for (const edge of sketch.projected_edges) {
+        if (edge.points.length < 2) continue;
+        const positions = edge.points.flatMap((point) => [point.x, point.y, 0.03]);
+        addViewportRelativePolyline(
+          entityGroup,
+          positions,
+          COLOR_PROJECTED,
+          VIEWPORT_INTERACTION_STROKE_PX.hover,
+          0,
+          false,
+          0.75,
+        );
+      }
+    };
+
     const rebuildEntities = (sketch: SketchDto) => {
       clearGroup(entityGroup);
       clearGroup(glyphGroup);
+      rebuildProjectedEdges(sketch);
       constraintSprites.length = 0;
       rightAngleMarks.length = 0;
       constraintGlyphGripObstacles = [];
@@ -12778,6 +12811,7 @@ export function Viewport() {
       points: store.getState().palette.points,
       dimensions: store.getState().palette.dimensions,
       constraints: store.getState().palette.constraints,
+      projectedGeometries: store.getState().palette.projectedGeometries,
     };
     // Track ground-grid rebuild with fade-aware opacity.
     const updateGridFades = (dt: number) => {
@@ -13030,12 +13064,14 @@ export function Viewport() {
       if (
         s.palette.points !== lastPalette.points ||
         s.palette.dimensions !== lastPalette.dimensions ||
-        s.palette.constraints !== lastPalette.constraints
+        s.palette.constraints !== lastPalette.constraints ||
+        s.palette.projectedGeometries !== lastPalette.projectedGeometries
       ) {
         lastPalette = {
           points: s.palette.points,
           dimensions: s.palette.dimensions,
           constraints: s.palette.constraints,
+          projectedGeometries: s.palette.projectedGeometries,
         };
         if (s.mode === 'sketch' && s.activeSketch) {
           rebuildEntities(s.activeSketch);

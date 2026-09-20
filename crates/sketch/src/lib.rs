@@ -59,11 +59,12 @@ pub use dto::{
     LineTrackingRequest, LockedCircleRequest, LockedRectangleRequest, LockedSegmentRequest,
     MidpointLineRequest, MirrorRequest, MoveCopyRequest, MoveDimensionRequest, MovePointRequest,
     MovePointResult, OffsetPreviewDto, OffsetRequest, PointRequest, PolygonRequest, PreviewCurve,
-    PreviewDto, ProjectVisibilityDto, RectangleMode, RectangleRequest, RectangularPatternRequest,
-    ReferenceMidpointDto, ScaleRequest, SegmentRequest, SetDimensionModeRequest,
-    SetDimensionStyleRequest, SetGridSnapRequest, SetGridStepRequest, SketchDto, SlotMode,
-    SlotRequest, SnapTarget, SplineRequest, ToggleFixBatchRequest, ToolResult, TrackingAxis,
-    TrackingGuideDto, TrimPreviewDto, TrimRequest, UndoResult,
+    PreviewDto, ProjectVisibilityDto, ProjectedCircleDto, ProjectedEdgeDto, RectangleMode,
+    RectangleRequest, RectangularPatternRequest, ReferenceMidpointDto, ScaleRequest,
+    SegmentRequest, SetDimensionModeRequest, SetDimensionStyleRequest, SetGridSnapRequest,
+    SetGridStepRequest, SketchDto, SlotMode, SlotRequest, SnapTarget, SplineRequest,
+    ToggleFixBatchRequest, ToolResult, TrackingAxis, TrackingGuideDto, TrimPreviewDto, TrimRequest,
+    UndoResult,
 };
 pub use edge_selection::{ChainMode, ChainSource, EdgeChainRequest};
 pub use entity::{Entity, EntityId};

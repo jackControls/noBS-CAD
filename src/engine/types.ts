@@ -109,12 +109,30 @@ export interface SketchDto {
   entities: EntityDto[];
   constraints: ConstraintDto[];
   reference_midpoints: Array<{ edge_id: number; position: Vec2 }>;
+  /**
+   * Boundary edges of the support face, projected into sketch coordinates.
+   * Runtime reference geometry: rebuilt from stable edge ids whenever the
+   * face-hosted sketch is opened or the body is recomputed, never persisted.
+   */
+  projected_edges: ProjectedEdgeDto[];
   /** Driving and reference dimensions with presentation data (D9). */
   dimensions: DimensionDto[];
   dimension_style: DimensionStyle;
   dof: DofDto;
   can_undo: boolean;
   can_redo: boolean;
+}
+
+/** One support-face boundary edge projected into a face-hosted sketch. */
+export interface ProjectedEdgeDto {
+  /** Reserved id: derived segment ids stay above every authored entity id. */
+  id: number;
+  /** Stable body edge id the projection is rebuilt from. */
+  edge_id: number;
+  /** Projected polyline in sketch coordinates. */
+  points: Vec2[];
+  /** Exact circular carrier when the body edge is circular. */
+  circle?: { center: Vec2; radius: number; closed: boolean };
 }
 
 export type DimensionStyle = 'aligned' | 'iso';
@@ -276,6 +294,9 @@ export type SnapTarget =
   | { kind: 'point'; entity: number }
   | { kind: 'midpoint'; entity: number }
   | { kind: 'reference_midpoint'; edge: number }
+  /** Snapped onto the projected support-face boundary: reference geometry the
+   *  sketch was created from, with no durable relation on commit. */
+  | { kind: 'projected_edge'; edge: number; position: Vec2 }
   | { kind: 'curve'; entity: number }
   | { kind: 'intersection'; first: number; second: number };
 

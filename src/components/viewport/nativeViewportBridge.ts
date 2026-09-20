@@ -109,6 +109,7 @@ interface NativePalette {
   finishedSketchPoint: [number, number, number];
   finishedSketchPointOutline: [number, number, number];
   preview: [number, number, number];
+  projected: [number, number, number];
 }
 
 interface NativeHudSelection {
@@ -150,6 +151,9 @@ interface NativePresentation {
   hoveredEdgeId: number | null;
   pickRefinableEdges: boolean;
   pickStraightEdges: boolean;
+  /** Sketch-palette "Projected Geometries" visibility toggle. Inverted so an
+   *  older payload keeps projected reference geometry visible. */
+  hideProjectedGeometry: boolean;
   selectedSketchEntityIds: number[];
   /** Entities owned by the selected geometric constraint (not true selection). */
   constraintRelatedSketchEntityIds: number[];
@@ -583,6 +587,7 @@ function collectPalette(): NativePalette {
       '#15191f',
     ),
     preview: cssRgb('--cad-preview', '#8fc4ff'),
+    projected: cssRgb('--cad-projected', '#c08cf5'),
   };
 }
 
@@ -937,6 +942,7 @@ export function collectNativeViewportPresentation(): NativePresentation {
     hoveredEdgeId: pickerFeedback.hoveredEdgeId,
     pickRefinableEdges: edgePickMode === 'refinable',
     pickStraightEdges: edgePickMode === 'straight',
+    hideProjectedGeometry: !state.palette.projectedGeometries,
     selectedSketchEntityIds,
     constraintRelatedSketchEntityIds,
     hoveredSketchEntityId: state.hoveredEntity,

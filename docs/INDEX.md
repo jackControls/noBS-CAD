@@ -46,6 +46,9 @@
 - [Sketch constraint matrix](SKETCH_CONSTRAINT_PAIRWISE_MATRIX.md),
   [modeling selection](MODELING_VIEWPORT_SELECTION.md) and
   [viewport interaction](VIEWPORT_INTERACTION_THEME.md).
+- [Projected face-boundary profiles](SKETCH_FACE_BOUNDARY_PROFILES.md) — how a
+  face sketch receives the support face's edges, and why a projected-only face
+  never becomes a profile.
 - [Icon provenance](ICON_PROVENANCE.md), [MCP milestones](../mcp-server/OKRs.md) and
   [presentation review](demo-presentation.md).
 

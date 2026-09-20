@@ -30,11 +30,25 @@ const waitForServer = async () => {
   for (let i = 0; i < 60; i++) {
     if (serverError) throw serverError;
     if (server.exitCode !== null) throw new Error(`dev server exited with code ${server.exitCode}`);
+    let ready = false;
     try {
       const res = await fetch(`http://localhost:${PORT}/`);
-      if (res.ok) return;
+      ready = res.ok;
     } catch {
       // not up yet
+    }
+    if (ready) {
+      // An unrelated dev server already on this port answers the probe even
+      // though our own server never bound: --strictPort makes Vite exit
+      // instead of moving. Give the child a moment to report that, because
+      // testing that window would silently validate another checkout.
+      await new Promise((r) => setTimeout(r, 250));
+      if (server.exitCode !== null || server.signalCode !== null) {
+        throw new Error(
+          `port ${PORT} is already serving another process; stop it or use NBCAD_E2E_BASE_URL with an isolated port`,
+        );
+      }
+      return;
     }
     await new Promise((r) => setTimeout(r, 500));
   }

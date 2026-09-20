@@ -97,6 +97,20 @@ for (const [mode, theme] of Object.entries(VIEWPORT_INTERACTION_THEME)) {
     cssValue(block, '--cad-sketch-selected') === theme.selected
       && cssValue(block, '--cad-edge-selected') === theme.selected,
   );
+  check(
+    `${mode} projected support geometry token matches the canonical theme`,
+    cssValue(block, '--cad-projected') === theme.projected,
+    `${cssValue(block, '--cad-projected')} !== ${theme.projected}`,
+  );
+  check(
+    `${mode} projected support geometry stays legible on the viewport`,
+    contrastRatio(theme.background, theme.projected) >= 3,
+    contrastRatio(theme.background, theme.projected).toFixed(2),
+  );
+  check(
+    `${mode} projected support geometry is distinct from sketch geometry`,
+    new Set([theme.projected, theme.normal]).size === 2,
+  );
 }
 
 check(

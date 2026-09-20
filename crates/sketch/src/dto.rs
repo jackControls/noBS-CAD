@@ -146,6 +146,15 @@ pub struct SketchDto {
     /// external snap references while editing a face-hosted sketch.
     #[serde(default)]
     pub reference_midpoints: Vec<ReferenceMidpointDto>,
+    /// Boundary edges of the support face, projected into sketch coordinates.
+    ///
+    /// Runtime external references, never persisted: they are rebuilt from
+    /// stable edge ids whenever a face-hosted sketch is opened or the body is
+    /// recomputed. They exist so the face boundary the user selected the
+    /// sketch plane from can close a region drawn against it, and so the
+    /// viewport can draw that boundary.
+    #[serde(default)]
+    pub projected_edges: Vec<ProjectedEdgeDto>,
     /// Driving dimensions with presentation data (D9).
     pub dimensions: Vec<DimensionDto>,
     pub dimension_style: DimensionStyle,
@@ -158,6 +167,35 @@ pub struct SketchDto {
 pub struct ReferenceMidpointDto {
     pub edge_id: EdgeId,
     pub position: Vec2,
+}
+
+/// One support-face boundary edge projected into a face-hosted sketch.
+///
+/// The polyline is the projected tessellation of the body edge; `circle`
+/// carries the exact analytic curve when the edge is circular, so the solid
+/// kernel receives one arc instead of the tessellation chords.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectedEdgeDto {
+    /// Reserved id. Derived segment ids are `id * SEGMENTS_PER_CURVE + index`,
+    /// which keeps them above every authored segment id so a piece shared with
+    /// authored geometry keeps the authored entity's identity.
+    pub id: u64,
+    /// Stable body edge id. A projection is refreshed from this id, never
+    /// carried across a recompute as raw coordinates.
+    pub edge_id: EdgeId,
+    /// Projected polyline in sketch coordinates.
+    pub points: Vec<Vec2>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub circle: Option<ProjectedCircleDto>,
+}
+
+/// Exact circular carrier of a projected edge, in sketch coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ProjectedCircleDto {
+    pub center: Vec2,
+    pub radius: f64,
+    /// True when the projected edge is the whole circle.
+    pub closed: bool,
 }
 
 /// Placement of sketch coordinate zero when the support is a planar body
@@ -209,7 +247,9 @@ pub struct DimensionDto {
 /// `Midpoint` and `ReferenceMidpoint` imply auto-created persistent midpoint
 /// constraints on commit (M1d, D4.1 parity) and are suppressed while Ctrl is
 /// held.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Not `Eq`: a `ProjectedEdge` acquisition carries the exact snapped position.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SnapTarget {
     None,
@@ -227,6 +267,14 @@ pub enum SnapTarget {
     /// edits and support-geometry refreshes preserve the exact midpoint.
     ReferenceMidpoint {
         edge: EdgeId,
+    },
+    /// Cursor snapped onto the projected boundary of the support face, so
+    /// geometry drawn against a face edge lands exactly on it and can close a
+    /// profile with it. The projected boundary is runtime reference geometry,
+    /// so this acquisition records no durable relation.
+    ProjectedEdge {
+        edge: EdgeId,
+        position: Vec2,
     },
     /// Exact intersection with a sketch curve acquired by the viewport.
     /// The endpoint remains a distinct point and commit adds its persistent

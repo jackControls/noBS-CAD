@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 use std::fmt;
 
 use crate::{Point2Dto, ProfileCurveDto};
@@ -805,15 +806,35 @@ pub fn extract_closed_loops(
     Ok(loops)
 }
 
+/// One bounded face of the embedded segment graph together with the
+/// provenance needed to decide whether it is a user profile.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoundedFace {
+    /// CCW boundary polygon, rotated to start at its lexicographic minimum.
+    pub points: Vec<Point2Dto>,
+    /// Boundary edges carried by an authored (non-projected) segment. A face
+    /// whose boundary is made only of projected support geometry is a real
+    /// face of the planar subdivision, but the user never drew it: it must not
+    /// become a selectable profile, and it must not turn authored geometry
+    /// nested inside it into a hole.
+    pub authored_edges: usize,
+}
+
 /// Extract bounded planar faces while permitting unrelated open sketch
 /// geometry. Peeling vertices with degree below two removes line/path/rib
 /// chains. The remaining embedded graph may still contain vertices of degree
 /// three or more when adjacent regions share an edge or vertex, so each
 /// directed half-edge is walked with the bounded face on its left.
-pub fn extract_closed_loops_allow_open(
+///
+/// `projected` marks the segment ids that came from projected support
+/// geometry instead of an authored sketch entity. They participate in the
+/// walk so a support edge can seal a region the user drew against it, and each
+/// returned face reports how much authored geometry bounds it.
+pub fn extract_bounded_faces(
     segments: &[Segment2],
     tolerance: f64,
-) -> Result<Vec<Vec<Point2Dto>>, ProfileError> {
+    projected: &BTreeSet<u64>,
+) -> Result<Vec<BoundedFace>, ProfileError> {
     if segments.is_empty() {
         return Err(ProfileError::Empty);
     }
@@ -916,6 +937,7 @@ pub fn extract_closed_loops_allow_open(
         }
         let mut current = start;
         let mut points = Vec::new();
+        let mut authored_edges = 0usize;
         for _ in 0..=visited.len() {
             if visited[current] {
                 if current != start {
@@ -924,6 +946,9 @@ pub fn extract_closed_loops_allow_open(
                 break;
             }
             visited[current] = true;
+            if !projected.contains(&ordered[current / 2].id) {
+                authored_edges += 1;
+            }
             let (from, to) = half_endpoints(current);
             points.push(vertices[from]);
 
@@ -956,18 +981,36 @@ pub fn extract_closed_loops_allow_open(
             .min_by(|a, b| point_cmp(points[*a], points[*b]))
             .unwrap();
         points.rotate_left(first);
-        loops.push(points);
+        loops.push(BoundedFace {
+            points,
+            authored_edges,
+        });
     }
 
     if loops.is_empty() {
         return Err(ProfileError::Empty);
     }
     loops.sort_by(|a, b| {
-        point_cmp(a[0], b[0])
-            .then_with(|| signed_area(b).total_cmp(&signed_area(a)))
-            .then_with(|| a.len().cmp(&b.len()))
+        point_cmp(a.points[0], b.points[0])
+            .then_with(|| signed_area(&b.points).total_cmp(&signed_area(&a.points)))
+            .then_with(|| a.points.len().cmp(&b.points.len()))
     });
     Ok(loops)
+}
+
+/// Extract bounded planar faces from authored sketch geometry alone. Every
+/// segment is authored, so the provenance carried by [`extract_bounded_faces`]
+/// is not observable here.
+pub fn extract_closed_loops_allow_open(
+    segments: &[Segment2],
+    tolerance: f64,
+) -> Result<Vec<Vec<Point2Dto>>, ProfileError> {
+    Ok(
+        extract_bounded_faces(segments, tolerance, &BTreeSet::new())?
+            .into_iter()
+            .map(|face| face.points)
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -1313,6 +1356,98 @@ mod tests {
                 .map(|points| signed_area(points))
                 .collect::<Vec<_>>(),
             vec![2.0, 1.0],
+        );
+    }
+
+    fn projected(ids: &[u64]) -> BTreeSet<u64> {
+        ids.iter().copied().collect()
+    }
+
+    /// Tessellate an arc into segments the way the sketch manager does.
+    fn arc_segments(
+        id: u64,
+        center: Point2Dto,
+        radius: f64,
+        start_angle: f64,
+        end_angle: f64,
+    ) -> Vec<Segment2> {
+        let steps = 16;
+        let point = |index: usize| {
+            let angle = start_angle + (end_angle - start_angle) * index as f64 / steps as f64;
+            p(
+                center.x + radius * angle.cos(),
+                center.y + radius * angle.sin(),
+            )
+        };
+        (0..steps)
+            .map(|index| s(id * 1_000 + index as u64, point(index), point(index + 1)))
+            .collect()
+    }
+
+    fn boundary_square() -> Vec<Segment2> {
+        vec![
+            s(900, p(0.0, 0.0), p(10.0, 0.0)),
+            s(901, p(10.0, 0.0), p(10.0, 10.0)),
+            s(902, p(10.0, 10.0), p(0.0, 10.0)),
+            s(903, p(0.0, 10.0), p(0.0, 0.0)),
+        ]
+    }
+
+    #[test]
+    fn projected_support_edges_seal_loops_without_becoming_profiles() {
+        let square = boundary_square();
+        let boundary = projected(&[900, 901, 902, 903]);
+
+        // A support boundary alone is a real face of the subdivision but has no
+        // authored geometry, so callers can drop it.
+        let boundary_only = extract_bounded_faces(&square, 1e-6, &boundary).unwrap();
+        assert_eq!(boundary_only.len(), 1);
+        assert_eq!(boundary_only[0].authored_edges, 0);
+
+        // The same square without projections is entirely authored.
+        let authored = extract_bounded_faces(&square, 1e-6, &projected(&[])).unwrap();
+        assert_eq!(authored.len(), 1);
+        assert_eq!(authored[0].authored_edges, 4);
+
+        // A semicircle drawn between two points of the projected boundary
+        // seals the region the user drew against it.
+        let mut sealed = square;
+        sealed.extend(arc_segments(
+            4,
+            p(5.0, 10.0),
+            3.0,
+            std::f64::consts::PI,
+            std::f64::consts::TAU,
+        ));
+        let faces = extract_bounded_faces(&sealed, 1e-6, &boundary).unwrap();
+        assert_eq!(faces.len(), 2);
+        assert!(faces.iter().all(|face| face.authored_edges > 0));
+        let areas = faces
+            .iter()
+            .map(|face| signed_area(&face.points).abs())
+            .collect::<Vec<_>>();
+        assert!(
+            areas
+                .iter()
+                .any(|area| (area - std::f64::consts::PI * 9.0 / 2.0).abs() < 0.1),
+            "the sealed half disc must be one of the faces: {areas:?}"
+        );
+    }
+
+    #[test]
+    fn authored_geometry_overlapping_a_projected_edge_stays_authored() {
+        // The noding dedupe keeps the smaller id. Projected ids live in a
+        // reserved high range, so a piece shared with authored geometry keeps
+        // the authored id and counts as authored.
+        let mut segments = boundary_square();
+        // A drawn line covering the first half of the projected bottom edge.
+        segments.push(s(4, p(0.0, 0.0), p(5.0, 0.0)));
+        let faces =
+            extract_bounded_faces(&segments, 1e-6, &projected(&[900, 901, 902, 903])).unwrap();
+        assert_eq!(faces.len(), 1);
+        assert!(
+            faces[0].authored_edges > 0,
+            "a coincident authored piece must keep authored provenance"
         );
     }
 
