@@ -103,7 +103,7 @@ installer. Native CAD build and test commands remain in [DEVELOPMENT.md](../DEVE
 
 ## Local help (`cad_help` + knowledge resources)
 
-After the server is installed, agents should prefer:
+After the server is installed, prefer:
 
 1. MCP tool **`cad_help`** with actions `search` → `get` / `topics` (snippet-first;
    caps locked in [`machine-design-help-search.md`](../machine-design-help-search.md)).

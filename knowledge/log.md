@@ -1,5 +1,11 @@
 # noBS CAD knowledge update log
 
+## 2026-09-20 — Ship-clean slop purge (materials + prefer tone)
+
+- Rewrote leftover `Agent anti-patterns` on materials vocabulary to preferred callouts.
+- Soft: renamed Agent loop / Agent search tip; prefer-tone on taxonomy, index, INSTALL, INSTALL_MCP.
+
+
 ## 2026-09-20 — Golden-path tone sweep
 
 - Corpus + agentic ADR wording flipped to prefer / golden-path packs (what to do);

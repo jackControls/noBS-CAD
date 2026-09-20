@@ -50,13 +50,13 @@ machine, mold, print). Naming a class without a process is incomplete.
   Apache-2.0) as a **pattern**, not as certified allowables.
 - Prefer link-out datasheets; keep MatWeb/MakeItFrom outside the repo.
 - Educational ranges are not design allowables. Say so on the page and in
-  agent answers.
+  answers that quote numbers.
 
-## Agent anti-patterns
+## Preferred material callouts
 
-- Picking ABS vs PETG from vibe without nozzle/temp/process notes
-- Publishing strength numbers from a help page into a drawing title block
-- Treating viewport metal color as alloy specification
+- Name filament/resin with process notes (nozzle, temp, orientation) before locking ABS vs PETG
+- Keep help-page teaching ranges in the notebook; put drawing allowables only from a cited datasheet
+- Specify alloy/grade from stock or datasheet text — viewport metal color is display only
 
 ## Pair with process pages
 
@@ -73,7 +73,7 @@ Materials **vocabulary** is not an allowables table. Before quoting a number:
 1. **Name the dataset** (vendor datasheet, ASTM/ISO grade sheet, KittyCAD JSON pattern) — prefer a cited source over “someone said 70 MPa.”
 2. **Say the condition** — heat treat, print orientation, moisture, temperature, strain rate.
 3. **Separate E / Sy / Sut / fatigue** — prefer tensile data over hardness-as-Sy.
-4. **Refuse MatWeb/MakeItFrom scrapes** into the repo or into a drawing title block.
+4. **Prefer cited datasheets / licensed datasets** over MatWeb/MakeItFrom scrapes in the repo or drawing title block.
 5. **Mark educational ranges** as educational; shipping allowables come from the responsible engineer’s approved source.
 6. **Couple material ↔ process** — FDM PETG ≠ injection PET; 6061-T6 bar ≠ cast “aluminum.”
 7. **CTE / galvanic / chemical** called out when mixed stacks exist.
@@ -85,7 +85,7 @@ Materials **vocabulary** is not an allowables table. Before quoting a number:
 - [ ] Environment and load story named
 - [ ] Mating materials / coatings noted
 - [ ] No untitled strength number on the drawing
-- [ ] Filament “looks strong” rejected as evidence
+- [ ] Filament strength claims backed by a datasheet or coupon, not appearance
 
 Related: [DFM overview](dfm-overview.md), [Fasteners & joints](fasteners-joints.md),
 [AM thin walls](am-thin-walls.md), [SOURCES](../SOURCES.md).

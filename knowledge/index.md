@@ -146,4 +146,4 @@ certified material allowables, standards tables or physical qualification.
 ## Hosted page
 
 GitHub Pages builds from this bundle (see `.github/workflows/pages-knowledge.yml`).
-Agents should prefer `cad_help` or bundled MCP resources over scraping the hosted HTML.
+Prefer `cad_help` or bundled MCP resources over scraping the hosted HTML.

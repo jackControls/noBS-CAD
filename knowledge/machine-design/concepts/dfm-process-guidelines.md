@@ -71,7 +71,7 @@ Edge breaks: [fillet vs chamfer](fillet-chamfer.md).
 5. **Secondary ops** listed (tap, ream, face, coat) — or designed out.
 6. **Critical fits** couponed ([fit coupons map](fit-coupons-recipes-map.md)).
 
-## Agent search tip
+## Preferred search
 
 Query **draft angle**, **bend radius**, or **pocket depth** here first;
 use DFAM pages when the answer is print-orientation-specific.

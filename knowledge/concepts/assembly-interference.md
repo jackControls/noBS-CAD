@@ -70,7 +70,7 @@ tight.
   evidence ([fits & clearances](../machine-design/concepts/fits-clearances.md)),
   not by hoping the check stays empty.
 
-## Agent loop
+## Preferred check loop
 
 1. `assembly_document` / scene inspect → confirm occurrences and visibility.
 2. `assembly_interference_check` (optionally scoped + threshold).
