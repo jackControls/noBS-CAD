@@ -40,7 +40,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 |-------|--------|------------|
 | Fasteners & joints | **seeded** | `machine-design.concepts.fasteners-joints` — [fasteners-joints](concepts/fasteners-joints.md); also [fastener-clearance-counterbore](concepts/fastener-clearance-counterbore.md), [am-heat-set-inserts](concepts/am-heat-set-inserts.md), [captive-nut-hex-trap](concepts/captive-nut-hex-trap.md) |
 | Hardware pocket / actuator / bolt circle research | **seeded** | `machine-design.concepts.am-hardware-pocket-research` — [am-hardware-pocket-research](concepts/am-hardware-pocket-research.md) |
-| Shafts, keys, retaining rings | **planned** | — |
+| Shafts, keys, retaining rings | **seeded** | `machine-design.concepts.shafts-keys-retaining-rings` — [shafts-keys-retaining-rings](concepts/shafts-keys-retaining-rings.md) |
 | Bearings / hubs / seats | **seeded (partial)** | `concepts.bearing-stacks` — [bearing-stacks](../concepts/bearing-stacks.md) |
 | Springs, seals, couplings | **planned** (lid/labyrinth seeded) | enclosure seal: [am-enclosure-lid-gasket-labyrinth](concepts/am-enclosure-lid-gasket-labyrinth.md); springs/couplings still planned |
 | Power screws / lead screws | **seeded** | `machine-design.concepts.power-screws-lead-screws` — [power-screws-lead-screws](concepts/power-screws-lead-screws.md) |
@@ -111,7 +111,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 |-----|-------|
 | Drawing vs MBD / PMI walkthrough | still **planned** |
 | Inspection / metrology bridge | still **planned** |
-| Shafts, keys, retaining rings | still **planned** |
+| Deep key stress / groove charts | shafts page seeded (roles only); numeric charts **TODO** |
 | Springs / couplings (beyond lid seal) | still **planned** |
 | Linkages / gears / cams / belts mobility | gears product page exists; mechanisms **planned** |
 | Materials allowables tables | **planned** (no MatWeb); vocabulary seeded |

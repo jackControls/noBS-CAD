@@ -1,8 +1,8 @@
-# Steerable MCP — agent operating rules
+# Steerable MCP — operating rules
 
 ## Invariants (keep these true)
 
-1. **Disclosure is guidance, not a jail.** Prefer accepting `tools/call`; soft focus only reshapes lists.
+1. **Disclosure is guidance.** Prefer accepting `tools/call`; soft focus only reshapes lists.
 2. **Hard errors** = missing IDs, invalid sketch state, kernel failure only.
 3. **Notification name** must stay exactly `notifications/tools/list_changed`.
 4. **Stdout** = JSON-RPC only; logs on **stderr**.

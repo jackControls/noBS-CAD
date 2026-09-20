@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated": "2026-09-20",
-  "count": 31,
+  "count": 32,
   "entries": [
     {
       "id": "machine-design.concepts.alignment-nubs-pins",
@@ -997,6 +997,49 @@
         "doe-3d"
       ],
       "snippet": "A power screw turns rotary motion into linear motion (vise, jack, axis). CAD can model the helix and envelopes; it does not certify load, wear, or self-locking. Prefer purchased screws/nuts when duty cycle or safety mat…"
+    },
+    {
+      "id": "machine-design.concepts.shafts-keys-retaining-rings",
+      "path": "knowledge/machine-design/concepts/shafts-keys-retaining-rings.md",
+      "title": "Shafts, keys, and retaining rings (CAD-time)",
+      "description": "Stepped shafts, keyseats vs keyways, and retaining-ring grooves — roles, VERIFY gates, and links to fits and bearing stacks without catalog tables.",
+      "status": "draft",
+      "topics": [
+        "machine-elements",
+        "shafts",
+        "fasteners",
+        "fits",
+        "bearings",
+        "mechanisms"
+      ],
+      "keywords": [
+        "shaft",
+        "stepped shaft",
+        "shoulder",
+        "undercut",
+        "keyseat",
+        "keyway",
+        "parallel key",
+        "woodruff",
+        "retaining ring",
+        "circlip",
+        "snap ring",
+        "groove",
+        "E-clip",
+        "axial retention"
+      ],
+      "related_recipes": [
+        "revolved-spacer",
+        "turbine-fit-coupons",
+        "vertical-axis-turbine",
+        "d-screw-vise-fit"
+      ],
+      "sources": [
+        "nasa-bearing",
+        "nist-gdt-2",
+        "doe-3d"
+      ],
+      "snippet": "Rotating machinery almost always needs a named shaft envelope, a torque path (key, spline, press, set screw), and axial retention (shoulder, collar, retaining ring). CAD models the geometry; catalogs and coupons decide …"
     },
     {
       "id": "machine-design.concepts.technic-envelope",

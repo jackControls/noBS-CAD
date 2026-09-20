@@ -808,6 +808,10 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/machine-design/concepts/power-screws-lead-screws.md"),
     },
     KnowledgeFile {
+        path: "machine-design/concepts/shafts-keys-retaining-rings.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/shafts-keys-retaining-rings.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/taxonomy.md",
         text: include_str!("../../../knowledge/machine-design/taxonomy.md"),
     },
@@ -1475,6 +1479,23 @@ mod tests {
     }
 
     #[test]
+    fn shafts_keys_retaining_rings_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "shafts keys retaining rings circlip",
+            "keyseat keyway parallel key shaft shoulder",
+            "retaining ring groove axial retention",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("shafts-keys-retaining-rings")),
+                "expected shafts-keys-retaining-rings for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn agent_mcp_workflow_ops_searchable() {
         let store = HelpStore::bundled();
         for query in [
@@ -1512,7 +1533,7 @@ mod tests {
     #[test]
     fn check_corpus_ok() {
         let n = check_corpus().expect("corpus check");
-        assert!(n >= 44);
+        assert!(n >= 45);
     }
 
     #[test]
@@ -1547,6 +1568,7 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/datum-sketch-plane-choice.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/hole-wizard-vs-modeled.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/power-screws-lead-screws.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/shafts-keys-retaining-rings.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));
         assert!(knowledge_file_by_uri("nbcad://knowledge/../etc/passwd").is_none());

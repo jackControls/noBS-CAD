@@ -31,7 +31,7 @@ Operating note: [How humans find help today](../docs/agentic/HUMAN_HELP.md).
 Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 `cad_help` `get` (id-only).
 
-### Agent doctrine & validation
+### Doctrine & validation
 
 | Topic | Id | Title |
 |-------|----|-------|
@@ -64,6 +64,7 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Fit coupons / recipes hub | `machine-design.concepts.fit-coupons-recipes-map` | Fit coupons and recipes map |
 | Datum / sketch plane (MCP) | `machine-design.concepts.datum-sketch-plane-choice` | Datum / sketch plane choice |
 | Hole feature vs modeled | `machine-design.concepts.hole-wizard-vs-modeled` | Hole wizard vs modeled hole |
+| Shafts / keys / retaining rings | `machine-design.concepts.shafts-keys-retaining-rings` | Shafts, keys, and retaining rings |
 
 Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 
@@ -137,6 +138,9 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [AM boss-to-boss / standoff patterns](machine-design/concepts/am-boss-standoff-patterns.md) - PCB/plate standoff grids and screw roles.
 - [AM assembly join choice](machine-design/concepts/am-assembly-join-choice.md) - Glue / weld / screw / snap — when not to snap.
 - [AM warpage / cooling / flatness](machine-design/concepts/am-warpage-cooling-flatness.md) - Large plate curl and flatness levers.
+- [Datum / sketch plane (MCP)](machine-design/concepts/datum-sketch-plane-choice.md) - Origin, CS, and sketch plane choice for MCP edits.
+- [Hole feature vs modeled](machine-design/concepts/hole-wizard-vs-modeled.md) - Hole feature vs sketched/patterned holes.
+- [Shafts / keys / retaining rings](machine-design/concepts/shafts-keys-retaining-rings.md) - Stepped shafts, keyseats, circlip grooves (CAD-time).
 - [Fit coupons & recipes map](machine-design/concepts/fit-coupons-recipes-map.md) - Concept → `related_recipes` hub.
 
 Use the listed resources for their stated scope, then consult the cited sources

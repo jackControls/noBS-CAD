@@ -1,5 +1,14 @@
 # noBS CAD knowledge update log
 
+## 2026-09-20 — Shafts/keys/rings + browse decruft
+
+- Seeded `machine-design.concepts.shafts-keys-retaining-rings` (CAD-time roles;
+  no key/circlip charts). Taxonomy B row + Still-thin note updated.
+- Index: doctrine section rename; Machine-design bullets for datum, hole, shafts
+  (were table-only). Soft: STEERABLE_MCP drop “jail” wording.
+- Rebuilt `machine-design/search-index.json`; wired Rust embed + BM25/unit tests
+  + wire golden H47.
+
 ## 2026-09-20 — Layout stage + decruft pass
 
 - Decided **not** to move `knowledge/` under `docs/` on this draft PR (stable
