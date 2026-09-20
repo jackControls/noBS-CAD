@@ -712,6 +712,22 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/concepts/assembly-interference.md"),
     },
     KnowledgeFile {
+        path: "concepts/validate-before-show.md",
+        text: include_str!("../../../knowledge/concepts/validate-before-show.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/adversarial-mesh-audit.md",
+        text: include_str!("../../../knowledge/concepts/adversarial-mesh-audit.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/alignment-nubs-pins.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/alignment-nubs-pins.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/am-clamshell-retainer.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-clamshell-retainer.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/taxonomy.md",
         text: include_str!("../../../knowledge/machine-design/taxonomy.md"),
     },
@@ -925,9 +941,77 @@ mod tests {
     }
 
     #[test]
+    fn validate_before_show_shot_pack_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "validate before show shot pack",
+            "blank frame camera inside solid",
+            "review PNG section cutaway",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("validate-before-show")),
+                "expected validate-before-show for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn adversarial_mesh_wall_probe_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "adversarial mesh audit manifold",
+            "wall probe thin wall seat",
+            "printable solid non-manifold export preflight",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("adversarial-mesh-audit")),
+                "expected adversarial-mesh-audit for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn alignment_nubs_vs_pins_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "alignment nubs vs pins",
+            "locating pin dowel locator sock",
+            "wedding-cake nub lofted cap",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("alignment-nubs-pins")),
+                "expected alignment-nubs-pins for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn clamshell_retainer_slide_detent_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "clamshell retainer slide fit",
+            "slide fit then detent clamp face",
+            "retainer clip retention bump",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("am-clamshell-retainer")),
+                "expected am-clamshell-retainer for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn check_corpus_ok() {
         let n = check_corpus().expect("corpus check");
-        assert!(n >= 21);
+        assert!(n >= 25);
     }
 
     #[test]
@@ -938,6 +1022,10 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-snap-fit.md"));
         assert!(files.iter().any(|f| f.path == "concepts/research-before-commit.md"));
         assert!(files.iter().any(|f| f.path == "concepts/assembly-interference.md"));
+        assert!(files.iter().any(|f| f.path == "concepts/validate-before-show.md"));
+        assert!(files.iter().any(|f| f.path == "concepts/adversarial-mesh-audit.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/alignment-nubs-pins.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-clamshell-retainer.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));
         assert!(knowledge_file_by_uri("nbcad://knowledge/../etc/passwd").is_none());

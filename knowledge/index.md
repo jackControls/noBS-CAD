@@ -20,6 +20,8 @@ Keep concepts **thin**. Longer material lives in the repository’s
 - [Agent MCP workflow](concepts/agent-mcp-workflow.md) - Tenacity, cad_help-first, soft focus, recipes.
 - [Research before commit](concepts/research-before-commit.md) - VERIFY table and local help before freezing geometry.
 - [Assembly interference check](concepts/assembly-interference.md) - Geometric overlap/clearance at solved poses vs fit classes.
+- [Validate before show](concepts/validate-before-show.md) - Mandatory review shot pack; reject blank/inside-solid frames.
+- [Adversarial mesh audit](concepts/adversarial-mesh-audit.md) - Manifold, wall probes, shards; printable-solid gate.
 - [Contribution process](concepts/process.md) - Lightweight contribution and review expectations.
 - [Export & print](concepts/export-print.md) - Interchange, print export and qualification boundaries.
 - [Gear identification and compatible pairs](concepts/gears.md) - Module/DP, OD limits, pressure angle, ratio changes and mounting.
@@ -61,6 +63,8 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [AM snap-fits](machine-design/concepts/am-snap-fit.md) - Cantilever clips, latches, living hinges.
 - [AM thin walls](machine-design/concepts/am-thin-walls.md) - FDM min wall, anisotropy, print orientation.
 - [Fillet vs chamfer](machine-design/concepts/fillet-chamfer.md) - When to blend vs bevel.
+- [Alignment nubs vs pins](machine-design/concepts/alignment-nubs-pins.md) - Locator class: short AM nubs/socks vs pins/dowels.
+- [AM clamshell retainer](machine-design/concepts/am-clamshell-retainer.md) - Slide-fit first, then optional detents.
 
 Use the listed resources for their stated scope, then consult the cited sources
 for more detail. The bundle is guidance for design decisions; it does not supply

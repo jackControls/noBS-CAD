@@ -3,7 +3,7 @@ type: Concept
 title: Machine-design taxonomy
 description: Topic map — seeded pages vs planned gaps for the open machine-design KB.
 status: draft
-updated: 2026-09-19
+updated: 2026-09-20
 searchable: false
 ---
 
@@ -57,8 +57,9 @@ Provenance: [SOURCES](SOURCES.md).
 |-------|--------|
 | DFM overview | **seeded** — [dfm-overview](concepts/dfm-overview.md) |
 | Process guidelines | **seeded** — [dfm-process-guidelines](concepts/dfm-process-guidelines.md) |
-| DFAM deep dive | **seeded (partial)** — [am-snap-fit](concepts/am-snap-fit.md), [am-thin-walls](concepts/am-thin-walls.md) |
+| DFAM deep dive | **seeded (partial)** — [am-snap-fit](concepts/am-snap-fit.md), [am-thin-walls](concepts/am-thin-walls.md), [am-clamshell-retainer](concepts/am-clamshell-retainer.md) |
 | Fillet vs chamfer | **seeded** — [fillet-chamfer](concepts/fillet-chamfer.md) |
+| Alignment nubs vs pins | **seeded** — [alignment-nubs-pins](concepts/alignment-nubs-pins.md) |
 
 ## F. Design hygiene
 
@@ -73,6 +74,8 @@ Provenance: [SOURCES](SOURCES.md).
 |-------|--------|
 | Interference / clearance at solved poses | **seeded** — [assembly-interference](../concepts/assembly-interference.md) (product check; distinct from fit classes) |
 | Fit classes (clearance / transition / interference) | **seeded** — [fits-clearances](concepts/fits-clearances.md) |
+| Validate before show (shot pack) | **seeded** — [validate-before-show](../concepts/validate-before-show.md) |
+| Adversarial mesh / wall probe audit | **seeded** — [adversarial-mesh-audit](../concepts/adversarial-mesh-audit.md) |
 
 ## Live examples
 
