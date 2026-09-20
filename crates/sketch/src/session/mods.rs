@@ -507,7 +507,10 @@ impl SketchSession {
 
     // --- Chamfer (equal-distance this round) ---
 
-    pub fn chamfer_lines(&mut self, request: &ChamferRequest) -> Result<ToolResult, SessionError> {
+    fn compute_chamfer(
+        &self,
+        request: &ChamferRequest,
+    ) -> Result<(EntityId, EntityId, f64, Vec2, Vec2), SessionError> {
         if !self.is_line_id(request.l1) || !self.is_line_id(request.l2) {
             return Err(SessionError::InvalidConstraint(
                 "Chamfer needs two lines".to_string(),
@@ -531,6 +534,16 @@ impl SketchSession {
         )
         .map_err(|e| SessionError::InvalidConstraint(format!("chamfer: {e:?}").to_lowercase()))?;
         let (p1, p2) = (result.point_on_l1, result.point_on_l2);
+        Ok((l1, l2, distance, p1, p2))
+    }
+
+    pub fn chamfer_preview(&self, request: &ChamferRequest) -> Result<PreviewCurve, SessionError> {
+        let (_, _, _, a, b) = self.compute_chamfer(request)?;
+        Ok(PreviewCurve::Line { a, b })
+    }
+
+    pub fn chamfer_lines(&mut self, request: &ChamferRequest) -> Result<ToolResult, SessionError> {
+        let (l1, l2, distance, p1, p2) = self.compute_chamfer(request)?;
         self.mutate_with_undo(move |s| {
             let v = line_vertex(&s.line_seg(l1)?, &s.line_seg(l2)?).unwrap();
             let corner1 = s.vertex_endpoint(l1, v);

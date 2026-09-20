@@ -145,7 +145,10 @@ fn mutate(world: &mut World, editor: &Editor, command: Prepared) -> Result<Value
 }
 
 #[derive(Resource, Default)]
-struct HoverCache(Option<(Stamp, SketchDto)>);
+struct HoverCache(
+    Option<(Stamp, SketchDto)>,
+    Option<(Option<u64>, Option<[u32; 2]>)>,
+);
 
 pub(super) fn hover(
     world: &mut World,
@@ -162,6 +165,7 @@ pub(super) fn hover(
     let result = (|| {
         if cache.0.as_ref().is_none_or(|(old, _)| old != stamp) {
             cache.0 = active(&services.engine)?.map(|sketch| (stamp.clone(), sketch));
+            cache.1 = None;
         }
         let hit = match (cursor, cache.0.as_ref()) {
             (Some(cursor), Some((_, sketch))) => selection::hit(
@@ -185,6 +189,30 @@ pub(super) fn hover(
         if view.hovered_sketch_entity_id != hit {
             view.hovered_sketch_entity_id = hit;
             native_viewport::apply_interface_view(world, &owner.document_id, None, Some(view))?;
+        }
+        if editor.interaction.modify == Some(ModifyTool::Trim) {
+            let key = (hit, cursor.map(|p| [p.x.to_bits(), p.y.to_bits()]));
+            if cache.1 != Some(key) {
+                cache.1 = Some(key);
+                let preview = match (hit, cursor, cache.0.as_ref()) {
+                    (Some(id), Some(p), Some((_, sketch))) => {
+                        native_viewport::interface_sketch_point(
+                            world,
+                            &owner.document_id,
+                            [p.x - canvas.x as f32, p.y - canvas.y as f32],
+                            sketch.basis,
+                        )?
+                        .and_then(|p| {
+                            modify_preview::trim(&services.engine, sketch, EntityId(id), p).ok()
+                        })
+                        .unwrap_or_default()
+                    }
+                    _ => ViewportPreview::default(),
+                };
+                native_viewport::apply_interface_preview(world, &owner.document_id, preview)?;
+            }
+        } else {
+            cache.1 = None;
         }
         Ok(())
     })();
@@ -451,6 +479,7 @@ pub(super) fn execute(
         }
     }
     present(world, owner, &editor.interaction)?;
+    modify_preview::refresh_form(world, engine, owner, editor, &sketch)?;
     Ok(
         json!({"handled":true,"selection":editor.interaction.selection,"instruction":editor.interaction.instruction()}),
     )
@@ -611,6 +640,8 @@ pub(super) fn pointer(
         editor.interaction.selection.clear();
     }
     present(world, owner, &editor.interaction)?;
+    editor.error.clear();
+    modify_preview::refresh_form(world, &services.engine, owner, editor, &sketch)?;
     Ok(
         json!({"handled":true,"selection":editor.interaction.selection,"dimension_placed":editor.interaction.dimension_position.is_some()}),
     )

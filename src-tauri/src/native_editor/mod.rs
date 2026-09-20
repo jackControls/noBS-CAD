@@ -2,6 +2,7 @@
 //! are scoped to one document incarnation, engine revision and active sketch.
 
 mod annotations;
+mod modify_preview;
 mod palette;
 pub(crate) use palette::PaletteCommand;
 mod constraints;

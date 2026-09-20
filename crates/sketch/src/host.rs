@@ -462,6 +462,7 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         "fillet_preview" => with_payload(payload, |r: FilletRequest| manager.fillet_preview(&r)),
         "fillet_lines" => with_payload(payload, |r: FilletRequest| manager.fillet_lines(r)),
         "chamfer_lines" => with_payload(payload, |r: ChamferRequest| manager.chamfer_lines(r)),
+        "chamfer_preview" => with_payload(payload, |r: ChamferRequest| manager.chamfer_preview(r)),
         "offset_preview" => with_payload(payload, |r: OffsetRequest| manager.offset_preview(&r)),
         "offset_curve" => with_payload(payload, |r: OffsetRequest| manager.offset_curve(r)),
         "trim_preview" => with_payload(payload, |r: TrimRequest| manager.trim_preview(&r)),

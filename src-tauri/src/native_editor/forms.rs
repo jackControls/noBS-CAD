@@ -95,8 +95,32 @@ mod tests {
                 form.option = true;
             }
             let prepared = form.request(&before, selection, UnitSystem::Mm).unwrap();
+            let preview =
+                super::super::modify_preview::form(&engine, before.basis, &prepared).unwrap();
+            if matches!(
+                kind,
+                FormKind::Fillet | FormKind::Chamfer | FormKind::Offset
+            ) {
+                assert!(preview
+                    .as_ref()
+                    .is_some_and(|p| p.lines.iter().any(|l| !l.segments.is_empty())));
+                assert_eq!(
+                    drawing(&engine),
+                    before,
+                    "{kind:?} preview mutated the sketch or history"
+                );
+            }
             apply(&engine, prepared);
             let after = drawing(&engine);
+            if matches!(kind, FormKind::Chamfer | FormKind::Offset) {
+                let segments = &preview.as_ref().unwrap().lines[0].segments;
+                assert_eq!(segments.len(), 6);
+                let a = Vec2::new(f64::from(segments[0]), f64::from(segments[1]));
+                let b = Vec2::new(f64::from(segments[3]), f64::from(segments[4]));
+                assert!(after.entities.iter().any(|e| matches!(e, EntityDto::Line { start, end, consumed: false, .. }
+                    if (start.distance(a) < 1e-5 && end.distance(b) < 1e-5) || (start.distance(b) < 1e-5 && end.distance(a) < 1e-5))),
+                    "{kind:?} preview differs from its committed construction");
+            }
             assert_ne!(
                 after.entities, before.entities,
                 "{kind:?} did not modify geometry"

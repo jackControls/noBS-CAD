@@ -4566,6 +4566,16 @@ impl SketchManager {
         self.active_mut()?.chamfer_lines(&request)
     }
 
+    pub fn chamfer_preview(
+        &self,
+        request: ChamferRequest,
+    ) -> Result<crate::PreviewCurve, SessionError> {
+        self.active
+            .as_ref()
+            .ok_or(SessionError::NoActiveSketch)?
+            .chamfer_preview(&request)
+    }
+
     pub fn offset_preview(
         &self,
         request: &OffsetRequest,

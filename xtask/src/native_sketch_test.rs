@@ -162,6 +162,14 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     click(&mut client, [30., 0.], true)?;
     control(&mut client, "Fillet", None)?;
     control(&mut client, "Radius", Some("5"))?;
+    ensure!(
+        sketch(&mut client)?["entities"] == original["entities"],
+        "Fillet preview changed the model before Apply"
+    );
+    ui(
+        &mut client,
+        json!({"action":"capture","path":out.join("fillet-preview.png")}),
+    )?;
     control(&mut client, "Apply Fillet", None)?;
     let rounded = sketch(&mut client)?;
     ensure!(
