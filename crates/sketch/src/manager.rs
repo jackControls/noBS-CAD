@@ -4542,7 +4542,7 @@ impl SketchManager {
             request.ctrl_held,
             request.radius_mm,
             request.radius_text.as_deref(),
-            request.clockwise,
+            request.sweep_rad,
         )
     }
 

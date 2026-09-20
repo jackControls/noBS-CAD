@@ -2965,7 +2965,8 @@ impl SketchSession {
     /// Center Arc honoring a locked radius field (typed value auto-creates a
     /// Radius dimension, D9). While the radius is locked the cursor supplies
     /// each pick's direction only, so the second and third clicks still aim
-    /// the arc.
+    /// the arc. `sweep_rad` is the pointer's signed travel from the start pick;
+    /// see [`Self::build_center_arc`] for how a clockwise sweep is stored.
     pub fn add_arc_center_locked(
         &mut self,
         center: Vec2,
@@ -2974,7 +2975,7 @@ impl SketchSession {
         ctrl_held: bool,
         radius_mm: Option<f64>,
         radius_text: Option<&str>,
-        clockwise: Option<bool>,
+        sweep_rad: Option<f64>,
     ) -> Result<ToolResult, SessionError> {
         let radius = match radius_text {
             Some(text) => Some(self.eval_text(text)?),
@@ -2987,7 +2988,7 @@ impl SketchSession {
             ctrl_held,
             radius,
             radius_text,
-            clockwise,
+            sweep_rad,
         )
     }
 
@@ -3016,7 +3017,7 @@ impl SketchSession {
         ctrl_held: bool,
         locked_radius: Option<f64>,
         radius_text: Option<&str>,
-        clockwise: Option<bool>,
+        sweep_rad: Option<f64>,
     ) -> Result<ToolResult, SessionError> {
         let (center, center_target) = self.snap_creation(center, ctrl_held);
         let lock = locked_radius.filter(|value| *value >= MIN_LINE_LENGTH_MM);
@@ -3038,17 +3039,38 @@ impl SketchSession {
         if radius < MIN_LINE_LENGTH_MM {
             return Err(SessionError::DegenerateSegment);
         }
-        let start_angle = (start.y - center.y).atan2(start.x - center.x);
-        let mut end_angle = (sweep.y - center.y).atan2(sweep.x - center.x);
-        // The third pick decides which way round the arc goes, so the same
-        // start point can place the arc on either side of the centre.
-        if clockwise == Some(true) {
-            if end_angle >= start_angle {
-                end_angle -= std::f64::consts::TAU;
+        let start_ray = (start.y - center.y).atan2(start.x - center.x);
+        let sweep_ray = (sweep.y - center.y).atan2(sweep.x - center.x);
+        // An arc entity is stored as (start_angle, end_angle) and always swept
+        // counter-clockwise, so a clockwise drag cannot simply negate the
+        // sweep: that would describe the mirror arc. Store the two angles
+        // swapped instead, which walks the very same points the other way.
+        let signed_sweep = match sweep_rad.filter(|value| value.is_finite()) {
+            Some(travel) if travel.abs() > 1e-9 => {
+                // A drag longer than a full turn is a full circle.
+                let magnitude = travel.abs().min(std::f64::consts::TAU);
+                if travel < 0.0 {
+                    -magnitude
+                } else {
+                    magnitude
+                }
             }
-        } else if end_angle <= start_angle {
-            end_angle += std::f64::consts::TAU;
-        }
+            // Picks alone: the historical counter-clockwise reading.
+            Some(_) => std::f64::consts::TAU,
+            None => {
+                let mut ccw = sweep_ray - start_ray;
+                if ccw <= 0.0 {
+                    ccw += std::f64::consts::TAU;
+                }
+                ccw
+            }
+        };
+        let (start_angle, end_angle, sweep_is_start) = if signed_sweep < 0.0 {
+            // Clockwise: the pick that ends the drag becomes the stored start.
+            (start_ray + signed_sweep, start_ray, true)
+        } else {
+            (start_ray, start_ray + signed_sweep, false)
+        };
         let before = self.sketch.snapshot();
         let id = self.sketch.add_entity(Entity::Arc {
             center,
@@ -3057,10 +3079,16 @@ impl SketchSession {
             end_angle,
         });
         self.attach_curve_center_if_acquired(id, center_target);
+        let start_position = if sweep_is_start {
+            // The clockwise drag's end became the stored start.
+            center + Vec2::new(radius * start_angle.cos(), radius * start_angle.sin())
+        } else {
+            start
+        };
         let start_point = match self.attach_arc_endpoint(
             id,
             crate::constraint::ArcEndpoint::Start,
-            start,
+            start_position,
             start_target,
         ) {
             Ok(point) => point,

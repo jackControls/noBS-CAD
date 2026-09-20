@@ -189,47 +189,81 @@ fn one_undo_removes_a_locked_arc_and_its_dimension() {
 }
 
 #[test]
-fn the_third_pick_chooses_the_sweep_side() {
-    // Same centre and start, sweep pick below the start ray: counter-clockwise
-    // takes the long way (270°), clockwise takes the short way (90°). One start
-    // point can therefore place the arc on either side.
-    let mut ccw = face_session();
-    ccw.add_arc_center(v(0.0, 0.0), v(5.0, 0.0), v(0.0, -5.0))
-        .unwrap();
-    let (_, _, start_angle, end_angle) = arc_of(&ccw, nbcad_sketch::EntityId(1));
-    assert!(close(radius_point(0.0, 0.0, 5.0, start_angle), v(5.0, 0.0)));
-    let ccw_sweep = end_angle - start_angle;
-    assert!(
-        (ccw_sweep - 3.0 * std::f64::consts::FRAC_PI_2).abs() < 1e-9,
-        "counter-clockwise sweep {ccw_sweep}"
-    );
-
+fn the_drag_direction_decides_which_half_the_arc_covers() {
+    // A pair of picks 180 degrees apart is the same rays either way round, so
+    // the pointer's own travel is the only thing that says which half the user
+    // drew. A clockwise drag from the right point through the bottom to the
+    // left must cover the LOWER half, not its mirror.
     let mut cw = face_session();
     cw.add_arc_center_locked(
         v(0.0, 0.0),
         v(5.0, 0.0),
-        v(0.0, -5.0),
+        v(-5.0, 0.0),
         false,
         None,
         None,
-        Some(true),
+        // Pointer travel: 0 -> -90 -> -180 degrees.
+        Some(-std::f64::consts::PI),
     )
     .unwrap();
-    let (_, radius, start_angle, end_angle) = arc_of(&cw, nbcad_sketch::EntityId(1));
-    assert!(close(
-        radius_point(0.0, 0.0, radius, start_angle),
-        v(5.0, 0.0)
-    ));
-    let cw_sweep = end_angle - start_angle;
+    let cw_id = nbcad_sketch::EntityId(1);
+    let (_, radius, start_angle, end_angle) = arc_of(&cw, cw_id);
+    assert!((radius - 5.0).abs() < 1e-9, "start pick radius {radius}");
+    // An arc entity always sweeps counter-clockwise, so the clockwise drag is
+    // stored with its angles swapped and still covers the same points.
+    assert!(end_angle > start_angle, "{start_angle} .. {end_angle}");
     assert!(
-        (cw_sweep + std::f64::consts::FRAC_PI_2).abs() < 1e-9,
-        "clockwise sweep {cw_sweep}"
+        (end_angle - start_angle - std::f64::consts::PI).abs() < 1e-9,
+        "half turn"
     );
-    // The end point is the sweep pick's bearing at the authored radius.
-    assert!(close(
-        radius_point(0.0, 0.0, radius, end_angle),
-        v(0.0, -radius)
-    ));
+    let mid = (start_angle + end_angle) / 2.0;
+    assert!(
+        mid < 0.0 && (mid + std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+        "the arc must pass below the centre, got mid ray {mid}"
+    );
+
+    // Same picks, no travel: the historical counter-clockwise half.
+    let mut ccw = face_session();
+    ccw.add_arc_center_locked(
+        v(0.0, 0.0),
+        v(5.0, 0.0),
+        v(-5.0, 0.0),
+        false,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let (_, _, start_angle, end_angle) = arc_of(&ccw, cw_id);
+    let mid = (start_angle + end_angle) / 2.0;
+    assert!(
+        (mid - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+        "the counter-clockwise half passes above the centre, got {mid}"
+    );
+
+    // A clockwise quarter turn keeps the short way round, not the long one.
+    let mut quarter = face_session();
+    quarter
+        .add_arc_center_locked(
+            v(0.0, 0.0),
+            v(5.0, 0.0),
+            v(0.0, -5.0),
+            false,
+            None,
+            None,
+            Some(-std::f64::consts::FRAC_PI_2),
+        )
+        .unwrap();
+    let (_, _, start_angle, end_angle) = arc_of(&quarter, cw_id);
+    assert!(
+        (end_angle - start_angle - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+        "a clockwise quarter turn stays a quarter turn: {start_angle} .. {end_angle}"
+    );
+    let mid = (start_angle + end_angle) / 2.0;
+    assert!(
+        (mid + std::f64::consts::FRAC_PI_4).abs() < 1e-9,
+        "the quarter turn covers the lower-right quadrant, got {mid}"
+    );
 }
 
 fn radius_point(center_x: f64, center_y: f64, radius: f64, angle: f64) -> Vec2 {

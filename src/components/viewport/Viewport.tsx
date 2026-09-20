@@ -152,6 +152,7 @@ import {
   signedSweep,
   slotCapsulePreview,
   tessellateArc,
+  tessellateArcSweep,
   tessellateCircle,
   tessellateSpline,
   type ToolLocks,
@@ -6018,6 +6019,10 @@ export function Viewport() {
        * typed input before the next commit. This keeps an extra Enter from
        * immediately backtracking over the segment that just finished. */
       awaitingPointerMove?: boolean;
+      /** Center arc only: the pointer's own angular travel since the start
+       * pick. It is what disambiguates the two halves a pair of picks cannot
+       * tell apart and what makes the preview match the stored arc. */
+      arc?: { lastAngle: number; travel: number };
     }
     let toolRun: ToolRun | null = null;
 
@@ -7043,6 +7048,10 @@ export function Viewport() {
 
     const endToolRun = () => {
       toolRun = null;
+      // A preview already in flight (its snap resolves a tick later) must not
+      // paint the rubber band back after the run ended; bump the sequence so
+      // it is discarded instead of leaving a stale half-arc on screen.
+      previewSeq += 1;
       setPreviewPositions(null);
       clearGroup(trackingGuideGroup);
       clearGroup(acquireGroup);
@@ -7210,12 +7219,18 @@ export function Viewport() {
       };
     };
 
-    /** Sweep direction for the center arc: the third pick's own side decides,
-     * and Alt/Option takes the long way around. Preview and commit share this
-     * so the drawn arc cannot flip on release. */
-    const arcSweepIsClockwise = (startAngle: number, cursorAngle: number, longWay: boolean) => {
-      const delta = signedSweep(startAngle, cursorAngle);
-      return longWay ? delta >= 0 : delta < 0;
+    /** Accumulate the pointer's signed angular travel for the center arc, so
+     * preview and commit agree on which half a drag describes. A drag longer
+     * than a full turn stays a full circle. */
+    const accumulateArcTravel = (run: ToolRun, cursorAngle: number): number => {
+      if (!run.arc) return 0;
+      const step = signedSweep(run.arc.lastAngle, cursorAngle);
+      run.arc.lastAngle = cursorAngle;
+      run.arc.travel = Math.max(
+        -Math.PI * 2,
+        Math.min(Math.PI * 2, run.arc.travel + step),
+      );
+      return run.arc.travel;
     };
 
     /** Live preview for the active tool run (per pointer move). */
@@ -7416,7 +7431,6 @@ export function Viewport() {
           // Midpoint/midpoint-locus acquisition matches the line tool: the
           // support-face edge midpoint (triangle marker) and the projected
           // face boundary are valid pick targets, not only points.
-          const longWay = e.altKey;
           void snapCursorInfo(p, toolAcquiresMidpoints(run.tool), inferenceOverride).then((snap) => {
             if (seq !== previewSeq) return;
             const snapped = snap.snapped_to;
@@ -7449,10 +7463,11 @@ export function Viewport() {
               const sweep = radiusLocked ? pointOnRadius(anchor, r, snapped) : snapped;
               const a0 = angleOf(anchor, start);
               const a1 = angleOf(anchor, sweep);
-              // The cursor picks the side: the shorter way normally, the long
-              // way around while Alt/Option is held (>180 degree sweeps).
-              const clockwise = arcSweepIsClockwise(a0, a1, longWay);
-              setPreviewPositions(tessellateArc(anchor, r, a0, a1, 0.12, clockwise));
+              // Follow the pointer's own travel. A pair of picks 180 degrees
+              // apart is the same rays either way round, so the path the
+              // cursor took is the only thing that says which half to draw.
+              const travel = accumulateArcTravel(run, a1);
+              setPreviewPositions(tessellateArcSweep(anchor, r, a0, travel, 0.12));
               tangentInference = !inferenceOverride
                 && (
                   arcEndpointHasConnectedTangent(anchor, start)
@@ -7686,6 +7701,9 @@ export function Viewport() {
             : acquired;
           if (run.points.length === 1) {
             run.points.push(next);
+            // Seed the angular accumulator at the start pick so the sweep can
+            // follow the pointer from here on.
+            run.arc = { lastAngle: angleOf(run.points[0], next), travel: 0 };
             break;
           }
           const [center, start] = run.points;
@@ -7693,6 +7711,11 @@ export function Viewport() {
           const directed = radiusLocked
             ? pointOnRadius(center, lockedRadius, next)
             : next;
+          // The pointer travel is authoritative; a click without any sweep
+          // stays a full circle, exactly as before.
+          const travel = run.arc
+            ? accumulateArcTravel(run, angleOf(center, directed))
+            : null;
           void engine
             .addArcCenter({
               center,
@@ -7701,11 +7724,7 @@ export function Viewport() {
               ctrl_held: suppressInference,
               radius_mm: radiusLocked ? lockedRadius : null,
               radius_text: radiusLocked ? texts.radius ?? null : null,
-              clockwise: arcSweepIsClockwise(
-                angleOf(center, start),
-                angleOf(center, directed),
-                altHeld,
-              ),
+              sweep_rad: travel,
             })
             .then((r) => {
               store.getState().setActiveSketch(r.sketch);
@@ -7889,6 +7908,11 @@ export function Viewport() {
           endModTool(); // cancel the current op
         } else if (toolRun) {
           endToolRun(); // cancel the current segment
+        } else if (state.activeTool !== null) {
+          // Idle creation tool: Esc retires it, mirroring the modify-tool rule
+          // so an armed tool never traps the pointer in a half-finished run.
+          endToolRun();
+          state.setActiveTool(null);
         }
         return true;
       }

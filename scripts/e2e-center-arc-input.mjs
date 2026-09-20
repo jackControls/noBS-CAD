@@ -311,15 +311,17 @@ try {
     `the third pick aims at the acquired midpoint: ${endAngle} vs ${normalize(sweptAngle)}`,
   );
 
-  console.log('5. The third pick decides the sweep side (and Alt takes the long way)');
-  const drawDirectedArc = async ({ start, sweep, longWay }) => {
+  console.log('5. The pointer travel decides which half the arc covers');
+  const drawDirectedArc = async ({ start: startPick, waypoints }) => {
     await arm('arcCenter');
     const before = (await sketch()).entities.filter((entity) => entity.kind === 'arc').length;
     await clickSketch(frame.center.x, frame.center.y);
-    await clickSketch(frame.center.x + start.x, frame.center.y + start.y);
-    if (longWay) await page.keyboard.down('Alt');
-    await clickSketch(frame.center.x + sweep.x, frame.center.y + sweep.y);
-    if (longWay) await page.keyboard.up('Alt');
+    await clickSketch(frame.center.x + startPick.x, frame.center.y + startPick.y);
+    for (const point of waypoints) {
+      await moveSketch(frame.center.x + point.x, frame.center.y + point.y);
+    }
+    const last = waypoints[waypoints.length - 1];
+    await clickSketch(frame.center.x + last.x, frame.center.y + last.y);
     await page.waitForFunction(
       (count) =>
         window.__appStore.getState().activeSketch.entities.filter(
@@ -331,23 +333,33 @@ try {
     const arcs = (await sketch()).entities.filter((entity) => entity.kind === 'arc');
     return arcs[arcs.length - 1];
   };
-  // Signed sweep: clockwise is negative, counter-clockwise positive.
-  const sweepOf = (arc) => arc.end_angle - arc.start_angle;
-  // Same centre and start, sweep pick below the start ray.
-  const shortWay = await drawDirectedArc({ start: { x: 5, y: 0 }, sweep: { x: 0, y: -5 } });
+  // Reported case: from the right point, drag clockwise through the bottom to
+  // the left point. Both halves share the same two rays, so only the path the
+  // pointer took says which one to draw.
+  const clockwise = await drawDirectedArc({
+    start: { x: 5, y: 0 },
+    waypoints: [{ x: 0, y: -5 }, { x: -5, y: 0 }],
+  });
+  const midRay = (arc) => (arc.start_angle + arc.end_angle) / 2;
   assert.ok(
-    Math.abs(sweepOf(shortWay) + Math.PI / 2) < 1e-6,
-    `the shorter side must be drawn clockwise (negative sweep), got ${sweepOf(shortWay)}`,
-  );
-  const longWay = await drawDirectedArc({ start: { x: 5, y: 0 }, sweep: { x: 0, y: -5 }, longWay: true });
-  assert.ok(
-    Math.abs(sweepOf(longWay) - 3 * Math.PI / 2) < 1e-6,
-    `Alt must take the long way around (positive sweep), got ${sweepOf(longWay)}`,
+    Math.abs(midRay(clockwise) + Math.PI / 2) < 1e-6,
+    `a clockwise drag must cover the lower half, got mid ray ${midRay(clockwise)}`,
   );
   assert.ok(
-    Math.abs(shortWay.radius - longWay.radius) < 1e-9,
-    'both directions share the start-pick radius',
+    Math.abs(clockwise.end_angle - clockwise.start_angle - Math.PI) < 1e-6,
+    'the stored arc must still be the half turn',
   );
+  const counterClockwise = await drawDirectedArc({
+    start: { x: 5, y: 0 },
+    waypoints: [{ x: 0, y: 5 }, { x: -5, y: 0 }],
+  });
+  assert.ok(
+    Math.abs(midRay(counterClockwise) - Math.PI / 2) < 1e-6,
+    `a counter-clockwise drag must cover the upper half, got ${midRay(counterClockwise)}`,
+  );
+  // The live radius field must not outlive the run it belongs to.
+  const afterRun = await state();
+  assert.equal(afterRun.dynInput.active, false, 'the value cluster retires with the run');
 
   assert.deepEqual(pageErrors, []);
   console.log('center-arc input: all checks passed');
