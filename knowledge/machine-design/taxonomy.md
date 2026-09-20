@@ -31,7 +31,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Fits & clearances (class-level) | **seeded** | `machine-design.concepts.fits-clearances` — [fits-clearances](concepts/fits-clearances.md) |
 | Tolerance stack-up (method) | **seeded (citation-only)** | `machine-design.concepts.tolerance-stackup-intro` — [tolerance-stackup-intro](concepts/tolerance-stackup-intro.md) |
 | Cosmetic threads vs clearance / tap / insert | **seeded** | `machine-design.concepts.cosmetic-threads-vs-clearance` — [cosmetic-threads-vs-clearance](concepts/cosmetic-threads-vs-clearance.md) |
-| Drawing vs MBD / PMI walkthrough | **planned** | — |
+| Drawing vs MBD / PMI walkthrough | **seeded** | `machine-design.concepts.drawing-vs-mbd-pmi` — [drawing-vs-mbd-pmi](concepts/drawing-vs-mbd-pmi.md) |
 | Inspection / metrology bridge | **planned** | — |
 
 ## B. Machine elements
@@ -66,7 +66,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 |-------|--------|------------|
 | DFM overview | **seeded** | `machine-design.concepts.dfm-overview` — [dfm-overview](concepts/dfm-overview.md) |
 | Process guidelines | **seeded** | `machine-design.concepts.dfm-process-guidelines` — [dfm-process-guidelines](concepts/dfm-process-guidelines.md) |
-| DFAM (snap / walls / ribs / supports / inserts / clamshell) | **seeded (partial)** | [am-snap-fit](concepts/am-snap-fit.md), [am-thin-walls](concepts/am-thin-walls.md), [am-clamshell-retainer](concepts/am-clamshell-retainer.md), [am-heat-set-inserts](concepts/am-heat-set-inserts.md), [am-ribs-gussets-draft](concepts/am-ribs-gussets-draft.md), [am-supports-overhangs](concepts/am-supports-overhangs.md) |
+| DFAM (FDM hub + snap / walls / ribs / supports / inserts / clamshell / holes) | **seeded** | Hub: `machine-design.concepts.dfam-fdm-overview` — [dfam-fdm-overview](concepts/dfam-fdm-overview.md); holes: [am-fdm-holes-fit-allowances](concepts/am-fdm-holes-fit-allowances.md); also [am-snap-fit](concepts/am-snap-fit.md), [am-thin-walls](concepts/am-thin-walls.md), [am-clamshell-retainer](concepts/am-clamshell-retainer.md), [am-heat-set-inserts](concepts/am-heat-set-inserts.md), [am-ribs-gussets-draft](concepts/am-ribs-gussets-draft.md), [am-supports-overhangs](concepts/am-supports-overhangs.md) |
 | Cable exits / wire windows / strain relief | **seeded** | `machine-design.concepts.am-cable-exits-strain-relief` — [am-cable-exits-strain-relief](concepts/am-cable-exits-strain-relief.md) |
 | Enclosure lid / gasket / labyrinth | **seeded** | `machine-design.concepts.am-enclosure-lid-gasket-labyrinth` — [am-enclosure-lid-gasket-labyrinth](concepts/am-enclosure-lid-gasket-labyrinth.md) |
 | Ventilation grille / finger-trap openings | **seeded** | `machine-design.concepts.am-ventilation-grille-finger-trap` — [am-ventilation-grille-finger-trap](concepts/am-ventilation-grille-finger-trap.md) |
@@ -109,7 +109,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 
 | Gap | Notes |
 |-----|-------|
-| Drawing vs MBD / PMI walkthrough | still **planned** |
+| Deep Y14.41 / semantic PMI export recipes | drawing-vs-mbd-pmi seeded (CAD-time packs); vendor/tutorial dumps **out**; inspection bridge still **planned** |
 | Inspection / metrology bridge | still **planned** |
 | Deep key stress / groove charts | shafts page seeded (roles only); numeric charts **TODO** |
 | Deep spring-rate / coupling misalignment charts | springs-couplings seeded (roles only); numeric charts **TODO** (datasheets) |
@@ -124,7 +124,7 @@ Frontmatter `topics:` on Concept pages feed `cad_help` **topics**. Expect labels
 such as: `dfam`, `am`, `fdm`, `fasteners`, `joints`, `hardware`, `enclosures`,
 `cables`, `seals`, `threads`, `fits`, `gdt`, `locators`, `print`, `snap-fit`,
 `recipes`, `manufacturing`, `research`, `validation`, `assembly`, `mcp`, `bearings`,
-`mechanisms`, `springs`, `couplings`, `dfa`, `datums`, `sketch`, `holes`, `history`, `export`, `units`,
+`mechanisms`, `springs`, `couplings`, `mbd`, `pmi`, `drawings`, `dfa`, `datums`, `sketch`, `holes`, `history`, `export`, `units`,
 `modeling`, `workflow`, `disclosure`, `focus`, `sessions`, `parametric`, `selection`, `topology`. Use `topics` then `search` with those words; `get` with an id
 from the tables above.
 

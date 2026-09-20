@@ -816,6 +816,18 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/machine-design/concepts/springs-couplings.md"),
     },
     KnowledgeFile {
+        path: "machine-design/concepts/drawing-vs-mbd-pmi.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/drawing-vs-mbd-pmi.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/dfam-fdm-overview.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/dfam-fdm-overview.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/am-fdm-holes-fit-allowances.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-fdm-holes-fit-allowances.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/taxonomy.md",
         text: include_str!("../../../knowledge/machine-design/taxonomy.md"),
     },
@@ -1517,6 +1529,58 @@ mod tests {
     }
 
     #[test]
+    fn drawing_vs_mbd_pmi_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "drawing vs MBD PMI model-based definition",
+            "PMI annotations datum feature control frame Y14.41",
+            "2D drawing notes vs semantic PMI manufacturing",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("drawing-vs-mbd-pmi")),
+                "expected drawing-vs-mbd-pmi for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+
+    #[test]
+    fn dfam_fdm_overview_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "DFAM FDM design for additive",
+            "FDM design additive manufacturing overview",
+            "design for additive FDM golden path",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("dfam-fdm-overview")),
+                "expected dfam-fdm-overview for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn am_fdm_holes_fit_allowances_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "printed hole shrink FDM",
+            "FDM hole clearance locate press allowance",
+            "XY shrink printed fit coupon hole",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("am-fdm-holes-fit-allowances")),
+                "expected am-fdm-holes-fit-allowances for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn agent_mcp_workflow_ops_searchable() {
         let store = HelpStore::bundled();
         for query in [
@@ -1591,6 +1655,9 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/power-screws-lead-screws.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/shafts-keys-retaining-rings.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/springs-couplings.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/drawing-vs-mbd-pmi.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/dfam-fdm-overview.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-fdm-holes-fit-allowances.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));
         assert!(knowledge_file_by_uri("nbcad://knowledge/../etc/passwd").is_none());

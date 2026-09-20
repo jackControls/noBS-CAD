@@ -70,5 +70,5 @@ software evidence. Fit coupons bridge to a specific printer and material
 - [UArk Jensen](https://uark.pressbooks.pub/mechanicaldesign/) — CC BY-NC
 - [MIT OCW 2.008](https://ocw.mit.edu/courses/2-008-design-and-manufacturing-ii-spring-2025/) — CC BY-NC-SA
 
-Related: [Fits & clearances](fits-clearances.md), [Materials vocabulary](materials-vocabulary.md),
+Related: [DFAM for FDM](dfam-fdm-overview.md), [Fits & clearances](fits-clearances.md), [Materials vocabulary](materials-vocabulary.md),
 [SOURCES](../SOURCES.md).

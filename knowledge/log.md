@@ -1,3 +1,25 @@
+## 2026-09-20 — DFAM FDM hub + printed holes
+
+- Seeded `machine-design.concepts.dfam-fdm-overview` (golden-path hub:
+  process → orientation → walls → supports → joints → coupons; AM Concept
+  table). Attribution Guns/NWTC + DOE 3D.
+- Seeded `machine-design.concepts.am-fdm-holes-fit-allowances` (role-based
+  clearance/locate/press; coupons over universal XY tables; links fits,
+  thin-walls, export-print).
+- Taxonomy DFAM row marked **seeded** (hub + holes); SOURCES `prusa-kb`
+  link-only; index table + bullets; thin-walls/DFM cross-links.
+- Rebuilt `machine-design/search-index.json`; Rust embed + BM25/unit tests +
+  wire goldens H50–H53.
+
+## 2026-09-20 — Drawing vs MBD / PMI concept
+
+- Seeded `machine-design.concepts.drawing-vs-mbd-pmi` (CAD-time packs: drawing
+  vs MBD vs dual; datum packs sheet/3D; VERIFY PMI↔process). Taxonomy A +
+  Still-thin updated; inspection/metrology bridge remains planned.
+- Index table + Machine-design bullet; cross-links from gdt-intro, datum,
+  hole, fasteners, locating. Rebuilt `machine-design/search-index.json`; Rust
+  embed + BM25/unit tests + wire golden H49.
+
 ## 2026-09-20 — Springs/couplings concept
 
 - Seeded `machine-design.concepts.springs-couplings` (CAD-time seats, coupling

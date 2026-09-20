@@ -67,4 +67,5 @@ Vendor PCD research stays on
 [hardware pocket research](am-hardware-pocket-research.md).
 
 Related: [fasteners & joints](fasteners-joints.md),
-[fits & clearances](fits-clearances.md).
+[fits & clearances](fits-clearances.md),
+[drawing vs MBD / PMI](drawing-vs-mbd-pmi.md).

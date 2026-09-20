@@ -78,4 +78,5 @@ roles — see [alignment nubs vs pins](alignment-nubs-pins.md).
 8. Drawing datums: [GD&T intro](gdt-intro.md) — prefer link-out standards over inventing ASME text here.
 
 Related: [fits & clearances](fits-clearances.md),
-[tolerance stack-up intro](tolerance-stackup-intro.md).
+[tolerance stack-up intro](tolerance-stackup-intro.md),
+[drawing vs MBD / PMI](drawing-vs-mbd-pmi.md).

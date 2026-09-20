@@ -61,6 +61,7 @@ Policy narrative: [`docs/machine-design-distill-vs-link.md`](https://github.com/
 | `makeitfrom` | MakeItFrom | vendor | proprietary | No scrape |
 | `boothroyd` | Boothroyd-Dewhurst DFA tables | proprietary | proprietary | Link-out only |
 | `vendor-cad-help` | Onshape / SolidWorks / Autodesk help | vendor | proprietary | Paraphrase only |
+| `prusa-kb` | Prusa Knowledge Base (design/print notes) | https://help.prusa3d.com/ | vendor | **Link-only**; material/profile specific — not a universal mm chart |
 
 ## In-repo recipe ids (not third-party text)
 

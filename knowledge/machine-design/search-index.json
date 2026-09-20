@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated": "2026-09-20",
-  "count": 33,
+  "count": 36,
   "entries": [
     {
       "id": "machine-design.concepts.alignment-nubs-pins",
@@ -202,6 +202,42 @@
         "palni-dfma"
       ],
       "snippet": "An enclosure lid is a mating system, not a flat plate on four screws. Name the seal class, the clamp method, and the service cycle before cutting rebates. FDM layers leak light and dust along Z seams unless the mating p…"
+    },
+    {
+      "id": "machine-design.concepts.am-fdm-holes-fit-allowances",
+      "path": "knowledge/machine-design/concepts/am-fdm-holes-fit-allowances.md",
+      "title": "FDM holes and printed-fit allowances",
+      "description": "Role-based clearance, locate, and press allowances for FDM printed holes; prefer coupons; XY shrink habits without universal mm tables.",
+      "status": "draft",
+      "topics": [
+        "dfam",
+        "am",
+        "fdm",
+        "fits",
+        "clearances",
+        "print"
+      ],
+      "keywords": [
+        "FDM hole",
+        "printed hole",
+        "hole shrink",
+        "XY compensation",
+        "clearance hole print",
+        "press fit print",
+        "locate fit FDM",
+        "printed-fit allowance"
+      ],
+      "related_recipes": [
+        "turbine-fit-coupons",
+        "d-screw-vise-fit",
+        "revolved-spacer"
+      ],
+      "sources": [
+        "nwtc-guns-dfm",
+        "doe-3d",
+        "nist-gdt-2"
+      ],
+      "snippet": "Printed FDM holes often finish undersize relative to CAD, especially in the XY plane, and behave differently when the hole axis is vertical vs horizontal. Treat fit as a role + process pair, not a single global offset. …"
     },
     {
       "id": "machine-design.concepts.am-hardware-pocket-research",
@@ -576,6 +612,41 @@
       "snippet": "Agents fail one-step models when the sketch plane is wrong: profile on the wrong face, extrude flipped into solid, or a “datum” that is really a floating construction plane with no story. Choose coordinate frame → plane…"
     },
     {
+      "id": "machine-design.concepts.dfam-fdm-overview",
+      "path": "knowledge/machine-design/concepts/dfam-fdm-overview.md",
+      "title": "DFAM for FDM — design-for-additive overview",
+      "description": "Golden-path hub for FDM/FFF design-for-additive manufacturing; process commit through coupons, with links to seeded AM Concepts.",
+      "status": "draft",
+      "topics": [
+        "dfam",
+        "am",
+        "fdm",
+        "dfm",
+        "print"
+      ],
+      "keywords": [
+        "DFAM",
+        "FDM",
+        "FFF",
+        "additive manufacturing",
+        "design for additive",
+        "print orientation",
+        "support strategy",
+        "FDM design"
+      ],
+      "related_recipes": [
+        "turbine-fit-coupons",
+        "d-screw-vise-fit",
+        "fillet-basics",
+        "mounting-plate"
+      ],
+      "sources": [
+        "nwtc-guns-dfm",
+        "doe-3d"
+      ],
+      "snippet": "Design for additive manufacturing (DFAM) for fused deposition (FDM/FFF) means committing to the printer/process early, then shaping geometry for layers, anisotropy, and cleanup — not “solid model first, hope the slicer …"
+    },
+    {
       "id": "machine-design.concepts.dfm-overview",
       "path": "knowledge/machine-design/concepts/dfm-overview.md",
       "title": "DFM overview",
@@ -647,6 +718,51 @@
         "nwtc-guns-dfm"
       ],
       "snippet": "Attribution: heuristics adapted from Guns / NWTC LibreTexts Ch. 2 — DFM Guidelines for Specific Manufacturing Processes, CC BY 4.0. Numbers below are starting guidance, not shop standards — confirm with your process, ma…"
+    },
+    {
+      "id": "machine-design.concepts.drawing-vs-mbd-pmi",
+      "path": "knowledge/machine-design/concepts/drawing-vs-mbd-pmi.md",
+      "title": "Drawing vs MBD / PMI (CAD-time)",
+      "description": "When to prefer 2D drawing notes vs model-based definition / PMI; datum packs on sheet vs 3D; VERIFY PMI against the manufacturing process.",
+      "status": "draft",
+      "topics": [
+        "gdt",
+        "drawings",
+        "mbd",
+        "pmi",
+        "inspection",
+        "manufacturing",
+        "datums"
+      ],
+      "keywords": [
+        "drawing",
+        "2D drawing",
+        "MBD",
+        "model-based definition",
+        "PMI",
+        "product manufacturing information",
+        "annotation",
+        "feature control frame",
+        "datum",
+        "title block",
+        "ASME Y14.41",
+        "Y14.5",
+        "digital product definition",
+        "balloon",
+        "note"
+      ],
+      "related_recipes": [
+        "mounting-plate",
+        "angle-bracket",
+        "turbine-fit-coupons",
+        "d-screw-vise-fit"
+      ],
+      "sources": [
+        "nist-pmi",
+        "nist-gdt-1",
+        "asme-y14"
+      ],
+      "snippet": "Product definition can live on a 2D drawing, in the 3D model as PMI (product manufacturing information / annotations), or both. CAD-time work is choosing which carrier owns each requirement and keeping datums, notes, an…"
     },
     {
       "id": "machine-design.concepts.fastener-clearance-counterbore",

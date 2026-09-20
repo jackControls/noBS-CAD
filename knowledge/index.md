@@ -66,6 +66,9 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Hole feature vs modeled | `machine-design.concepts.hole-wizard-vs-modeled` | Hole wizard vs modeled hole |
 | Shafts / keys / retaining rings | `machine-design.concepts.shafts-keys-retaining-rings` | Shafts, keys, and retaining rings |
 | Springs / couplings | `machine-design.concepts.springs-couplings` | Springs and couplings |
+| Drawing vs MBD / PMI | `machine-design.concepts.drawing-vs-mbd-pmi` | Drawing vs MBD / PMI |
+| DFAM / FDM overview | `machine-design.concepts.dfam-fdm-overview` | DFAM for FDM overview |
+| FDM holes / printed fits | `machine-design.concepts.am-fdm-holes-fit-allowances` | FDM holes and printed-fit allowances |
 
 Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 
@@ -117,6 +120,8 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [Power screws / lead screws](machine-design/concepts/power-screws-lead-screws.md) - Lead vs pitch, wear nuts, VERIFY (not load ratings).
 - [Materials vocabulary](machine-design/concepts/materials-vocabulary.md) - Properties for CAD choices.
 - [DFM overview](machine-design/concepts/dfm-overview.md) - Process families and heuristics.
+- [DFAM for FDM overview](machine-design/concepts/dfam-fdm-overview.md) - Additive FDM golden path hub; links seeded AM Concepts.
+- [FDM holes / printed-fit allowances](machine-design/concepts/am-fdm-holes-fit-allowances.md) - Role-based printed hole fits; coupons over universal tables.
 - [DFM process guidelines](machine-design/concepts/dfm-process-guidelines.md) - Molding, cast, sheet, weld, EDM, CNC.
 - [AM snap-fits](machine-design/concepts/am-snap-fit.md) - Cantilever clips, latches, living hinges (sizing).
 - [AM thin walls](machine-design/concepts/am-thin-walls.md) - FDM min wall, anisotropy, print orientation.
@@ -143,6 +148,7 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [Hole feature vs modeled](machine-design/concepts/hole-wizard-vs-modeled.md) - Hole feature vs sketched/patterned holes.
 - [Shafts / keys / retaining rings](machine-design/concepts/shafts-keys-retaining-rings.md) - Stepped shafts, keyseats, circlip grooves (CAD-time).
 - [Springs / couplings](machine-design/concepts/springs-couplings.md) - Spring seats and shaft couplings (CAD-time; datasheet rates).
+- [Drawing vs MBD / PMI](machine-design/concepts/drawing-vs-mbd-pmi.md) - 2D drawing notes vs model PMI; VERIFY process match.
 - [Fit coupons & recipes map](machine-design/concepts/fit-coupons-recipes-map.md) - Concept → `related_recipes` hub.
 
 Use the listed resources for their stated scope, then consult the cited sources

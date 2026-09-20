@@ -59,7 +59,9 @@ they answer different questions.
 
 Printed holes often shrink relative to CAD. Prefer **role-based allowances**
 (clearance / locate / press) and [fit coupons](fits-clearances.md) over one
-global XY compensation. Export orientation must match the qualification print —
+global XY compensation — detail on
+[FDM holes / printed-fit allowances](am-fdm-holes-fit-allowances.md).
+Export orientation must match the qualification print —
 see [export and print](../../concepts/export-print.md).
 
 ## CAD-time checklist

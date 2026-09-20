@@ -98,4 +98,5 @@ Rewritten from the NIST Part II “every part is different” teaching arc
 - [Ford, Engineering Graphics](https://uw.pressbooks.pub/enggraphics/) — CC BY-NC-SA
 
 Related: [Fits & clearances](fits-clearances.md), [DFM overview](dfm-overview.md),
+[drawing vs MBD / PMI](drawing-vs-mbd-pmi.md),
 [taxonomy](../taxonomy.md).

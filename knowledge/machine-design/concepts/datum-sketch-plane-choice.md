@@ -66,4 +66,5 @@ Prefer deliberate datum planes; keep ASME frames tied to functional faces, not a
 sketch → feature chains on blank documents.
 
 Related: [agent MCP workflow](../../concepts/agent-mcp-workflow.md),
-[GD&T intro](gdt-intro.md).
+[GD&T intro](gdt-intro.md),
+[drawing vs MBD / PMI](drawing-vs-mbd-pmi.md).
