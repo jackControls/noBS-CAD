@@ -27,6 +27,7 @@ mod history;
 mod prepared;
 mod publication;
 mod view;
+pub(crate) use view::clear_selection;
 pub(crate) mod workspace;
 use prepared::{apply_prepared_scene, prepare_native_presentation, PreparedNativePresentation};
 pub(crate) use view::ViewDirection;
@@ -250,7 +251,7 @@ impl SessionBridgeState {
             let edit_history = if operation == "solid_delete_feature"
                 || operation == "solid_reorder_feature"
                 || operation.starts_with("solid_edit_")
-                || matches!(operation, "assembly_set_occurrence_pose" | "assembly_duplicate_occurrence")
+                || matches!(operation, "assembly_set_occurrence_pose" | "assembly_duplicate_occurrence" | "assembly_create_component" | "assembly_create_occurrence" | "assembly_update_component" | "assembly_update_occurrence" | "assembly_set_occurrence_grounded")
             {
                 let model =
                     super::parse_engine_envelope(engine.engine_call("project_export_model", ""))?;
@@ -313,6 +314,8 @@ pub(crate) enum NativeCommand {
     File(controller::files::FileCommand),
     #[cfg(feature = "dev-bevy-host")]
     Browser(controller::browser::BrowserCommand),
+    #[cfg(feature = "dev-bevy-host")]
+    Assembly(controller::assembly::Command),
     #[cfg(feature = "dev-bevy-host")]
     History(controller::history::HistoryCommand),
     Feature(feature::FeatureCommand),
@@ -489,6 +492,10 @@ pub(crate) fn reduce_action(
         return controller::browser::reduce(world, handle, engine, bridge, action, command);
     }
     #[cfg(feature = "dev-bevy-host")]
+    if let NativeCommand::Assembly(command) = &binding.command {
+        return controller::assembly::reduce(world, handle, engine, bridge, action, command);
+    }
+    #[cfg(feature = "dev-bevy-host")]
     if let NativeCommand::History(command) = &binding.command {
         return controller::history::reduce(world, handle, engine, bridge, action, command);
     }
@@ -502,6 +509,8 @@ pub(crate) fn reduce_action(
         NativeCommand::Sketch(command)=>crate::native_editor::execute(world,engine,bridge,&action.context,command,||handle.validate_action(action)),
         #[cfg(feature="dev-bevy-host")]
         NativeCommand::File(_)=>unreachable!("File fields are reduced before button activation"),
+        #[cfg(feature="dev-bevy-host")]
+        NativeCommand::Assembly(_)=>unreachable!("Assembly input is reduced before button activation"),
         #[cfg(feature="dev-bevy-host")]
         NativeCommand::Browser(_)=>unreachable!("Browser input is reduced before button activation"),
         #[cfg(feature="dev-bevy-host")]

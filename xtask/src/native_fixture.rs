@@ -169,18 +169,31 @@ pub(super) fn edit_feature(client: &mut Client, name: &str, context_menu: bool) 
 }
 
 pub(super) fn field(client: &mut Client, label: &str, value: Option<&str>) -> Result<Value> {
+    panel_field(
+        client,
+        label,
+        value,
+        "Scroll feature up",
+        "Scroll feature down",
+    )
+}
+pub(super) fn panel_field(
+    client: &mut Client,
+    label: &str,
+    value: Option<&str>,
+    up: &str,
+    down: &str,
+) -> Result<Value> {
     // Expanded custom profiles scroll naturally; drive those same scroll buttons.
     // Search current position, then from top to bottom, never hidden controls.
     for pass in 0..2 {
         if pass == 1 {
             for _ in 0..12 {
                 let state = ui(client, json!({"action":"inspect"}))?;
-                if !controls(&state)
-                    .any(|c| c["label"] == "Scroll feature up" && c["disabled"] == false)
-                {
+                if !controls(&state).any(|c| c["label"] == up && c["disabled"] == false) {
                     break;
                 }
-                control(client, "Scroll feature up", None)?;
+                control(client, up, None)?;
             }
         }
         for _ in 0..12 {
@@ -204,12 +217,10 @@ pub(super) fn field(client: &mut Client, label: &str, value: Option<&str>) -> Re
                 );
             }
             ensure!(found.is_empty(), "Ambiguous feature control {label}");
-            if !controls(&state)
-                .any(|c| c["label"] == "Scroll feature down" && c["disabled"] == false)
-            {
+            if !controls(&state).any(|c| c["label"] == down && c["disabled"] == false) {
                 break;
             }
-            control(client, "Scroll feature down", None)?;
+            control(client, down, None)?;
         }
     }
     anyhow::bail!("No visible, enabled feature control {label}")

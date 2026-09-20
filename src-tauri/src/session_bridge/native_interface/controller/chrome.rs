@@ -8,6 +8,66 @@ use interface_shell::{
 };
 use std::collections::HashSet;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn text_controls_are_real_retained_editors_with_the_value_visible() {
+        let mut world = World::new();
+        world.init_resource::<ViewportUiAssets>();
+        let camera = world.spawn_empty().id();
+        let mut widgets = Widgets::default();
+        let mut control = InterfaceControl::button("assembly/joints", "Instance name");
+        control.field = nbcad_interface::Field::Text {
+            value: "Bracket".into(),
+            read_only: false,
+            selection: None,
+        };
+        let entity = widgets
+            .button(
+                &mut world,
+                camera,
+                "name",
+                control.clone(),
+                None,
+                NativeCommand::ClearSelection,
+                rect(0., 0., 180., 28.),
+                None,
+                35,
+            )
+            .unwrap();
+        assert!(world
+            .get::<interface_shell::fields::NativeTextField>(entity)
+            .is_some());
+        assert_eq!(
+            world
+                .get::<bevy::text::EditableText>(entity)
+                .unwrap()
+                .value(),
+            "Bracket"
+        );
+        assert!(world.get::<InterfaceControl>(entity).unwrap().text_editing);
+        let again = widgets
+            .button(
+                &mut world,
+                camera,
+                "name",
+                control,
+                None,
+                NativeCommand::ClearSelection,
+                rect(0., 0., 180., 28.),
+                None,
+                35,
+            )
+            .unwrap();
+        assert_eq!(
+            entity, again,
+            "Refreshing a panel must retain the text editor and focus"
+        );
+        assert!(world.get::<InterfaceControl>(entity).unwrap().text_editing);
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Widgets {
     controls: HashMap<String, (Entity, NativeCommand, Option<Icon>)>,
@@ -83,30 +143,48 @@ impl Widgets {
         self.live.insert(key.into());
         let assets = world.resource::<ViewportUiAssets>().clone();
         let theme = ViewportUiTheme::from_palette(&ViewportPalette::default());
+        let text_field = matches!(control.field, nbcad_interface::Field::Text { .. });
+        if text_field {
+            control.text_editing = true;
+            control.role = "textbox".into();
+        }
         let entity = if let Some((entity, _, _)) = self.controls.get(key) {
             *entity
         } else {
-            let entity = spawn_button(
-                &mut world.commands(),
-                camera,
-                bounds.clone(),
-                control.clone(),
-                theme,
-                &assets,
-            );
+            let entity = if text_field {
+                interface_shell::fields::spawn_text_field(
+                    &mut world.commands(),
+                    camera,
+                    bounds.clone(),
+                    control.clone(),
+                    theme,
+                    &assets,
+                )?
+            } else {
+                spawn_button(
+                    &mut world.commands(),
+                    camera,
+                    bounds.clone(),
+                    control.clone(),
+                    theme,
+                    &assets,
+                )
+            };
             world.flush();
             bind_command(world, entity, command.clone())?;
-            compact_label(
-                world,
-                entity,
-                if caption == Some("") {
-                    0.
-                } else if icon.is_some() {
-                    24.
-                } else {
-                    8.
-                },
-            );
+            if !text_field {
+                compact_label(
+                    world,
+                    entity,
+                    if caption == Some("") {
+                        0.
+                    } else if icon.is_some() {
+                        24.
+                    } else {
+                        8.
+                    },
+                );
+            }
             if let Some(icon) = icon {
                 ribbon::compact_glyph(world, entity, icon, 4., 13.);
             }

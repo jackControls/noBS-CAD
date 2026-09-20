@@ -51,7 +51,7 @@ impl ViewDirection {
     }
 }
 
-pub(super) fn clear_selection(value: &mut ViewportPresentation) {
+pub(crate) fn clear_selection(value: &mut ViewportPresentation) {
     value.selected_origin_plane = None;
     value.hovered_origin_plane = None;
     value.selected_datum_plane_id = None;

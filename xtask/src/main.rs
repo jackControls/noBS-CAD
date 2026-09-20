@@ -6,6 +6,7 @@
 //! ```
 
 mod install_mcp;
+mod native_assembly_test;
 mod native_body_test;
 mod native_build_test;
 mod native_fixture;

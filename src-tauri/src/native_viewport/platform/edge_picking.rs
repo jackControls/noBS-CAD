@@ -29,7 +29,14 @@ fn pick(
     instances: &[InstanceBodyPoseDto],
 ) -> Option<NativePick> {
     pick_edges(
-        scene, camera, viewport, cursor, hidden, poses, instances, false, false,
+        scene,
+        camera,
+        viewport,
+        cursor,
+        hidden,
+        poses,
+        instances,
+        NativePickPurpose::RefinableEdge,
     )
 }
 pub(super) fn pick_edges(
@@ -40,9 +47,10 @@ pub(super) fn pick_edges(
     hidden: &[u64],
     poses: &[BodyPoseDto],
     instances: &[InstanceBodyPoseDto],
-    straight: bool,
-    vertices: bool,
+    purpose: NativePickPurpose,
 ) -> Option<NativePick> {
+    let straight = purpose == NativePickPurpose::StraightEdge;
+    let vertices = purpose == NativePickPurpose::Vertex;
     let basis = camera_projection(camera, viewport)?;
     let cursor = Vec2::from_array(cursor);
     if !cursor.is_finite() {
@@ -76,6 +84,7 @@ pub(super) fn pick_edges(
         for (occurrence, transform) in placements {
             for edge in body.edges.iter().filter(|edge| {
                 vertices
+                    || purpose == NativePickPurpose::Edge
                     || if straight {
                         edge_is_straight(edge)
                     } else {
@@ -225,8 +234,7 @@ mod tests {
                 hidden,
                 &[],
                 &[],
-                false,
-                true,
+                NativePickPurpose::Vertex,
             )
         };
         let hit = pick(&scene, [screen.x - 6., screen.y + 1.], &[]).unwrap();

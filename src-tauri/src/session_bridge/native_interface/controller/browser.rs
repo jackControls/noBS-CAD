@@ -626,3 +626,13 @@ pub(crate) fn synchronize(
 
 #[cfg(test)]
 mod tests;
+
+// Sidebar replacement removes only rendered widgets; expansion and selection
+// stay available when the user returns to the model browser.
+pub(crate) fn hide(world:&mut World) {
+    if let Some(mut state)=world.remove_resource::<Browser>() {
+        for (_, (entity,_,_)) in state.widgets.drain() {world.despawn(entity);}
+        for (_,entity) in state.labels.drain(){world.despawn(entity);}
+        world.insert_resource(state);
+    }
+}

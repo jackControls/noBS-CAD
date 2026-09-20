@@ -614,6 +614,7 @@ pub enum NativePickPurpose {
     Geometry,
     JointConnector,
     RefinableEdge,
+    Edge,
     StraightEdge,
     Vertex,
 }

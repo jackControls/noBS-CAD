@@ -2,6 +2,7 @@
 //! are scoped to one document incarnation, engine revision and active sketch.
 
 mod annotations;
+mod solid;
 mod dynamic;
 pub(crate) mod support;
 pub(crate) use dynamic::SizeField;
@@ -570,6 +571,7 @@ pub(crate) fn process_one(
                 clear_preview(world, &services.engine, &services.bridge, &frame.context)?;
                 support::hover(world, &frame.context, &mut editor.support, None)?;
                 crate::session_bridge::native_interface::feature::hover_references(world,services,&frame.context,None)?;
+                solid::hover(world, services, &frame.context, None)?;
             }
             WindowEvent::CursorMoved(moved) if editor.support.active => {
                 if let Some(canvas) = frame.canvases.iter().find(|c| c.name == "viewport") {
@@ -586,7 +588,10 @@ pub(crate) fn process_one(
                     let p=moved.position;let a=canvas.bounds;
                     let inside=f64::from(p.x)>=a.x&&f64::from(p.x)<a.x+a.width&&f64::from(p.y)>=a.y&&f64::from(p.y)<a.y+a.height&&!handle.owns_pointer([f64::from(p.x),f64::from(p.y)]);
                     let handled=crate::session_bridge::native_interface::feature::hover_references(world,services,&frame.context,inside.then_some([p.x-a.x as f32,p.y-a.y as f32]))?;
-                    result=json!({"handled":handled,"hover":inside});
+                    if !handled {
+                        solid::hover(world, services, &frame.context, inside.then_some([p.x-a.x as f32,p.y-a.y as f32]))?;
+                    }
+                    result=json!({"handled":true,"hover":inside});
                 }
             }
             WindowEvent::CursorMoved(moved) if editor.draft.tool.is_some() => {
@@ -697,7 +702,7 @@ pub(crate) fn process_one(
                         return Ok(value);
                     }
                     let Some(basis) = editor.stamp.as_ref().and_then(|stamp| stamp.basis) else {
-                        return Ok(result);
+                        return solid::select(world, services, &owner, [cursor.x-canvas.bounds.x as f32,cursor.y-canvas.bounds.y as f32], event.modifiers.shift || event.modifiers.ctrl || event.modifiers.meta);
                     };
                     if editor.draft.tool.is_none() {
                         return Ok(result);

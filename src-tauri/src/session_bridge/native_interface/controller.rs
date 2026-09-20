@@ -28,6 +28,7 @@ use std::{
 };
 
 pub(crate) mod browser;
+pub(crate) mod assembly;
 mod capture;
 pub(crate) mod chrome;
 pub(crate) mod files;
@@ -468,8 +469,9 @@ fn update_inner(
                             } else {
                                 1.
                             };
-                            state.sidebar_scroll =
-                                (state.sidebar_scroll - wheel.y * factor).max(0.);
+                            if !assembly::scroll(world,-wheel.y*factor) {
+                                state.sidebar_scroll=(state.sidebar_scroll-wheel.y*factor).max(0.);
+                            }
                         }
                     }
                 }
@@ -1031,7 +1033,7 @@ fn synchronize(
     let height = state.logical_size.y;
     let scale = window.resolution.scale_factor();
     let visible = window.visible;
-    let side = 240_f32.min(width * 0.45);
+    let side = (if assembly::active(world) {286_f32} else {240_f32}).min(width * 0.45);
     let top = 120_f32.min(height * 0.3);
     let bottom = 74_f32.min(height * 0.1);
     let canvas = Rect::from_corners(Vec2::new(side, top), Vec2::new(width, height - bottom));
@@ -1168,6 +1170,7 @@ fn synchronize(
         rows.push((key.into(),kind.label().into(),NativeCommand::Feature(feature::FeatureCommand::Open {kind,feature_id:None}),
             presentation.mode==native_viewport::ViewportMode::Sketch||feature::panel(world).is_some(),x,34.,48.));
     }
+    rows.push(("assembly".into(),"Assembly".into(),NativeCommand::Assembly(assembly::Command::Show(!assembly::active(world))),presentation.mode==native_viewport::ViewportMode::Sketch,1270.,34.,48.));
     if state.close_pending {
         rows.push((
             "cancel-close".into(),
@@ -1321,8 +1324,8 @@ fn synchronize(
         }
     });
     for (key, label, command, disabled, x, y, width) in rows {
-        let is_extrude = matches!(key.as_str(), "extrude" | "revolve" | "sweep" | "loft" | "rib" | "solid-fillet" | "solid-chamfer" | "solid-shell" | "combine" | "offset-plane" | "midplane" | "angle-plane" | "solid-mirror" | "split-body" | "solid-rectangular-pattern" | "solid-circular-pattern" | "external-thread" | "hole" | "move-copy");
-        let build_icon = match key.as_str() {"revolve"=>interface_shell::ribbon::Icon::Revolve,"sweep"=>interface_shell::ribbon::Icon::Sweep,"loft"=>interface_shell::ribbon::Icon::Loft,"rib"=>interface_shell::ribbon::Icon::Rib,"solid-fillet"=>interface_shell::ribbon::Icon::Fillet,"solid-chamfer"=>interface_shell::ribbon::Icon::Chamfer,"solid-shell"=>interface_shell::ribbon::Icon::Shell,"external-thread"=>interface_shell::ribbon::Icon::ExternalThread,"hole"=>interface_shell::ribbon::Icon::Hole,"move-copy"=>interface_shell::ribbon::Icon::MoveCopy,"combine"=>interface_shell::ribbon::Icon::Combine,"offset-plane"=>interface_shell::ribbon::Icon::OffsetPlane,"midplane"=>interface_shell::ribbon::Icon::Midplane,"angle-plane"=>interface_shell::ribbon::Icon::AnglePlane,"solid-mirror"=>interface_shell::ribbon::Icon::Mirror,"split-body"=>interface_shell::ribbon::Icon::SplitBody,"solid-rectangular-pattern"=>interface_shell::ribbon::Icon::RectangularPattern,"solid-circular-pattern"=>interface_shell::ribbon::Icon::CircularPattern,_=>interface_shell::ribbon::Icon::Extrude};
+        let is_extrude = matches!(key.as_str(), "extrude" | "revolve" | "sweep" | "loft" | "rib" | "solid-fillet" | "solid-chamfer" | "solid-shell" | "combine" | "offset-plane" | "midplane" | "angle-plane" | "solid-mirror" | "split-body" | "solid-rectangular-pattern" | "solid-circular-pattern" | "external-thread" | "hole" | "move-copy" | "assembly");
+        let build_icon = match key.as_str() {"assembly"=>interface_shell::ribbon::Icon::Boxes,"revolve"=>interface_shell::ribbon::Icon::Revolve,"sweep"=>interface_shell::ribbon::Icon::Sweep,"loft"=>interface_shell::ribbon::Icon::Loft,"rib"=>interface_shell::ribbon::Icon::Rib,"solid-fillet"=>interface_shell::ribbon::Icon::Fillet,"solid-chamfer"=>interface_shell::ribbon::Icon::Chamfer,"solid-shell"=>interface_shell::ribbon::Icon::Shell,"external-thread"=>interface_shell::ribbon::Icon::ExternalThread,"hole"=>interface_shell::ribbon::Icon::Hole,"move-copy"=>interface_shell::ribbon::Icon::MoveCopy,"combine"=>interface_shell::ribbon::Icon::Combine,"offset-plane"=>interface_shell::ribbon::Icon::OffsetPlane,"midplane"=>interface_shell::ribbon::Icon::Midplane,"angle-plane"=>interface_shell::ribbon::Icon::AnglePlane,"solid-mirror"=>interface_shell::ribbon::Icon::Mirror,"split-body"=>interface_shell::ribbon::Icon::SplitBody,"solid-rectangular-pattern"=>interface_shell::ribbon::Icon::RectangularPattern,"solid-circular-pattern"=>interface_shell::ribbon::Icon::CircularPattern,_=>interface_shell::ribbon::Icon::Extrude};
         let is_body = key.starts_with("body-") || key.starts_with("visibility-");
         let surface = command_group(&command);
         let entity = if let Some(entity) = state.controls.get(&key) {
@@ -1432,6 +1435,7 @@ fn synchronize(
         }
     }
     files::synchronize(world, services, &owner, width, height)?;
+    if assembly::active(world) { browser::hide(world); } else {
     browser::synchronize(
         world,
         services,
@@ -1445,6 +1449,8 @@ fn synchronize(
         },
         &mut state.sidebar_scroll,
     )?;
+    }
+    assembly::synchronize(world,services,&owner,revision,InterfaceRect{x:0.,y:top as f64,width:side as f64,height:(height-top-bottom) as f64})?;
     let client = InterfaceRect {
         // History is a retained footer outside the model canvas.
         x: 0.,
@@ -1591,6 +1597,7 @@ fn decorate(
 fn command_group(command: &NativeCommand) -> &'static str {
     match command {
         NativeCommand::Sketch(_) => "sketch/draw",
+        NativeCommand::Assembly(_) => "assembly/joints",
         NativeCommand::Feature(feature::FeatureCommand::Open { kind, .. }) => kind.group(),
         NativeCommand::Feature(_) => "document/history",
         NativeCommand::Mutation { operation, .. } => {
