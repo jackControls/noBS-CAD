@@ -22,6 +22,26 @@ const ALL_ENTITY_KINDS: readonly Kind[] = ['point', 'line', 'arc', 'circle', 'sp
 
 const isCurve = (kind: Kind): boolean => CURVE_KINDS.has(kind);
 
+/** Concentric between two curves, or a point and a circle/arc center. */
+export function buildConcentricPayload(
+  ids: number[],
+  kinds: Kind[],
+): ConstraintPayload[] {
+  if (ids.length !== 2 || kinds.length !== 2) return [];
+  const [a, b] = ids;
+  const [ka, kb] = kinds;
+  if (ka === 'point' && isCurve(kb)) {
+    return [{ type: 'center_coincident', point: a, curve: b }];
+  }
+  if (kb === 'point' && isCurve(ka)) {
+    return [{ type: 'center_coincident', point: b, curve: a }];
+  }
+  if (isCurve(ka) && isCurve(kb)) {
+    return [{ type: 'concentric', a, b }];
+  }
+  return [];
+}
+
 /** Client-side selection requirements per constraint icon id. */
 const RULES = {
   hv: {
@@ -72,8 +92,11 @@ const RULES = {
   },
   concentric: {
     count: 2,
-    kinds: ([a, b]) => isCurve(a) && isCurve(b),
-    build: ([a, b]) => [{ type: 'concentric', a, b }],
+    kinds: ([a, b]) =>
+      (isCurve(a) && isCurve(b)) ||
+      (a === 'point' && isCurve(b)) ||
+      (b === 'point' && isCurve(a)),
+    build: (ids) => [], // resolved in applyConstraintById with entity kinds
   },
   collinear: {
     count: 2,
@@ -326,7 +349,15 @@ export async function applyConstraintById(
       acceptSketch(result.sketch);
       return;
     }
-    const result = await engine.addConstraints(rule.build(orderedIds));
+    const payloads =
+      iconId === 'concentric'
+        ? buildConcentricPayload(orderedIds, kinds)
+        : rule.build(orderedIds);
+    if (payloads.length === 0) {
+      showSelectionError(iconId);
+      return;
+    }
+    const result = await engine.addConstraints(payloads);
     acceptSketch(result.sketch);
   } catch (err) {
     if (err instanceof EngineError) {
