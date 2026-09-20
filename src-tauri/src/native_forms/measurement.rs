@@ -71,6 +71,51 @@ impl MeasurementInput {
         units: UnitSystem,
         parameters: &[ParameterValue],
     ) -> Result<f64, String> {
+        self.resolve(units, parameters).map(|(value, _, _)| value)
+    }
+
+    /// Sketch dimensions store expressions, not just their current value. Keep
+    /// dependencies while translating a display-unit formula to engine units.
+    pub(crate) fn evaluate_expression(
+        &self,
+        units: UnitSystem,
+        parameters: &[ParameterValue],
+    ) -> Result<(f64, String), String> {
+        let (value, expression, scale) = self.resolve(units, parameters)?;
+        if scale == 1. {
+            return Ok((value, expression.to_owned()));
+        }
+        let ast = nbcad_sketch::parse_expression(expression).map_err(|e| e.to_string())?;
+        let names = nbcad_sketch::referenced_idents(&ast);
+        let mut converted = String::new();
+        let mut chars = expression.trim().trim_start_matches('=').chars().peekable();
+        while let Some(c) = chars.next() {
+            if c.is_ascii_alphabetic() || c == '_' {
+                let mut name = String::from(c);
+                while chars
+                    .peek()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+                {
+                    name.push(chars.next().unwrap());
+                }
+                let is_call = chars.clone().find(|c| !c.is_whitespace()) == Some('(');
+                if names.contains(&name) && !is_call {
+                    converted.push_str(&format!("({name}/{scale})"));
+                } else {
+                    converted.push_str(&name);
+                }
+            } else {
+                converted.push(c);
+            }
+        }
+        Ok((value, format!("({converted})*{scale}")))
+    }
+
+    fn resolve<'a>(
+        &'a self,
+        units: UnitSystem,
+        parameters: &[ParameterValue],
+    ) -> Result<(f64, &'a str, f64), String> {
         let text = self.text.trim();
         if text.is_empty() {
             return Err("Enter a measurement".into());
@@ -165,7 +210,7 @@ impl MeasurementInput {
         if !canonical.is_finite() {
             return Err("The measurement result must be finite".into());
         }
-        Ok(canonical)
+        Ok((canonical, expression, scale))
     }
 }
 
@@ -177,6 +222,30 @@ mod tests {
         let mut value = MeasurementInput::new(kind, 0., UnitSystem::Mm);
         value.set_text(text.into());
         value
+    }
+
+    #[test]
+    fn stored_unit_expressions_keep_live_dependencies_and_function_names() {
+        let mut params = vec![ParameterValue {
+            name: "d1".into(),
+            kind: DimensionKind::Length,
+            value: 50.8,
+        }];
+        let (value, expression) = input(DimensionKind::Length, "d1 / 2 + 1")
+            .evaluate_expression(UnitSystem::In, &params)
+            .unwrap();
+        assert!((value - 50.8).abs() < 1e-10);
+        params[0].value = 76.2;
+        let changed = eval_expression(&expression, &mut |_| Ok(params[0].value)).unwrap();
+        assert!((changed - 63.5).abs() < 1e-10, "{expression}");
+        params[0].name = "min".into();
+        let (_, expression) = input(DimensionKind::Length, "min(min, 2)")
+            .evaluate_expression(UnitSystem::In, &params)
+            .unwrap();
+        assert!(
+            (eval_expression(&expression, &mut |_| Ok(76.2)).unwrap() - 50.8).abs() < 1e-10,
+            "{expression}"
+        );
     }
 
     #[test]

@@ -148,11 +148,11 @@ mod tests {
         form.values[0] = "0.125".into();
         let command = form.request(&sketch, &ids[..2], UnitSystem::In).unwrap();
         assert_eq!(
-            command.arguments["radius_text"]
-                .as_str()
-                .unwrap()
-                .parse::<f64>()
-                .unwrap(),
+            nbcad_sketch::eval_expression(
+                command.arguments["radius_text"].as_str().unwrap(),
+                &mut |_| unreachable!()
+            )
+            .unwrap(),
             3.175
         );
         form.values[0] = "3 mm".into();
@@ -175,6 +175,48 @@ mod tests {
         assert!(form
             .request(&sketch, &[EntityId(u64::MAX)], UnitSystem::Mm)
             .is_err());
+    }
+
+    #[test]
+    fn fillet_form_keeps_a_live_radius_expression() {
+        let engine = rectangle();
+        let lines: Vec<_> = drawing(&engine)
+            .entities
+            .iter()
+            .filter(|e| matches!(e, EntityDto::Line { .. }))
+            .map(EntityDto::id)
+            .collect();
+        call(
+            &engine,
+            "add_dimension",
+            json!({"entities":[lines[0]],"text_pos":{"x":15.,"y":-5.},"value_text":"30"}),
+        );
+        let before = drawing(&engine);
+        let source = &before.dimensions[0];
+        let name = source.param_name.as_ref().unwrap();
+        let mut form = ModifyForm::new(1, FormKind::Fillet);
+        form.values[0] = format!("{name}/10");
+        apply(
+            &engine,
+            form.request(&before, &lines[..2], UnitSystem::Mm).unwrap(),
+        );
+        let after = drawing(&engine);
+        assert!(after
+            .dimensions
+            .iter()
+            .any(|d| d.param_expression.as_deref() == Some(form.values[0].as_str())));
+        call(
+            &engine,
+            "edit_dimension",
+            json!({"constraint_id":source.constraint_id,"text":"40"}),
+        );
+        assert!(
+            drawing(&engine)
+                .entities
+                .iter()
+                .any(|e| matches!(e, EntityDto::Arc {radius,..} if (radius - 4.).abs() < 1e-6)),
+            "Radius did not follow the source dimension"
+        );
     }
 }
 impl FormKind {
@@ -297,6 +339,14 @@ impl ModifyForm {
                 .evaluate(units, &parameters)
                 .map_err(|e| format!("{}: {e}", self.kind.fields()[i].0))
         };
+        let expression = |i: usize, kind| -> Result<String, String> {
+            let mut value = MeasurementInput::new(kind, 0., units);
+            value.set_text(self.values[i].clone());
+            value
+                .evaluate_expression(units, &parameters)
+                .map(|(_, text)| text)
+                .map_err(|e| format!("{}: {e}", self.kind.fields()[i].0))
+        };
         let count = |i: usize, minimum: u32, maximum: u32| -> Result<u32, String> {
             let value = number(i, DimensionKind::Unitless)?;
             if !(f64::from(minimum)..=f64::from(maximum)).contains(&value) || value.fract() != 0. {
@@ -341,7 +391,7 @@ impl ModifyForm {
                     FilletRequest {
                         l1,
                         l2,
-                        radius_text: number(0, Length)?.to_string(),
+                        radius_text: expression(0, Length)?,
                     },
                 )
             }
@@ -352,7 +402,7 @@ impl ModifyForm {
                     ChamferRequest {
                         l1,
                         l2,
-                        distance_text: number(0, Length)?.to_string(),
+                        distance_text: expression(0, Length)?,
                     },
                 )
             }
@@ -364,7 +414,7 @@ impl ModifyForm {
                     "sketch_offset",
                     OffsetRequest {
                         entity: selection[0],
-                        distance_text: number(0, Length)?.to_string(),
+                        distance_text: expression(0, Length)?,
                         cursor: self.point.ok_or("Click on the desired offset side")?,
                     },
                 )
@@ -383,7 +433,7 @@ impl ModifyForm {
                 ScaleRequest {
                     entity_ids: selection.to_vec(),
                     origin: Vec2::new(number(1, Length)?, number(2, Length)?),
-                    factor_text: number(0, DimensionKind::Unitless)?.to_string(),
+                    factor_text: expression(0, DimensionKind::Unitless)?,
                 },
             ),
             FormKind::Mirror => {
@@ -442,7 +492,7 @@ impl ModifyForm {
                     PolygonRequest {
                         center: Vec2::new(number(0, Length)?, number(1, Length)?),
                         edge_count: sides,
-                        radius_text: number(3, Length)?.to_string(),
+                        radius_text: expression(3, Length)?,
                         rotation_deg: number(4, Angle)?,
                         mode: if self.option {
                             "circumscribed"
