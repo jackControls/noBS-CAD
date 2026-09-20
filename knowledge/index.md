@@ -69,6 +69,7 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Drawing vs MBD / PMI | `machine-design.concepts.drawing-vs-mbd-pmi` | Drawing vs MBD / PMI |
 | DFAM / FDM overview | `machine-design.concepts.dfam-fdm-overview` | DFAM for FDM overview |
 | FDM holes / printed fits | `machine-design.concepts.am-fdm-holes-fit-allowances` | FDM holes and printed-fit allowances |
+| FDM load / layers / infill | `machine-design.concepts.am-fdm-load-layers-infill` | FDM load path vs layer orientation / infill roles |
 
 Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 
@@ -122,6 +123,7 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [DFM overview](machine-design/concepts/dfm-overview.md) - Process families and heuristics.
 - [DFAM for FDM overview](machine-design/concepts/dfam-fdm-overview.md) - Additive FDM golden path hub; links seeded AM Concepts.
 - [FDM holes / printed-fit allowances](machine-design/concepts/am-fdm-holes-fit-allowances.md) - Role-based printed hole fits; coupons over universal tables.
+- [FDM load / layers / infill](machine-design/concepts/am-fdm-load-layers-infill.md) - Load path vs bed face; shells vs infill; coupons, no % strength tables.
 - [DFM process guidelines](machine-design/concepts/dfm-process-guidelines.md) - Molding, cast, sheet, weld, EDM, CNC.
 - [AM snap-fits](machine-design/concepts/am-snap-fit.md) - Cantilever clips, latches, living hinges (sizing).
 - [AM thin walls](machine-design/concepts/am-thin-walls.md) - FDM min wall, anisotropy, print orientation.

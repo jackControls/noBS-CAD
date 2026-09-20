@@ -47,8 +47,9 @@ Choose the bed face for:
 
 **Layer lines / anisotropy:** tensile and bending strength along layers often
 differ sharply from strength across layers. Prefer putting primary tension in
-plane with layers when the part allows. Flexures and living hinges need an
-explicit bend-vs-layer plan.
+plane with layers when the part allows — detail on
+[FDM load / layers / infill](am-fdm-load-layers-infill.md). Flexures and living
+hinges need an explicit bend-vs-layer plan.
 
 Keep **anisotropy** distinct from **draft** (taper for demold / support peel /
 sliding mates). Draft lives on

@@ -79,4 +79,5 @@ language: [fits & clearances](fits-clearances.md).
 4. Plan a coupon; do not freeze critical printed fits from CAD alone.
 
 Related: [DFAM FDM overview](dfam-fdm-overview.md),
+[FDM load / layers / infill](am-fdm-load-layers-infill.md),
 [SOURCES](../SOURCES.md).

@@ -33,7 +33,8 @@ DFM/DFA (public domain). Rewritten for noBS CAD help — not a chapter mirror.
    ([DFM overview](dfm-overview.md), [process guidelines](dfm-process-guidelines.md)).
 2. **Orientation** — pick the bed face for accuracy, strength (layer
    anisotropy), support cost, and cosmetics
-   ([thin walls / orientation](am-thin-walls.md)).
+   ([thin walls / orientation](am-thin-walls.md),
+   [load / layers / infill](am-fdm-load-layers-infill.md)).
 3. **Walls & stiffening** — min wall per role; ribs/gussets; draft vs
    anisotropy kept distinct
    ([thin walls](am-thin-walls.md), [ribs & draft](am-ribs-gussets-draft.md)).
@@ -69,6 +70,7 @@ Export orientation must match the qualification print
 | Ventilation / finger-trap | `machine-design.concepts.am-ventilation-grille-finger-trap` | [am-ventilation-grille-finger-trap](am-ventilation-grille-finger-trap.md) |
 | Hardware pocket research | `machine-design.concepts.am-hardware-pocket-research` | [am-hardware-pocket-research](am-hardware-pocket-research.md) |
 | FDM holes / printed-fit allowances | `machine-design.concepts.am-fdm-holes-fit-allowances` | [am-fdm-holes-fit-allowances](am-fdm-holes-fit-allowances.md) |
+| Load path / layers / infill roles | `machine-design.concepts.am-fdm-load-layers-infill` | [am-fdm-load-layers-infill](am-fdm-load-layers-infill.md) |
 | Captive nut / hex trap | `machine-design.concepts.captive-nut-hex-trap` | [captive-nut-hex-trap](captive-nut-hex-trap.md) |
 | Fit coupons / recipes map | `machine-design.concepts.fit-coupons-recipes-map` | [fit-coupons-recipes-map](fit-coupons-recipes-map.md) |
 

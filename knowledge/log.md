@@ -1,3 +1,12 @@
+## 2026-09-20 — FDM load / layers / infill
+
+- Seeded `machine-design.concepts.am-fdm-load-layers-infill` (name primary load
+  → bed face so tension in-plane; shells vs infill roles; coupons; no %
+  strength tables). Attribution Guns/NWTC + DOE 3D.
+- Cross-links: DFAM hub, thin-walls, snap-fit; taxonomy DFAM + draft/anisotropy
+  rows updated. Rebuilt `machine-design/search-index.json`; Rust embed +
+  BM25/unit tests + wire goldens H54–H55.
+
 ## 2026-09-20 — DFAM FDM hub + printed holes
 
 - Seeded `machine-design.concepts.dfam-fdm-overview` (golden-path hub:

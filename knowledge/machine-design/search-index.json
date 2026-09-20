@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated": "2026-09-20",
-  "count": 36,
+  "count": 37,
   "entries": [
     {
       "id": "machine-design.concepts.alignment-nubs-pins",
@@ -238,6 +238,37 @@
         "nist-gdt-2"
       ],
       "snippet": "Printed FDM holes often finish undersize relative to CAD, especially in the XY plane, and behave differently when the hole axis is vertical vs horizontal. Treat fit as a role + process pair, not a single global offset. …"
+    },
+    {
+      "id": "machine-design.concepts.am-fdm-load-layers-infill",
+      "path": "knowledge/machine-design/concepts/am-fdm-load-layers-infill.md",
+      "title": "FDM load path vs layer orientation / infill roles",
+      "description": "CAD-time load direction vs layer planes; shells carry structure; infill is not a datasheet; coupons for critical loads — no invented % strength tables.",
+      "status": "draft",
+      "topics": [
+        "dfam",
+        "am",
+        "fdm",
+        "print",
+        "orientation"
+      ],
+      "keywords": [
+        "FDM load path",
+        "layer orientation",
+        "anisotropy",
+        "shells vs infill",
+        "perimeters strength",
+        "bed face tension",
+        "infill not structural datasheet"
+      ],
+      "related_recipes": [
+        "turbine-fit-coupons"
+      ],
+      "sources": [
+        "nwtc-guns-dfm",
+        "doe-3d"
+      ],
+      "snippet": "FDM parts are anisotropic: strength along layers usually differs sharply from strength across layers. At CAD time, treat primary load direction and bed face as one decision — not a slicer afterthought. Attribution: proc…"
     },
     {
       "id": "machine-design.concepts.am-hardware-pocket-research",

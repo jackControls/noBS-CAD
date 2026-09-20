@@ -66,7 +66,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 |-------|--------|------------|
 | DFM overview | **seeded** | `machine-design.concepts.dfm-overview` — [dfm-overview](concepts/dfm-overview.md) |
 | Process guidelines | **seeded** | `machine-design.concepts.dfm-process-guidelines` — [dfm-process-guidelines](concepts/dfm-process-guidelines.md) |
-| DFAM (FDM hub + snap / walls / ribs / supports / inserts / clamshell / holes) | **seeded** | Hub: `machine-design.concepts.dfam-fdm-overview` — [dfam-fdm-overview](concepts/dfam-fdm-overview.md); holes: [am-fdm-holes-fit-allowances](concepts/am-fdm-holes-fit-allowances.md); also [am-snap-fit](concepts/am-snap-fit.md), [am-thin-walls](concepts/am-thin-walls.md), [am-clamshell-retainer](concepts/am-clamshell-retainer.md), [am-heat-set-inserts](concepts/am-heat-set-inserts.md), [am-ribs-gussets-draft](concepts/am-ribs-gussets-draft.md), [am-supports-overhangs](concepts/am-supports-overhangs.md) |
+| DFAM (FDM hub + snap / walls / ribs / supports / inserts / clamshell / holes / load-layers) | **seeded** | Hub: `machine-design.concepts.dfam-fdm-overview` — [dfam-fdm-overview](concepts/dfam-fdm-overview.md); holes: [am-fdm-holes-fit-allowances](concepts/am-fdm-holes-fit-allowances.md); load/layers/infill: [am-fdm-load-layers-infill](concepts/am-fdm-load-layers-infill.md); also [am-snap-fit](concepts/am-snap-fit.md), [am-thin-walls](concepts/am-thin-walls.md), [am-clamshell-retainer](concepts/am-clamshell-retainer.md), [am-heat-set-inserts](concepts/am-heat-set-inserts.md), [am-ribs-gussets-draft](concepts/am-ribs-gussets-draft.md), [am-supports-overhangs](concepts/am-supports-overhangs.md) |
 | Cable exits / wire windows / strain relief | **seeded** | `machine-design.concepts.am-cable-exits-strain-relief` — [am-cable-exits-strain-relief](concepts/am-cable-exits-strain-relief.md) |
 | Enclosure lid / gasket / labyrinth | **seeded** | `machine-design.concepts.am-enclosure-lid-gasket-labyrinth` — [am-enclosure-lid-gasket-labyrinth](concepts/am-enclosure-lid-gasket-labyrinth.md) |
 | Ventilation grille / finger-trap openings | **seeded** | `machine-design.concepts.am-ventilation-grille-finger-trap` — [am-ventilation-grille-finger-trap](concepts/am-ventilation-grille-finger-trap.md) |
@@ -77,7 +77,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Fillet vs chamfer | **seeded** | `machine-design.concepts.fillet-chamfer` — [fillet-chamfer](concepts/fillet-chamfer.md) |
 | Alignment nubs vs pins | **seeded** | `machine-design.concepts.alignment-nubs-pins` — [alignment-nubs-pins](concepts/alignment-nubs-pins.md) |
 | Locating schemes / DOF | **seeded** | `machine-design.concepts.locating-scheme-dof` — [locating-scheme-dof](concepts/locating-scheme-dof.md) |
-| Draft vs layer anisotropy | **seeded (partial)** | [am-ribs-gussets-draft](concepts/am-ribs-gussets-draft.md), [am-thin-walls](concepts/am-thin-walls.md), [dfm-process-guidelines](concepts/dfm-process-guidelines.md) |
+| Draft vs layer anisotropy | **seeded** | Load/layers/infill: [am-fdm-load-layers-infill](concepts/am-fdm-load-layers-infill.md); also [am-ribs-gussets-draft](concepts/am-ribs-gussets-draft.md), [am-thin-walls](concepts/am-thin-walls.md), [dfm-process-guidelines](concepts/dfm-process-guidelines.md) |
 | Living hinge sizing | **deepened on** | [am-snap-fit](concepts/am-snap-fit.md) (HIT; not a separate page) |
 
 ## F. Design hygiene

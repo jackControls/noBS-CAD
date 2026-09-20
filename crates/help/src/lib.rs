@@ -828,6 +828,10 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/machine-design/concepts/am-fdm-holes-fit-allowances.md"),
     },
     KnowledgeFile {
+        path: "machine-design/concepts/am-fdm-load-layers-infill.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-fdm-load-layers-infill.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/taxonomy.md",
         text: include_str!("../../../knowledge/machine-design/taxonomy.md"),
     },
@@ -1581,6 +1585,23 @@ mod tests {
     }
 
     #[test]
+    fn am_fdm_load_layers_infill_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "FDM load path layer orientation",
+            "shells vs infill structural roles",
+            "bed face tension in-plane layers anisotropy",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("am-fdm-load-layers-infill")),
+                "expected am-fdm-load-layers-infill for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn agent_mcp_workflow_ops_searchable() {
         let store = HelpStore::bundled();
         for query in [
@@ -1658,6 +1679,7 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/drawing-vs-mbd-pmi.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/dfam-fdm-overview.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-fdm-holes-fit-allowances.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-fdm-load-layers-infill.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));
         assert!(knowledge_file_by_uri("nbcad://knowledge/../etc/passwd").is_none());

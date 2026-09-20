@@ -108,4 +108,5 @@ run parallel to the bend often fail early. See also
   See [agent MCP workflow](../../concepts/agent-mcp-workflow.md).
 
 Related: [DFM process guidelines](dfm-process-guidelines.md),
-[fits & clearances](fits-clearances.md).
+[fits & clearances](fits-clearances.md),
+[FDM load / layers / infill](am-fdm-load-layers-infill.md).
