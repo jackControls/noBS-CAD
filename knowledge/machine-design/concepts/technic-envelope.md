@@ -117,11 +117,11 @@ For FDM parts that must accept purchased Technic pins/axles or mate to ABS brick
 
 ## Further reading (link only)
 
-- LDraw File Format Spec — LDU table: https://www.ldraw.org/article/218.html
-- LDraw Official Parts Library Specs: https://www.ldraw.org/article/512.html
-- Technic.scad (MIT): https://github.com/cfinke/Technic.scad
-- Empirical LDU length note (community metrology): https://itn-web.it.liu.se/~stegu76/lego/LDUlength.pdf
-- Independent reverse-engineering narrative (verify license before reuse): https://www.cailliau.org/Alphabetical/L/Lego/Dimensions/
+- LDraw File Format Spec — LDU table (`ldraw-ffs`): https://www.ldraw.org/article/218.html
+- LDraw Official Parts Library Specs (`ldraw-opls`): https://www.ldraw.org/article/512.html
+- Technic.scad MIT (`technic-scad`): https://github.com/cfinke/Technic.scad
+- Empirical LDU length note (`stegu-ldu`, link-only): https://itn-web.it.liu.se/~stegu76/lego/LDUlength.pdf
+- Independent RE narrative (`cailliau-lego-dims`, link-only; verify license before reuse): https://www.cailliau.org/Alphabetical/L/Lego/Dimensions/
 
 Related: [mechanisms overview](mechanisms-overview.md),
 [linkages / mobility](mechanisms-linkages-mobility.md),
