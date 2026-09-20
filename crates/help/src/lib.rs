@@ -772,6 +772,30 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/machine-design/concepts/cosmetic-threads-vs-clearance.md"),
     },
     KnowledgeFile {
+        path: "machine-design/concepts/am-enclosure-lid-gasket-labyrinth.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-enclosure-lid-gasket-labyrinth.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/am-ventilation-grille-finger-trap.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-ventilation-grille-finger-trap.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/am-boss-standoff-patterns.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-boss-standoff-patterns.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/am-assembly-join-choice.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-assembly-join-choice.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/am-warpage-cooling-flatness.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-warpage-cooling-flatness.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/fit-coupons-recipes-map.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/fit-coupons-recipes-map.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/taxonomy.md",
         text: include_str!("../../../knowledge/machine-design/taxonomy.md"),
     },
@@ -1260,9 +1284,111 @@ mod tests {
     }
 
     #[test]
+    fn enclosure_lid_gasket_labyrinth_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "enclosure lid gasket labyrinth seal",
+            "tongue groove dust seal FDM lid",
+            "O-ring groove gasket seat enclosure",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("am-enclosure-lid-gasket-labyrinth")),
+                "expected am-enclosure-lid-gasket-labyrinth for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn ventilation_grille_finger_trap_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "ventilation grille finger trap",
+            "FDM vent slots louvers finger guard",
+            "grille bar pitch airflow opening",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("am-ventilation-grille-finger-trap")),
+                "expected am-ventilation-grille-finger-trap for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn boss_standoff_patterns_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "boss-to-boss standoff pattern PCB",
+            "FDM standoff height mounting boss grid",
+            "PCB standoff boss pair screw roles",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("am-boss-standoff-patterns")),
+                "expected am-boss-standoff-patterns for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn assembly_join_choice_when_not_to_snap_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "when not to snap glue screw assembly",
+            "solvent weld vs screw vs snap FDM",
+            "ultrasonic plastic join choice AM enclosure",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("am-assembly-join-choice")),
+                "expected am-assembly-join-choice for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn warpage_cooling_flatness_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "warpage cooling flatness large plate",
+            "FDM plate curl dish flatness",
+            "large enclosure base warp residual stress",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("am-warpage-cooling-flatness")),
+                "expected am-warpage-cooling-flatness for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn fit_coupons_recipes_map_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "fit coupons recipes map related_recipes",
+            "turbine-fit-coupons recipe hub",
+            "coupon map help recipes demos",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("fit-coupons-recipes-map")),
+                "expected fit-coupons-recipes-map for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn check_corpus_ok() {
         let n = check_corpus().expect("corpus check");
-        assert!(n >= 36);
+        assert!(n >= 42);
     }
 
     #[test]
@@ -1288,6 +1414,12 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-cable-exits-strain-relief.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/captive-nut-hex-trap.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/cosmetic-threads-vs-clearance.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-enclosure-lid-gasket-labyrinth.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-ventilation-grille-finger-trap.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-boss-standoff-patterns.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-assembly-join-choice.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-warpage-cooling-flatness.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/fit-coupons-recipes-map.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));
         assert!(knowledge_file_by_uri("nbcad://knowledge/../etc/passwd").is_none());

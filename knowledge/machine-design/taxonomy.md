@@ -42,7 +42,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Hardware pocket / actuator / bolt circle research | **seeded** | `machine-design.concepts.am-hardware-pocket-research` — [am-hardware-pocket-research](concepts/am-hardware-pocket-research.md) |
 | Shafts, keys, retaining rings | **planned** | — |
 | Bearings / hubs / seats | **seeded (partial)** | `concepts.bearing-stacks` — [bearing-stacks](../concepts/bearing-stacks.md) |
-| Springs, seals, couplings | **planned** | — |
+| Springs, seals, couplings | **planned** (lid/labyrinth seeded) | enclosure seal: [am-enclosure-lid-gasket-labyrinth](concepts/am-enclosure-lid-gasket-labyrinth.md); springs/couplings still planned |
 | Power screws / lead screws | **planned** | (vise recipe exists) |
 
 ## C. Mechanisms
@@ -68,6 +68,12 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Process guidelines | **seeded** | `machine-design.concepts.dfm-process-guidelines` — [dfm-process-guidelines](concepts/dfm-process-guidelines.md) |
 | DFAM (snap / walls / ribs / supports / inserts / clamshell) | **seeded (partial)** | [am-snap-fit](concepts/am-snap-fit.md), [am-thin-walls](concepts/am-thin-walls.md), [am-clamshell-retainer](concepts/am-clamshell-retainer.md), [am-heat-set-inserts](concepts/am-heat-set-inserts.md), [am-ribs-gussets-draft](concepts/am-ribs-gussets-draft.md), [am-supports-overhangs](concepts/am-supports-overhangs.md) |
 | Cable exits / wire windows / strain relief | **seeded** | `machine-design.concepts.am-cable-exits-strain-relief` — [am-cable-exits-strain-relief](concepts/am-cable-exits-strain-relief.md) |
+| Enclosure lid / gasket / labyrinth | **seeded** | `machine-design.concepts.am-enclosure-lid-gasket-labyrinth` — [am-enclosure-lid-gasket-labyrinth](concepts/am-enclosure-lid-gasket-labyrinth.md) |
+| Ventilation grille / finger-trap openings | **seeded** | `machine-design.concepts.am-ventilation-grille-finger-trap` — [am-ventilation-grille-finger-trap](concepts/am-ventilation-grille-finger-trap.md) |
+| Boss-to-boss / standoff patterns | **seeded** | `machine-design.concepts.am-boss-standoff-patterns` — [am-boss-standoff-patterns](concepts/am-boss-standoff-patterns.md) |
+| AM join choice (glue / weld / screw / snap) | **seeded** | `machine-design.concepts.am-assembly-join-choice` — [am-assembly-join-choice](concepts/am-assembly-join-choice.md) |
+| Warpage / cooling / flatness (large plates) | **seeded** | `machine-design.concepts.am-warpage-cooling-flatness` — [am-warpage-cooling-flatness](concepts/am-warpage-cooling-flatness.md) |
+| Fit coupons & recipes map (hub) | **seeded** | `machine-design.concepts.fit-coupons-recipes-map` — [fit-coupons-recipes-map](concepts/fit-coupons-recipes-map.md) |
 | Fillet vs chamfer | **seeded** | `machine-design.concepts.fillet-chamfer` — [fillet-chamfer](concepts/fillet-chamfer.md) |
 | Alignment nubs vs pins | **seeded** | `machine-design.concepts.alignment-nubs-pins` — [alignment-nubs-pins](concepts/alignment-nubs-pins.md) |
 | Locating schemes / DOF | **seeded** | `machine-design.concepts.locating-scheme-dof` — [locating-scheme-dof](concepts/locating-scheme-dof.md) |
@@ -93,13 +99,14 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 
 Frontmatter `topics:` on Concept pages feed `cad_help` **topics**. Expect labels
 such as: `dfam`, `am`, `fdm`, `fasteners`, `joints`, `hardware`, `enclosures`,
-`cables`, `threads`, `fits`, `gdt`, `locators`, `print`, `snap-fit`,
-`manufacturing`, `research`, `validation`, `assembly`, `mcp`, `bearings`,
-`mechanisms`. Use `topics` then `search` with those words; `get` with an id
+`cables`, `seals`, `threads`, `fits`, `gdt`, `locators`, `print`, `snap-fit`,
+`recipes`, `manufacturing`, `research`, `validation`, `assembly`, `mcp`, `bearings`,
+`mechanisms`, `dfa`. Use `topics` then `search` with those words; `get` with an id
 from the tables above.
 
 ## Live examples
 
 Scripted recipes remain the screen source. See
-[machine-design help search](../../docs/machine-design-help-search.md) and
+[machine-design help search](../../docs/machine-design-help-search.md),
+the [fit coupons & recipes map](concepts/fit-coupons-recipes-map.md) hub, and
 recipe ids in page frontmatter (`related_recipes`).

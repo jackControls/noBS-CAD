@@ -48,6 +48,31 @@ prompts land, point them at the same `cad_help` ids.
 ## Rebuild reminder
 
 Knowledge embeds at MCP **build** time. After corpus changes on this machine:
-run `cad-design-ops/scripts/install-nbcad-mcp.sh`, then Cursor **Uninstall +
-Add** with **bash + `launch.sh`** (pkill/Restart alone can leave a stale
-server).
+run `cad-design-ops/scripts/install-nbcad-mcp.sh` (stdio prove). **Cursor still
+lags** until Jeff re-Adds the MCP entry with **bash + `launch.sh`** — do not
+Uninstall/Add from an agent session; pkill/Restart alone can leave a stale
+server.
+
+## Worked example (human via `cad_help`)
+
+Goal: find a **fit coupon** demo after reading enclosure join guidance.
+
+1. **`topics`** (optional) — note labels such as `enclosures`, `dfam`, `recipes`,
+   `joints`.
+2. **`search`** — query e.g. `when not to snap glue screw` or
+   `fit coupons recipes map`. Expect near-top hits:
+   - `machine-design.concepts.am-assembly-join-choice`
+   - `machine-design.concepts.fit-coupons-recipes-map`
+3. **`get`** — fetch `machine-design.concepts.fit-coupons-recipes-map` (id-only).
+   Read the table: Concept → recipe ids (`turbine-fit-coupons`, `mounting-plate`, …).
+4. **Scripts** — open the chip / recipe id from frontmatter `related_recipes`
+   (same ids as on the Concept page). Help does not show Bevy; Scripts is the
+   geometry door.
+5. Optional: `get` a teaching page first (e.g.
+   `machine-design.concepts.am-enclosure-lid-gasket-labyrinth`), then follow its
+   `related_recipes` the same way.
+
+Agents use the identical `search` → `get` → recipe path; humans may instead
+click links from [knowledge/index.md](../../knowledge/index.md) or
+[taxonomy](../../knowledge/machine-design/taxonomy.md).
+

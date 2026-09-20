@@ -55,6 +55,12 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Cosmetic vs clearance threads | `machine-design.concepts.cosmetic-threads-vs-clearance` | Cosmetic threads vs modeled clearance |
 | Heat-set inserts | `machine-design.concepts.am-heat-set-inserts` | AM heat-set inserts… |
 | Fastener hole roles | `machine-design.concepts.fastener-clearance-counterbore` | Fastener clearance & counterbore |
+| Lid / gasket / labyrinth | `machine-design.concepts.am-enclosure-lid-gasket-labyrinth` | AM enclosure lid… |
+| Vent / finger-trap grille | `machine-design.concepts.am-ventilation-grille-finger-trap` | AM ventilation grille… |
+| Boss / standoff patterns | `machine-design.concepts.am-boss-standoff-patterns` | AM boss-to-boss… |
+| Glue / screw / snap choice | `machine-design.concepts.am-assembly-join-choice` | AM assembly join choice |
+| Warpage / flatness | `machine-design.concepts.am-warpage-cooling-flatness` | AM warpage… |
+| Fit coupons / recipes hub | `machine-design.concepts.fit-coupons-recipes-map` | Fit coupons and recipes map |
 
 Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 
@@ -122,6 +128,12 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [AM cable exits & strain relief](machine-design/concepts/am-cable-exits-strain-relief.md) - Wire windows, grommets, jacket clamp.
 - [Captive nut / hex trap](machine-design/concepts/captive-nut-hex-trap.md) - Anti-rotation nut pockets for AM.
 - [Cosmetic threads vs clearance](machine-design/concepts/cosmetic-threads-vs-clearance.md) - Display helix vs real hole roles.
+- [AM enclosure lid / gasket / labyrinth](machine-design/concepts/am-enclosure-lid-gasket-labyrinth.md) - Lid seal classes and clamp/locate roles.
+- [AM ventilation grille / finger-trap](machine-design/concepts/am-ventilation-grille-finger-trap.md) - Vent openings vs ingress and print bars.
+- [AM boss-to-boss / standoff patterns](machine-design/concepts/am-boss-standoff-patterns.md) - PCB/plate standoff grids and screw roles.
+- [AM assembly join choice](machine-design/concepts/am-assembly-join-choice.md) - Glue / weld / screw / snap — when not to snap.
+- [AM warpage / cooling / flatness](machine-design/concepts/am-warpage-cooling-flatness.md) - Large plate curl and flatness levers.
+- [Fit coupons & recipes map](machine-design/concepts/fit-coupons-recipes-map.md) - Concept → `related_recipes` hub.
 
 Use the listed resources for their stated scope, then consult the cited sources
 for more detail. The bundle is guidance for design decisions; it does not supply

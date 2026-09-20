@@ -23,7 +23,7 @@ Fixtures/results: `modeling-goldens.json`, `modeling-golden-results.md` under `/
 
 Record: server revision, elapsed_ms, pass/fail/skip, tool error strings. Prefer honest SKIP over inventing geometry APIs.
 
-## Help MCP wire (H1–H8 core; H9–H28 corpus)
+## Help MCP wire (H1–H8 core; H9–H34 corpus)
 
 In-process BM25 unit tests live in `crates/help`. **Wire** goldens exercise the installed stdio binary the Cursor client uses (`tools/call` `cad_help`).
 
@@ -47,4 +47,4 @@ Fixtures/results stay under `/workspace/cad-design-ops/evals/` (`help-goldens.js
 | H7 | topics | total > 0, page ≤50 |
 | H8 | search `fillet` | some hit `related_recipes` includes `fillet-basics` |
 
-Caps **confirmed** 2026-09-19 (H1–H8 (+ H9–H28 corpus) PASS): search default 5 / max 10, snippet ~280, get 12 KiB, topics page 50. Locked in `docs/machine-design-help-search.md`. Retune only from honest FAIL notes — do not silently weaken goldens.
+Caps **confirmed** 2026-09-19 (H1–H8 (+ H9–H34 corpus) PASS): search default 5 / max 10, snippet ~280, get 12 KiB, topics page 50. Locked in `docs/machine-design-help-search.md`. Retune only from honest FAIL notes — do not silently weaken goldens.
