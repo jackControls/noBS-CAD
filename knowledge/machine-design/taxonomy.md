@@ -1,7 +1,7 @@
 ---
 type: Concept
 title: Machine-design taxonomy
-description: Topic map — seeded pages vs planned gaps for the open machine-design KB (human + agent door).
+description: Topic map — seeded pages vs planned gaps for the open machine-design KB (browse + search door).
 status: draft
 updated: 2026-09-20
 searchable: false
@@ -12,9 +12,9 @@ searchable: false
 Open help for **design-time** decisions in noBS CAD. Product/architecture
 concepts stay in [the OKF index](../index.md).
 
-**Human door:** use this page as the topic map (seeded → link; planned → web /
-further reading). **Agent door:** `cad_help` `topics` / `search` / `get` using
-the **ids** in the tables (path with `/` → `.`).
+**Browse:** use this page as the topic map (seeded → link; planned → web /
+further reading). **Search:** `cad_help` `topics` / `search` / `get` using the
+**ids** in the tables (path with `/` → `.`).
 
 **Coverage honesty:** prefer searching **seeded** pages first. For
 **planned** rows, prefer linked further-reading / web — leave empty rather than invent from an
@@ -104,7 +104,6 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Datum / CS / sketch plane choice | **seeded** | `machine-design.concepts.datum-sketch-plane-choice` — [datum-sketch-plane-choice](concepts/datum-sketch-plane-choice.md) |
 | Hole feature vs modeled / patterns | **seeded** | `machine-design.concepts.hole-wizard-vs-modeled` — [hole-wizard-vs-modeled](concepts/hole-wizard-vs-modeled.md) |
 | Export / print / 3MF vs STL | **seeded** | `concepts.export-print` — [export-print](../concepts/export-print.md) (pair with [adversarial-mesh-audit](../concepts/adversarial-mesh-audit.md)) |
-| Power screws / lead screws | **seeded** | `machine-design.concepts.power-screws-lead-screws` — [power-screws-lead-screws](concepts/power-screws-lead-screws.md) |
 
 ## Still thin / planned (honest)
 
@@ -114,11 +113,10 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Inspection / metrology bridge | still **planned** |
 | Shafts, keys, retaining rings | still **planned** |
 | Springs / couplings (beyond lid seal) | still **planned** |
-| Power screws / lead screws distill | **seeded** — [power-screws-lead-screws](concepts/power-screws-lead-screws.md) |
 | Linkages / gears / cams / belts mobility | gears product page exists; mechanisms **planned** |
 | Materials allowables tables | **planned** (no MatWeb); vocabulary seeded |
 | Full NASA fastener preload distill | overview + hole/insert pages seeded; deep sizing **TODO** |
-| MCP `prompts` capability | product gap — pages + skills only ([HUMAN_HELP](../../docs/agentic/HUMAN_HELP.md)) |
+| More MCP `prompts` (beyond `help_search`) | design-flow prompts still pages + skills ([HUMAN_HELP](../../docs/agentic/HUMAN_HELP.md)) |
 
 ## `cad_help` topics labels (useful seeds)
 
@@ -127,7 +125,7 @@ such as: `dfam`, `am`, `fdm`, `fasteners`, `joints`, `hardware`, `enclosures`,
 `cables`, `seals`, `threads`, `fits`, `gdt`, `locators`, `print`, `snap-fit`,
 `recipes`, `manufacturing`, `research`, `validation`, `assembly`, `mcp`, `bearings`,
 `mechanisms`, `dfa`, `datums`, `sketch`, `holes`, `history`, `export`, `units`,
-`modeling`, `workflow`, `disclosure`, `focus`, `sessions`, `parametric`, `selection`, `topology`, `mechanisms`. Use `topics` then `search` with those words; `get` with an id
+`modeling`, `workflow`, `disclosure`, `focus`, `sessions`, `parametric`, `selection`, `topology`. Use `topics` then `search` with those words; `get` with an id
 from the tables above.
 
 ## Live examples

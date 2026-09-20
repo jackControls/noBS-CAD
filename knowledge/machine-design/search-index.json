@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated": "2026-09-20",
-  "count": 30,
+  "count": 31,
   "entries": [
     {
       "id": "machine-design.concepts.alignment-nubs-pins",
@@ -54,16 +54,11 @@
         "dfa"
       ],
       "keywords": [
-        "glue joint AM",
+        "glue joint",
         "solvent weld",
-        "ultrasonic weld plastic",
-        "screw assembly FDM",
-        "when not to snap",
-        "permanent bond enclosure",
-        "serviceable joint",
-        "adhesive boss",
-        "plastic weld AM",
-        "join choice DFMA"
+        "screw assembly",
+        "snap vs glue",
+        "DFMA join"
       ],
       "related_recipes": [
         "turbine-fit-coupons",
@@ -94,16 +89,10 @@
       ],
       "keywords": [
         "standoff",
-        "boss to boss",
         "PCB standoff",
-        "stand-off pattern",
-        "mounting boss grid",
-        "spacer boss",
-        "stacked boss",
-        "through standoff",
-        "heat-set boss pair",
-        "FDM standoff height",
-        "bolt circle bosses"
+        "mounting boss",
+        "boss grid",
+        "heat-set boss"
       ],
       "related_recipes": [
         "mounting-plate",
@@ -131,18 +120,11 @@
         "fdm"
       ],
       "keywords": [
-        "wire window",
         "cable exit",
         "strain relief",
         "grommet",
-        "lead exit",
-        "cord grip",
-        "slot",
-        "bushing",
-        "insulation",
-        "flex relief",
-        "wire channel",
-        "AM enclosure wiring"
+        "wire window",
+        "cord grip"
       ],
       "related_recipes": [
         "turbine-fit-coupons",
@@ -153,7 +135,7 @@
         "doe-3d",
         "palni-dfma"
       ],
-      "snippet": "A wire window is not leftover air after a pocket. It is a named feature with an exit face, a minimum aperture for the cable bundle, edge treatment, and a strain-relief plan so tug loads stay off solder joints or t…"
+      "snippet": "A wire window is not leftover air after a pocket. It is a named feature with an exit face, a minimum aperture for the cable bundle, edge treatment, and a strain-relief plan so tug loads stay off solder joints and thin w…"
     },
     {
       "id": "machine-design.concepts.am-clamshell-retainer",
@@ -186,7 +168,7 @@
         "nwtc-guns-dfm",
         "doe-3d"
       ],
-      "snippet": "Use when an FDM/AM retainer holds two clamshell halves together. Prefer this order before inventing snap geometry. - Print the retainer on its side so layer lines run with the clamp load (stronger against the halves separa…"
+      "snippet": "Use when an FDM/AM retainer holds two clamshell halves together. Prefer the simple clamp loop before inventing snap geometry without this order. - Print the retainer on its side so layer lines run with the clamp load (s…"
     },
     {
       "id": "machine-design.concepts.am-enclosure-lid-gasket-labyrinth",
@@ -206,14 +188,8 @@
         "enclosure lid",
         "gasket seat",
         "labyrinth seal",
-        "dust seal",
         "crush lip",
-        "tongue and groove",
-        "O-ring groove AM",
-        "lid rebate",
-        "weather lip",
-        "light-tight seam",
-        "FDM enclosure seal",
+        "O-ring groove",
         "mating flange"
       ],
       "related_recipes": [
@@ -246,14 +222,8 @@
         "spline",
         "bolt circle",
         "PCD",
-        "mounting pattern",
-        "actuator pocket",
         "hardware envelope",
-        "datasheet",
-        "VERIFY table",
-        "purchased part",
-        "motor mount",
-        "flange pattern"
+        "VERIFY"
       ],
       "related_recipes": [
         "turbine-fit-coupons",
@@ -265,7 +235,7 @@
         "nwtc-guns-dfm",
         "doe-3d"
       ],
-      "snippet": "Agents often carve a “servo pocket” or “horn clearance” from memory, then discover the real spline, boss height, or bolt pitch circle diameter (PCD) after geometry froze. Treat every purchased actuator or patterned moun…"
+      "snippet": "Purchased actuators and patterned mounts are a research-before-commit problem: name the SKU, measure critical dims (spline, boss height, bolt PCD), then model the pocket. Attribution: process habit only (DFM / joint hyg…"
     },
     {
       "id": "machine-design.concepts.am-heat-set-inserts",
@@ -357,17 +327,11 @@
       "keywords": [
         "snap fit",
         "cantilever",
-        "clip",
         "latch",
         "living hinge",
-        "hinge sizing",
         "flexure",
         "barb",
-        "seat",
-        "pocket depth",
-        "beam thickness",
-        "hinge web",
-        "hinge span"
+        "seat"
       ],
       "related_recipes": [
         "turbine-fit-coupons",
@@ -429,17 +393,12 @@
         "print"
       ],
       "keywords": [
-        "wall thickness",
         "thin wall",
         "min wall",
         "FDM",
-        "layer lines",
         "anisotropy",
         "print orientation",
-        "overhang",
-        "support",
-        "nozzle",
-        "draft vs anisotropy"
+        "overhang"
       ],
       "related_recipes": [
         "turbine-fit-coupons"
@@ -465,18 +424,11 @@
       ],
       "keywords": [
         "ventilation grille",
-        "vent slots",
-        "louvers",
         "finger trap",
-        "finger guard",
-        "IP open",
-        "airflow opening",
+        "louvers",
         "bar pitch",
         "slot width",
-        "safety opening",
-        "FDM grille",
-        "mesh vent",
-        "cooling vents enclosure"
+        "airflow"
       ],
       "related_recipes": [
         "mounting-plate",
@@ -503,18 +455,11 @@
       ],
       "keywords": [
         "warpage",
-        "warp",
         "curling",
         "flatness",
         "large plate FDM",
         "cooling",
-        "bed adhesion",
-        "residual stress",
-        "elephant foot",
-        "dish plate",
-        "ribbed plate",
-        "print flatness",
-        "enclosure base warp"
+        "bed adhesion"
       ],
       "related_recipes": [
         "mounting-plate",
@@ -580,15 +525,9 @@
       "keywords": [
         "cosmetic thread",
         "modeled thread",
-        "helix",
-        "thread display",
         "tap drill",
         "clearance hole",
-        "major diameter",
-        "pitch diameter",
-        "thread engagement",
-        "CAD thread",
-        "visual thread"
+        "thread engagement"
       ],
       "related_recipes": [
         "d-screw-vise",
@@ -701,7 +640,8 @@
       "related_recipes": [
         "mounting-plate",
         "angle-bracket",
-        "fillet-basics"
+        "fillet-basics",
+        "revolved-spacer"
       ],
       "sources": [
         "nwtc-guns-dfm"
@@ -725,13 +665,8 @@
         "counterbore",
         "countersink",
         "tap drill",
-        "tapped hole",
-        "through hole",
-        "screw clearance",
-        "bolt hole",
-        "washer face",
-        "heat-set vs tap",
-        "head recess"
+        "insert pilot",
+        "heat-set"
       ],
       "related_recipes": [
         "d-screw-vise",
@@ -742,7 +677,7 @@
         "nasa-fastener",
         "nwtc-guns-dfm"
       ],
-      "snippet": "Every screw path needs an explicit hole role. Agents often punch a nominal “M3 hole” without saying whether it clears the shank, locates, or holds a thread. Freeze the role before diameters. Attribution: high-level join…"
+      "snippet": "Every screw path needs an explicit hole role — clearance, locate, tap, or insert pilot. Freeze the role before diameters; a bare “M3 hole” is not a role. Attribution: high-level joint hygiene from NASA Fastener Design M…"
     },
     {
       "id": "machine-design.concepts.fasteners-joints",
@@ -814,27 +749,20 @@
       "id": "machine-design.concepts.fit-coupons-recipes-map",
       "path": "knowledge/machine-design/concepts/fit-coupons-recipes-map.md",
       "title": "Fit coupons and recipes map",
-      "description": "Hub mapping machine-design concepts to related_recipes and coupon intent — start here to find demos for fits, AM joints, and hardware.",
+      "description": "Concept → related_recipes map for fit/AM coupons and product demos.",
       "status": "draft",
       "topics": [
         "dfam",
         "fits",
         "am",
-        "recipes",
-        "manufacturing",
-        "help"
+        "recipes"
       ],
       "keywords": [
         "fit coupons",
-        "recipe map",
         "related_recipes",
         "turbine-fit-coupons",
         "d-screw-vise-fit",
-        "coupon map",
-        "demo scripts",
-        "help recipes hub",
-        "clearance coupon",
-        "AM coupon"
+        "clearance coupon"
       ],
       "related_recipes": [
         "turbine-fit-coupons",
@@ -845,13 +773,14 @@
         "garden-bench",
         "vertical-axis-turbine",
         "repeated-bracket-assembly",
-        "angle-bracket"
+        "angle-bracket",
+        "revolved-spacer"
       ],
       "sources": [
         "nwtc-guns-dfm",
         "doe-3d"
       ],
-      "snippet": "Use this page as a cross-link hub: Concept teaching → relatedrecipes chips → Scripts / .nbcad.jsonc demos. Help does not embed a viewport; recipes are the live geometry door. How agents/humans navigate: cadhelp topics /…"
+      "snippet": "Coupon the critical joint before committing the flagship. Recipe ids below are the same catalog as Help relatedrecipes / cadinterface recipes. | Recipe id | Intent | Concepts | |-----------|--------|----------| | turbin…"
     },
     {
       "id": "machine-design.concepts.fits-clearances",
@@ -870,14 +799,8 @@
         "transition fit",
         "interference fit",
         "press fit",
-        "running fit",
-        "locational fit",
-        "fit class",
         "allowance",
         "radial clearance",
-        "diametral clearance",
-        "shaft hole fit",
-        "hole basis",
         "coupon"
       ],
       "related_recipes": [
@@ -1036,6 +959,46 @@
       "snippet": "Defines words for CAD-time decisions — not certified allowables. Materials Project is crystalline DFT data, not shop steel charts. Prefer KittyCAD JSON as a pattern only (kittycad-materials). Filament appearance in the …"
     },
     {
+      "id": "machine-design.concepts.power-screws-lead-screws",
+      "path": "knowledge/machine-design/concepts/power-screws-lead-screws.md",
+      "title": "Power screws and lead screws (CAD-time)",
+      "description": "Lead vs pitch, friction/backdrive, printed vs purchased nuts, and VERIFY gates — vise recipe context without load ratings from CAD.",
+      "status": "draft",
+      "topics": [
+        "mechanisms",
+        "fasteners",
+        "joints",
+        "machine-elements",
+        "dfam"
+      ],
+      "keywords": [
+        "power screw",
+        "lead screw",
+        "pitch",
+        "lead",
+        "starts",
+        "backdrive",
+        "Acme",
+        "trapezoidal",
+        "printed nut",
+        "wear nut",
+        "jack screw",
+        "vise screw",
+        "efficiency",
+        "self-locking"
+      ],
+      "related_recipes": [
+        "d-screw-vise",
+        "d-screw-vise-fit",
+        "revolved-spacer"
+      ],
+      "sources": [
+        "nasa-fastener",
+        "doe-3d"
+      ],
+      "snippet": "A power screw turns rotary motion into linear motion (vise, jack, axis). CAD can model the helix and envelopes; it does not certify load, wear, or self-locking. Prefer purchased screws/nuts when duty cycle or safety mat…"
+    },
+    {
       "id": "machine-design.concepts.technic-envelope",
       "path": "knowledge/machine-design/concepts/technic-envelope.md",
       "title": "Technic-style beam and pin envelope (unofficial)",
@@ -1048,14 +1011,11 @@
       ],
       "keywords": [
         "Technic",
-        "LEGO compatible",
-        "Lego pin",
         "beam pitch",
-        "stud pitch",
         "pin diameter",
+        "stud pitch",
         "axle envelope",
-        "brick unit",
-        "unofficial clone"
+        "unofficial"
       ],
       "related_recipes": [
         "repeated-bracket-assembly"
@@ -1063,7 +1023,7 @@
       "sources": [
         "doe-3d"
       ],
-      "snippet": "Agents often search for “Technic pin diameter” or “beam pitch” and get forum folklore. Prefer: physical calipers → coupon → lock. Numbers below are approximate public community figures for orientation only. | Quantity |…"
+      "snippet": "Forum folklore is common for pin diameter and beam pitch. Prefer: physical calipers → coupon → lock. Numbers below are approximate public community figures for orientation only. | Quantity | Approximate community figure…"
     },
     {
       "id": "machine-design.concepts.tolerance-stackup-intro",
@@ -1079,14 +1039,10 @@
       ],
       "keywords": [
         "tolerance stack-up",
-        "stackup",
         "dimensional loop",
         "worst case",
         "RSS",
-        "statistical tolerancing",
-        "accumulation",
-        "gap analysis",
-        "assembly tolerance"
+        "gap analysis"
       ],
       "related_recipes": [
         "turbine-fit-coupons",

@@ -1,5 +1,17 @@
 # noBS CAD knowledge update log
 
+## 2026-09-20 — Layout stage + decruft pass
+
+- Decided **not** to move `knowledge/` under `docs/` on this draft PR (stable
+  `nbcad://knowledge/` + embeds); Design Ops write-up:
+  `cad-design-ops/ship-clean/layout-review-2026-09-20.md`.
+- Taxonomy: dropped duplicate power-screws rows (section H + stale “Still thin”);
+  softened door wording; prompts row notes `help_search` shipped.
+- Rebuilt `machine-design/search-index.json` (31 Concepts, includes power-screws).
+- Soft: `docs/knowledge-wiki.md` (cad_help-first, drop stale “four articles” /
+  “no search engine”), HUMAN_HELP shared-corpus doors, index/taxonomy prefer tone,
+  power-screws lead/travel line.
+
 ## 2026-09-20 — Ship-clean slop purge (materials + prefer tone)
 
 - Rewrote leftover `Agent anti-patterns` on materials vocabulary to preferred callouts.

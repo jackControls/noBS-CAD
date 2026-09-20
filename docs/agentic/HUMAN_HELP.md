@@ -17,7 +17,7 @@ panel yet** — humans and agents share one Markdown corpus; doors differ.
 | **Taxonomy** | Open [`knowledge/machine-design/taxonomy.md`](../../knowledge/machine-design/taxonomy.md) — seeded vs planned map with links | Source of truth |
 | **MCP `cad_help`** | In an MCP client: `topics` → labels; `search` → snippets; `get` by id | `nbcad-help` |
 | **MCP resources** | `resources/list` / `resources/read` on `nbcad://knowledge/...` (start at `nbcad://knowledge/index.md`) | Embedded at MCP build |
-| **GitHub Pages** | Browse hosted knowledge HTML (when published) | Same markdown; prefer MCP for agents |
+| **GitHub Pages** | Browse hosted knowledge HTML (when published) | Same markdown; prefer `cad_help` / resources for automation |
 | **Checkout** | Read files under `knowledge/**` in a clone | Same files |
 
 Future **desktop Help** should call the **same** `nbcad-help` crate (search /
@@ -30,12 +30,12 @@ Recipe chips and presentation deep-links still open **Scripts** /
 `.nbcad.jsonc` demos. Help does **not** embed a Bevy viewport. Agents and
 humans use the same recipe ids from page frontmatter (`related_recipes`).
 
-## Agent vs human
+## Shared corpus, different doors
 
-- **Humans:** start at index or taxonomy; follow links; optional Pages.
-- **Agents:** prefer `cad_help` `search` → `get` (id-only); use `topics` to
-  discover labels; `resources/read` only for the chosen full page.
-- Prefer one shared corpus; agent and human doors point at the same pages.
+- **Browse:** start at index or taxonomy; follow links; optional Pages.
+- **Search / automation:** prefer `cad_help` `search` → `get` (id-only); use
+  `topics` to discover labels; `resources/read` only for the chosen full page.
+- One shared corpus; every door points at the same pages.
 
 ## MCP prompts
 
@@ -75,7 +75,7 @@ Goal: find a **fit coupon** demo after reading enclosure join guidance.
 6. CAD-program ops: search `inspect between mutates`, `edit history not delete-rebuild`,
    `3MF vs STL`, `unit systems mm`, or `datum sketch plane` for agent-ops Concepts.
 
-Agents use the identical `search` → `get` → recipe path; humans may instead
-click links from [knowledge/index.md](../../knowledge/index.md) or
+Automation uses the identical `search` → `get` → recipe path; browse may
+instead click links from [knowledge/index.md](../../knowledge/index.md) or
 [taxonomy](../../knowledge/machine-design/taxonomy.md).
 

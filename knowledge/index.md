@@ -14,7 +14,7 @@ Keep concepts **thin**. Longer material lives in the repository’s
 
 ## How to browse (humans)
 
-1. **This index** — product/agent doctrine + machine-design door list (below).
+1. **This index** — product doctrine + machine-design door list (below).
 2. **[Machine-design taxonomy](machine-design/taxonomy.md)** — seeded vs planned
    topic map with **page ids** and titles (best map for “what exists?”).
 3. **Search** — MCP tool `cad_help` → `topics` (labels) → `search` → `get` by id;
@@ -107,7 +107,7 @@ Open design-time help (GD&T, elements, mechanisms, materials, DFM).
 Prefer **seeded** pages via `cad_help` before web search; see taxonomy for **planned**
 gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 
-- [Taxonomy](machine-design/taxonomy.md) - Topic map for the domain KB (**human door**).
+- [Taxonomy](machine-design/taxonomy.md) - Topic map for the domain KB (browse map).
 - [Sources](machine-design/SOURCES.md) - License and provenance table.
 - [GD&T intro](machine-design/concepts/gdt-intro.md) - Datums and feature control frames.
 - [Fits & clearances](machine-design/concepts/fits-clearances.md) - Clearance, locational, interference.

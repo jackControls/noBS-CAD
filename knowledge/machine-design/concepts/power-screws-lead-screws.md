@@ -34,7 +34,7 @@ RP-1228 (public domain) plus DFM checklists. No torque/load tables here.
 1. **Purchased vs printed** — name the screw/nut SKU or the printed wear pair;
    prefer catalog ratings over implying duty from a cosmetic helix
    ([cosmetic threads](cosmetic-threads-vs-clearance.md)).
-2. **Lead ↔ travel** — document lead so agents stop inventing turn counts.
+2. **Lead ↔ travel** — document lead so turn counts are not invented.
 3. **Nut role** — captive / flanged / trapezoid / printed — and how it is
    retained ([captive nut](captive-nut-hex-trap.md)).
 4. **Alignment** — screw axis vs slide guides; overconstraint fights the nut
