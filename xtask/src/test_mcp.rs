@@ -29,6 +29,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     if suite == "native-joint" {
         return crate::native_joint_test::run(args);
     }
+    if suite == "native-inspect" {
+        return crate::native_inspect_test::run(args);
+    }
     if suite == "native-move" {
         return crate::native_move_test::run(args);
     }

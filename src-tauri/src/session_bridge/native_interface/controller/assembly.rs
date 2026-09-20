@@ -10,8 +10,16 @@ use nbcad_sketch::{
     AssemblyDocumentDto, AssemblyTransformDto, ComponentDefinitionDto, ComponentOccurrenceDto,
 };
 use std::collections::HashSet;
+mod inspect;
 pub(crate) mod joint;
 mod panel;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Tab {
+    #[default]
+    Structure,
+    Inspect,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EditField {
@@ -22,6 +30,8 @@ pub(crate) enum EditField {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Command {
+    Tab(Tab),
+    Inspect(inspect::Action),
     Joint(joint::Command),
     Show(bool),
     Select(u64),
@@ -127,6 +137,8 @@ impl Draft {
 }
 #[derive(Resource)]
 struct Browser {
+    tab: Tab,
+    inspect: inspect::State,
     enabled: bool,
     owner: Option<DocumentContext>,
     revision: u64,
@@ -146,6 +158,8 @@ struct Browser {
 impl Default for Browser {
     fn default() -> Self {
         Self {
+            tab: Tab::Structure,
+            inspect: default(),
             enabled: false,
             owner: None,
             revision: 0,
@@ -305,6 +319,30 @@ pub(crate) fn reduce(
             .clone()
             .ok_or("Assembly structure is unavailable")?;
         let input = &action.control.input;
+        if let Command::Inspect(command) = command {
+            if feature::panel(world).is_some()
+                || joint::active(world)
+                || native_viewport::interface_geometry(world)
+                    .active_sketch
+                    .is_some()
+            {
+                return Err(
+                    "Finish the active modeling command before inspecting the assembly".into(),
+                );
+            }
+            return inspect::reduce(
+                world,
+                engine,
+                bridge,
+                &receipt.owner,
+                receipt.revision,
+                &mut state.inspect,
+                &a,
+                state.units,
+                command,
+                input,
+            );
+        }
         let normalized = match (command, input) {
             (Command::Definitions | Command::Parents, ControlInput::Key(key))
                 if !super::super::is_activation(input) =>
@@ -400,6 +438,10 @@ pub(crate) fn reduce(
             .selected_occurrence_id;
         let mut request = None;
         match *command {
+            Command::Tab(tab) => {
+                state.tab = tab;
+                state.scroll = 0.;
+            }
             Command::Select(id) => {
                 if let Some(p) = feature::panel(world)
                     .filter(|p| p.pick_target == Some(feature::SolidField::Bodies))
@@ -575,7 +617,9 @@ pub(crate) fn reduce(
                     json!({if definition {"component"} else {"occurrence"}:patch}),
                 ));
             }
-            Command::Show(_) | Command::Edit(..) | Command::Joint(_) => unreachable!(),
+            Command::Show(_) | Command::Edit(..) | Command::Joint(_) | Command::Inspect(_) => {
+                unreachable!()
+            }
         }
         if let Some((op, args)) = request {
             if native_viewport::interface_geometry(world)
@@ -632,6 +676,7 @@ pub(crate) fn synchronize(
             state.scroll = 0.;
             state.parents_open = false;
             state.definitions_open = false;
+            state.inspect = default();
         }
         if state.assembly.is_none() || state.revision != revision {
             let a = services
@@ -654,6 +699,7 @@ pub(crate) fn synchronize(
             state.assembly = Some(Arc::new(a));
             state.revision = revision;
             state.draft = None;
+            state.inspect.changed();
         }
         let a = state.assembly.as_ref().unwrap().clone();
         let selected = native_viewport::interface_view_snapshot(world)

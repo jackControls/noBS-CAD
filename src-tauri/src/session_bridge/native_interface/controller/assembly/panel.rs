@@ -4,8 +4,8 @@ use super::*;
 use crate::native_viewport::interface_shell::{ribbon::Icon, InterfaceControl};
 use nbcad_interface::{ChoiceOption, KeyChord};
 
-struct Paint<'a> {
-    world: &'a mut World,
+pub(super) struct Paint<'a> {
+    pub(super) world: &'a mut World,
     widgets: &'a mut chrome::Widgets,
     camera: Entity,
     x: f32,
@@ -14,7 +14,48 @@ struct Paint<'a> {
     scroll: f32,
 }
 impl Paint<'_> {
-    fn button(
+    pub(super) fn card(&mut self, key: &str, y: f32, w: f32, h: f32) {
+        let top = (self.top + y - self.scroll).max(self.top);
+        let bottom = (self.top + y + h - self.scroll).min(self.bottom);
+        if bottom <= top {
+            return;
+        }
+        let theme = ViewportUiTheme::from_palette(&ViewportPalette::default());
+        let mut bounds = chrome::rect(self.x + 8., top, w - 16., bottom - top);
+        bounds.border = UiRect::all(px(1.));
+        self.widgets
+            .panel(self.world, self.camera, key, bounds, theme.header, 34);
+        if let Some(e) = self.widgets.entity(key) {
+            self.world
+                .entity_mut(e)
+                .insert(BorderColor::all(theme.edge));
+        }
+    }
+    pub(super) fn heading(&mut self, key: &str, label: &str, icon: Icon, y: f32, w: f32) {
+        self.text(key, label, 28., y, w - 38., 20., 10.);
+        let top = self.top + y - self.scroll;
+        if top < self.top || top + 20. > self.bottom {
+            return;
+        }
+        let theme = ViewportUiTheme::from_palette(&ViewportPalette::default());
+        self.widgets.glyph(
+            self.world,
+            self.camera,
+            &format!("{key}-icon"),
+            chrome::rect(self.x + 10., top + 4., 12., 12.),
+            icon,
+            theme.accent,
+            35,
+        );
+    }
+    pub(super) fn warning(&mut self, key: &str) {
+        if let Some(e) = self.widgets.entity(key) {
+            self.world
+                .entity_mut(e)
+                .insert(TextColor(Color::srgb_u8(239, 94, 103)));
+        }
+    }
+    pub(super) fn button(
         &mut self,
         key: &str,
         label: &str,
@@ -33,7 +74,14 @@ impl Paint<'_> {
         if y < self.top || y + h > self.bottom {
             return Ok(());
         }
-        let mut control = InterfaceControl::button("assembly/joints", label);
+        let mut control = InterfaceControl::button(
+            if matches!(command, Command::Inspect(_)) {
+                "assembly/inspect"
+            } else {
+                "assembly/joints"
+            },
+            label,
+        );
         control.disabled = disabled;
         control.selected = selected;
         if matches!(command, Command::Components | Command::Inspector) {
@@ -41,6 +89,18 @@ impl Paint<'_> {
             control.expanded = selected;
         }
         control.field = field;
+        if matches!(command, Command::Tab(_)) {
+            control.role = "tab".into();
+        }
+        let toggle = if let Field::Toggle(value) = control.field {
+            Some(value)
+        } else {
+            None
+        };
+        if toggle.is_some() {
+            control.role = "checkbox".into();
+            control.selected = toggle;
+        }
         if matches!(command, Command::Select(_)) {
             control.role = "treeitem".into();
         }
@@ -69,6 +129,7 @@ impl Paint<'_> {
             None
         };
         let mut bounds = chrome::rect(self.x + x, y, w, h);
+        let primary = matches!(command, Command::Inspect(inspect::Action::Check));
         if matches!(control.field, Field::Text { .. } | Field::Choice { .. })
             || matches!(
                 command,
@@ -76,6 +137,12 @@ impl Paint<'_> {
                     | Command::Add(_)
                     | Command::Rename(..)
                     | Command::ApplyTransform(..)
+                    | Command::Inspect(
+                        inspect::Action::Check
+                            | inspect::Action::Swept
+                            | inspect::Action::CreateContact
+                            | inspect::Action::ApplyContact(_)
+                    )
             )
         {
             bounds.border = UiRect::all(px(1.));
@@ -97,6 +164,12 @@ impl Paint<'_> {
             icon,
             35,
         )?;
+        if primary {
+            interface_shell::primary_button(self.world, entity);
+        }
+        if let Some(value) = toggle {
+            interface_shell::checkbox_button(self.world, entity, self.camera, value);
+        }
         if text_field {
             if let Some(mut font) = self.world.get_mut::<TextFont>(entity) {
                 if font.font_size != bevy::text::FontSize::Px(11.) {
@@ -117,7 +190,16 @@ impl Paint<'_> {
         }
         Ok(())
     }
-    fn text(&mut self, key: &str, value: &str, x: f32, y: f32, w: f32, h: f32, size: f32) {
+    pub(super) fn text(
+        &mut self,
+        key: &str,
+        value: &str,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        size: f32,
+    ) {
         let y = self.top + y - self.scroll;
         if y < self.top || y + h > self.bottom {
             return;
@@ -132,7 +214,7 @@ impl Paint<'_> {
             35,
         );
     }
-    fn input(
+    pub(super) fn input(
         &mut self,
         key: &str,
         label: &str,
@@ -207,380 +289,358 @@ pub(super) fn paint(
         Field::None,
     )?;
     p.text("title", "ASSEMBLY", width - 110., 5., 100., 22., 10.);
-    p.text("structure", "Structure", 8., 36., width - 16., 22., 10.);
+    for (i, (tab, label)) in [(Tab::Structure, "Structure"), (Tab::Inspect, "Inspect")]
+        .into_iter()
+        .enumerate()
+    {
+        p.button(
+            &format!("tab-{i}"),
+            &format!("Assembly {label}"),
+            Some(label),
+            Command::Tab(tab),
+            4. + i as f32 * (width - 8.) / 2.,
+            34.,
+            (width - 8.) / 2.,
+            28.,
+            None,
+            blocked,
+            Some(state.tab == tab),
+            Field::None,
+        )?;
+    }
     p.top += 64.;
     p.bottom -= 24.;
     p.scroll = state.scroll;
     let mut y = 0.;
-    p.button(
-        "components",
-        "Components",
-        Some("COMPONENTS"),
-        Command::Components,
-        4.,
-        y,
-        width - 8.,
-        28.,
-        Some(if state.components {
-            Icon::ChevronDown
-        } else {
-            Icon::ChevronRight
-        }),
-        false,
-        Some(state.components),
-        Field::None,
-    )?;
-    y += 34.;
-    if state.components {
-        let half = (width - 18.) * 0.5;
+    if state.tab == Tab::Inspect {
+        y = inspect::panel::paint(&mut p, &mut state.inspect, a, state.units, width, blocked)?;
+    } else {
         p.button(
-            "create",
-            "Make component",
-            None,
-            Command::Create(false),
-            6.,
-            y,
-            half,
-            28.,
-            Some(Icon::Box),
-            blocked || view.selected_body_ids.is_empty(),
-            None,
-            Field::None,
-        )?;
-        p.button(
-            "group",
-            "Create subassembly",
-            Some("Subassembly"),
-            Command::Create(true),
-            12. + half,
-            y,
-            half,
-            28.,
-            Some(Icon::FolderTree),
-            blocked,
-            None,
-            Field::None,
-        )?;
-        y += 38.;
-        let mut rows = vec![];
-        let mut pending = a
-            .component_structure
-            .occurrences
-            .iter()
-            .filter(|o| o.parent_occurrence_id.is_none())
-            .rev()
-            .map(|o| (o, 0))
-            .collect::<Vec<_>>();
-        while let Some((o, depth)) = pending.pop() {
-            rows.push((o, depth));
-            if !state.collapsed.contains(&o.id.0) {
-                pending.extend(
-                    a.component_structure
-                        .occurrences
-                        .iter()
-                        .filter(|child| child.parent_occurrence_id == Some(o.id))
-                        .rev()
-                        .map(|child| (child, depth + 1)),
-                );
-            }
-        }
-        if rows.is_empty() {
-            p.text(
-                "empty",
-                "Make a component from selected bodies",
-                12.,
-                y,
-                width - 24.,
-                38.,
-                10.,
-            );
-            y += 44.;
-        }
-        for (o, depth) in rows {
-            let id = o.id.0;
-            let key = format!("occurrence-{id}");
-            let children = a
-                .component_structure
-                .occurrences
-                .iter()
-                .any(|child| child.parent_occurrence_id == Some(o.id));
-            let d = a
-                .component_structure
-                .definitions
-                .iter()
-                .find(|d| d.id == o.component_id);
-            let x = 6. + 13. * (depth as f32).min(5.);
-            p.button(
-                &format!("{key}-expand"),
-                &format!(
-                    "{} {}",
-                    if state.collapsed.contains(&id) {
-                        "Expand"
-                    } else {
-                        "Collapse"
-                    },
-                    o.name
-                ),
-                Some(""),
-                Command::Expand(id),
-                x,
-                y,
-                18.,
-                28.,
-                Some(if state.collapsed.contains(&id) {
-                    Icon::ChevronRight
-                } else {
-                    Icon::ChevronDown
-                }),
-                !children,
-                None,
-                Field::None,
-            )?;
-            p.button(
-                &key,
-                &format!("Component {}", o.name),
-                Some(&o.name),
-                Command::Select(id),
-                x + 20.,
-                y,
-                (width - x - 110.).max(20.),
-                28.,
-                Some(if children || d.is_some_and(|d| d.body_ids.is_empty()) {
-                    Icon::FolderTree
-                } else {
-                    Icon::Box
-                }),
-                false,
-                Some(selected == Some(id)),
-                Field::None,
-            )?;
-            for (index, (suffix, label, command, icon, on)) in [
-                (
-                    "move",
-                    format!("Move {}", o.name),
-                    Command::Move(id),
-                    Icon::MoveCopy,
-                    false,
-                ),
-                (
-                    "ground",
-                    format!(
-                        "{} {}",
-                        if o.grounded { "Release" } else { "Ground" },
-                        o.name
-                    ),
-                    Command::Ground(id),
-                    Icon::Anchor,
-                    o.grounded,
-                ),
-                (
-                    "copy",
-                    format!("Duplicate {}", o.name),
-                    Command::Duplicate(id),
-                    Icon::Copy,
-                    false,
-                ),
-                (
-                    "visible",
-                    format!("{} {}", if o.visible { "Hide" } else { "Show" }, o.name),
-                    Command::Visibility(id),
-                    if o.visible { Icon::Eye } else { Icon::EyeOff },
-                    false,
-                ),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                p.button(
-                    &format!("{key}-{suffix}"),
-                    &label,
-                    Some(""),
-                    command,
-                    width - 88. + index as f32 * 21.,
-                    y,
-                    20.,
-                    28.,
-                    Some(icon),
-                    blocked,
-                    Some(on),
-                    Field::None,
-                )?;
-            }
-            y += 32.;
-        }
-        if !a.component_structure.definitions.is_empty() {
-            y += 8.;
-            let value = state
-                .definition
-                .map(|id| id.to_string())
-                .unwrap_or_default();
-            let options = a
-                .component_structure
-                .definitions
-                .iter()
-                .map(|d| ChoiceOption {
-                    value: d.id.0.to_string(),
-                    label: format!(
-                        "{} · {} {}",
-                        d.name,
-                        d.body_ids.len(),
-                        if d.body_ids.len() == 1 {
-                            "body"
-                        } else {
-                            "bodies"
-                        }
-                    ),
-                    disabled: false,
-                })
-                .collect();
-            p.button(
-                "definitions",
-                "Reusable component definition",
-                None,
-                Command::Definitions,
-                6.,
-                y,
-                width - 104.,
-                28.,
-                None,
-                blocked,
-                Some(state.definitions_open),
-                Field::Choice { value, options },
-            )?;
-            p.button(
-                "add-root",
-                "Add root instance",
-                Some("+ Root"),
-                Command::Add(false),
-                width - 92.,
-                y,
-                44.,
-                28.,
-                None,
-                blocked,
-                None,
-                Field::None,
-            )?;
-            p.button(
-                "add-child",
-                "Add child instance",
-                Some("+ Child"),
-                Command::Add(true),
-                width - 46.,
-                y,
-                44.,
-                28.,
-                None,
-                blocked || selected.is_none(),
-                None,
-                Field::None,
-            )?;
-            y += 34.;
-            if state.definitions_open {
-                for d in &a.component_structure.definitions {
-                    p.button(
-                        &format!("definition-{}", d.id.0),
-                        &format!("Use {}", d.name),
-                        Some(&d.name),
-                        Command::Definition(d.id.0),
-                        6.,
-                        y,
-                        width - 12.,
-                        28.,
-                        Some(Icon::Box),
-                        blocked,
-                        Some(state.definition == Some(d.id.0)),
-                        Field::None,
-                    )?;
-                    y += 30.;
-                }
-            }
-        }
-    }
-    if let Some(draft) = &state.draft {
-        let o = find(a, draft.occurrence)?;
-        let d = a
-            .component_structure
-            .definitions
-            .iter()
-            .find(|d| d.id == o.component_id)
-            .ok_or("Component definition disappeared")?;
-        let id = o.id.0;
-        p.button(
-            "inspector",
-            "Selected instance",
-            Some("SELECTED INSTANCE"),
-            Command::Inspector,
+            "components",
+            "Components",
+            Some("COMPONENTS"),
+            Command::Components,
             4.,
             y,
             width - 8.,
             28.,
-            Some(Icon::Box),
+            Some(if state.components {
+                Icon::ChevronDown
+            } else {
+                Icon::ChevronRight
+            }),
             false,
-            Some(state.inspector),
+            Some(state.components),
             Field::None,
         )?;
         y += 34.;
-        if state.inspector {
-            for definition in [false, true] {
-                let tag = if definition { "definition" } else { "instance" };
-                let label = if definition {
-                    "Reusable definition"
-                } else {
-                    "Instance name"
-                };
-                let name = if definition {
-                    &draft.definition_name
-                } else {
-                    &draft.name
-                };
-                let original = if definition { &d.name } else { &o.name };
+        if state.components {
+            let half = (width - 18.) * 0.5;
+            p.button(
+                "create",
+                "Make component",
+                None,
+                Command::Create(false),
+                6.,
+                y,
+                half,
+                28.,
+                Some(Icon::Box),
+                blocked || view.selected_body_ids.is_empty(),
+                None,
+                Field::None,
+            )?;
+            p.button(
+                "group",
+                "Create subassembly",
+                Some("Subassembly"),
+                Command::Create(true),
+                12. + half,
+                y,
+                half,
+                28.,
+                Some(Icon::FolderTree),
+                blocked,
+                None,
+                Field::None,
+            )?;
+            y += 38.;
+            let mut rows = vec![];
+            let mut pending = a
+                .component_structure
+                .occurrences
+                .iter()
+                .filter(|o| o.parent_occurrence_id.is_none())
+                .rev()
+                .map(|o| (o, 0))
+                .collect::<Vec<_>>();
+            while let Some((o, depth)) = pending.pop() {
+                rows.push((o, depth));
+                if !state.collapsed.contains(&o.id.0) {
+                    pending.extend(
+                        a.component_structure
+                            .occurrences
+                            .iter()
+                            .filter(|child| child.parent_occurrence_id == Some(o.id))
+                            .rev()
+                            .map(|child| (child, depth + 1)),
+                    );
+                }
+            }
+            if rows.is_empty() {
                 p.text(
-                    &format!("{tag}-name-label"),
-                    &label.to_uppercase(),
-                    8.,
+                    "empty",
+                    "Make a component from selected bodies",
+                    12.,
                     y,
-                    width - 16.,
-                    18.,
-                    9.,
+                    width - 24.,
+                    38.,
+                    10.,
                 );
-                y += 20.;
-                p.input(
-                    &format!("{tag}-name"),
-                    label,
-                    name,
-                    Command::Edit(
-                        id,
-                        if definition {
-                            EditField::DefinitionName
-                        } else {
-                            EditField::Name
-                        },
-                    ),
-                    8.,
-                    y,
-                    width - 80.,
-                    blocked,
-                )?;
+                y += 44.;
+            }
+            for (o, depth) in rows {
+                let id = o.id.0;
+                let key = format!("occurrence-{id}");
+                let children = a
+                    .component_structure
+                    .occurrences
+                    .iter()
+                    .any(|child| child.parent_occurrence_id == Some(o.id));
+                let d = a
+                    .component_structure
+                    .definitions
+                    .iter()
+                    .find(|d| d.id == o.component_id);
+                let x = 6. + 13. * (depth as f32).min(5.);
                 p.button(
-                    &format!("{tag}-rename"),
-                    &format!("Rename {tag}"),
-                    Some("Rename"),
-                    Command::Rename(id, definition),
-                    width - 68.,
+                    &format!("{key}-expand"),
+                    &format!(
+                        "{} {}",
+                        if state.collapsed.contains(&id) {
+                            "Expand"
+                        } else {
+                            "Collapse"
+                        },
+                        o.name
+                    ),
+                    Some(""),
+                    Command::Expand(id),
+                    x,
                     y,
-                    60.,
+                    18.,
                     28.,
-                    None,
-                    blocked || name.trim().is_empty() || name.trim() == original,
+                    Some(if state.collapsed.contains(&id) {
+                        Icon::ChevronRight
+                    } else {
+                        Icon::ChevronDown
+                    }),
+                    !children,
                     None,
                     Field::None,
                 )?;
-                y += 36.;
-                if !definition {
+                p.button(
+                    &key,
+                    &format!("Component {}", o.name),
+                    Some(&o.name),
+                    Command::Select(id),
+                    x + 20.,
+                    y,
+                    (width - x - 110.).max(20.),
+                    28.,
+                    Some(if children || d.is_some_and(|d| d.body_ids.is_empty()) {
+                        Icon::FolderTree
+                    } else {
+                        Icon::Box
+                    }),
+                    false,
+                    Some(selected == Some(id)),
+                    Field::None,
+                )?;
+                for (index, (suffix, label, command, icon, on)) in [
+                    (
+                        "move",
+                        format!("Move {}", o.name),
+                        Command::Move(id),
+                        Icon::MoveCopy,
+                        false,
+                    ),
+                    (
+                        "ground",
+                        format!(
+                            "{} {}",
+                            if o.grounded { "Release" } else { "Ground" },
+                            o.name
+                        ),
+                        Command::Ground(id),
+                        Icon::Anchor,
+                        o.grounded,
+                    ),
+                    (
+                        "copy",
+                        format!("Duplicate {}", o.name),
+                        Command::Duplicate(id),
+                        Icon::Copy,
+                        false,
+                    ),
+                    (
+                        "visible",
+                        format!("{} {}", if o.visible { "Hide" } else { "Show" }, o.name),
+                        Command::Visibility(id),
+                        if o.visible { Icon::Eye } else { Icon::EyeOff },
+                        false,
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    p.button(
+                        &format!("{key}-{suffix}"),
+                        &label,
+                        Some(""),
+                        command,
+                        width - 88. + index as f32 * 21.,
+                        y,
+                        20.,
+                        28.,
+                        Some(icon),
+                        blocked,
+                        Some(on),
+                        Field::None,
+                    )?;
+                }
+                y += 32.;
+            }
+            if !a.component_structure.definitions.is_empty() {
+                y += 8.;
+                let value = state
+                    .definition
+                    .map(|id| id.to_string())
+                    .unwrap_or_default();
+                let options = a
+                    .component_structure
+                    .definitions
+                    .iter()
+                    .map(|d| ChoiceOption {
+                        value: d.id.0.to_string(),
+                        label: format!(
+                            "{} · {} {}",
+                            d.name,
+                            d.body_ids.len(),
+                            if d.body_ids.len() == 1 {
+                                "body"
+                            } else {
+                                "bodies"
+                            }
+                        ),
+                        disabled: false,
+                    })
+                    .collect();
+                p.button(
+                    "definitions",
+                    "Reusable component definition",
+                    None,
+                    Command::Definitions,
+                    6.,
+                    y,
+                    width - 104.,
+                    28.,
+                    None,
+                    blocked,
+                    Some(state.definitions_open),
+                    Field::Choice { value, options },
+                )?;
+                p.button(
+                    "add-root",
+                    "Add root instance",
+                    Some("+ Root"),
+                    Command::Add(false),
+                    width - 92.,
+                    y,
+                    44.,
+                    28.,
+                    None,
+                    blocked,
+                    None,
+                    Field::None,
+                )?;
+                p.button(
+                    "add-child",
+                    "Add child instance",
+                    Some("+ Child"),
+                    Command::Add(true),
+                    width - 46.,
+                    y,
+                    44.,
+                    28.,
+                    None,
+                    blocked || selected.is_none(),
+                    None,
+                    Field::None,
+                )?;
+                y += 34.;
+                if state.definitions_open {
+                    for d in &a.component_structure.definitions {
+                        p.button(
+                            &format!("definition-{}", d.id.0),
+                            &format!("Use {}", d.name),
+                            Some(&d.name),
+                            Command::Definition(d.id.0),
+                            6.,
+                            y,
+                            width - 12.,
+                            28.,
+                            Some(Icon::Box),
+                            blocked,
+                            Some(state.definition == Some(d.id.0)),
+                            Field::None,
+                        )?;
+                        y += 30.;
+                    }
+                }
+            }
+        }
+        if let Some(draft) = &state.draft {
+            let o = find(a, draft.occurrence)?;
+            let d = a
+                .component_structure
+                .definitions
+                .iter()
+                .find(|d| d.id == o.component_id)
+                .ok_or("Component definition disappeared")?;
+            let id = o.id.0;
+            p.button(
+                "inspector",
+                "Selected instance",
+                Some("SELECTED INSTANCE"),
+                Command::Inspector,
+                4.,
+                y,
+                width - 8.,
+                28.,
+                Some(Icon::Box),
+                false,
+                Some(state.inspector),
+                Field::None,
+            )?;
+            y += 34.;
+            if state.inspector {
+                for definition in [false, true] {
+                    let tag = if definition { "definition" } else { "instance" };
+                    let label = if definition {
+                        "Reusable definition"
+                    } else {
+                        "Instance name"
+                    };
+                    let name = if definition {
+                        &draft.definition_name
+                    } else {
+                        &draft.name
+                    };
+                    let original = if definition { &d.name } else { &o.name };
                     p.text(
-                        "parent-label",
-                        "PARENT COORDINATE SYSTEM",
+                        &format!("{tag}-name-label"),
+                        &label.to_uppercase(),
                         8.,
                         y,
                         width - 16.,
@@ -588,258 +648,302 @@ pub(super) fn paint(
                         9.,
                     );
                     y += 20.;
-                    let excluded = descendants(a, id);
-                    let mut options = vec![ChoiceOption {
-                        value: "root".into(),
-                        label: "Document root".into(),
-                        disabled: false,
-                    }];
-                    options.extend(
-                        a.component_structure
-                            .occurrences
-                            .iter()
-                            .filter(|o| !excluded.contains(&o.id.0))
-                            .map(|o| ChoiceOption {
-                                value: o.id.0.to_string(),
-                                label: o.name.clone(),
-                                disabled: false,
-                            }),
-                    );
-                    p.button(
-                        "parent",
-                        "Parent coordinate system",
-                        None,
-                        Command::Parents,
+                    p.input(
+                        &format!("{tag}-name"),
+                        label,
+                        name,
+                        Command::Edit(
+                            id,
+                            if definition {
+                                EditField::DefinitionName
+                            } else {
+                                EditField::Name
+                            },
+                        ),
                         8.,
                         y,
-                        width - 16.,
+                        width - 80.,
+                        blocked,
+                    )?;
+                    p.button(
+                        &format!("{tag}-rename"),
+                        &format!("Rename {tag}"),
+                        Some("Rename"),
+                        Command::Rename(id, definition),
+                        width - 68.,
+                        y,
+                        60.,
                         28.,
                         None,
-                        blocked,
-                        Some(state.parents_open),
-                        Field::Choice {
-                            value: o
-                                .parent_occurrence_id
-                                .map(|id| id.0.to_string())
-                                .unwrap_or("root".into()),
-                            options: options.clone(),
-                        },
+                        blocked || name.trim().is_empty() || name.trim() == original,
+                        None,
+                        Field::None,
                     )?;
-                    y += 34.;
-                    if state.parents_open {
-                        for option in options {
-                            let parent = option.value.parse::<u64>().ok();
-                            p.button(
-                                &format!("parent-{}", option.value),
-                                &format!("Parent {}", option.label),
-                                Some(&option.label),
-                                Command::Parent(id, parent),
-                                8.,
-                                y,
-                                width - 16.,
-                                28.,
-                                None,
-                                blocked,
-                                Some(o.parent_occurrence_id.map(|id| id.0) == parent),
-                                Field::None,
-                            )?;
-                            y += 30.;
+                    y += 36.;
+                    if !definition {
+                        p.text(
+                            "parent-label",
+                            "PARENT COORDINATE SYSTEM",
+                            8.,
+                            y,
+                            width - 16.,
+                            18.,
+                            9.,
+                        );
+                        y += 20.;
+                        let excluded = descendants(a, id);
+                        let mut options = vec![ChoiceOption {
+                            value: "root".into(),
+                            label: "Document root".into(),
+                            disabled: false,
+                        }];
+                        options.extend(
+                            a.component_structure
+                                .occurrences
+                                .iter()
+                                .filter(|o| !excluded.contains(&o.id.0))
+                                .map(|o| ChoiceOption {
+                                    value: o.id.0.to_string(),
+                                    label: o.name.clone(),
+                                    disabled: false,
+                                }),
+                        );
+                        p.button(
+                            "parent",
+                            "Parent coordinate system",
+                            None,
+                            Command::Parents,
+                            8.,
+                            y,
+                            width - 16.,
+                            28.,
+                            None,
+                            blocked,
+                            Some(state.parents_open),
+                            Field::Choice {
+                                value: o
+                                    .parent_occurrence_id
+                                    .map(|id| id.0.to_string())
+                                    .unwrap_or("root".into()),
+                                options: options.clone(),
+                            },
+                        )?;
+                        y += 34.;
+                        if state.parents_open {
+                            for option in options {
+                                let parent = option.value.parse::<u64>().ok();
+                                p.button(
+                                    &format!("parent-{}", option.value),
+                                    &format!("Parent {}", option.label),
+                                    Some(&option.label),
+                                    Command::Parent(id, parent),
+                                    8.,
+                                    y,
+                                    width - 16.,
+                                    28.,
+                                    None,
+                                    blocked,
+                                    Some(o.parent_occurrence_id.map(|id| id.0) == parent),
+                                    Field::None,
+                                )?;
+                                y += 30.;
+                            }
                         }
                     }
-                }
-                let title = if definition {
-                    "Component coordinate system"
-                } else {
-                    "Instance placement"
-                };
-                let transform = if definition {
-                    &draft.origin
-                } else {
-                    &draft.placement
-                };
-                p.text(
-                    &format!("{tag}-pose-label"),
-                    &title.to_uppercase(),
-                    8.,
-                    y,
-                    width - 16.,
-                    18.,
-                    9.,
-                );
-                y += 22.;
-                let w = (width - 42.) / 3.;
-                for rotation in [false, true] {
-                    p.text(
-                        &format!("{tag}-{}-units", rotation),
-                        if rotation {
-                            "deg"
-                        } else {
-                            match state.units {
-                                UnitSystem::Mm => "mm",
-                                UnitSystem::Cm => "cm",
-                                UnitSystem::In => "in",
-                            }
-                        },
-                        5.,
-                        y,
-                        24.,
-                        28.,
-                        8.,
-                    );
-                    for i in 0..3 {
-                        let field = if rotation {
-                            EditField::Rotation(definition, i)
-                        } else {
-                            EditField::Translation(definition, i)
-                        };
-                        let value = if rotation {
-                            transform.rotation[i].text()
-                        } else {
-                            transform.translation[i].text()
-                        };
-                        p.input(
-                            &format!("{tag}-{rotation}-{i}"),
-                            &format!(
-                                "{title} {} {}",
-                                ["X", "Y", "Z"][i],
-                                if rotation { "rotation" } else { "translation" }
-                            ),
-                            value,
-                            Command::Edit(id, field),
-                            28. + i as f32 * (w + 3.),
-                            y,
-                            w,
-                            blocked,
-                        )?;
-                    }
-                    y += 32.;
-                }
-                let error = transform.value(state.units).err();
-                p.text(&format!("{tag}-xyz"), "X · Y · Z", 28., y, 76., 28., 8.);
-                p.button(
-                    &format!("{tag}-apply"),
-                    if definition {
-                        "Apply component origin"
+                    let title = if definition {
+                        "Component coordinate system"
                     } else {
-                        "Apply placement"
-                    },
-                    None,
-                    Command::ApplyTransform(id, definition),
-                    108.,
-                    y,
-                    width - 116.,
-                    28.,
-                    None,
-                    blocked || error.is_some(),
-                    None,
-                    Field::None,
-                )?;
-                y += 34.;
-                if let Some(error) = error {
+                        "Instance placement"
+                    };
+                    let transform = if definition {
+                        &draft.origin
+                    } else {
+                        &draft.placement
+                    };
                     p.text(
-                        &format!("{tag}-error"),
-                        &error,
+                        &format!("{tag}-pose-label"),
+                        &title.to_uppercase(),
                         8.,
                         y,
                         width - 16.,
-                        44.,
-                        10.,
+                        18.,
+                        9.,
                     );
-                    y += 46.;
+                    y += 22.;
+                    let w = (width - 42.) / 3.;
+                    for rotation in [false, true] {
+                        p.text(
+                            &format!("{tag}-{}-units", rotation),
+                            if rotation {
+                                "deg"
+                            } else {
+                                match state.units {
+                                    UnitSystem::Mm => "mm",
+                                    UnitSystem::Cm => "cm",
+                                    UnitSystem::In => "in",
+                                }
+                            },
+                            5.,
+                            y,
+                            24.,
+                            28.,
+                            8.,
+                        );
+                        for i in 0..3 {
+                            let field = if rotation {
+                                EditField::Rotation(definition, i)
+                            } else {
+                                EditField::Translation(definition, i)
+                            };
+                            let value = if rotation {
+                                transform.rotation[i].text()
+                            } else {
+                                transform.translation[i].text()
+                            };
+                            p.input(
+                                &format!("{tag}-{rotation}-{i}"),
+                                &format!(
+                                    "{title} {} {}",
+                                    ["X", "Y", "Z"][i],
+                                    if rotation { "rotation" } else { "translation" }
+                                ),
+                                value,
+                                Command::Edit(id, field),
+                                28. + i as f32 * (w + 3.),
+                                y,
+                                w,
+                                blocked,
+                            )?;
+                        }
+                        y += 32.;
+                    }
+                    let error = transform.value(state.units).err();
+                    p.text(&format!("{tag}-xyz"), "X · Y · Z", 28., y, 76., 28., 8.);
+                    p.button(
+                        &format!("{tag}-apply"),
+                        if definition {
+                            "Apply component origin"
+                        } else {
+                            "Apply placement"
+                        },
+                        None,
+                        Command::ApplyTransform(id, definition),
+                        108.,
+                        y,
+                        width - 116.,
+                        28.,
+                        None,
+                        blocked || error.is_some(),
+                        None,
+                        Field::None,
+                    )?;
+                    y += 34.;
+                    if let Some(error) = error {
+                        p.text(
+                            &format!("{tag}-error"),
+                            &error,
+                            8.,
+                            y,
+                            width - 16.,
+                            44.,
+                            10.,
+                        );
+                        y += 46.;
+                    }
+                    p.text(
+                        &format!("{tag}-hint"),
+                        if definition {
+                            "Source parts stay in their authored coordinates."
+                        } else {
+                            "Placement is relative to the parent coordinate system."
+                        },
+                        8.,
+                        y,
+                        width - 16.,
+                        40.,
+                        9.,
+                    );
+                    y += 48.;
                 }
-                p.text(
-                    &format!("{tag}-hint"),
-                    if definition {
-                        "Source parts stay in their authored coordinates."
-                    } else {
-                        "Placement is relative to the parent coordinate system."
-                    },
-                    8.,
-                    y,
-                    width - 16.,
-                    40.,
-                    9.,
-                );
-                y += 48.;
             }
         }
-    }
-    p.text("joints-label", "JOINTS", 8., y + 10., width - 90., 20., 10.);
-    p.button(
-        "new-joint",
-        "Create joint",
-        Some("+ Joint"),
-        Command::Joint(joint::Command::Open(None)),
-        width - 74.,
-        y + 5.,
-        66.,
-        28.,
-        None,
-        blocked,
-        None,
-        Field::None,
-    )?;
-    y += 42.;
-    for j in &a.joints {
+        p.text("joints-label", "JOINTS", 8., y + 10., width - 90., 20., 10.);
         p.button(
-            &format!("joint-{}", j.id.0),
-            &format!("Edit joint {}", j.name),
-            Some(&j.name),
-            Command::Joint(joint::Command::Open(Some(j.id.0))),
-            8.,
-            y,
-            width - 64.,
-            28.,
-            Some(Icon::Joint),
-            blocked,
-            None,
-            Field::None,
-        )?;
-        p.button(
-            &format!("joint-{}-enabled", j.id.0),
-            &format!(
-                "{} joint {}",
-                if j.enabled { "Suppress" } else { "Unsuppress" },
-                j.name
-            ),
-            Some(""),
-            Command::Joint(joint::Command::Enabled(j.id.0)),
-            width - 52.,
-            y,
-            22.,
-            28.,
-            Some(if j.enabled { Icon::Eye } else { Icon::EyeOff }),
-            blocked,
-            None,
-            Field::None,
-        )?;
-        p.button(
-            &format!("joint-{}-delete", j.id.0),
-            &format!("Delete joint {}", j.name),
-            Some("×"),
-            Command::Joint(joint::Command::Delete(j.id.0)),
-            width - 28.,
-            y,
-            22.,
+            "new-joint",
+            "Create joint",
+            Some("+ Joint"),
+            Command::Joint(joint::Command::Open(None)),
+            width - 74.,
+            y + 5.,
+            66.,
             28.,
             None,
             blocked,
             None,
             Field::None,
         )?;
-        y += 32.;
-    }
-    if a.joints.is_empty() {
-        p.text(
-            "no-joints",
-            "Create joints to relate component instances.",
-            12.,
-            y,
-            width - 24.,
-            36.,
-            10.,
-        );
-        y += 40.;
+        y += 42.;
+        for j in &a.joints {
+            p.button(
+                &format!("joint-{}", j.id.0),
+                &format!("Edit joint {}", j.name),
+                Some(&j.name),
+                Command::Joint(joint::Command::Open(Some(j.id.0))),
+                8.,
+                y,
+                width - 64.,
+                28.,
+                Some(Icon::Joint),
+                blocked,
+                None,
+                Field::None,
+            )?;
+            p.button(
+                &format!("joint-{}-enabled", j.id.0),
+                &format!(
+                    "{} joint {}",
+                    if j.enabled { "Suppress" } else { "Unsuppress" },
+                    j.name
+                ),
+                Some(""),
+                Command::Joint(joint::Command::Enabled(j.id.0)),
+                width - 52.,
+                y,
+                22.,
+                28.,
+                Some(if j.enabled { Icon::Eye } else { Icon::EyeOff }),
+                blocked,
+                None,
+                Field::None,
+            )?;
+            p.button(
+                &format!("joint-{}-delete", j.id.0),
+                &format!("Delete joint {}", j.name),
+                Some("×"),
+                Command::Joint(joint::Command::Delete(j.id.0)),
+                width - 28.,
+                y,
+                22.,
+                28.,
+                None,
+                blocked,
+                None,
+                Field::None,
+            )?;
+            y += 32.;
+        }
+        if a.joints.is_empty() {
+            p.text(
+                "no-joints",
+                "Create joints to relate component instances.",
+                12.,
+                y,
+                width - 24.,
+                36.,
+                10.,
+            );
+            y += 40.;
+        }
     }
     state.max_scroll = (y - (height - 88.)).max(0.);
     state.scroll = state.scroll.min(state.max_scroll);

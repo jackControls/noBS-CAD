@@ -11,7 +11,7 @@ use nbcad_sketch::{
     ContactSetDto, EvaluateMotionStudyRequestDto, InstanceBodyPoseDto, InterferenceCheckRequestDto,
     InterferencePairResultDto, InterferenceReportDto, MotionStudyEvaluationDto, MotionStudyId,
     MotionStudySampleDto, SampleMotionStudyRequestDto, SketchDto, SketchManager,
-    SweptCollisionEventDto, SweptCollisionReportDto, SweptCollisionRequestDto,
+    SweptCollisionRequestDto,
 };
 use nbcad_solid::{
     BodyFeatureRequestDto, DatumPlaneDefinitionDto, DeleteFeatureRequest, EditBodyFeatureRequest,
@@ -260,6 +260,14 @@ impl AppState {
     }
 
     pub fn engine_call(&self, method: &str, payload: &str) -> String {
+        // Every native caller uses the exact kernel-backed inspection path.
+        // The host-neutral fallback is reserved for hosts without OCCT.
+        match method {
+            "assembly_interference_check" => return self.assembly_interference_check(payload),
+            "assembly_evaluate_motion_study" => return self.assembly_evaluate_motion_study(payload),
+            "assembly_swept_collision_check" => return self.assembly_swept_collision_check(payload),
+            _ => {}
+        }
         if method == "drawing_export" {
             return self.drawing_export(payload);
         }
@@ -605,108 +613,15 @@ impl AppState {
             Ok(request) => request,
             Err(error) => return err_json(format!("bad request payload: {error}")),
         };
-        if !request.sample_rate_hz.is_finite() || !(1.0..=240.0).contains(&request.sample_rate_hz) {
-            return err_json("swept collision sample rate must be between 1 and 240 Hz");
-        }
-        if !request.clearance_threshold_mm.is_finite() || request.clearance_threshold_mm < 0.0 {
-            return err_json("swept collision clearance must be finite and non-negative");
-        }
         let workspace = match self.inner.lock() {
             Ok(workspace) => workspace,
             Err(_) => return err_json("engine lock poisoned"),
         };
         let inner = workspace.active();
-        let document = inner.manager.assembly_document();
-        let study = match document
-            .motion_studies
-            .iter()
-            .find(|study| study.id == request.study_id)
-        {
-            Some(study) => study,
-            None => {
-                return err_json(format!(
-                    "motion study {} does not exist",
-                    request.study_id.0
-                ))
-            }
-        };
-        let count = (study.duration_seconds * request.sample_rate_hz).ceil() as u32 + 1;
-        if count > 100_001 {
-            return err_json("swept collision study exceeds 100,001 samples");
+        match nbcad_occt::exact_swept_collision_check(&inner.manager, &inner.kernel, &request) {
+            Ok(report) => ok_json(report),
+            Err(error) => err_json(error),
         }
-        let mut events = HashMap::<(u64, u64, u64, u64), SweptCollisionEventDto>::new();
-        for index in 0..count {
-            let time = ((index as f64) / request.sample_rate_hz).min(study.duration_seconds);
-            let sample = match inner
-                .manager
-                .sample_motion_study(SampleMotionStudyRequestDto {
-                    study_id: request.study_id,
-                    time_seconds: time,
-                }) {
-                Ok(sample) => sample,
-                Err(error) => return err_json(error.to_string()),
-            };
-            let report = match exact_interference_report(
-                &inner.kernel,
-                &inner.manager.solid_scene(),
-                &sample.solution.instance_body_poses,
-                &InterferenceCheckRequestDto {
-                    occurrence_ids: Vec::new(),
-                    clearance_threshold_mm: request.clearance_threshold_mm,
-                },
-            ) {
-                Ok(report) => report,
-                Err(error) => return err_json(error),
-            };
-            for pair in report
-                .pairs
-                .into_iter()
-                .filter(|pair| pair.interfering || pair.below_clearance)
-            {
-                let key = (
-                    pair.occurrence_a.0,
-                    pair.body_a.0,
-                    pair.occurrence_b.0,
-                    pair.body_b.0,
-                );
-                events
-                    .entry(key)
-                    .and_modify(|event| {
-                        event.last_time_seconds = time;
-                        event.minimum_clearance_mm =
-                            event.minimum_clearance_mm.min(pair.minimum_clearance_mm);
-                        event.maximum_overlap_volume_mm3 = event
-                            .maximum_overlap_volume_mm3
-                            .max(pair.overlap_volume_mm3);
-                    })
-                    .or_insert(SweptCollisionEventDto {
-                        occurrence_a: pair.occurrence_a,
-                        body_a: pair.body_a,
-                        occurrence_b: pair.occurrence_b,
-                        body_b: pair.body_b,
-                        first_time_seconds: time,
-                        last_time_seconds: time,
-                        minimum_clearance_mm: pair.minimum_clearance_mm,
-                        maximum_overlap_volume_mm3: pair.overlap_volume_mm3,
-                    });
-            }
-            if request.stop_at_first && !events.is_empty() {
-                let mut result = events.into_values().collect::<Vec<_>>();
-                result.sort_by(|a, b| a.first_time_seconds.total_cmp(&b.first_time_seconds));
-                return ok_json(SweptCollisionReportDto {
-                    exact: true,
-                    sample_count: index + 1,
-                    events: result,
-                });
-            }
-        }
-        let mut result = events.into_values().collect::<Vec<_>>();
-        result.sort_by(|a, b| a.first_time_seconds.total_cmp(&b.first_time_seconds));
-        ok_json(SweptCollisionReportDto {
-            exact: true,
-            sample_count: count,
-            events: result,
-        })
     }
 
     pub fn export_step(&self, payload: &str) -> Result<Vec<u8>, String> {

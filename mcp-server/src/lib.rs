@@ -9,6 +9,7 @@ use nbcad_solid::{CommitKernelRequest, RecomputePlanDto, StepExportRequest};
 use serde_json::{json, Map, Value};
 
 mod cam_tools;
+mod assembly_tools;
 mod desktop;
 mod disclosure;
 mod drawing_tools;
@@ -409,6 +410,9 @@ impl CadServer {
                 })
             } else if name == "solid_export_stl" || name == "solid_export_3mf" {
                 self.export_mesh(name, arguments)?
+            } else if name == "assembly_swept_collision_check" {
+                let request=serde_json::from_value(arguments).map_err(|e|format!("swept collision request: {e}"))?;
+                serde_json::to_value(nbcad_occt::exact_swept_collision_check(&self.manager,&self.kernel,&request)?).map_err(|e|e.to_string())?
             } else if name == "assembly_interference_check" {
                 let request = serde_json::from_value(arguments)
                     .map_err(|e| format!("interference request: {e}"))?;
@@ -1449,6 +1453,7 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "assembly_document"
             | "assembly_solution"
             | "assembly_interference_check"
+            | "assembly_swept_collision_check"
             | "solid_tessellate"
             | "solid_extrude_definitions"
             | "solid_revolve_definitions"
@@ -3957,6 +3962,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ),
     ];
     tools.extend(drawing_tools::specs());
+    tools.extend(assembly_tools::specs());
     tools.extend(cam_tools::specs());
     for tool in &mut tools {
         let (pack, spine) = tags_for_tool(tool.name);
@@ -10443,6 +10449,53 @@ mod tests {
             restored.call_tool("assembly_document", json!({})).unwrap()["gear_relations"],
             json!([])
         );
+    }
+
+    #[test]
+    fn contact_tools_preserve_instances_validate_and_roundtrip() {
+        let mut server=CadServer::new().unwrap();
+        extrude_offset_box(&mut server,"Sketch1",-12.,-2.);
+        extrude_offset_box(&mut server,"Sketch2",2.,12.);
+        let source=server.call_tool("solid_scene",json!({})).unwrap();
+        let poses=server.call_tool("assembly_solution",json!({})).unwrap()["instance_body_poses"].clone();
+        let args=json!({"name":"Travel stop","occurrence_a":poses[0]["occurrence_id"],"body_a":poses[0]["body_id"],"occurrence_b":poses[1]["occurrence_id"],"body_b":poses[1]["body_id"],"clearance_mm":0.3,"stop_motion":true});
+        let mut invalid=args.clone();invalid["clearance_mm"]=json!(-1.);
+        assert!(server.call_tool("assembly_create_contact_set",invalid).is_err());
+        server.call_tool("assembly_create_contact_set",args).unwrap();
+        let mut contact=server.call_tool("assembly_document",json!({})).unwrap()["contact_sets"][0].clone();
+        contact["enabled"]=json!(false);contact["name"]=json!("Edited stop");
+        server.call_tool("assembly_update_contact_set",contact.clone()).unwrap();
+        assert_eq!(server.call_tool("assembly_document",json!({})).unwrap()["contact_sets"][0],contact);
+        assert_eq!(server.call_tool("solid_scene",json!({})).unwrap(),source);
+        let model=server.call_tool("cad_project_model",json!({})).unwrap();
+        let mut restored=CadServer::new().unwrap();
+        restored.call_tool("cad_load_project_model",json!({"model_json":model.as_str().unwrap()})).unwrap();
+        assert_eq!(restored.call_tool("assembly_document",json!({})).unwrap()["contact_sets"][0],contact);
+        restored.call_tool("assembly_delete_contact_set",json!({"contact_id":contact["id"]})).unwrap();
+        assert_eq!(restored.call_tool("assembly_document",json!({})).unwrap()["contact_sets"],json!([]));
+    }
+
+    #[test]
+    fn swept_inspection_is_exact_read_only_bounded_and_deterministic() {
+        let mut server=CadServer::new().unwrap();
+        extrude_offset_box(&mut server,"Sketch1",-12.,-2.);
+        extrude_offset_box(&mut server,"Sketch2",2.,12.);
+        parse_engine_envelope(host::handle(&mut server.manager,"assembly_create_motion_study",r#"{"name":"Stationary pair","duration_seconds":0.1}"#)).unwrap();
+        let before=server.call_tool("cad_project_model",json!({})).unwrap();
+        let args=json!({"study_id":1,"sample_rate_hz":10,"clearance_threshold_mm":5.,"stop_at_first":true});
+        let report=server.call_tool("assembly_swept_collision_check",args.clone()).unwrap();
+        assert_eq!(report["exact"],true);assert_eq!(report["sample_count"],1);
+        assert_eq!(report["events"].as_array().unwrap().len(),1);
+        assert_eq!(server.call_tool("assembly_swept_collision_check",args).unwrap(),report);
+        assert_eq!(server.call_tool("cad_project_model",json!({})).unwrap(),before);
+        assert!(is_read_safe_while_attached("assembly_swept_collision_check"));
+        assert!(nbcad_mcp_mutate::is_live_engine_query("assembly_swept_collision_check"));
+        for args in [json!({"study_id":1,"sample_rate_hz":0}),json!({"study_id":1,"clearance_threshold_mm":-1})] {
+            assert!(server.call_tool("assembly_swept_collision_check",args).is_err());
+        }
+        parse_engine_envelope(host::handle(&mut server.manager,"assembly_create_motion_study",r#"{"name":"Enormous duration","duration_seconds":1e30}"#)).unwrap();
+        let error=server.call_tool("assembly_swept_collision_check",json!({"study_id":2})).unwrap_err();
+        assert!(error.contains("100,001"),"{error}");
     }
 
     #[test]

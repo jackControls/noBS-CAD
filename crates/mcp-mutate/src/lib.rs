@@ -17,6 +17,7 @@ pub fn is_live_engine_query(method: &str) -> bool {
             | "drawing_export"
             | "drawing_projection"
             | "assembly_document"
+            | "assembly_swept_collision_check"
             | "eval_expression"
             | "preview_segment"
             | "preview_segment_locked"
@@ -730,6 +731,24 @@ pub static MUTATES: &[MutateSpec] = &[
         name: "assembly_set_joint_motion",
         engine_method: "assembly_set_joint_motion",
         payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_create_contact_set",
+        engine_method: "assembly_create_contact_set",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_update_contact_set",
+        engine_method: "assembly_update_contact_set",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_delete_contact_set",
+        engine_method: "assembly_delete_contact_set",
+        payload: PayloadKind::Field("contact_id"),
         execution: ExecutionKind::Direct,
     },
     MutateSpec {

@@ -11,6 +11,7 @@ mod native_body_test;
 mod native_build_test;
 mod native_fixture;
 mod native_hole_test;
+mod native_inspect_test;
 mod native_joint_test;
 mod native_move_test;
 mod native_planes_test;

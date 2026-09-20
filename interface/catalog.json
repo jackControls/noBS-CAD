@@ -2192,7 +2192,7 @@
     {
       "id": "assembly/inspect",
       "labelKey": "ribbon.solid.interference",
-      "operations": ["assembly_interference_check"]
+      "operations": ["assembly_interference_check", "assembly_swept_collision_check", "assembly_create_contact_set", "assembly_update_contact_set", "assembly_delete_contact_set"]
     },
     {
       "id": "document/files",
