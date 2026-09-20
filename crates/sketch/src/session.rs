@@ -642,18 +642,23 @@ impl SketchSession {
     /// Creation-tool snap with a temporary inference override. Ctrl/Cmd
     /// suppresses object/datum acquisition while leaving the independently
     /// configured engineering grid available.
+    /// The one creation snap every curve/rectangle create tool uses: points,
+    /// origin, curve crossings, line midpoints, support-face edge midpoints and
+    /// the projected face boundary. Keeping a single implementation means the
+    /// cursor, the preview and the commit can never disagree about what a pick
+    /// acquired. These picks stay geometric (no durable midpoint relation is
+    /// manufactured), matching how curve creation consumes an acquisition.
+    /// Holding Ctrl suppresses the whole acquisition.
     fn snap_creation(&self, raw: Vec2, ctrl_held: bool) -> (Vec2, SnapTarget) {
-        self.snap_inner(raw, !ctrl_held, false, None)
+        self.snap_inner(raw, !ctrl_held, !ctrl_held, None)
     }
 
-    /// Creation snap that also acquires midpoints: a support-face edge
-    /// midpoint or a line midpoint is a valid pick for the center-point arc,
-    /// exactly as it is for a line endpoint. Unlike the line flow these picks
-    /// stay geometric (no durable midpoint relation is manufactured), matching
-    /// how every other curve creation consumes an acquisition. Holding Ctrl
-    /// suppresses the acquisition.
-    fn snap_creation_with_midpoints(&self, raw: Vec2, ctrl_held: bool) -> (Vec2, SnapTarget) {
-        self.snap_inner(raw, !ctrl_held, !ctrl_held, None)
+    /// Creation snap without midpoint-class references. The Point tool is the
+    /// only caller: it resolves curve interiors, virtual line extensions and
+    /// carrier coincidences itself, and a midpoint reference would override
+    /// that choice.
+    fn snap_creation_carrier_only(&self, raw: Vec2, ctrl_held: bool) -> (Vec2, SnapTarget) {
+        self.snap_inner(raw, !ctrl_held, false, None)
     }
 
     /// Line-flow snap (M1d): midpoint snapping is enabled here only, because
@@ -2120,7 +2125,8 @@ impl SketchSession {
             });
         }
 
-        let (coords, target) = self.snap_creation(raw, ctrl_held);
+        // Point keeps carrier semantics: no midpoint-class acquisition.
+        let (coords, target) = self.snap_creation_carrier_only(raw, ctrl_held);
         let resolution = self.resolve_endpoint(coords, target);
         if let EndpointResolution::Existing(id) = resolution {
             // Snapped onto an existing point: normally nothing to add. An
@@ -3002,21 +3008,21 @@ impl SketchSession {
         locked_radius: Option<f64>,
         radius_text: Option<&str>,
     ) -> Result<ToolResult, SessionError> {
-        let (center, center_target) = self.snap_creation_with_midpoints(center, ctrl_held);
+        let (center, center_target) = self.snap_creation(center, ctrl_held);
         let lock = locked_radius.filter(|value| *value >= MIN_LINE_LENGTH_MM);
         let (start, start_target) = match lock {
             Some(radius) => (
                 self.radius_locked_point(center, radius, start),
                 SnapTarget::None,
             ),
-            None => self.snap_creation_with_midpoints(start, ctrl_held),
+            None => self.snap_creation(start, ctrl_held),
         };
         let (sweep, sweep_target) = match lock {
             Some(radius) => (
                 self.radius_locked_point(center, radius, sweep),
                 SnapTarget::None,
             ),
-            None => self.snap_creation_with_midpoints(sweep, ctrl_held),
+            None => self.snap_creation(sweep, ctrl_held),
         };
         let radius = center.distance(start);
         if radius < MIN_LINE_LENGTH_MM {

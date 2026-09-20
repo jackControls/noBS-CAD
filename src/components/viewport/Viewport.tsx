@@ -6209,13 +6209,53 @@ export function Viewport() {
       slot: ['width'],
     };
 
-    /** Creation tools whose picks acquire midpoints: line midpoints,
-     * support-face edge midpoints and the projected face boundary. The line
-     * flow has always had it; the center-point arc is the same kind of pick.
-     * Every hover/preview/commit path must agree, or the cursor would show no
-     * marker while the committed point still moved. */
+    /**
+     * Object-snap policy for the shared creation acquisition.
+     *
+     * Every line/curve/rectangle create tool acquires the same reference set
+     * (line midpoints, support-face edge midpoints and the projected face
+     * boundary); the Point tool opts out because it resolves curve carriers
+     * itself, and the modify tools pick their own targets. Hover, preview and
+     * commit all read this one table, so the cursor marker can never disagree
+     * with what a commit acquires.
+     */
+    const SNAP_MIDPOINTS_BY_TOOL: Readonly<Partial<Record<ToolId, boolean>>> = {
+      line: true,
+      midpointLine: true,
+      rect2pt: true,
+      rectCenter: true,
+      circleCenter: true,
+      circle2pt: true,
+      arc3pt: true,
+      arcCenter: true,
+      slot: true,
+      splineFit: true,
+      polygon: true,
+      point: false,
+      moveCopy: false,
+      scale: false,
+    };
     const toolAcquiresMidpoints = (tool: ToolId | null): boolean =>
-      tool === 'line' || tool === 'midpointLine' || tool === 'arcCenter';
+      tool !== null && SNAP_MIDPOINTS_BY_TOOL[tool] === true;
+
+    /** The single acquisition a create tool uses. Nothing else may pass its
+     * own midpoint flag, which is what let the arc tool hover without a marker
+     * while its commit still snapped. */
+    const acquireToolSnap = (
+      tool: ToolId | null,
+      p: Vec2,
+      options: {
+        exclude?: Vec2 | null;
+        suppressRelations?: boolean;
+        midpoints?: boolean;
+      } = {},
+    ) =>
+      acquireCreateSnap(
+        p,
+        options.midpoints ?? toolAcquiresMidpoints(tool),
+        options.exclude ?? null,
+        options.suppressRelations ?? false,
+      );
 
     /** Raw typed text of locked fields (formulas pass through, D9). */
     const dynTexts = (): Record<string, string | undefined> => {
@@ -6882,6 +6922,8 @@ export function Viewport() {
       coincidentWith: number | null;
       extension: { from: Vec2; to: Vec2 } | null;
     } => {
+      // The Point tool resolves curve interiors/extensions itself; midpoint
+      // references would override that choice (see SNAP_MIDPOINTS_BY_TOOL).
       const acquired = acquireCreateSnap(p, false, null, suppressCarrier);
       if (acquired.target.kind === 'point' || acquired.target.kind === 'origin') {
         return { position: acquired.point, coincidentWith: null, extension: null };
@@ -7311,7 +7353,7 @@ export function Viewport() {
           break;
         }
         case 'arc3pt': {
-          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
+          void snapCursorInfo(p, toolAcquiresMidpoints(run.tool), inferenceOverride).then((snap) => {
             if (seq !== previewSeq) return;
             const snapped = snap.snapped_to;
             let tangentInference = false;
@@ -7365,7 +7407,7 @@ export function Viewport() {
           // Midpoint/midpoint-locus acquisition matches the line tool: the
           // support-face edge midpoint (triangle marker) and the projected
           // face boundary are valid pick targets, not only points.
-          void snapCursorInfo(p, true, inferenceOverride).then((snap) => {
+          void snapCursorInfo(p, toolAcquiresMidpoints(run.tool), inferenceOverride).then((snap) => {
             if (seq !== previewSeq) return;
             const snapped = snap.snapped_to;
             const lockedRadius = locks.radius;
@@ -7423,7 +7465,7 @@ export function Viewport() {
         case 'slot': {
           const modeMap = { centerToCenter: 'center_to_center', overall: 'overall', centerPoint: 'center_point' } as const;
           const mode = modeMap[store.getState().slotMode];
-          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
+          void snapCursorInfo(p, toolAcquiresMidpoints(run.tool), inferenceOverride).then((snap) => {
             if (seq !== previewSeq) return;
             const snapped = snap.snapped_to;
             if (run.points.length === 1) {
@@ -7460,7 +7502,7 @@ export function Viewport() {
           break;
         }
         case 'splineFit': {
-          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
+          void snapCursorInfo(p, toolAcquiresMidpoints(run.tool), inferenceOverride).then((snap) => {
             if (seq !== previewSeq) return;
             const pts = [...run.points, snap.snapped_to];
             const positions = tessellateSpline(pts, 16, 0.12);
@@ -7555,7 +7597,7 @@ export function Viewport() {
         }
         case 'rect2pt':
         case 'rectCenter': {
-          const corner = acquireCreateSnap(p, false, null, suppressInference).point;
+          const corner = acquireToolSnap(run.tool, p, { suppressRelations: suppressInference }).point;
           void engine
             .addRectangleLocked({
               mode: run.tool === 'rect2pt' ? 'two_point' : 'center',
@@ -7576,7 +7618,7 @@ export function Viewport() {
         }
         case 'circleCenter':
         case 'circle2pt': {
-          const edge = acquireCreateSnap(p, false, null, suppressInference).point;
+          const edge = acquireToolSnap(run.tool, p, { suppressRelations: suppressInference }).point;
           void engine
             .addCircleLocked({
               mode: run.tool === 'circleCenter' ? 'center_diameter' : 'two_point',
@@ -7594,7 +7636,7 @@ export function Viewport() {
           break;
         }
         case 'arc3pt': {
-          const next = acquireCreateSnap(p, false, null, suppressInference).point;
+          const next = acquireToolSnap(run.tool, p, { suppressRelations: suppressInference }).point;
           if (run.points.length < 2) {
             run.points.push(next);
             break;
@@ -7612,7 +7654,7 @@ export function Viewport() {
         case 'arcCenter': {
           // Same acquisition as the preview, including support-face edge
           // midpoints and the projected face boundary.
-          const acquired = acquireCreateSnap(p, true, null, suppressInference).point;
+          const acquired = acquireToolSnap(run.tool, p, { suppressRelations: suppressInference }).point;
           if (run.points.length === 0) {
             // The radius field is already armed by `startToolRun`, so a value
             // typed before or during the sweep survives this pick.
@@ -7650,7 +7692,7 @@ export function Viewport() {
           if (run.points.length < 2) {
             // Second end-cap center picked: arm the width field once the
             // slot axis exists.
-            run.points.push(acquireCreateSnap(p, false, null, suppressInference).point);
+            run.points.push(acquireToolSnap(run.tool, p, { suppressRelations: suppressInference }).point);
             const lp = lastPointerClient ?? { x: 0, y: 0 };
             const pos2 = clusterPos(lp.x, lp.y);
             store.getState().showDynInput(TOOL_FIELDS.slot!, pos2.x, pos2.y);
@@ -7663,7 +7705,7 @@ export function Viewport() {
               mode: modeMap[store.getState().slotMode],
               p1: run.points[0],
               p2: run.points[1],
-              cursor: acquireCreateSnap(p, false, null, suppressInference).point,
+              cursor: acquireToolSnap(run.tool, p, { suppressRelations: suppressInference }).point,
               width_mm: locks.width ?? null,
               width_text: texts.width ?? null,
             })
@@ -7675,7 +7717,7 @@ export function Viewport() {
         case 'splineFit': {
           // Chain: every click appends a fit point; Enter or double-click
           // commits (see commitSpline), Esc cancels via endToolRun.
-          run.points.push(acquireCreateSnap(p, false, null, suppressInference).point);
+          run.points.push(acquireToolSnap(run.tool, p, { suppressRelations: suppressInference }).point);
           break;
         }
       }
@@ -10906,12 +10948,9 @@ export function Viewport() {
           );
           return;
         }
-        const acquired = acquireCreateSnap(
-          p,
-          !inferenceOverride && toolAcquiresMidpoints(state.activeTool),
-          null,
-          inferenceOverride,
-        );
+        const acquired = acquireToolSnap(state.activeTool, p, {
+          suppressRelations: inferenceOverride,
+        });
         showSnapMarker(acquired.point, nativeSnapKind(acquired.target.kind));
         return;
       }
