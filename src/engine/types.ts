@@ -3367,6 +3367,9 @@ export interface ArcCenterRequest {
    *  typed value creates a driving Radius dimension (D9). */
   radius_mm?: number | null;
   radius_text?: string | null;
+  /** Locked included angle: a typed value creates a driving ArcAngle dimension
+   *  beside the radius one, so the sweep stays visible and editable. */
+  angle_text?: string | null;
   /** Signed sweep from the start pick to the third pick, in radians, taken
    *  from the pointer's travel: positive counter-clockwise, negative
    *  clockwise. It disambiguates two picks 180 degrees apart, so one start

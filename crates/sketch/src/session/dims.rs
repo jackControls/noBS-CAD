@@ -795,6 +795,42 @@ impl SketchSession {
         );
     }
 
+    /// A typed sweep angle becomes a driving `ArcAngle` dimension, placed like
+    /// an angular dimension: inside the arc, centred on the span it measures.
+    pub(crate) fn auto_dim_arc_angle(&mut self, arc: EntityId, text: &str) {
+        let Some((center, r)) = self.circle_spec(arc) else {
+            return;
+        };
+        let Some(mid) = self.arc_mid_angle(arc) else {
+            return;
+        };
+        let Ok(param) = self.param_from_text(ParamKind::Angle, Some(text), 0.0) else {
+            return;
+        };
+        let span = self
+            .sketch
+            .entity(arc)
+            .and_then(|entity| match entity {
+                Entity::Arc {
+                    start_angle,
+                    end_angle,
+                    ..
+                } => Some((end_angle - start_angle).rem_euclid(std::f64::consts::TAU)),
+                _ => None,
+            })
+            .unwrap_or(0.0);
+        let _ = self.add_constraint_bound(
+            Constraint::ArcAngle {
+                entity: arc,
+                value: span.to_degrees(),
+            },
+            param,
+            // Well inside the arc, where an angular dimension reads.
+            center + Vec2::new(mid.cos(), mid.sin()) * (r * 0.55),
+            false,
+        );
+    }
+
     // --- DTO ---
 
     pub(crate) fn dimension_dtos(&self) -> Vec<DimensionDto> {

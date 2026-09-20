@@ -7907,6 +7907,7 @@ export function Viewport() {
               ctrl_held: suppressInference,
               radius_mm: radiusLocked ? lockedRadius : null,
               radius_text: radiusLocked ? texts.radius ?? null : null,
+              angle_text: texts.angle ?? null,
               sweep_rad: travel,
             })
             .then((r) => {

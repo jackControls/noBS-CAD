@@ -179,6 +179,9 @@ const OCCURRENCE_EDGE_LOD_MIN_RADIUS_PX: f32 = 3.0;
 /// step size grows with the square of the view distance, and so does the bias
 /// it buys) yet far below the depth of geometry that must stay hidden.
 const MODEL_EDGE_DEPTH_BIAS: f32 = -1.0e-5;
+/// How far a model edge is nudged towards the camera so it beats the faces it
+/// lies on. One pixel is enough to win the tie and cannot be seen as a shift.
+const MODEL_EDGE_LIFT_PIXELS: f32 = 1.0;
 const SKETCH_DEPTH_BIAS: f32 = -0.90;
 const SKETCH_POINT_OUTLINE_WIDTH: f32 = 2.0;
 const SKETCH_POINT_OUTLINE_DEPTH_BIAS: f32 = -0.89;
@@ -4517,8 +4520,9 @@ fn draw_cad_gizmos(
                         edge,
                         rgb(palette.0.pick_halo),
                         &body_transform,
+                        None,
                     );
-                    draw_edge_segments(&mut pick_feedback, edge, color, &body_transform);
+                    draw_edge_segments(&mut pick_feedback, edge, color, &body_transform, None);
                 }
             }
 
@@ -4553,9 +4557,15 @@ fn draw_cad_gizmos(
                 };
                 if ghosted_body && !selected && !hovered && selected_body_index.is_none() {
                     // Through-geometry wireframe for the ghosted part.
-                    draw_edge_segments(&mut highlights, edge, rgb(color), &body_transform);
+                    draw_edge_segments(&mut highlights, edge, rgb(color), &body_transform, None);
                 } else {
-                    draw_edge_segments(&mut gizmos, edge, rgba(color, 0.92), &body_transform);
+                    draw_edge_segments(
+                        &mut gizmos,
+                        edge,
+                        rgba(color, 0.92),
+                        &body_transform,
+                        Some((camera.camera, *viewport)),
+                    );
                 }
                 if selected || hovered {
                     draw_edge_segments(
@@ -4563,6 +4573,7 @@ fn draw_cad_gizmos(
                         edge,
                         rgb(palette.0.pick_halo),
                         &body_transform,
+                        None,
                     );
                     draw_edge_segments(
                         &mut pick_feedback,
@@ -4573,6 +4584,7 @@ fn draw_cad_gizmos(
                             palette.0.edge_hover
                         }),
                         &body_transform,
+                        None,
                     );
                 }
             }
@@ -5290,21 +5302,38 @@ fn draw_edge_segments<Config: GizmoConfigGroup>(
     edge: &nbcad_solid::EdgeDto,
     color: Color,
     transform: &Transform,
+    lift: Option<(ViewportCamera, ViewportSizeResource)>,
 ) {
+    // A model edge lies exactly on the faces that meet along it. A fixed depth
+    // bias is not enough to win that tie: on a face seen at a grazing angle the
+    // depth slope across one pixel is larger than the bias, so the stroke keeps
+    // losing the comparison and breaks up into dashes - which is what happened
+    // to a pocket floor arc while the top rim stayed solid. Nudging the stroke
+    // one pixel towards the camera wins the tie at any zoom, because moving
+    // along the view direction changes exactly the depth the comparison reads.
+    let lift = lift.map(|(camera, viewport)| {
+        let position = Vec3::from_array(camera.position);
+        let forward = (Vec3::from_array(camera.target) - position).normalize_or_zero();
+        (forward, camera, viewport)
+    });
     for pair in edge.points.windows(2) {
-        gizmos.line(
-            transform.transform_point(Vec3::new(
-                pair[0].x as f32,
-                pair[0].y as f32,
-                pair[0].z as f32,
-            )),
-            transform.transform_point(Vec3::new(
-                pair[1].x as f32,
-                pair[1].y as f32,
-                pair[1].z as f32,
-            )),
-            color,
-        );
+        let mut start = transform.transform_point(Vec3::new(
+            pair[0].x as f32,
+            pair[0].y as f32,
+            pair[0].z as f32,
+        ));
+        let mut end = transform.transform_point(Vec3::new(
+            pair[1].x as f32,
+            pair[1].y as f32,
+            pair[1].z as f32,
+        ));
+        if let Some((forward, camera, viewport)) = lift {
+            let pixel = world_per_pixel_at(camera, viewport, (start + end) * 0.5);
+            let offset = forward * pixel * MODEL_EDGE_LIFT_PIXELS;
+            start -= offset;
+            end -= offset;
+        }
+        gizmos.line(start, end, color);
     }
 }
 

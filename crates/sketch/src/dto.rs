@@ -764,6 +764,10 @@ pub struct ArcCenterRequest {
     pub radius_mm: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radius_text: Option<String>,
+    /// The typed value of the included-angle field, when the user locked one.
+    /// Present means "dimension this sweep", mirroring `radius_text`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle_text: Option<String>,
     /// Signed sweep from the start pick to the third pick, in radians, taken
     /// from the pointer's own travel: positive is counter-clockwise, negative
     /// clockwise. It disambiguates the two halves a pair of picks cannot tell

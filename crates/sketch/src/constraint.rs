@@ -168,6 +168,14 @@ pub enum Constraint {
         b: EntityId,
         value: f64,
     },
+    /// Included angle of an arc, in degrees. A center-point arc stores its own
+    /// start and end angles, so its sweep is a real degree of freedom and can be
+    /// dimensioned in its own right - which is what a typed sweep angle needs in
+    /// order to stay editable afterwards.
+    ArcAngle {
+        entity: EntityId,
+        value: f64,
+    },
 }
 
 impl Constraint {
@@ -209,6 +217,9 @@ impl Constraint {
             | (Constraint::Collinear { a, b }, Constraint::Collinear { a: c, b: d })
             | (Constraint::Angle { a, b, .. }, Constraint::Angle { a: c, b: d, .. }) => {
                 unordered_pair_eq(a, b, c, d)
+            }
+            (Constraint::ArcAngle { entity: a, .. }, Constraint::ArcAngle { entity: b, .. }) => {
+                a == b
             }
             (
                 Constraint::Symmetry { a, b, axis },
@@ -309,7 +320,8 @@ impl Constraint {
             Constraint::Distance { value, .. }
             | Constraint::Radius { value, .. }
             | Constraint::Diameter { value, .. }
-            | Constraint::Angle { value, .. } => *value = target,
+            | Constraint::Angle { value, .. }
+            | Constraint::ArcAngle { value, .. } => *value = target,
             _ => {}
         }
     }
@@ -336,6 +348,9 @@ impl Constraint {
             Constraint::Collinear { .. } => "collinear",
             Constraint::Symmetry { .. } => "symmetry",
             Constraint::ArcEndpointCoincident { .. } => "arc_endpoint_coincident",
+            // Surfaced as an angle dimension: the viewport anchors it at the
+            // arc's centre when the dimension names a single arc.
+            Constraint::ArcAngle { .. } => "angle",
             Constraint::EqualDistance { .. } => "equal_distance",
             Constraint::Distance { .. } => "distance",
             Constraint::Radius { .. } => "radius",
@@ -349,7 +364,8 @@ impl Constraint {
             Constraint::Distance { .. }
             | Constraint::Radius { .. }
             | Constraint::Diameter { .. }
-            | Constraint::Angle { .. } => ConstraintKind::Dimensional,
+            | Constraint::Angle { .. }
+            | Constraint::ArcAngle { .. } => ConstraintKind::Dimensional,
             _ => ConstraintKind::Geometric,
         }
     }
@@ -376,6 +392,7 @@ impl Constraint {
             | Constraint::Concentric { a, b }
             | Constraint::Collinear { a, b }
             | Constraint::Angle { a, b, .. } => vec![a, b],
+            Constraint::ArcAngle { entity, .. } => vec![entity],
             Constraint::ArcEndpointCoincident { point, arc, .. } => vec![point, arc],
             Constraint::SpanMidpoint { point, start, end } => vec![point, start, end],
             Constraint::EqualDistance { origin, a, b } => vec![origin, a, b],

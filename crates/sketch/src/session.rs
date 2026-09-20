@@ -2962,7 +2962,7 @@ impl SketchSession {
         sweep: Vec2,
         ctrl_held: bool,
     ) -> Result<ToolResult, SessionError> {
-        self.build_center_arc(center, start, sweep, ctrl_held, None, None, None)
+        self.build_center_arc(center, start, sweep, ctrl_held, None, None, None, None)
     }
 
     /// Center Arc honoring a locked radius field (typed value auto-creates a
@@ -2978,6 +2978,7 @@ impl SketchSession {
         ctrl_held: bool,
         radius_mm: Option<f64>,
         radius_text: Option<&str>,
+        angle_text: Option<&str>,
         sweep_rad: Option<f64>,
     ) -> Result<ToolResult, SessionError> {
         let radius = match radius_text {
@@ -2991,6 +2992,7 @@ impl SketchSession {
             ctrl_held,
             radius,
             radius_text,
+            angle_text,
             sweep_rad,
         )
     }
@@ -3020,6 +3022,7 @@ impl SketchSession {
         ctrl_held: bool,
         locked_radius: Option<f64>,
         radius_text: Option<&str>,
+        angle_text: Option<&str>,
         sweep_rad: Option<f64>,
     ) -> Result<ToolResult, SessionError> {
         let (center, center_target) = self.snap_creation(center, ctrl_held);
@@ -3139,6 +3142,12 @@ impl SketchSession {
             .or_else(|| lock.map(format_number));
         if let Some(text) = dim_text.as_deref() {
             self.auto_dim_arc_radius(id, text);
+        }
+        // A typed sweep angle is a dimension in its own right: it must stay
+        // visible and editable after the arc is committed, not vanish into the
+        // numbers the endpoints happened to land on.
+        if let Some(text) = angle_text.map(str::to_owned) {
+            self.auto_dim_arc_angle(id, &text);
         }
         self.recompute();
         self.push_command(before);
@@ -3279,6 +3288,7 @@ impl SketchSession {
 
         match *constraint {
             Constraint::ArcEndpointCoincident { .. }
+            | Constraint::ArcAngle { .. }
             | Constraint::OriginCoincident { .. }
             | Constraint::EqualDistance { .. }
             | Constraint::ReferenceMidpoint { .. }
@@ -4337,6 +4347,7 @@ impl SketchSession {
                 Constraint::Fix { .. }
                 | Constraint::Radius { .. }
                 | Constraint::Diameter { .. }
+                | Constraint::ArcAngle { .. }
                 | Constraint::ReferenceMidpoint { .. }
                 | Constraint::SpanMidpoint { .. }
                 | Constraint::ArcEndpointCoincident { .. }
@@ -4569,6 +4580,12 @@ impl SketchSession {
                 Constraint::CenterCoincident { point, curve } => {
                     point_positions.insert(point);
                     curve_radii.insert(curve);
+                }
+                // A sweep dimension owns the arc's angles alone: its centre and
+                // radius stay where they are while the endpoints swing.
+                Constraint::ArcAngle { entity, .. } => {
+                    curve_radii.insert(entity);
+                    curve_centers.insert(entity);
                 }
                 Constraint::Midpoint { a: point, b: line } => {
                     add_line_shape(&mut line_lengths, &mut line_angles, line);

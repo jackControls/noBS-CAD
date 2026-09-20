@@ -1305,6 +1305,19 @@ fn build_equations(
                     eqs.push((Some(cid), Eq::Radius { r, target }));
                 }
             }
+            Constraint::ArcAngle { entity, value } => {
+                // The arc stores its own start and end angles sweeping
+                // counter-clockwise, so the included angle is their difference.
+                if let Some(&(_, _, start_angle, end_angle)) = map.arcs.get(&entity) {
+                    let target = sketch.dim_value(&cid, value).to_radians();
+                    push_lin(
+                        &mut eqs,
+                        cid,
+                        vec![(end_angle, 1.0), (start_angle, -1.0)],
+                        -target,
+                    );
+                }
+            }
             Constraint::Diameter { entity, value } => {
                 if let Some(r) = map.radius_var(sketch, entity) {
                     let target = sketch.dim_value(&cid, value);

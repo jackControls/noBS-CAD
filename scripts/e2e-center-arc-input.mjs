@@ -566,6 +566,26 @@ try {
     (lockedSweep.start_angle + lockedSweep.end_angle) / 2 < 0,
     'the drag direction still chooses the side the arc covers',
   );
+  // A typed angle is dimensioned like a typed radius: the annotation must
+  // survive the commit so the sweep stays readable and editable.
+  // Earlier steps already own a radius dimension, so find this arc's angle one.
+  const sweepDimensions = (await sketch()).dimensions.filter(
+    (dimension) => dimension.kind === 'angle' && dimension.entities.includes(lockedSweep.id),
+  );
+  assert.equal(
+    sweepDimensions.length,
+    1,
+    `one sweep dimension for this arc, got ${JSON.stringify(sweepDimensions)}`,
+  );
+  assert.equal(sweepDimensions[0].text, '45.00°');
+  const dimensionReach = Math.hypot(
+    sweepDimensions[0].text_pos.x - lockedSweep.center.x,
+    sweepDimensions[0].text_pos.y - lockedSweep.center.y,
+  );
+  assert.ok(
+    dimensionReach < lockedSweep.radius,
+    `an angular dimension reads inside the arc, got ${dimensionReach}`,
+  );
 
   assert.deepEqual(pageErrors, []);
   console.log('center-arc input: all checks passed');

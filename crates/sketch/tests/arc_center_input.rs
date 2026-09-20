@@ -110,6 +110,7 @@ fn a_typed_radius_locks_the_arc_and_adds_a_driving_dimension() {
             None,
             Some("12"),
             None,
+            None,
         )
         .unwrap();
     let (center, radius, start_angle, end_angle) = arc_of(&session, result.entities[0]);
@@ -169,6 +170,7 @@ fn a_typed_radius_expression_is_evaluated() {
             None,
             Some("=6*2"),
             None,
+            None,
         )
         .unwrap();
     let (_, radius, _, _) = arc_of(&session, result.entities[0]);
@@ -191,6 +193,7 @@ fn one_undo_removes_a_locked_arc_and_its_dimension() {
             None,
             Some("12"),
             None,
+            None,
         )
         .unwrap();
     assert_eq!(session.dto().dimensions.len(), 1);
@@ -212,6 +215,7 @@ fn the_drag_direction_decides_which_half_the_arc_covers() {
         v(5.0, 0.0),
         v(-5.0, 0.0),
         false,
+        None,
         None,
         None,
         // Pointer travel: 0 -> -90 -> -180 degrees.
@@ -244,6 +248,7 @@ fn the_drag_direction_decides_which_half_the_arc_covers() {
         None,
         None,
         None,
+        None,
     )
     .unwrap();
     let (_, _, start_angle, end_angle) = arc_of(&ccw, cw_id);
@@ -263,6 +268,7 @@ fn the_drag_direction_decides_which_half_the_arc_covers() {
             false,
             None,
             None,
+            None,
             Some(-std::f64::consts::FRAC_PI_2),
         )
         .unwrap();
@@ -279,6 +285,61 @@ fn the_drag_direction_decides_which_half_the_arc_covers() {
 }
 
 #[test]
+fn a_typed_sweep_angle_becomes_a_driving_dimension() {
+    let mut session = face_session();
+    let result = session
+        .add_arc_center_locked(
+            v(0.0, 0.0),
+            v(9.0, 0.0),
+            v(0.0, 9.0),
+            false,
+            None,
+            None,
+            // A typed "90" with the pointer travelling counter-clockwise.
+            Some("90"),
+            Some(std::f64::consts::FRAC_PI_2),
+        )
+        .unwrap();
+    let arc_id = result.entities[0];
+    let (center, radius, start_angle, end_angle) = arc_of(&session, arc_id);
+    assert!((radius - 9.0).abs() < 1e-9, "radius {radius}");
+    assert!(
+        (end_angle - start_angle - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+        "the typed angle sizes the sweep: {start_angle} .. {end_angle}"
+    );
+
+    let dto = session.dto();
+    let dimensions = dto.dimensions.clone();
+    assert_eq!(
+        dimensions.len(),
+        1,
+        "one sweep dimension, no radius dimension"
+    );
+    assert_eq!(dimensions[0].kind, "angle");
+    assert_eq!(dimensions[0].entities, vec![arc_id]);
+    assert_eq!(dimensions[0].text, "90.00°");
+    // ISO/ANSI puts an angular dimension inside the arc it measures.
+    let reach = dimensions[0].text_pos.distance(center);
+    assert!(
+        reach > 0.0 && reach < radius,
+        "the angle value sits inside the arc, got {reach} for radius {radius}"
+    );
+
+    // Driving: editing the dimension re-solves the arc's sweep.
+    session
+        .edit_dimension(EditDimensionRequest {
+            constraint_id: dimensions[0].constraint_id,
+            text: "30".to_string(),
+        })
+        .unwrap();
+    let (_, _, start_angle, end_angle) = arc_of(&session, arc_id);
+    assert!(
+        (end_angle - start_angle - 30.0_f64.to_radians()).abs() < 1e-6,
+        "edited sweep {start_angle} .. {end_angle}"
+    );
+}
+
+#[test]
 fn a_click_that_never_moved_is_not_a_full_circle() {
     // The pick pair sits on one ray, so the pointer described no sweep at all.
     // This used to be read as "no direction given" and produced a whole circle
@@ -289,6 +350,7 @@ fn a_click_that_never_moved_is_not_a_full_circle() {
         v(5.0, 0.0),
         v(5.0, 0.0),
         false,
+        None,
         None,
         None,
         Some(0.0),
@@ -309,6 +371,7 @@ fn a_click_that_never_moved_is_not_a_full_circle() {
         v(5.0, 0.0),
         v(5.0, 0.0),
         false,
+        None,
         None,
         None,
         Some(std::f64::consts::TAU),
