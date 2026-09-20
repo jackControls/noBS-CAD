@@ -3,9 +3,9 @@ type: Concept
 title: DFM process guidelines
 description: Starting manufacturability heuristics by process family; confirm with your shop.
 status: draft
-updated: 2026-09-11
+updated: 2026-09-19
 topics: dfm, cnc, sheet-metal, casting, injection-molding, welding, edm
-keywords: draft, wall thickness, bend radius, tool access, fillet, pocket depth
+keywords: draft, wall thickness, bend radius, tool access, fillet, pocket depth, additive, FDM, anisotropy
 related_recipes: mounting-plate, angle-bracket, fillet-basics
 sources: nwtc-guns-dfm
 ---
@@ -55,6 +55,8 @@ tolerances; prefer near-net blanks over hogging air.
 
 Orientation, supports, anisotropy, and hole shrinkage dominate. Use
 [fit coupons](fits-clearances.md) before locking mating geometry
-(`turbine-fit-coupons`, `d-screw-vise-fit`).
+(`turbine-fit-coupons`, `d-screw-vise-fit`). Deepen with
+[AM thin walls and print orientation](am-thin-walls.md) and
+[AM snap-fits](am-snap-fit.md). Edge breaks: [fillet vs chamfer](fillet-chamfer.md).
 
 Related: [DFM overview](dfm-overview.md), [taxonomy](../taxonomy.md).

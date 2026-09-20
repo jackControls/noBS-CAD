@@ -3,7 +3,7 @@ type: Concept
 title: Machine-design taxonomy
 description: Topic map — seeded pages vs planned gaps for the open machine-design KB.
 status: draft
-updated: 2026-09-11
+updated: 2026-09-19
 searchable: false
 ---
 
@@ -57,7 +57,8 @@ Provenance: [SOURCES](SOURCES.md).
 |-------|--------|
 | DFM overview | **seeded** — [dfm-overview](concepts/dfm-overview.md) |
 | Process guidelines | **seeded** — [dfm-process-guidelines](concepts/dfm-process-guidelines.md) |
-| DFAM deep dive | **planned** beyond coupon notes |
+| DFAM deep dive | **seeded (partial)** — [am-snap-fit](concepts/am-snap-fit.md), [am-thin-walls](concepts/am-thin-walls.md) |
+| Fillet vs chamfer | **seeded** — [fillet-chamfer](concepts/fillet-chamfer.md) |
 
 ## F. Design hygiene
 

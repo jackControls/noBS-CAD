@@ -692,6 +692,22 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/machine-design/concepts/materials-vocabulary.md"),
     },
     KnowledgeFile {
+        path: "machine-design/concepts/am-snap-fit.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-snap-fit.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/am-thin-walls.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-thin-walls.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/fillet-chamfer.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/fillet-chamfer.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/research-before-commit.md",
+        text: include_str!("../../../knowledge/concepts/research-before-commit.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/taxonomy.md",
         text: include_str!("../../../knowledge/machine-design/taxonomy.md"),
     },
@@ -831,9 +847,66 @@ mod tests {
     }
 
     #[test]
+    fn snap_fit_hits_am_snap_page() {
+        let store = HelpStore::bundled();
+        let hits = store.search("snap fit cantilever clip", Some(5));
+        assert!(!hits.is_empty(), "expected hits for snap fit");
+        assert!(
+            hits.iter().any(|h| h.id.contains("am-snap-fit")),
+            "expected am-snap-fit in hits, got {:?}",
+            hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn living_hinge_hits_am_snap_page() {
+        let store = HelpStore::bundled();
+        let hits = store.search("living hinge", Some(5));
+        assert!(
+            hits.iter().any(|h| h.id.contains("am-snap-fit")),
+            "expected am-snap-fit for living hinge, got {:?}",
+            hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn thin_wall_fdm_hits_am_thin_walls() {
+        let store = HelpStore::bundled();
+        let hits = store.search("thin wall FDM min wall", Some(5));
+        assert!(
+            hits.iter()
+                .any(|h| h.id.contains("am-thin-walls") || h.id.contains("am-snap-fit")),
+            "expected am-thin-walls (or snap) for thin wall FDM, got {:?}",
+            hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn research_before_commit_is_searchable() {
+        let store = HelpStore::bundled();
+        let hits = store.search("research before commit verify table", Some(5));
+        assert!(
+            hits.iter().any(|h| h.id.contains("research-before-commit")),
+            "expected research-before-commit, got {:?}",
+            hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn fillet_vs_chamfer_hits_dedicated_page() {
+        let store = HelpStore::bundled();
+        let hits = store.search("fillet vs chamfer when to use", Some(5));
+        assert!(
+            hits.iter().any(|h| h.id.contains("fillet-chamfer")),
+            "expected fillet-chamfer, got {:?}",
+            hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn check_corpus_ok() {
         let n = check_corpus().expect("corpus check");
-        assert!(n >= 6);
+        assert!(n >= 18);
     }
 
     #[test]
@@ -841,6 +914,8 @@ mod tests {
         let files = knowledge_files();
         assert!(files.iter().any(|f| f.path == "index.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/fits-clearances.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-snap-fit.md"));
+        assert!(files.iter().any(|f| f.path == "concepts/research-before-commit.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));
         assert!(knowledge_file_by_uri("nbcad://knowledge/../etc/passwd").is_none());

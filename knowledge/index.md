@@ -18,6 +18,7 @@ Keep concepts **thin**. Longer material lives in the repository’s
 - [Architecture](concepts/architecture.md) - Kernel, shell, and project-file boundaries.
 - [MCP harness](concepts/mcp-harness.md) - Headless/live routing and engineering resources.
 - [Agent MCP workflow](concepts/agent-mcp-workflow.md) - Tenacity, cad_help-first, soft focus, recipes.
+- [Research before commit](concepts/research-before-commit.md) - VERIFY table and local help before freezing geometry.
 - [Contribution process](concepts/process.md) - Lightweight contribution and review expectations.
 - [Export & print](concepts/export-print.md) - Interchange, print export and qualification boundaries.
 - [Gear identification and compatible pairs](concepts/gears.md) - Module/DP, OD limits, pressure angle, ratio changes and mounting.
@@ -56,6 +57,9 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [Materials vocabulary](machine-design/concepts/materials-vocabulary.md) - Properties for CAD choices.
 - [DFM overview](machine-design/concepts/dfm-overview.md) - Process families and heuristics.
 - [DFM process guidelines](machine-design/concepts/dfm-process-guidelines.md) - Molding, cast, sheet, weld, EDM, CNC.
+- [AM snap-fits](machine-design/concepts/am-snap-fit.md) - Cantilever clips, latches, living hinges.
+- [AM thin walls](machine-design/concepts/am-thin-walls.md) - FDM min wall, anisotropy, print orientation.
+- [Fillet vs chamfer](machine-design/concepts/fillet-chamfer.md) - When to blend vs bevel.
 
 Use the listed resources for their stated scope, then consult the cited sources
 for more detail. The bundle is guidance for design decisions; it does not supply
