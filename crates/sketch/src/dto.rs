@@ -768,7 +768,8 @@ pub struct ArcCenterRequest {
     /// from the pointer's own travel: positive is counter-clockwise, negative
     /// clockwise. It disambiguates the two halves a pair of picks cannot tell
     /// apart (a 180 degree drag is the same pair of rays either way) and lets
-    /// one start point place the arc on either side. `None` keeps the
+    /// one start point place the arc on either side. A magnitude of zero is a
+    /// click that never moved and is rejected as degenerate; `None` keeps the
     /// historical counter-clockwise sweep.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sweep_rad: Option<f64>,

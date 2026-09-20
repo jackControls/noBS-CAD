@@ -266,9 +266,46 @@ fn the_drag_direction_decides_which_half_the_arc_covers() {
     );
 }
 
-fn radius_point(center_x: f64, center_y: f64, radius: f64, angle: f64) -> Vec2 {
-    v(
-        center_x + radius * angle.cos(),
-        center_y + radius * angle.sin(),
+#[test]
+fn a_click_that_never_moved_is_not_a_full_circle() {
+    // The pick pair sits on one ray, so the pointer described no sweep at all.
+    // This used to be read as "no direction given" and produced a whole circle
+    // out of a stray click; it must be refused instead.
+    let mut session = face_session();
+    let refused = session.add_arc_center_locked(
+        v(0.0, 0.0),
+        v(5.0, 0.0),
+        v(5.0, 0.0),
+        false,
+        None,
+        None,
+        Some(0.0),
+    );
+    assert!(
+        refused.is_err(),
+        "a zero-travel sweep must not become an arc"
+    );
+    assert!(
+        session.dto().entities.is_empty(),
+        "the refused arc must not be left behind"
+    );
+
+    // A deliberate full turn is still a full circle.
+    let mut full = face_session();
+    full.add_arc_center_locked(
+        v(0.0, 0.0),
+        v(5.0, 0.0),
+        v(5.0, 0.0),
+        false,
+        None,
+        None,
+        Some(std::f64::consts::TAU),
     )
+    .unwrap();
+    let (_, radius, start_angle, end_angle) = arc_of(&full, nbcad_sketch::EntityId(1));
+    assert!((radius - 5.0).abs() < 1e-9, "radius {radius}");
+    assert!(
+        (end_angle - start_angle - std::f64::consts::TAU).abs() < 1e-9,
+        "a full turn stays a full circle: {start_angle} .. {end_angle}"
+    );
 }

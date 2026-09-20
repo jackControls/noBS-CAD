@@ -64,6 +64,11 @@ const arcOf = async () => {
   const current = await sketch();
   return current.entities.find((entity) => entity.kind === 'arc') ?? null;
 };
+/** Point count of every transient preview line the native viewport would draw. */
+const previewPointCounts = () =>
+  page.evaluate(() =>
+    window.__nativeViewportTransient().lines.map((layer) => layer.segments.length / 6),
+  );
 
 /** 20 x 15 x 10 body, sketch hosted on its top face. */
 async function faceSketch() {
@@ -360,6 +365,66 @@ try {
   // The live radius field must not outlive the run it belongs to.
   const afterRun = await state();
   assert.equal(afterRun.dynInput.active, false, 'the value cluster retires with the run');
+
+  console.log('6. Placing the first endpoint must not leave a whole circle behind');
+  await arm('arcCenter');
+  await clickSketch(frame.center.x, frame.center.y);
+  await moveSketch(frame.center.x + 6, frame.center.y);
+  // While the radius is undefined the closed circle IS the radius affordance.
+  const radiusGuide = Math.max(0, ...(await previewPointCounts()));
+  assert.ok(
+    radiusGuide > 20,
+    `the radius guide is a closed circle, got ${radiusGuide} points`,
+  );
+  await clickSketch(frame.center.x + 6, frame.center.y);
+  // The radius is fixed by this pick, so the circle must retire at once —
+  // without waiting for the next pointer move. Leaving it on screen is what
+  // read as "I had just placed the first endpoint and it drew the whole
+  // circle".
+  const afterStart = await previewPointCounts();
+  assert.ok(
+    afterStart.every((count) => count < 10),
+    `the radius circle must retire at the start pick, got ${JSON.stringify(afterStart)}`,
+  );
+  // A third pick that never moved describes no sweep, so nothing may commit.
+  const beforeNoTravel = (await sketch()).entities.filter((entity) => entity.kind === 'arc').length;
+  await clickSketch(frame.center.x + 6, frame.center.y);
+  assert.equal(
+    (await sketch()).entities.filter((entity) => entity.kind === 'arc').length,
+    beforeNoTravel,
+    'a pick with no pointer travel must not commit a full circle',
+  );
+  assert.equal(
+    (await state()).activeTool,
+    'arcCenter',
+    'the run stays armed so the sweep can still be drawn',
+  );
+  // Two pixels is a click too: the snap pulls the pick back onto the start ray.
+  const startPixel = await screenOf(frame.center.x + 6, frame.center.y);
+  await page.mouse.move(startPixel.x, startPixel.y, { steps: 2 });
+  await page.mouse.click(startPixel.x + 2, startPixel.y + 2);
+  await page.waitForTimeout(260);
+  assert.equal(
+    (await sketch()).entities.filter((entity) => entity.kind === 'arc').length,
+    beforeNoTravel,
+    'a two pixel nudge is still not a sweep',
+  );
+  // ... and the very next real move sweeps a normal arc.
+  await moveSketch(frame.center.x + 4, frame.center.y + 4);
+  await clickSketch(frame.center.x + 4, frame.center.y + 4);
+  await page.waitForFunction(
+    (count) =>
+      window.__appStore.getState().activeSketch.entities.filter(
+        (entity) => entity.kind === 'arc',
+      ).length === count + 1,
+    beforeNoTravel,
+  );
+  await cancel();
+  const swept = (await sketch()).entities.filter((entity) => entity.kind === 'arc').pop();
+  assert.ok(
+    Math.abs(swept.end_angle - swept.start_angle - Math.PI / 4) < 1e-6,
+    `the deferred pick still sweeps a quarter turn: ${swept.start_angle} .. ${swept.end_angle}`,
+  );
 
   assert.deepEqual(pageErrors, []);
   console.log('center-arc input: all checks passed');

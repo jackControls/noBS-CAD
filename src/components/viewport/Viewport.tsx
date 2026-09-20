@@ -7219,6 +7219,10 @@ export function Viewport() {
       };
     };
 
+    /** Angular travel below this is a click, not a sweep: the two picks sit on
+     * the same ray and the pointer never went anywhere. */
+    const MIN_ARC_TRAVEL_RAD = 1e-6;
+
     /** Accumulate the pointer's signed angular travel for the center arc, so
      * preview and commit agree on which half a drag describes. A drag longer
      * than a full turn stays a full circle. */
@@ -7704,6 +7708,13 @@ export function Viewport() {
             // Seed the angular accumulator at the start pick so the sweep can
             // follow the pointer from here on.
             run.arc = { lastAngle: angleOf(run.points[0], next), travel: 0 };
+            // The closed circle on screen was the *radius* affordance, and the
+            // radius is fixed by this pick. Retiring it here — and invalidating
+            // the preview that is still in flight from the move before the
+            // click — is what keeps "I just placed the first endpoint" from
+            // looking like "the tool drew the whole circle".
+            previewSeq += 1;
+            setPreviewPositions(null);
             break;
           }
           const [center, start] = run.points;
@@ -7711,11 +7722,16 @@ export function Viewport() {
           const directed = radiusLocked
             ? pointOnRadius(center, lockedRadius, next)
             : next;
-          // The pointer travel is authoritative; a click without any sweep
-          // stays a full circle, exactly as before.
+          // The pointer travel is authoritative. A pick that carries none
+          // describes no sweep at all — two picks on one ray — so it must not
+          // commit: that is how a stray click (or a cursor the snap pulled back
+          // onto the start ray) used to turn into a full circle. Keep the run
+          // armed and wait for the pointer; dragging a deliberate full turn is
+          // still a full circle.
           const travel = run.arc
             ? accumulateArcTravel(run, angleOf(center, directed))
             : null;
+          if (travel !== null && Math.abs(travel) < MIN_ARC_TRAVEL_RAD) break;
           void engine
             .addArcCenter({
               center,

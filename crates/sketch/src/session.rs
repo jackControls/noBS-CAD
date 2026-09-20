@@ -58,6 +58,9 @@ pub const INFERENCE_ANGLE_TOL_DEG: f64 = 3.0;
 pub const MIN_LINE_LENGTH_MM: f64 = 1e-6;
 /// Distance below which two points are considered the same location.
 const MERGE_EPS: f64 = 1e-6;
+/// Angular travel below which a center-arc sweep counts as "the pointer never
+/// moved": the picks sit on one ray and there is no arc to build.
+pub const MIN_ARC_TRAVEL_RAD: f64 = 1e-6;
 /// Residual above which a fresh constraint counts as inconsistent (D4.2).
 const INCONSISTENT_EPS: f64 = 1e-6;
 
@@ -3046,7 +3049,7 @@ impl SketchSession {
         // sweep: that would describe the mirror arc. Store the two angles
         // swapped instead, which walks the very same points the other way.
         let signed_sweep = match sweep_rad.filter(|value| value.is_finite()) {
-            Some(travel) if travel.abs() > 1e-9 => {
+            Some(travel) if travel.abs() > MIN_ARC_TRAVEL_RAD => {
                 // A drag longer than a full turn is a full circle.
                 let magnitude = travel.abs().min(std::f64::consts::TAU);
                 if travel < 0.0 {
@@ -3055,8 +3058,11 @@ impl SketchSession {
                     magnitude
                 }
             }
+            // A measured travel of zero is a click, not a sweep. The two picks
+            // share one ray, so there is no arc: refuse it rather than invent a
+            // full circle out of a stray click that never moved.
+            Some(_) => return Err(SessionError::DegenerateSegment),
             // Picks alone: the historical counter-clockwise reading.
-            Some(_) => std::f64::consts::TAU,
             None => {
                 let mut ccw = sweep_ray - start_ray;
                 if ccw <= 0.0 {
