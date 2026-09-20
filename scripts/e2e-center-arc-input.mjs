@@ -474,6 +474,14 @@ try {
     beforeFirstPick.badgeIcon,
     'the cursor keeps the same command identity it had before the first pick',
   );
+  // Leaving the viewport drops the whole command cursor. The native viewport
+  // renders on demand, so this only reaches the screen if the HUD asked for a
+  // frame — a cursor left drawn at the last pick is exactly the stale HUD.
+  await page.mouse.move(4, 4);
+  await page.waitForTimeout(220);
+  const away = await cursorState();
+  assert.equal(away.badge, false, 'the command badge clears when the pointer leaves');
+  assert.equal(away.marker, null, 'the acquisition marker clears with it');
   await cancel();
 
   assert.deepEqual(pageErrors, []);

@@ -1377,6 +1377,13 @@ export function Viewport() {
           : kind === 'projected_edge'
             ? 'curve'
             : kind;
+    /** The native viewport renders on demand and only receives transient
+     * geometry (cursor badge, snap marker, rubber band) when a frame runs, so
+     * every cursor-HUD change has to ask for one. Without this the HUD keeps
+     * whatever it had at the last pointer move: a pick does not stamp its
+     * marker, and a cursor that leaves the viewport stays drawn where it was. */
+    const wakeCursorHud = () => wakeControllerFrame();
+
     const showSnapMarker = (
       point: Vec2,
       kind: NativeViewportSnapKind = 'grid',
@@ -1390,10 +1397,12 @@ export function Viewport() {
             : snapTexture;
       snapMarkerKind = kind;
       snapMarker.visible = true;
+      wakeCursorHud();
     };
     const hideSnapMarker = () => {
       snapMarker.visible = false;
       snapMarkerKind = 'grid';
+      wakeCursorHud();
     };
 
     // Rubber-band preview line (constant screen width).
@@ -7040,6 +7049,7 @@ export function Viewport() {
     const setPreviewPositions = (positions: number[] | null) => {
       if (!positions || positions.length < 6) {
         previewLine.visible = false;
+        wakeCursorHud();
         return;
       }
       const geometry = new PolylineGeometry();
@@ -7047,6 +7057,7 @@ export function Viewport() {
       previewLine.geometry.dispose();
       previewLine.geometry = geometry;
       previewLine.visible = true;
+      wakeCursorHud();
     };
 
     /** Armed tool, no run yet: the cursor advertises what its first pick would
@@ -10401,6 +10412,7 @@ export function Viewport() {
       activeToolCursorScreen = null;
       const badge = toolCursorRef.current;
       if (badge) badge.style.display = 'none';
+      wakeCursorHud();
     };
     const updateActiveToolCursor = (state: ViewportState, event: PointerEvent) => {
       const hasTool = state.pendingConstraintTool !== null || state.activeTool !== null;
@@ -10432,6 +10444,7 @@ export function Viewport() {
       }
       badge.style.display = 'flex';
       badge.style.transform = `translate3d(${centerX - badgeHalf}px, ${centerY - badgeHalf}px, 0)`;
+      wakeCursorHud();
     };
     /** CAM loop picking: resolve the pointer to a closed sketch loop by
      *  screen-space proximity — inside the projected polygon counts as a
@@ -11092,6 +11105,10 @@ export function Viewport() {
       const tag = planeTagRef.current;
       if (tag) tag.style.display = 'none';
       hideActiveToolCursor();
+      // The pointer is gone, so the acquisition it was advertising is too.
+      // Without this the marker stays drawn at the last inside position.
+      hideSnapMarker();
+      hideChips();
       surface.domElement.style.cursor = '';
     };
 
@@ -11706,6 +11723,9 @@ export function Viewport() {
         } else {
           commitToolRun(toolRun, p, e.ctrlKey || e.metaKey, e.altKey);
         }
+        // A pick is a cursor event like any other: stamp its marker and the
+        // value cluster now instead of waiting for the pointer to move.
+        wakeCursorHud();
         return;
       }
 
