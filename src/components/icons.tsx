@@ -63,13 +63,7 @@ const GLYPHS: Record<string, ReactNode> = {
       <path d="M7.5 8.5a5 5 0 0 1 4.5-2" strokeDasharray="2 2" />
     </>
   ),
-  combine: (
-    <>
-      <rect x="3.5" y="5" width="10" height="10" rx="2" />
-      <circle cx="15" cy="14" r="5.5" />
-      <path d="M11 10l7 7M18 13v4h-4" />
-    </>
-  ),
+  combine: <SharedRibbonGlyph id="combine" />,
   splitBody: (
     <>
       <path d="M5 5h14v14H5z" />

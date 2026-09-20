@@ -1174,7 +1174,7 @@ fn synchronize(
             320.,34.,48.,
         ),
     ];
-    for (key,kind,x) in [("sweep",feature::SolidFormKind::Sweep,370.),("loft",feature::SolidFormKind::Loft,420.),("rib",feature::SolidFormKind::Rib,470.),("solid-fillet",feature::SolidFormKind::Fillet,530.),("solid-chamfer",feature::SolidFormKind::Chamfer,580.),("solid-shell",feature::SolidFormKind::Shell,630.)] {
+    for (key,kind,x) in [("sweep",feature::SolidFormKind::Sweep,370.),("loft",feature::SolidFormKind::Loft,420.),("rib",feature::SolidFormKind::Rib,470.),("solid-fillet",feature::SolidFormKind::Fillet,530.),("solid-chamfer",feature::SolidFormKind::Chamfer,580.),("solid-shell",feature::SolidFormKind::Shell,630.),("combine",feature::SolidFormKind::Combine,690.)] {
         rows.push((key.into(),kind.label().into(),NativeCommand::Feature(feature::FeatureCommand::Open {kind,feature_id:None}),
             presentation.mode==native_viewport::ViewportMode::Sketch||feature::panel(world).is_some(),x,34.,48.));
     }
@@ -1331,8 +1331,8 @@ fn synchronize(
         }
     });
     for (key, label, command, disabled, x, y, width) in rows {
-        let is_extrude = matches!(key.as_str(), "extrude" | "revolve" | "sweep" | "loft" | "rib" | "solid-fillet" | "solid-chamfer" | "solid-shell");
-        let build_icon = match key.as_str() {"revolve"=>interface_shell::ribbon::Icon::Revolve,"sweep"=>interface_shell::ribbon::Icon::Sweep,"loft"=>interface_shell::ribbon::Icon::Loft,"rib"=>interface_shell::ribbon::Icon::Rib,"solid-fillet"=>interface_shell::ribbon::Icon::Fillet,"solid-chamfer"=>interface_shell::ribbon::Icon::Chamfer,"solid-shell"=>interface_shell::ribbon::Icon::Shell,_=>interface_shell::ribbon::Icon::Extrude};
+        let is_extrude = matches!(key.as_str(), "extrude" | "revolve" | "sweep" | "loft" | "rib" | "solid-fillet" | "solid-chamfer" | "solid-shell" | "combine");
+        let build_icon = match key.as_str() {"revolve"=>interface_shell::ribbon::Icon::Revolve,"sweep"=>interface_shell::ribbon::Icon::Sweep,"loft"=>interface_shell::ribbon::Icon::Loft,"rib"=>interface_shell::ribbon::Icon::Rib,"solid-fillet"=>interface_shell::ribbon::Icon::Fillet,"solid-chamfer"=>interface_shell::ribbon::Icon::Chamfer,"solid-shell"=>interface_shell::ribbon::Icon::Shell,"combine"=>interface_shell::ribbon::Icon::Combine,_=>interface_shell::ribbon::Icon::Extrude};
         let is_body = key.starts_with("body-") || key.starts_with("visibility-");
         let surface = command_group(&command);
         let entity = if let Some(entity) = state.controls.get(&key) {

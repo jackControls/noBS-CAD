@@ -1,24 +1,10 @@
 //! Refine the rendered model and edit original topology through live MCP.
-use crate::native_fixture::{begin_sketch, control, controls, start, ui};
+use crate::native_fixture::{begin_sketch, control, controls, edit_feature, start, ui};
 use crate::replay::Client;
 use anyhow::{ensure, Context, Result};
 use serde_json::{json, Value};
 use std::{fs, path::Path};
 
-fn edit(client: &mut Client, name: &str, context_menu: bool) -> Result<()> {
-    let state = ui(client, json!({"action":"inspect"}))?;
-    let target = controls(&state)
-        .find(|c| c["label"] == name && c["surface"] == "document/history")
-        .context("History feature missing")?;
-    ui(
-        client,
-        json!({"action":if context_menu {"context_menu"} else {"double_click"},"target":target["id"]}),
-    )?;
-    if context_menu {
-        control(client, "Edit feature", None)?;
-    }
-    Ok(())
-}
 fn case(client: &mut Client, out: &Path, kind: &str) -> Result<Value> {
     begin_sketch(client, "XY")?;
     client.call(
@@ -137,7 +123,7 @@ fn case(client: &mut Client, out: &Path, kind: &str) -> Result<Value> {
         .as_str()
         .context("Feature name missing")?;
     let before = client.call("cad_document", json!({}))?;
-    edit(client, name, true)?;
+    edit_feature(client, name, true)?;
     ensure!(
         client.call("cad_document", json!({}))? == before,
         "Opening edit changed live history"
@@ -148,7 +134,7 @@ fn case(client: &mut Client, out: &Path, kind: &str) -> Result<Value> {
         client.call(&method, json!({}))? == original,
         "Cancel changed the feature"
     );
-    edit(client, name, false)?;
+    edit_feature(client, name, false)?;
     control(client, size, Some("2 mm"))?;
     ui(
         client,

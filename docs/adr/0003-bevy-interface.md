@@ -148,3 +148,10 @@ after a rejected edit.
 Ordinary model edges have their own small depth bias: coincident cavity seams
 remain visible with Bevy's strict reverse-Z depth test, while rear edges remain
 occluded and the reference grid retains its original depth behavior.
+
+Combine uses the shared solid form for its distinct target and tool selectors,
+Add/Cut/Intersect and Keep tool bodies. Its history editor shows the pre-boolean
+bodies in the isolated kernel, including tools consumed by the result. Native
+engine tests check exact boolean volumes and restoration; the `native-body`
+Rust MCP fixture checks rendered selection, choices, exact bounds, editing,
+Cancel, Undo/Redo and saving each case before opening another blank document.

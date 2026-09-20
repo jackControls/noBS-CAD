@@ -17,6 +17,8 @@ mod edges;
 use edges::EdgeFields;
 mod shell;
 use shell::ShellFields;
+mod combine;
+use combine::CombineFields;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SolidFormKind {
@@ -28,6 +30,7 @@ pub(crate) enum SolidFormKind {
     Fillet,
     Chamfer,
     Shell,
+    Combine,
 }
 impl SolidFormKind {
     pub(crate) fn from_feature_kind(kind: FeatureKind) -> Option<Self> {
@@ -40,6 +43,7 @@ impl SolidFormKind {
             FeatureKind::Fillet => Self::Fillet,
             FeatureKind::Chamfer => Self::Chamfer,
             FeatureKind::Shell => Self::Shell,
+            FeatureKind::Combine => Self::Combine,
             _ => return None,
         })
     }
@@ -57,6 +61,7 @@ impl SolidFormKind {
             Self::Fillet => "Fillet",
             Self::Chamfer => "Chamfer",
             Self::Shell => "Shell",
+            Self::Combine => "Combine",
         }
     }
     pub(crate) fn operation(self) -> &'static str {
@@ -69,6 +74,7 @@ impl SolidFormKind {
             Self::Fillet => "solid_fillet",
             Self::Chamfer => "solid_chamfer",
             Self::Shell => "solid_shell",
+            Self::Combine => "solid_combine",
         }
     }
 }
@@ -118,6 +124,9 @@ pub(crate) enum SolidField {
     TangentChain,
     Faces,
     Inward,
+    TargetBody,
+    ToolBodies,
+    KeepTools,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -210,6 +219,7 @@ pub(crate) struct SolidForm {
     rib: Option<RibFields>,
     edges: Option<EdgeFields>,
     shell: Option<ShellFields>,
+    combine: Option<CombineFields>,
 }
 
 impl SolidForm {
@@ -240,6 +250,7 @@ impl SolidForm {
             rib: None,
             edges: None,
             shell: None,
+            combine: None,
         }
     }
 
@@ -255,10 +266,15 @@ impl SolidForm {
             form.edges = Some(EdgeFields::new(kind, model.document.settings.units));
         } else if kind == SolidFormKind::Shell {
             form.shell = Some(ShellFields::new(model.document.settings.units));
+        } else if kind == SolidFormKind::Combine {
+            form.combine = Some(CombineFields::default());
         }
         form
     }
     pub(crate) fn kind(&self) -> SolidFormKind {
+        if self.combine.is_some() {
+            return SolidFormKind::Combine;
+        }
         if self.shell.is_some() {
             return SolidFormKind::Shell;
         }
@@ -402,6 +418,11 @@ impl SolidForm {
         model: &FormModel<'_>,
     ) -> Result<(), String> {
         self.editing(model)?;
+        if let Some(combine) = &mut self.combine {
+            combine.set(field, value)?;
+            self.changed();
+            return Ok(());
+        }
         if let Some(shell) = &mut self.shell {
             shell.set(field, value)?;
             self.changed();
@@ -765,6 +786,9 @@ impl SolidForm {
     }
 
     pub(crate) fn fields(&self, model: &FormModel<'_>) -> Vec<SolidFieldView> {
+        if self.combine.is_some() {
+            return self.combine_fields(model);
+        }
         if self.shell.is_some() {
             return self.shell_fields(model);
         }
@@ -908,6 +932,9 @@ impl SolidForm {
         &self,
         model: &FormModel<'_>,
     ) -> Result<(&'static str, Value), Vec<(SolidField, String)>> {
+        if self.combine.is_some() {
+            return self.combine_payload(model);
+        }
         if self.shell.is_some() {
             return self.shell_payload(model);
         }

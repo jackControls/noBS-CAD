@@ -135,3 +135,18 @@ pub(super) fn start(mut args: impl Iterator<Item = String>, name: &str) -> Resul
         report,
     })
 }
+
+pub(super) fn edit_feature(client: &mut Client, name: &str, context_menu: bool) -> Result<()> {
+    let state = ui(client, json!({"action":"inspect"}))?;
+    let target = controls(&state)
+        .find(|c| c["label"] == name && c["surface"] == "document/history")
+        .context("History feature missing")?;
+    ui(
+        client,
+        json!({"action":if context_menu {"context_menu"} else {"double_click"},"target":target["id"]}),
+    )?;
+    if context_menu {
+        control(client, "Edit feature", None)?;
+    }
+    Ok(())
+}

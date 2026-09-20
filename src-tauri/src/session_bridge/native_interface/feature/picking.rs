@@ -14,8 +14,15 @@ pub(crate) fn hover_references(
     let mut state = world.remove_resource::<NativeFeature>().unwrap_or_default();
     let result = (|| {
         let Some(editor) = state.editor.as_mut().filter(|e| {
-            matches!(e.pick_target, Some(SolidField::Edges | SolidField::Faces))
-                && !e.form.is_busy()
+            matches!(
+                e.pick_target,
+                Some(
+                    SolidField::Edges
+                        | SolidField::Faces
+                        | SolidField::TargetBody
+                        | SolidField::ToolBodies
+                )
+            ) && !e.form.is_busy()
         }) else {
             return Ok(false);
         };
@@ -36,6 +43,21 @@ pub(crate) fn hover_references(
                 })
                 .transpose()?
                 .flatten();
+            if matches!(
+                editor.pick_target,
+                Some(SolidField::TargetBody | SolidField::ToolBodies)
+            ) {
+                let next = hit
+                    .filter(|hit| editor.snapshot.source_local(hit.body_id, hit.occurrence_id))
+                    .map(|hit| BodyId(hit.body_id));
+                if next != editor.hovered_body
+                    || native_viewport::interface_preview_revision(world) != editor.preview_revision
+                {
+                    editor.hovered_body = next;
+                    update_preview(editor, world)?;
+                }
+                return Ok(true);
+            }
             if editor.pick_target == Some(SolidField::Faces) {
                 let next = hit
                     .filter(|hit| editor.snapshot.source_local(hit.body_id, hit.occurrence_id))
@@ -370,6 +392,18 @@ pub(crate) fn handle_canvas_pick(
                     return Err("Open the component before selecting its references".into());
                 }
                 match target {
+                    SolidField::TargetBody | SolidField::ToolBodies => {
+                        let id = BodyId(hit.body_id);
+                        let mut bodies = editor.form.combine_bodies(target);
+                        if target == SolidField::TargetBody {
+                            bodies = vec![id];
+                        } else if let Some(index) = bodies.iter().position(|b| *b == id) {
+                            bodies.remove(index);
+                        } else {
+                            bodies.push(id);
+                        }
+                        Ok(FeaturePick::Bodies(bodies))
+                    }
                     SolidField::Faces => {
                         let body = BodyId(hit.body_id);
                         let id = FaceId(hit.face_id);

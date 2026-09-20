@@ -15,6 +15,28 @@ pub(super) fn references(
 ) -> Result<ViewportPreview, String> {
     let mut segments = Vec::new();
     let mut triangles = Vec::new();
+    for (field, color) in [
+        (
+            crate::native_forms::SolidField::TargetBody,
+            [1., 0.65, 0.25, 0.30],
+        ),
+        (
+            crate::native_forms::SolidField::ToolBodies,
+            [0.25, 0.7, 1., 0.30],
+        ),
+    ] {
+        for id in form.combine_bodies(field) {
+            triangles.push(body_fill(model.scene, id, color)?);
+            if triangles
+                .iter()
+                .map(|t| t.positions.len() / 9)
+                .sum::<usize>()
+                > MAX_SEGMENTS
+            {
+                return Err("Selected bodies are too large to highlight together".into());
+            }
+        }
+    }
     if let Some((body, faces)) = form.selected_faces() {
         triangles.push(face_fill(model.scene, body, faces, [1., 0.80, 0.25, 0.35])?);
     }
@@ -98,6 +120,24 @@ pub(super) fn references(
         }],
         ..Default::default()
     })
+}
+
+pub(super) fn body_fill(
+    scene: &nbcad_solid::SolidSceneDto,
+    id: nbcad_core::BodyId,
+    color: [f32; 4],
+) -> Result<crate::native_viewport::ViewportTriangleLayer, String> {
+    let body = scene
+        .bodies
+        .iter()
+        .find(|b| b.id == id)
+        .ok_or("Selected body no longer exists")?;
+    face_fill(
+        scene,
+        id,
+        &body.faces.iter().map(|f| f.id).collect::<Vec<_>>(),
+        color,
+    )
 }
 
 pub(super) fn face_fill(

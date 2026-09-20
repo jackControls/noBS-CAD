@@ -208,6 +208,7 @@ struct Editor {
     original_view: Option<ViewportModel>,
     hovered_edge: Option<(BodyId, nbcad_core::EdgeId)>,
     hovered_face: Option<(BodyId, nbcad_core::FaceId)>,
+    hovered_body: Option<BodyId>,
 }
 
 #[derive(Resource, Default)]
@@ -314,7 +315,7 @@ fn update_preview(editor: &mut Editor, world: &mut World) -> Result<(), String> 
     let model = editor.snapshot.model(editor.form.parameter_sketch());
     // Invalid text remains the actual field draft, but must not leave a
     // stale last-valid extrusion appearing to describe the invalid input.
-    let (mut next, notice) = if editor.form.kind() != SolidFormKind::Extrude {
+    let (mut next, mut notice) = if editor.form.kind() != SolidFormKind::Extrude {
         match preview::references(&editor.form, &model, &editor.snapshot.viewport) {
             Ok(value) => (value, None),
             Err(e) => (ViewportPreview::default(), Some(e)),
@@ -362,12 +363,26 @@ fn update_preview(editor: &mut Editor, world: &mut World) -> Result<(), String> 
             .selected_faces()
             .is_some_and(|(b, ids)| b == body && ids.contains(&face))
         {
-            next.triangles.push(preview::face_fill(
-                model.scene,
-                body,
-                &[face],
-                [1., 0.65, 0.2, 0.25],
-            )?);
+            match preview::face_fill(model.scene, body, &[face], [1., 0.65, 0.2, 0.25]) {
+                Ok(fill) => next.triangles.push(fill),
+                Err(error) => notice = Some(error),
+            }
+        }
+    }
+    if let Some(body) = editor.hovered_body {
+        if !editor
+            .form
+            .combine_bodies(SolidField::TargetBody)
+            .contains(&body)
+            && !editor
+                .form
+                .combine_bodies(SolidField::ToolBodies)
+                .contains(&body)
+        {
+            match preview::body_fill(model.scene, body, [1., 0.7, 0.35, 0.15]) {
+                Ok(fill) => next.triangles.push(fill),
+                Err(error) => notice = Some(error),
+            }
         }
     }
     native_viewport::apply_interface_preview(world, &model.owner.document_id, next)?;
@@ -406,6 +421,10 @@ fn selected_source(world: &World, snapshot: &Snapshot) -> Result<Option<FeatureP
 fn apply_pick(editor: &mut Editor, pick: FeaturePick) -> Result<(), String> {
     let model = editor.snapshot.model(editor.form.parameter_sketch());
     match (editor.pick_target, pick) {
+        (
+            Some(field @ (SolidField::TargetBody | SolidField::ToolBodies)),
+            FeaturePick::Bodies(bodies),
+        ) => editor.form.set_combine_bodies(field, bodies, &model),
         (Some(SolidField::Faces), FeaturePick::Faces { body, faces }) => {
             editor.form.set_faces(body, faces, &model)
         }
@@ -540,7 +559,10 @@ fn reduce_owned(
         if let Some(feature_id) = feature_id.filter(|_| {
             matches!(
                 kind,
-                SolidFormKind::Fillet | SolidFormKind::Chamfer | SolidFormKind::Shell
+                SolidFormKind::Fillet
+                    | SolidFormKind::Chamfer
+                    | SolidFormKind::Shell
+                    | SolidFormKind::Combine
             )
         }) {
             return editing::begin(
@@ -644,6 +666,8 @@ fn reduce_owned(
                 pick_target: Some(
                     if matches!(kind, SolidFormKind::Fillet | SolidFormKind::Chamfer) {
                         SolidField::Edges
+                    } else if *kind == SolidFormKind::Combine {
+                        SolidField::TargetBody
                     } else if *kind == SolidFormKind::Shell {
                         SolidField::Faces
                     } else if *kind == SolidFormKind::Rib {
@@ -657,6 +681,7 @@ fn reduce_owned(
                 original_view: None,
                 hovered_edge: None,
                 hovered_face: None,
+                hovered_body: None,
             };
             if feature_id.is_none()
                 && matches!(kind, SolidFormKind::Fillet | SolidFormKind::Chamfer)
@@ -685,6 +710,26 @@ fn reduce_owned(
                                     .collect(),
                             },
                         )?;
+                    }
+                }
+            } else if feature_id.is_none() && *kind == SolidFormKind::Combine {
+                let (_, _, presentation, _) = native_viewport::interface_view_snapshot(world);
+                let bodies: Vec<_> = presentation
+                    .selected_body_ids
+                    .iter()
+                    .copied()
+                    .filter(|body| {
+                        editor
+                            .snapshot
+                            .source_local(*body, presentation.selected_occurrence_id)
+                    })
+                    .map(BodyId)
+                    .collect();
+                if let Some(target) = bodies.first() {
+                    apply_pick(&mut editor, FeaturePick::Bodies(vec![*target]))?;
+                    if bodies.len() > 1 {
+                        editor.pick_target = Some(SolidField::ToolBodies);
+                        apply_pick(&mut editor, FeaturePick::Bodies(bodies[1..].to_vec()))?;
                     }
                 }
             } else if feature_id.is_none() && *kind == SolidFormKind::Shell {
@@ -867,6 +912,8 @@ fn reduce_owned(
                     field,
                     SolidField::Source
                         | SolidField::Faces
+                        | SolidField::TargetBody
+                        | SolidField::ToolBodies
                         | SolidField::Edges
                         | SolidField::Targets
                         | SolidField::StopFace
@@ -880,6 +927,9 @@ fn reduce_owned(
                 editor.choice_field = None;
             }
             FeatureControl::Clear(field) => match field {
+                SolidField::TargetBody | SolidField::ToolBodies => {
+                    editor.form.set_combine_bodies(*field, Vec::new(), &model)?
+                }
                 SolidField::Faces => editor.form.set_faces(None, Vec::new(), &model)?,
                 SolidField::Edges => editor.form.set_edges(None, Vec::new(), &model)?,
                 SolidField::Source => editor.form.set_profiles(Vec::new(), &model)?,
