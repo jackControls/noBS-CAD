@@ -7,7 +7,7 @@ updated: 2026-09-20
 topics: mechanisms, joints, dfam, lego, technic
 keywords: Technic, Lego, LEGO, LDraw, LDU, stud pitch, brick height, plate height, stud diameter, anti-stud, beam hole pitch, pin diameter, axle cross-section, axle length, printed Technic hole
 related_recipes: repeated-bracket-assembly
-sources: ldraw-ffs, ldraw-opls, technic-scad, doe-3d
+sources: ldraw-ffs, ldraw-opls, technic-scad, doe-3d, stegu-ldu, cailliau-lego-dims
 ---
 
 # Technic-style beam and pin envelope (unofficial)
