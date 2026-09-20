@@ -37,13 +37,15 @@ humans use the same recipe ids from page frontmatter (`related_recipes`).
   discover labels; `resources/read` only for the chosen full page.
 - Prefer one shared corpus; agent and human doors point at the same pages.
 
-## MCP prompts (gap)
+## MCP prompts
 
-As of 2026-09-20, `nbcad-mcp` `initialize` advertises `tools` + `resources`
-only — **no** `prompts` capability / `prompts/list`. Validate-before-show and
-research-before-commit remain **knowledge pages + Cursor skills**, not MCP
-prompt templates. See Design Ops `cad-design-ops` notes (prompts gap). When
-prompts land, point them at the same `cad_help` ids.
+As of 2026-09-20, `nbcad-mcp` advertises `prompts` and ships one template:
+**`help_search`** (optional argument `query` / alias `context`). It steers
+agents to form a contextual query and call `cad_help` (`search` → `get` 1–2
+ids; optional `resources/read` for the full OKF page). Design-flow prompts
+(validate-before-show, research-before-commit) remain **knowledge pages +
+Cursor skills** for now — deferred as separate MCP prompts. See Design Ops
+`cad-design-ops/guidance/mcp-prompts-gap.md`.
 
 ## Rebuild reminder
 

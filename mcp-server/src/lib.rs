@@ -15,6 +15,7 @@ mod drawing_tools;
 mod inbox;
 mod interface;
 mod knowledge;
+mod prompts;
 mod session;
 mod stdio;
 
@@ -4150,7 +4151,8 @@ fn handle_message(server: &mut CadServer, message: Value) -> Vec<Value> {
                     "protocolVersion": protocol,
                     "capabilities": {
                         "tools": { "listChanged": true },
-                        "resources": { "subscribe": false, "listChanged": false }
+                        "resources": { "subscribe": false, "listChanged": false },
+                        "prompts": { "listChanged": false }
                     },
                     "serverInfo": {
                         "name": "nbcad",
@@ -4194,6 +4196,39 @@ fn handle_message(server: &mut CadServer, message: Value) -> Vec<Value> {
                     Some(contents) => vec![response(id, contents)],
                     None => vec![error_response(id, -32002, "knowledge resource not found")],
                 },
+            }
+        }
+        "prompts/list" => {
+            let id = id.unwrap_or(Value::Null);
+            if message
+                .get("params")
+                .is_some_and(|params| !params.is_null() && !params.is_object())
+                || message
+                    .pointer("/params/cursor")
+                    .is_some_and(|cursor| !cursor.is_null())
+            {
+                vec![error_response(
+                    id,
+                    -32602,
+                    "prompts/list has no pagination cursor",
+                )]
+            } else {
+                vec![response(id, prompts::list())]
+            }
+        }
+        "prompts/get" => {
+            let id = id.unwrap_or(Value::Null);
+            let Some(name) = message.pointer("/params/name").and_then(Value::as_str) else {
+                return vec![error_response(
+                    id,
+                    -32602,
+                    "prompts/get requires params.name",
+                )];
+            };
+            let arguments = message.pointer("/params/arguments");
+            match prompts::get(name, arguments) {
+                Ok(result) => vec![response(id, result)],
+                Err(message) => vec![error_response(id, -32602, message)],
             }
         }
         "tools/list" => vec![response(
@@ -5403,6 +5438,64 @@ mod tests {
             );
             assert_eq!(reply[0]["error"]["code"], -32602);
         }
+    }
+
+    #[test]
+    fn help_search_prompt_is_advertised_listed_and_gettable() {
+        let mut server = CadServer::new().unwrap();
+        let initialized = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": { "protocolVersion": "2025-06-18" }
+            }),
+        );
+        assert_eq!(
+            initialized[0]["result"]["capabilities"]["prompts"],
+            json!({ "listChanged": false })
+        );
+        let listed = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0", "id": 2, "method": "prompts/list"
+            }),
+        );
+        let prompts = listed[0]["result"]["prompts"].as_array().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0]["name"], "help_search");
+        assert_eq!(prompts[0]["arguments"][0]["name"], "query");
+        assert_eq!(prompts[0]["arguments"][0]["required"], false);
+
+        let got = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "prompts/get",
+                "params": {
+                    "name": "help_search",
+                    "arguments": { "query": "clearance fit" }
+                }
+            }),
+        );
+        assert_eq!(got[0]["id"], 3);
+        let text = got[0]["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap();
+        assert!(text.contains("cad_help"), "{text}");
+        assert!(text.contains("Search for: clearance fit"), "{text}");
+        assert_eq!(got[0]["result"]["messages"][0]["role"], "user");
+
+        let unknown = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "prompts/get",
+                "params": { "name": "validate-before-show" }
+            }),
+        );
+        assert_eq!(unknown[0]["error"]["code"], -32602);
     }
 
     #[test]
