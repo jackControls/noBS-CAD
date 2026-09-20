@@ -660,6 +660,10 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/concepts/geometry-naming.md"),
     },
     KnowledgeFile {
+        path: "concepts/shared-reference-geometry.md",
+        text: include_str!("../../../knowledge/concepts/shared-reference-geometry.md"),
+    },
+    KnowledgeFile {
         path: "concepts/gears.md",
         text: include_str!("../../../knowledge/concepts/gears.md"),
     },
@@ -1889,6 +1893,23 @@ mod tests {
     }
 
     #[test]
+    fn shared_reference_geometry_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "shared reference geometry",
+            "surfaces follow param change",
+            "offset from named plane",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("shared-reference-geometry")),
+                "expected shared-reference-geometry for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn check_corpus_ok() {
         let n = check_corpus().expect("corpus check");
         assert!(n >= 50);
@@ -1906,6 +1927,7 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "concepts/adversarial-mesh-audit.md"));
         assert!(files.iter().any(|f| f.path == "concepts/design-version-scripts.md"));
         assert!(files.iter().any(|f| f.path == "concepts/geometry-naming.md"));
+        assert!(files.iter().any(|f| f.path == "concepts/shared-reference-geometry.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/alignment-nubs-pins.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-clamshell-retainer.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-heat-set-inserts.md"));

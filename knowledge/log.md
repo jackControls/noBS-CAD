@@ -1,3 +1,13 @@
+## 2026-09-20 — Shared reference geometry (followers / named parents)
+
+- Seeded `concepts.shared-reference-geometry`: prefer named shared references
+  (planes, axes, sketches, faces) over duplicated numeric offsets; drive
+  related surfaces from the same reference; JSONC/history reference-first;
+  assembly locating-scheme analog; datum/sketch-plane + geometry-naming
+  cross-links; VERIFY after param change via solid_scene / compare / section.
+- Soft pointers: geometry-naming, datum-sketch-plane-choice; index + taxonomy H;
+  Design Ops guidance; goldens H82+ + Rust BM25 queries.
+
 ## 2026-09-20 — Geometry naming (bodies / faces / scripts / STEP)
 
 - Seeded `concepts.geometry-naming`: role-noun bodies, feature/history names

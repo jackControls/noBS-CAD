@@ -5,7 +5,7 @@ description: Prefer role nouns and one shared vocabulary across project browser,
 status: draft
 updated: 2026-09-20
 topics: workflow, modeling, mcp, export, sessions
-keywords: geometry naming, body name, face name, edge name, datum name, set_name, display name, STEP names, JSONC names, browser tree, servo_cradle, clamshell_a, lid, stable labels
+keywords: geometry naming, body name, face name, edge name, datum name, set_name, display name, STEP names, JSONC names, browser tree, servo_cradle, clamshell_a, lid, stable labels, shared reference
 ---
 
 # Geometry naming — bodies, features, faces, scripts, STEP
@@ -89,5 +89,7 @@ Pair visual “looks good” claims with
 
 Related: [MCP workflow](agent-mcp-workflow.md) (inspect between mutates),
 [design VERSION / JSONC scripts](design-version-scripts.md) (JSONC chunks),
+[shared reference geometry](shared-reference-geometry.md) (named parents so
+followers track param changes),
 [export and print](export-print.md),
 [validate before show](validate-before-show.md).

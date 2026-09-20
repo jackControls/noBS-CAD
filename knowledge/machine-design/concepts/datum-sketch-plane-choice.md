@@ -50,7 +50,7 @@ sketch plane or edit the feature
 4. Check extrude **direction** (into air vs into material) before long chains.
 5. Prefer **sketch on planar face** only when that face already exists and is
    the functional reference.
-6. Avoid stacking anonymous offset planes without names/ids you will reuse.
+6. Avoid stacking anonymous offset planes without names/ids you will reuse — prefer named shared references ([shared reference geometry](../../concepts/shared-reference-geometry.md)).
 
 ## Locating vs modeling planes
 
@@ -66,5 +66,8 @@ Prefer deliberate datum planes; keep ASME frames tied to functional faces, not a
 sketch → feature chains on blank documents.
 
 Related: [agent MCP workflow](../../concepts/agent-mcp-workflow.md),
+[geometry naming](../../concepts/geometry-naming.md),
+[shared reference geometry](../../concepts/shared-reference-geometry.md)
+(named planes/faces as parents so followers track params),
 [GD&T intro](gdt-intro.md),
 [drawing vs MBD / PMI](drawing-vs-mbd-pmi.md).

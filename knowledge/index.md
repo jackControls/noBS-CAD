@@ -43,6 +43,7 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Export / print / 3MF vs STL | `concepts.export-print` | Export and print |
 | Design VERSION / JSONC scripts | `concepts.design-version-scripts` | Design VERSION and JSONC script naming |
 | Geometry naming (bodies / faces / scripts / STEP) | `concepts.geometry-naming` | Geometry naming — bodies, features, faces, scripts, STEP |
+| Shared reference geometry | `concepts.shared-reference-geometry` | Shared reference geometry — surfaces that follow param changes |
 
 ### Machine design (seeded highlights)
 
@@ -93,6 +94,7 @@ Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 - [MCP workflow](concepts/agent-mcp-workflow.md) - Help-first, soft focus, inspect, edit, sessions, units.
 - [Design VERSION / JSONC scripts](concepts/design-version-scripts.md) - One VERSION → design_vM_N.nbcad.jsonc (filename + embed); prune prior; prefer JSONC chunks over gen_*.py.
 - [Geometry naming](concepts/geometry-naming.md) - Role-noun bodies/features/faces; align script ↔ browser ↔ STEP; VERIFY names after mutate.
+- [Shared reference geometry](concepts/shared-reference-geometry.md) - Named shared planes/axes/faces so related surfaces follow param changes; VERIFY after edits.
 - [Research before commit](concepts/research-before-commit.md) - VERIFY table and local help before freezing geometry.
 - [Assembly interference check](concepts/assembly-interference.md) - Geometric overlap/clearance at solved poses vs fit classes.
 - [Validate before show](concepts/validate-before-show.md) - Mandatory review shot pack; prefer recapture when frames are blank or inside-solid.
