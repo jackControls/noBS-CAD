@@ -25,8 +25,10 @@ import { constraintReferencedEntityIds } from './constraintRefs';
 import {
   CONSTRAINT_ICON_PRIMITIVES,
   CONSTRAINT_TYPE_ICON,
+  CONSTRAINT_TYPE_LABEL_KEY,
   TOOL_CONSTRAINT_ICON,
 } from './constraintIcons';
+import en from '../i18n/en.json';
 
 let failures = 0;
 
@@ -492,6 +494,48 @@ console.log('constraint glyph offsets');
       y: zoomedIn.y * (zoomedOutWorldPerPixel / zoomedInWorldPerPixel),
     }),
     JSON.stringify({ zoomedOut, zoomedIn }),
+  );
+}
+
+{
+  // The report that started this: a point bound to an arc's implicit endpoint,
+  // a point sitting on a circle/arc centre, and a plain point coincidence all
+  // read as the same "Coincident" chip, so the panel could not say what was
+  // actually constrained.
+  const family = ['coincident', 'origin_coincident', 'center_coincident', 'arc_endpoint_coincident'] as const;
+  const label = (key: string): string =>
+    key.split('.').reduce<unknown>((node, part) => (node as Record<string, unknown>)?.[part], en) as string;
+  const labels = family.map((type) => label(CONSTRAINT_TYPE_LABEL_KEY[type]));
+  check(
+    'every coincidence-family relation keeps its own name',
+    new Set(labels).size === family.length
+      && labels.every((value) => typeof value === 'string' && value.trim().length > 0),
+    JSON.stringify(labels),
+  );
+  check(
+    'a point on an arc endpoint is named as such, not as a bare coincidence',
+    labels[3].includes('arc') && labels[3] !== labels[0],
+    labels[3],
+  );
+  check(
+    'a point on a centre is named as such',
+    labels[2].toLowerCase().includes('center') || labels[2].toLowerCase().includes('centre'),
+    labels[2],
+  );
+  check(
+    'centre and arc-endpoint relations use different artwork',
+    CONSTRAINT_TYPE_ICON.center_coincident !== CONSTRAINT_TYPE_ICON.arc_endpoint_coincident
+      && CONSTRAINT_TYPE_ICON.center_coincident !== CONSTRAINT_TYPE_ICON.coincident
+      && CONSTRAINT_ICON_PRIMITIVES[CONSTRAINT_TYPE_ICON.arc_endpoint_coincident].length > 0,
+    `${CONSTRAINT_TYPE_ICON.center_coincident}/${CONSTRAINT_TYPE_ICON.arc_endpoint_coincident}`,
+  );
+  check(
+    'the viewport badge distinguishes an arc-endpoint binding from a coincidence',
+    CONSTRAINT_EXISTENCE_GLYPH.arc_endpoint_coincident
+      !== CONSTRAINT_EXISTENCE_GLYPH.coincident
+      && CONSTRAINT_EXISTENCE_GLYPH.center_coincident
+        !== CONSTRAINT_EXISTENCE_GLYPH.coincident,
+    `${CONSTRAINT_EXISTENCE_GLYPH.coincident}/${CONSTRAINT_EXISTENCE_GLYPH.center_coincident}/${CONSTRAINT_EXISTENCE_GLYPH.arc_endpoint_coincident}`,
   );
 }
 

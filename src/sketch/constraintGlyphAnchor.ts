@@ -38,7 +38,7 @@ export const CONSTRAINT_EXISTENCE_GLYPH: Readonly<
   vertical_points: 'V',
   coincident: '●',
   origin_coincident: '●',
-  center_coincident: '●',
+  center_coincident: '⊙',
   tangent: 'Tg',
   equal: '=',
   parallel: '∥',
@@ -50,7 +50,7 @@ export const CONSTRAINT_EXISTENCE_GLYPH: Readonly<
   concentric: '◎',
   collinear: 'Col',
   symmetry: 'Sym',
-  arc_endpoint_coincident: '●',
+  arc_endpoint_coincident: 'End',
   equal_distance: '=',
 });
 
