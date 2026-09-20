@@ -75,6 +75,7 @@ here.
 - `mounting-plate` — slotted motor plates often provide center-distance adjust
 
 Related: [mechanisms overview](mechanisms-overview.md),
+[chains & sprockets](mechanisms-chains-sprockets.md),
 [gears](../../concepts/gears.md),
 [shafts / keys / rings](shafts-keys-retaining-rings.md),
 [springs / couplings](springs-couplings.md),

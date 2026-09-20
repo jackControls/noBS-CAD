@@ -848,6 +848,14 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/machine-design/concepts/mechanisms-belts-pulleys.md"),
     },
     KnowledgeFile {
+        path: "machine-design/concepts/mechanisms-chains-sprockets.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/mechanisms-chains-sprockets.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/am-printed-gears-dfam.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-printed-gears-dfam.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/concepts/inspection-metrology-bridge.md",
         text: include_str!("../../../knowledge/machine-design/concepts/inspection-metrology-bridge.md"),
     },
@@ -1690,6 +1698,40 @@ mod tests {
     }
 
     #[test]
+    fn mechanisms_chains_sprockets_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "roller chain center distance",
+            "chain sprocket wrap idler tension",
+            "purchased chain pitch sprocket",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("mechanisms-chains-sprockets")),
+                "expected mechanisms-chains-sprockets for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn am_printed_gears_dfam_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "printed gear FDM orientation tooth",
+            "min tooth thickness nozzle backlash coupon",
+            "DFAM printed spur gear layer load",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("am-printed-gears-dfam")),
+                "expected am-printed-gears-dfam for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn inspection_metrology_bridge_searchable() {
         let store = HelpStore::bundled();
         for query in [
@@ -1789,6 +1831,8 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-linkages-mobility.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-cams.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-belts-pulleys.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-chains-sprockets.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-printed-gears-dfam.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/inspection-metrology-bridge.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));

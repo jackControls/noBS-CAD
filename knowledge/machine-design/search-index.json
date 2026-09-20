@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated": "2026-09-20",
-  "count": 42,
+  "count": 44,
   "entries": [
     {
       "id": "machine-design.concepts.alignment-nubs-pins",
@@ -341,6 +341,42 @@
         "doe-3d"
       ],
       "snippet": "For FDM housings that take repeated screw cycles, prefer a purchased heat-set (thermal) insert in a printed boss over cutting threads in plastic. Name the insert (thread, OD, length, knurl style) before modeling the pil…"
+    },
+    {
+      "id": "machine-design.concepts.am-printed-gears-dfam",
+      "path": "knowledge/machine-design/concepts/am-printed-gears-dfam.md",
+      "title": "Printed gears — FDM DFAM",
+      "description": "FDM/printed gear DFAM — orientation vs tooth load, min tooth thickness vs nozzle, backlash as coupon; no invented module strength tables.",
+      "status": "draft",
+      "topics": [
+        "dfam",
+        "am",
+        "fdm",
+        "mechanisms",
+        "print"
+      ],
+      "keywords": [
+        "printed gear",
+        "FDM gear",
+        "DFAM gear",
+        "tooth orientation",
+        "layer anisotropy gear",
+        "min tooth thickness",
+        "nozzle width tooth",
+        "backlash coupon",
+        "module",
+        "spur print"
+      ],
+      "related_recipes": [
+        "turbine-fit-coupons",
+        "revolved-spacer"
+      ],
+      "sources": [
+        "nwtc-guns-dfm",
+        "doe-3d",
+        "mit-272"
+      ],
+      "snippet": "Printing a spur (or similar) gear does not change gear compatibility rules — same module/DP and pressure angle still apply — but FDM adds orientation, min feature vs nozzle, and backlash-as-coupon decisions you must loc…"
     },
     {
       "id": "machine-design.concepts.am-ribs-gussets-draft",
@@ -1224,6 +1260,46 @@
         "doe-3d"
       ],
       "snippet": "A cam imposes a prescribed displacement on a follower as a function of cam rotation (or translation). CAD models the blank, shaft seat, and follower envelope; the cam law (rise / dwell / return) and safe pressure angle …"
+    },
+    {
+      "id": "machine-design.concepts.mechanisms-chains-sprockets",
+      "path": "knowledge/machine-design/concepts/mechanisms-chains-sprockets.md",
+      "title": "Chains and sprockets (CAD-time)",
+      "description": "CAD-time chain/sprocket envelopes, center distance, wrap, and tension path; prefer purchased pitch — no invented pitch or tension charts.",
+      "status": "draft",
+      "topics": [
+        "mechanisms",
+        "machine-elements",
+        "shafts",
+        "bearings"
+      ],
+      "keywords": [
+        "chain",
+        "roller chain",
+        "sprocket",
+        "pitch",
+        "center distance",
+        "wrap angle",
+        "idler",
+        "tensioner",
+        "slack strand",
+        "master link",
+        "ANSI chain",
+        "BS chain",
+        "purchased pitch"
+      ],
+      "related_recipes": [
+        "revolved-spacer",
+        "vertical-axis-turbine",
+        "turbine-fit-coupons",
+        "mounting-plate"
+      ],
+      "sources": [
+        "mit-272",
+        "doe-3d",
+        "nasa-bearing"
+      ],
+      "snippet": "Roller (and similar) chains transmit rotary motion across a center distance with a tension path you can sketch. CAD owns sprocket envelopes, hubs, shaft seats, guards, and idler locations; pitch / strand / length and te…"
     },
     {
       "id": "machine-design.concepts.mechanisms-linkages-mobility",

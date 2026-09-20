@@ -53,7 +53,9 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Linkages / mobility | **seeded** | `machine-design.concepts.mechanisms-linkages-mobility` — [mechanisms-linkages-mobility](concepts/mechanisms-linkages-mobility.md) |
 | Cams (CAD-time) | **seeded** | `machine-design.concepts.mechanisms-cams` — [mechanisms-cams](concepts/mechanisms-cams.md) |
 | Belts & pulleys | **seeded** | `machine-design.concepts.mechanisms-belts-pulleys` — [mechanisms-belts-pulleys](concepts/mechanisms-belts-pulleys.md) |
+| Chains & sprockets | **seeded** | `machine-design.concepts.mechanisms-chains-sprockets` — [mechanisms-chains-sprockets](concepts/mechanisms-chains-sprockets.md) |
 | Gears (product page) | **seeded** | `concepts.gears` — [gears](../concepts/gears.md) |
+| Printed gears (FDM DFAM) | **seeded** | `machine-design.concepts.am-printed-gears-dfam` — [am-printed-gears-dfam](concepts/am-printed-gears-dfam.md) |
 | Technic-style beam/pin envelope | **seeded (unofficial)** | `machine-design.concepts.technic-envelope` — [technic-envelope](concepts/technic-envelope.md) |
 | Product joints demo | recipe | `vertical-axis-turbine` |
 | Deep tooth / cam-law / belt-tension charts | **planned** | datasheets + `mit-272` link-out; Help stays roles only |
@@ -71,7 +73,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 |-------|--------|------------|
 | DFM overview | **seeded** | `machine-design.concepts.dfm-overview` — [dfm-overview](concepts/dfm-overview.md) |
 | Process guidelines | **seeded** | `machine-design.concepts.dfm-process-guidelines` — [dfm-process-guidelines](concepts/dfm-process-guidelines.md) |
-| DFAM (FDM hub + snap / walls / ribs / supports / inserts / clamshell / holes / load-layers) | **seeded** | Hub: `machine-design.concepts.dfam-fdm-overview` — [dfam-fdm-overview](concepts/dfam-fdm-overview.md); holes: [am-fdm-holes-fit-allowances](concepts/am-fdm-holes-fit-allowances.md); load/layers/infill: [am-fdm-load-layers-infill](concepts/am-fdm-load-layers-infill.md); also [am-snap-fit](concepts/am-snap-fit.md), [am-thin-walls](concepts/am-thin-walls.md), [am-clamshell-retainer](concepts/am-clamshell-retainer.md), [am-heat-set-inserts](concepts/am-heat-set-inserts.md), [am-ribs-gussets-draft](concepts/am-ribs-gussets-draft.md), [am-supports-overhangs](concepts/am-supports-overhangs.md) |
+| DFAM (FDM hub + snap / walls / ribs / supports / inserts / clamshell / holes / load-layers / printed gears) | **seeded** | Hub: `machine-design.concepts.dfam-fdm-overview` — [dfam-fdm-overview](concepts/dfam-fdm-overview.md); holes: [am-fdm-holes-fit-allowances](concepts/am-fdm-holes-fit-allowances.md); load/layers/infill: [am-fdm-load-layers-infill](concepts/am-fdm-load-layers-infill.md); printed gears: [am-printed-gears-dfam](concepts/am-printed-gears-dfam.md); also [am-snap-fit](concepts/am-snap-fit.md), [am-thin-walls](concepts/am-thin-walls.md), [am-clamshell-retainer](concepts/am-clamshell-retainer.md), [am-heat-set-inserts](concepts/am-heat-set-inserts.md), [am-ribs-gussets-draft](concepts/am-ribs-gussets-draft.md), [am-supports-overhangs](concepts/am-supports-overhangs.md) |
 | Cable exits / wire windows / strain relief | **seeded** | `machine-design.concepts.am-cable-exits-strain-relief` — [am-cable-exits-strain-relief](concepts/am-cable-exits-strain-relief.md) |
 | Enclosure lid / gasket / labyrinth | **seeded** | `machine-design.concepts.am-enclosure-lid-gasket-labyrinth` — [am-enclosure-lid-gasket-labyrinth](concepts/am-enclosure-lid-gasket-labyrinth.md) |
 | Ventilation grille / finger-trap openings | **seeded** | `machine-design.concepts.am-ventilation-grille-finger-trap` — [am-ventilation-grille-finger-trap](concepts/am-ventilation-grille-finger-trap.md) |
@@ -118,7 +120,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Deep CMM / GR&R / gage design | inspection bridge **seeded (thin)**; numeric/procedure dumps **out** |
 | Deep key stress / groove charts | shafts page seeded (roles only); numeric charts **TODO** |
 | Deep spring-rate / coupling misalignment charts | springs-couplings seeded (roles only); numeric charts **TODO** (datasheets) |
-| Deep cam-law / belt-tension / tooth charts | mechanisms hub + linkages/cams/belts **seeded (partial)**; numeric charts stay datasheet / `mit-272` |
+| Deep cam-law / belt-tension / chain-tension / tooth charts | mechanisms hub + linkages/cams/belts/chains **seeded (partial)**; printed-gears DFAM seeded (no module-strength tables); numeric charts stay datasheet / `mit-272` |
 | Materials allowables tables | **planned** (no MatWeb); vocabulary seeded |
 | Full NASA fastener preload distill | overview + hole/insert pages seeded; deep sizing **TODO** |
 | More MCP `prompts` (beyond `help_search`) | design-flow prompts still pages + skills ([HUMAN_HELP](../../docs/agentic/HUMAN_HELP.md)) |

@@ -1,3 +1,17 @@
+## 2026-09-20 — Chains/sprockets + printed gears DFAM
+
+- Seeded `machine-design.concepts.mechanisms-chains-sprockets` (center distance,
+  wrap, tension path, purchased pitch; cite `mit-272`; link mechanisms hub +
+  belts sibling).
+- Seeded `machine-design.concepts.am-printed-gears-dfam` (orientation vs tooth
+  load; min tooth vs nozzle; backlash as coupon; cross-link gears + DFAM hub +
+  load-layers; **no** module strength tables).
+- Skipped optional NASA preload Concept — fasteners-joints already carries
+  checklist distill; deep numeric tables remain Still-thin.
+- Taxonomy C/E + Still-thin; index table + bullets; cross-links from overview,
+  belts, gears, DFAM hub, load-layers. Rebuilt search-index.json; Rust embed +
+  BM25/unit tests; wire goldens H64+.
+
 ## 2026-09-20 — Mechanisms corpus (hub + linkages/cams/belts)
 
 - Seeded `machine-design.concepts.mechanisms-overview` (motion class → element

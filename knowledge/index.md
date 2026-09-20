@@ -75,6 +75,8 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Linkages / mobility | `machine-design.concepts.mechanisms-linkages-mobility` | Linkages and mobility |
 | Cams | `machine-design.concepts.mechanisms-cams` | Cams (CAD-time) |
 | Belts & pulleys | `machine-design.concepts.mechanisms-belts-pulleys` | Belts and pulleys |
+| Chains & sprockets | `machine-design.concepts.mechanisms-chains-sprockets` | Chains and sprockets |
+| Printed gears (FDM DFAM) | `machine-design.concepts.am-printed-gears-dfam` | Printed gears — FDM DFAM |
 
 Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 
@@ -133,6 +135,8 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [Linkages / mobility](machine-design/concepts/mechanisms-linkages-mobility.md) - Joints/DOFs first; four-bar / slider-crank envelopes.
 - [Cams (CAD-time)](machine-design/concepts/mechanisms-cams.md) - Rise–dwell–return story; base circle / PA as VERIFY.
 - [Belts & pulleys](machine-design/concepts/mechanisms-belts-pulleys.md) - Center distance, wrap, tension path; purchased profiles.
+- [Chains & sprockets](machine-design/concepts/mechanisms-chains-sprockets.md) - Center distance, wrap, tension path; purchased pitch.
+- [Printed gears (FDM DFAM)](machine-design/concepts/am-printed-gears-dfam.md) - Orientation vs tooth load; min tooth vs nozzle; backlash coupon; no module-strength tables.
 
 - [DFM process guidelines](machine-design/concepts/dfm-process-guidelines.md) - Molding, cast, sheet, weld, EDM, CNC.
 - [AM snap-fits](machine-design/concepts/am-snap-fit.md) - Cantilever clips, latches, living hinges (sizing).

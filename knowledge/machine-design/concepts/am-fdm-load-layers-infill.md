@@ -74,4 +74,6 @@ orientation** first — then pick a modest infill that prints cleanly.
 4. Plan orientation-matched coupons for any load-critical region.
 
 Related: [DFAM FDM overview](dfam-fdm-overview.md),
-[AM thin walls](am-thin-walls.md), [SOURCES](../SOURCES.md).
+[AM thin walls](am-thin-walls.md),
+[printed gears DFAM](am-printed-gears-dfam.md),
+[SOURCES](../SOURCES.md).

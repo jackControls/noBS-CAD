@@ -66,6 +66,7 @@ Do **not** invent tooth, cam, or belt charts in Help — cite datasheets and
 | Linkages / mobility | `machine-design.concepts.mechanisms-linkages-mobility` | [mechanisms-linkages-mobility](mechanisms-linkages-mobility.md) |
 | Cams (CAD-time) | `machine-design.concepts.mechanisms-cams` | [mechanisms-cams](mechanisms-cams.md) |
 | Belts & pulleys | `machine-design.concepts.mechanisms-belts-pulleys` | [mechanisms-belts-pulleys](mechanisms-belts-pulleys.md) |
+| Chains & sprockets | `machine-design.concepts.mechanisms-chains-sprockets` | [mechanisms-chains-sprockets](mechanisms-chains-sprockets.md) |
 | Power / lead screws | `machine-design.concepts.power-screws-lead-screws` | [power-screws-lead-screws](power-screws-lead-screws.md) |
 | Shafts / keys / rings | `machine-design.concepts.shafts-keys-retaining-rings` | [shafts-keys-retaining-rings](shafts-keys-retaining-rings.md) |
 | Bearings / hubs / seats | `concepts.bearing-stacks` | [bearing-stacks](../../concepts/bearing-stacks.md) |

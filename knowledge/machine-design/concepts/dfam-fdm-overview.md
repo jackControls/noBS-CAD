@@ -71,6 +71,7 @@ Export orientation must match the qualification print
 | Hardware pocket research | `machine-design.concepts.am-hardware-pocket-research` | [am-hardware-pocket-research](am-hardware-pocket-research.md) |
 | FDM holes / printed-fit allowances | `machine-design.concepts.am-fdm-holes-fit-allowances` | [am-fdm-holes-fit-allowances](am-fdm-holes-fit-allowances.md) |
 | Load path / layers / infill roles | `machine-design.concepts.am-fdm-load-layers-infill` | [am-fdm-load-layers-infill](am-fdm-load-layers-infill.md) |
+| Printed gears (DFAM) | `machine-design.concepts.am-printed-gears-dfam` | [am-printed-gears-dfam](am-printed-gears-dfam.md) |
 | Captive nut / hex trap | `machine-design.concepts.captive-nut-hex-trap` | [captive-nut-hex-trap](captive-nut-hex-trap.md) |
 | Fit coupons / recipes map | `machine-design.concepts.fit-coupons-recipes-map` | [fit-coupons-recipes-map](fit-coupons-recipes-map.md) |
 
