@@ -97,6 +97,6 @@ Rewritten from the NIST Part II “every part is different” teaching arc
 - [ASME codes & standards](https://www.asme.org/codes-standards) — Y14.5, Y14.41, Y14.46
 - [Ford, Engineering Graphics](https://uw.pressbooks.pub/enggraphics/) — CC BY-NC-SA
 
-Related: [Fits & clearances](fits-clearances.md), [DFM overview](dfm-overview.md),
+Related: [inspection / metrology bridge](inspection-metrology-bridge.md), [Fits & clearances](fits-clearances.md), [DFM overview](dfm-overview.md),
 [drawing vs MBD / PMI](drawing-vs-mbd-pmi.md),
 [taxonomy](../taxonomy.md).

@@ -55,3 +55,5 @@ shipping drawing as certified. Prefer **mm** project units
 - [ ] Coupon printed and measured after cool-down
 - [ ] No trademarked marks on distributable geometry
 - [ ] Locator count reviewed for overconstraint
+
+Related: [mechanisms overview](mechanisms-overview.md), [linkages / mobility](mechanisms-linkages-mobility.md).

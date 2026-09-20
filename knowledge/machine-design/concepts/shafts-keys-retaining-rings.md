@@ -73,7 +73,7 @@ circlip dimension charts here.
 - `turbine-fit-coupons` / `vertical-axis-turbine` — hub and seat fit practice
 - `d-screw-vise-fit` — qualify running fits before locking product geometry
 
-Related: [bearing stacks](../../concepts/bearing-stacks.md),
+Related: [mechanisms overview](mechanisms-overview.md), [belts & pulleys](mechanisms-belts-pulleys.md), [bearing stacks](../../concepts/bearing-stacks.md),
 [fits & clearances](fits-clearances.md),
 [power screws / lead screws](power-screws-lead-screws.md),
 [springs and couplings](springs-couplings.md),

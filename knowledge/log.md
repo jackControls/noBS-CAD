@@ -1,3 +1,21 @@
+## 2026-09-20 — Mechanisms corpus (hub + linkages/cams/belts)
+
+- Seeded `machine-design.concepts.mechanisms-overview` (motion class → element
+  family → envelopes/centers/DOFs → VERIFY hub; table to gears + elements).
+- Seeded `mechanisms-linkages-mobility` (joints/DOFs first; Gruebler as roles;
+  four-bar / slider-crank envelopes).
+- Seeded `mechanisms-cams` (follower types; rise–dwell–return story; base
+  circle / pressure angle as VERIFY — no invented cam charts).
+- Seeded `mechanisms-belts-pulleys` (center distance, wrap, tension, idlers;
+  purchased belt profiles).
+- Stretch: thin `inspection-metrology-bridge` (characteristic → pack → method
+  class → as-built); taxonomy A seeded thin.
+- Taxonomy C → **seeded (partial)**; Still-thin updated. Index table + bullets;
+  cross-links from gears, power-screws, shafts, springs, technic-envelope,
+  drawing-vs-mbd, gdt-intro.
+- Cite `mit-272` link-out on mechanisms pages. Rebuilt search-index.json; Rust
+  embed + BM25/unit tests; floor ≥50; wire goldens H56–H63.
+
 ## 2026-09-20 — FDM load / layers / infill
 
 - Seeded `machine-design.concepts.am-fdm-load-layers-infill` (name primary load

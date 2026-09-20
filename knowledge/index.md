@@ -67,9 +67,14 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Shafts / keys / retaining rings | `machine-design.concepts.shafts-keys-retaining-rings` | Shafts, keys, and retaining rings |
 | Springs / couplings | `machine-design.concepts.springs-couplings` | Springs and couplings |
 | Drawing vs MBD / PMI | `machine-design.concepts.drawing-vs-mbd-pmi` | Drawing vs MBD / PMI |
+| Inspection / metrology bridge | `machine-design.concepts.inspection-metrology-bridge` | Inspection / metrology bridge (thin) |
 | DFAM / FDM overview | `machine-design.concepts.dfam-fdm-overview` | DFAM for FDM overview |
 | FDM holes / printed fits | `machine-design.concepts.am-fdm-holes-fit-allowances` | FDM holes and printed-fit allowances |
 | FDM load / layers / infill | `machine-design.concepts.am-fdm-load-layers-infill` | FDM load path vs layer orientation / infill roles |
+| Mechanisms overview | `machine-design.concepts.mechanisms-overview` | Mechanisms overview (CAD-time hub) |
+| Linkages / mobility | `machine-design.concepts.mechanisms-linkages-mobility` | Linkages and mobility |
+| Cams | `machine-design.concepts.mechanisms-cams` | Cams (CAD-time) |
+| Belts & pulleys | `machine-design.concepts.mechanisms-belts-pulleys` | Belts and pulleys |
 
 Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 
@@ -124,6 +129,11 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [DFAM for FDM overview](machine-design/concepts/dfam-fdm-overview.md) - Additive FDM golden path hub; links seeded AM Concepts.
 - [FDM holes / printed-fit allowances](machine-design/concepts/am-fdm-holes-fit-allowances.md) - Role-based printed hole fits; coupons over universal tables.
 - [FDM load / layers / infill](machine-design/concepts/am-fdm-load-layers-infill.md) - Load path vs bed face; shells vs infill; coupons, no % strength tables.
+- [Mechanisms overview](machine-design/concepts/mechanisms-overview.md) - Motion class → element family → envelopes/DOFs → VERIFY.
+- [Linkages / mobility](machine-design/concepts/mechanisms-linkages-mobility.md) - Joints/DOFs first; four-bar / slider-crank envelopes.
+- [Cams (CAD-time)](machine-design/concepts/mechanisms-cams.md) - Rise–dwell–return story; base circle / PA as VERIFY.
+- [Belts & pulleys](machine-design/concepts/mechanisms-belts-pulleys.md) - Center distance, wrap, tension path; purchased profiles.
+
 - [DFM process guidelines](machine-design/concepts/dfm-process-guidelines.md) - Molding, cast, sheet, weld, EDM, CNC.
 - [AM snap-fits](machine-design/concepts/am-snap-fit.md) - Cantilever clips, latches, living hinges (sizing).
 - [AM thin walls](machine-design/concepts/am-thin-walls.md) - FDM min wall, anisotropy, print orientation.
@@ -151,6 +161,7 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [Shafts / keys / retaining rings](machine-design/concepts/shafts-keys-retaining-rings.md) - Stepped shafts, keyseats, circlip grooves (CAD-time).
 - [Springs / couplings](machine-design/concepts/springs-couplings.md) - Spring seats and shaft couplings (CAD-time; datasheet rates).
 - [Drawing vs MBD / PMI](machine-design/concepts/drawing-vs-mbd-pmi.md) - 2D drawing notes vs model PMI; VERIFY process match.
+- [Inspection / metrology bridge](machine-design/concepts/inspection-metrology-bridge.md) - Characteristic set → pack → method class → as-built loop (thin).
 - [Fit coupons & recipes map](machine-design/concepts/fit-coupons-recipes-map.md) - Concept → `related_recipes` hub.
 
 Use the listed resources for their stated scope, then consult the cited sources

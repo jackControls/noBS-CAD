@@ -95,7 +95,7 @@ Enclosure lid gaskets and labyrinths are a different seal class:
 - `turbine-fit-coupons` / `vertical-axis-turbine` — hub and seat fit practice
 - `d-screw-vise-fit` — qualify running fits before locking product geometry
 
-Related: [shafts, keys, and retaining rings](shafts-keys-retaining-rings.md),
+Related: [mechanisms overview](mechanisms-overview.md), [shafts, keys, and retaining rings](shafts-keys-retaining-rings.md),
 [bearing stacks](../../concepts/bearing-stacks.md),
 [fasteners & joints](fasteners-joints.md),
 [fits & clearances](fits-clearances.md),

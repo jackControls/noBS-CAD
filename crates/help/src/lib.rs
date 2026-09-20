@@ -832,6 +832,26 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/machine-design/concepts/am-fdm-load-layers-infill.md"),
     },
     KnowledgeFile {
+        path: "machine-design/concepts/mechanisms-overview.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/mechanisms-overview.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/mechanisms-linkages-mobility.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/mechanisms-linkages-mobility.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/mechanisms-cams.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/mechanisms-cams.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/mechanisms-belts-pulleys.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/mechanisms-belts-pulleys.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/inspection-metrology-bridge.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/inspection-metrology-bridge.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/taxonomy.md",
         text: include_str!("../../../knowledge/machine-design/taxonomy.md"),
     },
@@ -1602,6 +1622,91 @@ mod tests {
     }
 
     #[test]
+    fn mechanisms_overview_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "mechanisms overview motion class",
+            "rotary to linear mechanism hub",
+            "mechanism element family envelopes DOF",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("mechanisms-overview")),
+                "expected mechanisms-overview for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn mechanisms_linkages_mobility_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "four bar linkage mobility",
+            "slider-crank joints DOF Gruebler",
+            "linkage revolute prismatic mobility",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("mechanisms-linkages-mobility")),
+                "expected mechanisms-linkages-mobility for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn mechanisms_cams_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "cam follower rise dwell return",
+            "base circle pressure angle cam",
+            "roller follower plate cam",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("mechanisms-cams")),
+                "expected mechanisms-cams for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn mechanisms_belts_pulleys_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "timing belt center distance",
+            "belt pulley wrap idler tension",
+            "GT2 HTD purchased belt profile",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("mechanisms-belts-pulleys")),
+                "expected mechanisms-belts-pulleys for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn inspection_metrology_bridge_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "inspection metrology bridge",
+            "CMM gage characteristic datum scheme handoff",
+            "FAIR balloon MBD to shop inspection",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("inspection-metrology-bridge")),
+                "expected inspection-metrology-bridge for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn agent_mcp_workflow_ops_searchable() {
         let store = HelpStore::bundled();
         for query in [
@@ -1639,7 +1744,7 @@ mod tests {
     #[test]
     fn check_corpus_ok() {
         let n = check_corpus().expect("corpus check");
-        assert!(n >= 45);
+        assert!(n >= 50);
     }
 
     #[test]
@@ -1680,6 +1785,11 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/dfam-fdm-overview.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-fdm-holes-fit-allowances.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-fdm-load-layers-infill.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-overview.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-linkages-mobility.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-cams.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-belts-pulleys.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/inspection-metrology-bridge.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));
         assert!(knowledge_file_by_uri("nbcad://knowledge/../etc/passwd").is_none());

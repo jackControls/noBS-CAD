@@ -53,6 +53,6 @@ RP-1228 (public domain) plus DFM checklists. No torque/load tables here.
 - `d-screw-vise-fit` — qualify thread and slide coupons first
 - `revolved-spacer` — annular spacer patterns often appear in screw stacks
 
-Related: [fasteners & joints](fasteners-joints.md),
+Related: [mechanisms overview](mechanisms-overview.md), [cams](mechanisms-cams.md), [linkages / mobility](mechanisms-linkages-mobility.md), [fasteners & joints](fasteners-joints.md),
 [additive workholding](../../concepts/additive-workholding.md),
 [fit coupons map](fit-coupons-recipes-map.md).

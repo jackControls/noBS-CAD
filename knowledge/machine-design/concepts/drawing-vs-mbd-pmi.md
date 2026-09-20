@@ -106,3 +106,5 @@ Related: [GD&T intro](gdt-intro.md),
 [fasteners & joints](fasteners-joints.md),
 [DFM overview](dfm-overview.md),
 [taxonomy](../taxonomy.md).
+
+Inspection handoff: [inspection / metrology bridge](inspection-metrology-bridge.md).

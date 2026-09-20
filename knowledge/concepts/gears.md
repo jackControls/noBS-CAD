@@ -70,6 +70,7 @@ motion; it does not establish correct tooth contact, efficiency or load capacity
 See [additive workholding](additive-workholding.md) for mounting and qualification.
 For speed-increasing generator drives, also check [rotor/load matching](small-wind-generators.md)
 and [bearing supports and axial retention](bearing-stacks.md).
+Mechanism motion-class hub: [mechanisms overview](../machine-design/concepts/mechanisms-overview.md); adjacent families: [belts & pulleys](../machine-design/concepts/mechanisms-belts-pulleys.md), [linkages](../machine-design/concepts/mechanisms-linkages-mobility.md), [cams](../machine-design/concepts/mechanisms-cams.md).
 
 ## Learning reference provenance
 

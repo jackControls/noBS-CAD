@@ -32,7 +32,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Tolerance stack-up (method) | **seeded (citation-only)** | `machine-design.concepts.tolerance-stackup-intro` — [tolerance-stackup-intro](concepts/tolerance-stackup-intro.md) |
 | Cosmetic threads vs clearance / tap / insert | **seeded** | `machine-design.concepts.cosmetic-threads-vs-clearance` — [cosmetic-threads-vs-clearance](concepts/cosmetic-threads-vs-clearance.md) |
 | Drawing vs MBD / PMI walkthrough | **seeded** | `machine-design.concepts.drawing-vs-mbd-pmi` — [drawing-vs-mbd-pmi](concepts/drawing-vs-mbd-pmi.md) |
-| Inspection / metrology bridge | **planned** | — |
+| Inspection / metrology bridge | **seeded (thin)** | `machine-design.concepts.inspection-metrology-bridge` — [inspection-metrology-bridge](concepts/inspection-metrology-bridge.md) |
 
 ## B. Machine elements
 
@@ -49,9 +49,14 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 
 | Topic | Status | Id / title |
 |-------|--------|------------|
-| Linkages, gears, cams, belts, mobility | **planned** | until then link MIT OCW (`mit-272`) |
+| Mechanisms overview (hub) | **seeded (partial)** | `machine-design.concepts.mechanisms-overview` — [mechanisms-overview](concepts/mechanisms-overview.md) |
+| Linkages / mobility | **seeded** | `machine-design.concepts.mechanisms-linkages-mobility` — [mechanisms-linkages-mobility](concepts/mechanisms-linkages-mobility.md) |
+| Cams (CAD-time) | **seeded** | `machine-design.concepts.mechanisms-cams` — [mechanisms-cams](concepts/mechanisms-cams.md) |
+| Belts & pulleys | **seeded** | `machine-design.concepts.mechanisms-belts-pulleys` — [mechanisms-belts-pulleys](concepts/mechanisms-belts-pulleys.md) |
+| Gears (product page) | **seeded** | `concepts.gears` — [gears](../concepts/gears.md) |
 | Technic-style beam/pin envelope | **seeded (unofficial)** | `machine-design.concepts.technic-envelope` — [technic-envelope](concepts/technic-envelope.md) |
 | Product joints demo | recipe | `vertical-axis-turbine` |
+| Deep tooth / cam-law / belt-tension charts | **planned** | datasheets + `mit-272` link-out; Help stays roles only |
 
 ## D. Materials
 
@@ -109,11 +114,11 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 
 | Gap | Notes |
 |-----|-------|
-| Deep Y14.41 / semantic PMI export recipes | drawing-vs-mbd-pmi seeded (CAD-time packs); vendor/tutorial dumps **out**; inspection bridge still **planned** |
-| Inspection / metrology bridge | still **planned** |
+| Deep Y14.41 / semantic PMI export recipes | drawing-vs-mbd-pmi seeded (CAD-time packs); vendor/tutorial dumps **out**; inspection bridge seeded thin; deep CMM/GR&R still out |
+| Deep CMM / GR&R / gage design | inspection bridge **seeded (thin)**; numeric/procedure dumps **out** |
 | Deep key stress / groove charts | shafts page seeded (roles only); numeric charts **TODO** |
 | Deep spring-rate / coupling misalignment charts | springs-couplings seeded (roles only); numeric charts **TODO** (datasheets) |
-| Linkages / gears / cams / belts mobility | gears product page exists; mechanisms **planned** |
+| Deep cam-law / belt-tension / tooth charts | mechanisms hub + linkages/cams/belts **seeded (partial)**; numeric charts stay datasheet / `mit-272` |
 | Materials allowables tables | **planned** (no MatWeb); vocabulary seeded |
 | Full NASA fastener preload distill | overview + hole/insert pages seeded; deep sizing **TODO** |
 | More MCP `prompts` (beyond `help_search`) | design-flow prompts still pages + skills ([HUMAN_HELP](../../docs/agentic/HUMAN_HELP.md)) |
