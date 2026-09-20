@@ -36,7 +36,7 @@ circlip dimension charts here.
 ## CAD-time checklist
 
 1. **Name the shaft duty** — torque, bending, continuous vs intermittent, and
-   which faces locate bearings ([bearing stacks](../../concepts/bearing-stacks.md)).
+   which faces locate bearings ([bearings / hubs / seats](bearings-hubs-seats.md), [bearing-stacks](../../concepts/bearing-stacks.md)).
 2. **Step plan** — diameters for seats, hubs, and free spans; each shoulder has a
    **role** (locate race, stop hub, clear seal). Prefer clear axial stack math over
    a single “pretty taper.”
@@ -73,7 +73,7 @@ circlip dimension charts here.
 - `turbine-fit-coupons` / `vertical-axis-turbine` — hub and seat fit practice
 - `d-screw-vise-fit` — qualify running fits before locking product geometry
 
-Related: [mechanisms overview](mechanisms-overview.md), [belts & pulleys](mechanisms-belts-pulleys.md), [bearing stacks](../../concepts/bearing-stacks.md),
+Related: [mechanisms overview](mechanisms-overview.md), [belts & pulleys](mechanisms-belts-pulleys.md), [bearings / hubs / seats](bearings-hubs-seats.md), [bearing stacks](../../concepts/bearing-stacks.md),
 [fits & clearances](fits-clearances.md),
 [power screws / lead screws](power-screws-lead-screws.md),
 [springs and couplings](springs-couplings.md),

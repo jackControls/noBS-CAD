@@ -30,9 +30,9 @@ the same catalog as Help `related_recipes` / `cad_interface` `recipes`.
 |-----------|---------|----------|
 | `d-screw-vise` | Screw / joint product | [fasteners](fasteners-joints.md), [captive nut](captive-nut-hex-trap.md), [heat-set](am-heat-set-inserts.md) |
 | `garden-bench` | Larger structural / fastener | [fasteners](fasteners-joints.md), [DFM overview](dfm-overview.md) |
-| `vertical-axis-turbine` | Product joints / hardware pockets | [hardware pocket](am-hardware-pocket-research.md), [bearing stacks](../../concepts/bearing-stacks.md) |
+| `vertical-axis-turbine` | Product joints / hardware pockets | [hardware pocket](am-hardware-pocket-research.md), [bearings / hubs / seats](bearings-hubs-seats.md) / [bearing-stacks](../../concepts/bearing-stacks.md) |
 | `repeated-bracket-assembly` | Locate / pattern repetition | [locating schemes](locating-scheme-dof.md), [nubs](alignment-nubs-pins.md) |
-| `revolved-spacer` | Annular / spacer stacks | [bearing stacks](../../concepts/bearing-stacks.md), [power screws](power-screws-lead-screws.md) |
+| `revolved-spacer` | Annular / spacer stacks | [bearings / hubs / seats](bearings-hubs-seats.md) / [bearing-stacks](../../concepts/bearing-stacks.md), [power screws](power-screws-lead-screws.md) |
 | `angle-bracket` | Simple bracket DFM | [DFM process](dfm-process-guidelines.md), [ribs](am-ribs-gussets-draft.md) |
 
 ## Enclosure / AM quick map

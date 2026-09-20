@@ -64,6 +64,7 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Fit coupons / recipes hub | `machine-design.concepts.fit-coupons-recipes-map` | Fit coupons and recipes map |
 | Datum / sketch plane (MCP) | `machine-design.concepts.datum-sketch-plane-choice` | Datum / sketch plane choice |
 | Hole feature vs modeled | `machine-design.concepts.hole-wizard-vs-modeled` | Hole wizard vs modeled hole |
+| Bearings / hubs / seats | `machine-design.concepts.bearings-hubs-seats` | Bearings, hubs, and seats |
 | Shafts / keys / retaining rings | `machine-design.concepts.shafts-keys-retaining-rings` | Shafts, keys, and retaining rings |
 | Springs / couplings | `machine-design.concepts.springs-couplings` | Springs and couplings |
 | Drawing vs MBD / PMI | `machine-design.concepts.drawing-vs-mbd-pmi` | Drawing vs MBD / PMI |
@@ -97,7 +98,7 @@ Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 - [Gear identification and compatible pairs](concepts/gears.md) - Module/DP, OD limits, pressure angle, ratio changes and mounting.
 - [Additive workholding](concepts/additive-workholding.md) - Captured guides, assembly access, D-flat roots and qualification.
 - [Small wind rotors and low-speed generators](concepts/small-wind-generators.md) - Power, startup, gearing, motor dimensions and measured loads.
-- [Bearing supports, hubs, and axial retention](concepts/bearing-stacks.md) - Seats, press-fit hubs, lead-in, shoulders, spacer stacks.
+- [Bearing supports, hubs, and axial retention](concepts/bearing-stacks.md) - Purchased SKU seats, press-fit hubs, lead-in, shoulders, spacer stacks.
 
 ## Read through MCP
 
@@ -166,6 +167,7 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [AM warpage / cooling / flatness](machine-design/concepts/am-warpage-cooling-flatness.md) - Large plate curl and flatness levers.
 - [Datum / sketch plane (MCP)](machine-design/concepts/datum-sketch-plane-choice.md) - Origin, CS, and sketch plane choice for MCP edits.
 - [Hole feature vs modeled](machine-design/concepts/hole-wizard-vs-modeled.md) - Hole feature vs sketched/patterned holes.
+- [Bearings / hubs / seats](machine-design/concepts/bearings-hubs-seats.md) - Shaft/housing seats, fit roles, preload stacks; load/speed/life VERIFY to catalog.
 - [Shafts / keys / retaining rings](machine-design/concepts/shafts-keys-retaining-rings.md) - Stepped shafts, keyseats, circlip grooves (CAD-time).
 - [Springs / couplings](machine-design/concepts/springs-couplings.md) - Spring seats and shaft couplings (CAD-time; datasheet rates).
 - [Drawing vs MBD / PMI](machine-design/concepts/drawing-vs-mbd-pmi.md) - 2D drawing notes vs model PMI; VERIFY process match.

@@ -64,7 +64,7 @@ Enclosure lid gaskets and labyrinths are a different seal class:
 2. **Misalignment class** — angular, parallel, axial (end float). Pick a
    **flexible** type when shafts cannot be perfectly aligned; prefer **rigid**
    only when seats and bearings already locate the axis
-   ([bearing stacks](../../concepts/bearing-stacks.md),
+   ([bearings / hubs / seats](bearings-hubs-seats.md),
    [locating schemes](locating-scheme-dof.md)).
 3. **Hub interface** — bore, key/spline/clamp/set-screw, and length on each
    side. Model the **real hub feature**, not a glued cylinder
@@ -96,6 +96,7 @@ Enclosure lid gaskets and labyrinths are a different seal class:
 - `d-screw-vise-fit` — qualify running fits before locking product geometry
 
 Related: [mechanisms overview](mechanisms-overview.md), [shafts, keys, and retaining rings](shafts-keys-retaining-rings.md),
+[bearings / hubs / seats](bearings-hubs-seats.md),
 [bearing stacks](../../concepts/bearing-stacks.md),
 [fasteners & joints](fasteners-joints.md),
 [fits & clearances](fits-clearances.md),

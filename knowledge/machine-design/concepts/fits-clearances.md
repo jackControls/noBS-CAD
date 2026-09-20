@@ -83,4 +83,5 @@ Software replay ≠ physical qualification.
 Related: [GD&T intro](gdt-intro.md), [DFM overview](dfm-overview.md),
 [DFM process guidelines](dfm-process-guidelines.md),
 [tolerance stack-up](tolerance-stackup-intro.md),
+[bearings / hubs / seats](bearings-hubs-seats.md),
 [assembly interference check](../../concepts/assembly-interference.md).

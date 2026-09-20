@@ -70,7 +70,7 @@ Do **not** invent tooth, cam, or belt charts in Help — cite datasheets and
 | Chains & sprockets | `machine-design.concepts.mechanisms-chains-sprockets` | [mechanisms-chains-sprockets](mechanisms-chains-sprockets.md) |
 | Power / lead screws | `machine-design.concepts.power-screws-lead-screws` | [power-screws-lead-screws](power-screws-lead-screws.md) |
 | Shafts / keys / rings | `machine-design.concepts.shafts-keys-retaining-rings` | [shafts-keys-retaining-rings](shafts-keys-retaining-rings.md) |
-| Bearings / hubs / seats | `concepts.bearing-stacks` | [bearing-stacks](../../concepts/bearing-stacks.md) |
+| Bearings / hubs / seats | `machine-design.concepts.bearings-hubs-seats` | [bearings-hubs-seats](bearings-hubs-seats.md); SKU: [bearing-stacks](../../concepts/bearing-stacks.md) |
 | Springs / couplings | `machine-design.concepts.springs-couplings` | [springs-couplings](springs-couplings.md) |
 | Technic-style envelope | `machine-design.concepts.technic-envelope` | [technic-envelope](technic-envelope.md) |
 

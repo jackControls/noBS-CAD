@@ -7,7 +7,7 @@ updated: 2026-09-20
 topics: bearings, machine-elements, fits, am, dfm
 keywords: bearing seat, press fit hub, lead-in, shaft shoulder, spacer stack, interference seat
 related_recipes: turbine-fit-coupons, vertical-axis-turbine, d-screw-vise-fit, revolved-spacer
-sources: nasa-bearing, nist-gdt-2
+sources: nasa-bearing, nist-gdt-2, mit-272
 ---
 
 # Bearing supports, hubs, and axial retention
@@ -15,6 +15,9 @@ sources: nasa-bearing, nist-gdt-2
 Use this when a printed housing supports a rotating shaft or when a collar,
 washer or spacer retains a bearing. Trace the radial and axial load paths and
 identify which surfaces rotate before setting clearances.
+
+CAD-time golden path (load/speed/life VERIFY, shaft/housing seats, fit roles,
+preload/spacer stacks): [bearings, hubs, and seats (CAD-time)](../machine-design/concepts/bearings-hubs-seats.md).
 
 ## Choose real hardware
 
@@ -97,7 +100,10 @@ An ideal revolute joint proves a kinematic relationship, not bearing friction,
 alignment, retention or durability. See [additive workholding](additive-workholding.md)
 and [small generators](small-wind-generators.md) for related checks.
 
-Related: [locating schemes](../machine-design/concepts/locating-scheme-dof.md),
+Related: [bearings, hubs, and seats (CAD-time)](../machine-design/concepts/bearings-hubs-seats.md),
+[mechanisms overview](../machine-design/concepts/mechanisms-overview.md),
+[fits & clearances](../machine-design/concepts/fits-clearances.md),
+[locating schemes](../machine-design/concepts/locating-scheme-dof.md),
 [tolerance stack-up intro](../machine-design/concepts/tolerance-stackup-intro.md).
 
 Shaft steps, keys, and retaining-ring grooves: [shafts, keys, and retaining rings](../machine-design/concepts/shafts-keys-retaining-rings.md).

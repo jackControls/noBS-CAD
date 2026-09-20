@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated": "2026-09-20",
-  "count": 46,
+  "count": 47,
   "entries": [
     {
       "id": "machine-design.concepts.alignment-nubs-pins",
@@ -574,6 +574,53 @@
         "doe-3d"
       ],
       "snippet": "Large plates, lids, and enclosure floors curl, dish, and lose hole-pattern accuracy when thermal gradients and residual stress win. Flatness is a design + process problem — not only a slicer checkbox. Attribution: proce…"
+    },
+    {
+      "id": "machine-design.concepts.bearings-hubs-seats",
+      "path": "knowledge/machine-design/concepts/bearings-hubs-seats.md",
+      "title": "Bearings, hubs, and seats (CAD-time)",
+      "description": "Shaft/housing seats, fit roles, preload/spacer stacks, and load/speed/life as VERIFY to catalog — no invented L10 tables.",
+      "status": "draft",
+      "topics": [
+        "machine-elements",
+        "bearings",
+        "shafts",
+        "fits",
+        "mechanisms",
+        "am",
+        "dfm"
+      ],
+      "keywords": [
+        "bearing seat",
+        "housing bore",
+        "shaft seat",
+        "inner ring",
+        "outer ring",
+        "press fit hub",
+        "lead-in",
+        "shoulder",
+        "abutment",
+        "spacer stack",
+        "preload",
+        "float",
+        "L10 life",
+        "radial load",
+        "axial load",
+        "C0 C dynamic"
+      ],
+      "related_recipes": [
+        "turbine-fit-coupons",
+        "vertical-axis-turbine",
+        "d-screw-vise-fit",
+        "revolved-spacer"
+      ],
+      "sources": [
+        "nasa-bearing",
+        "mit-272",
+        "nist-gdt-2",
+        "doe-3d"
+      ],
+      "snippet": "CAD owns seat geometry, fit roles, and axial stacks. Catalogs own load ratings, speed limits, and life (L10) curves. Prefer a named purchased bearing with its drawing over inventing capacity tables in Help. Attribution:…"
     },
     {
       "id": "machine-design.concepts.captive-nut-hex-trap",

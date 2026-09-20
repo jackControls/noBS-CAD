@@ -864,6 +864,10 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/machine-design/concepts/design-hygiene-requirements-bom.md"),
     },
     KnowledgeFile {
+        path: "machine-design/concepts/bearings-hubs-seats.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/bearings-hubs-seats.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/concepts/inspection-metrology-bridge.md",
         text: include_str!("../../../knowledge/machine-design/concepts/inspection-metrology-bridge.md"),
     },
@@ -1757,6 +1761,23 @@ mod tests {
     }
 
     #[test]
+    fn bearings_hubs_seats_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "bearing shaft housing seat preload",
+            "L10 life load speed VERIFY catalog",
+            "inner ring outer ring spacer stack fit roles",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("bearings-hubs-seats")),
+                "expected bearings-hubs-seats for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn design_hygiene_requirements_bom_searchable() {
         let store = HelpStore::bundled();
         for query in [
@@ -1877,6 +1898,7 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-printed-gears-dfam.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-intermittent-geneva.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/design-hygiene-requirements-bom.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/bearings-hubs-seats.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/inspection-metrology-bridge.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));

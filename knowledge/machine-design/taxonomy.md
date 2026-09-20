@@ -41,7 +41,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Fasteners & joints | **seeded** | `machine-design.concepts.fasteners-joints` — [fasteners-joints](concepts/fasteners-joints.md); also [fastener-clearance-counterbore](concepts/fastener-clearance-counterbore.md), [am-heat-set-inserts](concepts/am-heat-set-inserts.md), [captive-nut-hex-trap](concepts/captive-nut-hex-trap.md) |
 | Hardware pocket / actuator / bolt circle research | **seeded** | `machine-design.concepts.am-hardware-pocket-research` — [am-hardware-pocket-research](concepts/am-hardware-pocket-research.md) |
 | Shafts, keys, retaining rings | **seeded** | `machine-design.concepts.shafts-keys-retaining-rings` — [shafts-keys-retaining-rings](concepts/shafts-keys-retaining-rings.md) |
-| Bearings / hubs / seats | **seeded (partial)** | `concepts.bearing-stacks` — [bearing-stacks](../concepts/bearing-stacks.md) |
+| Bearings / hubs / seats | **seeded** | `machine-design.concepts.bearings-hubs-seats` — [bearings-hubs-seats](concepts/bearings-hubs-seats.md); product/SKU: [bearing-stacks](../concepts/bearing-stacks.md) |
 | Springs, seals, couplings | **seeded** (springs/couplings + lid seal) | `machine-design.concepts.springs-couplings` — [springs-couplings](concepts/springs-couplings.md); enclosure seal: [am-enclosure-lid-gasket-labyrinth](concepts/am-enclosure-lid-gasket-labyrinth.md) |
 | Power screws / lead screws | **seeded** | `machine-design.concepts.power-screws-lead-screws` — [power-screws-lead-screws](concepts/power-screws-lead-screws.md) |
 
@@ -119,6 +119,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 |-----|-------|
 | Deep Y14.41 / semantic PMI export recipes | drawing-vs-mbd-pmi seeded (CAD-time packs); vendor/tutorial dumps **out**; inspection bridge seeded (roles); deep CMM/GR&R still out |
 | Deep CMM / GR&R / gage design | inspection bridge **seeded** (roles + handoff checklist); numeric/procedure dumps **out** |
+| Deep bearing L10 / capacity charts | bearings-hubs-seats seeded (VERIFY→catalog); L10 tables stay datasheet |
 | Deep key stress / groove charts | shafts page seeded (roles only); numeric charts **TODO** |
 | Deep spring-rate / coupling misalignment charts | springs-couplings seeded (roles only); numeric charts **TODO** (datasheets) |
 | Deep cam-law / belt-tension / chain-tension / tooth / Geneva-slot charts | mechanisms hub + linkages/cams/belts/chains/Geneva **seeded (partial)**; printed-gears DFAM seeded (no module-strength tables); numeric charts stay datasheet / `mit-272` |

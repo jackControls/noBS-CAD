@@ -1,3 +1,15 @@
+## 2026-09-20 — Bearings / hubs / seats CAD-time deepen
+
+- Seeded `machine-design.concepts.bearings-hubs-seats` (shaft/housing seats,
+  fit roles, preload/spacer stacks; load/speed/life as VERIFY→catalog; **no**
+  invented L10 tables). Cite `nasa-bearing` + `mit-272`; cross-link shafts,
+  mechanisms hub, fits, product `concepts.bearing-stacks`.
+- Taxonomy B Bearings / hubs / seats → **seeded** (primary CAD-time id; product
+  SKU page retained). Still-thin: deep L10/capacity charts stay datasheet.
+- Index table + bullets; light pointer on bearing-stacks; mechanisms/shafts/
+  springs/fits/fit-coupons cross-links.
+- Rebuilt search-index.json; Rust embed + BM25/unit tests; wire goldens H73+.
+
 ## 2026-09-20 — Design hygiene BOM + intermittent/Geneva
 
 - Seeded `machine-design.concepts.design-hygiene-requirements-bom` (requirements
