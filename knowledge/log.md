@@ -1,3 +1,15 @@
+## 2026-09-20 — Materials vocabulary deepen (CAD-time props)
+
+- Deepened `machine-design.concepts.materials-vocabulary`: CAD-time roles for
+  **E / Sy / Sut / hardness / fatigue / CTE / density / corrosion**, isotropic vs
+  anisotropy / print-vs-isotropic, grade/temper/condition; golden path +
+  CAD-vs-datasheet ownership; DOE `doe-3d` + NWTC `nwtc-guns-dfm` + KittyCAD /
+  Materials Project patterns — **no** allowables / MatWeb scrapes (selection
+  tables stay planned).
+- Taxonomy D → seeded (vocab / roles distill); Still-thin → allowables planned.
+  Index quick-lookup + bullet. Goldens H97–H99; Rust BM25 queries.
+- Rebuilt search-index.json; MCP embed via install script (no Cursor Uninstall/Add).
+
 ## 2026-09-20 — Mechanisms overview hub deepen
 
 - Deepened `machine-design.concepts.mechanisms-overview`: CAD-time vocabulary

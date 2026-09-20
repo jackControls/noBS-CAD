@@ -1810,6 +1810,25 @@ mod tests {
     }
 
     #[test]
+    fn materials_vocabulary_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "materials vocabulary E Sy Sut hardness",
+            "print vs isotropic anisotropy filament allowable",
+            "educational range not allowable materials datasheet",
+            "elastic modulus yield ultimate CAD materials",
+            "hardness not substitute for Sy grade temper",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("materials-vocabulary")),
+                "expected materials-vocabulary for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn design_hygiene_requirements_bom_searchable() {
         let store = HelpStore::bundled();
         for query in [

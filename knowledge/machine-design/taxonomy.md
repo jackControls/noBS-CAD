@@ -65,7 +65,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 
 | Topic | Status | Id / title |
 |-------|--------|------------|
-| Property vocabulary | **seeded (thin)** | `machine-design.concepts.materials-vocabulary` — [materials-vocabulary](concepts/materials-vocabulary.md) |
+| Property vocabulary | **seeded** (CAD-time vocab / roles distill) | `machine-design.concepts.materials-vocabulary` — [materials-vocabulary](concepts/materials-vocabulary.md) E/Sy/Sut/hardness/anisotropy/print-vs-isotropic; **no** allowables charts |
 | Selection / allowables tables | **planned** | (no MatWeb scrape) |
 
 ## E. Design for manufacturing
@@ -127,7 +127,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Deep spring-rate / coupling misalignment charts | springs-couplings seeded (roles only); numeric charts **TODO** (datasheets) |
 | Deep cam-law / belt-tension / chain-tension / tooth / Geneva-slot charts | mechanisms hub **seeded** (navigation + CAD-vs-catalog roles); linkages/cams/belts/chains/Geneva seeded; printed-gears DFAM seeded (no module-strength tables); numeric charts stay datasheet / `mit-272` |
 | Deep ERP / PLM / Stage-Gate BOM workflows | design-hygiene **seeded** (CAD-time roles + VERIFY); ERP/indenture dumps **out** |
-| Materials allowables tables | **planned** (no MatWeb); vocabulary seeded |
+| Materials allowables tables | **planned** (no MatWeb); vocabulary **seeded** (roles only) |
 | Deep fastener torque / proof-load / K-factor charts | fasteners-joints **seeded** (preload/clamp + torque-as-install + friction/lube roles); numeric tables stay NASA RP-1228 / datasheet |
 | More MCP `prompts` (beyond `help_search`) | design-flow prompts still pages + skills ([HUMAN_HELP](../../docs/agentic/HUMAN_HELP.md)) |
 

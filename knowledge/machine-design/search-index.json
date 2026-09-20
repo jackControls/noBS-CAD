@@ -1257,37 +1257,51 @@
       "id": "machine-design.concepts.materials-vocabulary",
       "path": "knowledge/machine-design/concepts/materials-vocabulary.md",
       "title": "Materials vocabulary",
-      "description": "Property vocabulary for CAD-time talk — modulus, yield, fatigue, CTE — not certified allowables or MatWeb scrapes.",
+      "description": "CAD-time property vocabulary — E, Sy, Sut, hardness, anisotropy, print vs isotropic, CTE — roles and golden path; not certified allowables or MatWeb scrapes.",
       "status": "draft",
       "topics": [
         "materials",
         "dfm",
-        "manufacturing"
+        "manufacturing",
+        "print",
+        "anisotropy"
       ],
       "keywords": [
         "modulus",
+        "E",
         "yield",
+        "Sy",
+        "Sut",
+        "hardness",
         "fatigue",
+        "endurance",
         "CTE",
         "density",
         "alloy",
         "polymer",
-        "Sy",
-        "Sut",
-        "hardness",
-        "endurance",
+        "anisotropy",
+        "isotropic",
+        "print vs isotropic",
+        "orthotropic",
         "corrosion",
         "allowables",
-        "filament"
+        "filament",
+        "temper",
+        "grade",
+        "educational range",
+        "datasheet"
       ],
       "related_recipes": [
         "turbine-fit-coupons",
         "garden-bench"
       ],
       "sources": [
-        "kittycad-materials"
+        "kittycad-materials",
+        "doe-3d",
+        "nwtc-guns-dfm",
+        "materials-project"
       ],
-      "snippet": "Defines words for CAD-time decisions — not certified allowables. Materials Project is crystalline DFT data, not shop steel charts. Prefer KittyCAD JSON as a pattern only (kittycad-materials). Filament appearance in the …"
+      "snippet": "Defines words for CAD-time decisions — not certified allowables. Prefer a named process + grade/condition over viewport metal color or filament appearance. Materials Project is crystalline DFT data, not shop steel chart…"
     },
     {
       "id": "machine-design.concepts.mechanisms-belts-pulleys",

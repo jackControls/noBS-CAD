@@ -76,6 +76,7 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | DFAM / FDM overview | `machine-design.concepts.dfam-fdm-overview` | DFAM for FDM overview |
 | FDM holes / printed fits | `machine-design.concepts.am-fdm-holes-fit-allowances` | FDM holes and printed-fit allowances |
 | FDM load / layers / infill | `machine-design.concepts.am-fdm-load-layers-infill` | FDM load path vs layer orientation / infill roles |
+| Materials vocabulary | `machine-design.concepts.materials-vocabulary` | E / Sy / Sut / hardness / anisotropy / print vs isotropic (vocab only) |
 | Mechanisms overview | `machine-design.concepts.mechanisms-overview` | Motion class → family → navigate children / CAD-vs-catalog |
 | Linkages / mobility | `machine-design.concepts.mechanisms-linkages-mobility` | Linkages and mobility |
 | Cams | `machine-design.concepts.mechanisms-cams` | Cams (CAD-time) |
@@ -136,7 +137,7 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [Fits & clearances](machine-design/concepts/fits-clearances.md) - Clearance, locational, interference.
 - [Fasteners & joints](machine-design/concepts/fasteners-joints.md) - Preload/clamp load, torque as install vs proof, friction/lube; VERIFY datasheet (no invented charts).
 - [Power screws / lead screws](machine-design/concepts/power-screws-lead-screws.md) - Lead vs pitch, wear nuts, VERIFY (not load ratings).
-- [Materials vocabulary](machine-design/concepts/materials-vocabulary.md) - Properties for CAD choices.
+- [Materials vocabulary](machine-design/concepts/materials-vocabulary.md) - E/Sy/Sut/hardness/anisotropy/print-vs-isotropic roles; educational ≠ allowable (no MatWeb/allowables tables).
 - [DFM overview](machine-design/concepts/dfm-overview.md) - Process families and heuristics.
 - [DFAM for FDM overview](machine-design/concepts/dfam-fdm-overview.md) - Additive FDM golden path hub; links seeded AM Concepts.
 - [FDM holes / printed-fit allowances](machine-design/concepts/am-fdm-holes-fit-allowances.md) - Role-based printed hole fits; coupons over universal tables.

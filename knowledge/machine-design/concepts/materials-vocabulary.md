@@ -1,70 +1,133 @@
 ---
 type: Concept
 title: Materials vocabulary
-description: Property vocabulary for CAD-time talk — modulus, yield, fatigue, CTE — not certified allowables or MatWeb scrapes.
+description: CAD-time property vocabulary — E, Sy, Sut, hardness, anisotropy, print vs isotropic, CTE — roles and golden path; not certified allowables or MatWeb scrapes.
 status: draft
 updated: 2026-09-20
-topics: materials, dfm, manufacturing
-keywords: modulus, yield, fatigue, CTE, density, alloy, polymer, Sy, Sut, hardness, endurance, corrosion, allowables, filament
+topics: materials, dfm, manufacturing, print, anisotropy
+keywords: modulus, E, yield, Sy, Sut, hardness, fatigue, endurance, CTE, density, alloy, polymer, anisotropy, isotropic, print vs isotropic, orthotropic, corrosion, allowables, filament, temper, grade, educational range, datasheet
 related_recipes: turbine-fit-coupons, garden-bench
-sources: kittycad-materials
+sources: kittycad-materials, doe-3d, nwtc-guns-dfm, materials-project
 ---
 
 # Materials vocabulary
 
-Defines **words** for CAD-time decisions — not certified allowables. Materials
-Project is crystalline DFT data, not shop steel charts. Prefer KittyCAD JSON as
-a *pattern* only (`kittycad-materials`). Filament appearance in the manufacturing
-catalog is not an engineering allowables table.
+Defines **words** for CAD-time decisions — not certified allowables. Prefer a
+named **process + grade/condition** over viewport metal color or filament
+appearance. Materials Project is crystalline DFT data, not shop steel charts.
+KittyCAD JSON is a *schema pattern* only (`kittycad-materials`). Filament
+appearance in a manufacturing catalog is not an engineering allowables table.
 
-## Symbols you will actually say (SI primary)
+**Attribution:** process-first / buy-before-invent habits from DOE Module 3D
+(`doe-3d`, public domain) and NWTC Guns DFM distill (`nwtc-guns-dfm`,
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). Open datasets
+(`kittycad-materials`, `materials-project`) are **patterns or computed props**,
+not drawing allowables. Do **not** invent Sy/Sut/E charts or scrape MatWeb /
+MakeItFrom into Help — leave selection/allowables tables **planned**.
 
-| Symbol / word | Meaning | CAD habit |
-|---------------|---------|-----------|
-| **E** | Elastic modulus (stiffness) | Stiff vs flexible; deflection talk |
-| **Sy / Sut** | Yield / ultimate tensile | Prefer datasheet values over color |
-| **Hardness** | Process / wear proxy | Not a substitute for Sy |
-| **Fatigue / endurance** | Repeated loads | Geometry + surface dominate |
-| **CTE** | Thermal expansion | Mixed-material stacks move |
-| **Density** | Mass and print time | Envelope vs mass goals |
-| **Corrosion / chemical** | Environment | Coatings, stainless vs plated |
+## Vocabulary (roles for discovery)
 
-## Classes you will specify
+| Symbol / word | CAD-time meaning | Habit |
+|---------------|------------------|-------|
+| **E** | Elastic modulus (stiffness) | Stiff vs flexible / deflection talk — not “how strong” |
+| **Sy** | Yield strength (onset of permanent set) | Prefer datasheet / grade sheet over hardness or color |
+| **Sut** | Ultimate tensile strength | Separate from Sy; do not swap labels |
+| **Hardness** | Process / wear / machinability proxy | **Not** a substitute for Sy on the drawing |
+| **Fatigue / endurance** | Repeated-load story | Geometry + surface + orientation dominate; no invented S–N charts |
+| **CTE** | Thermal expansion | Mixed-material stacks move; name the mismatch |
+| **Density** | Mass and print-time feel | After envelope is real; density does not fix a bad load path |
+| **Corrosion / chemical** | Environment class | Coatings, stainless vs plated, solvent/UV/food-adjacent |
+| **Isotropic** | Same props in all directions (CAD assumption for many stock metals/plastics) | State the assumption; VERIFY when process breaks it |
+| **Anisotropy / orthotropy** | Direction-dependent props (FDM layers, rolled plate, composites) | Name load vs layer / grain before freezing |
+| **Print vs isotropic** | AM part ≠ isotropic bar of the same polymer name | Orient for load; coupon; see [FDM load / layers](am-fdm-load-layers-infill.md) |
+| **Grade / temper / condition** | Heat treat, cold work, moisture, print settings | Call out with the alloy — “6061” alone is incomplete |
+| **Educational range** | Teaching / notebook number | Mark educational; **≠** shipping allowable |
+
+## Golden path (CAD-time)
+
+1. **Name the process first** — CNC bar, sheet, weldment, injection resin, FDM
+   filament, mold, cast? Class without process is incomplete
+   ([DFM process guidelines](dfm-process-guidelines.md),
+   [DFM overview](dfm-overview.md)).
+2. **Name the property roles you need** — stiffness (**E**), onset of set
+   (**Sy**), ultimate (**Sut**), wear/process proxy (**hardness**), cyclic story
+   (**fatigue**), stack motion (**CTE**), mass (**density**), environment
+   (**corrosion / chemical**). Prefer the few roles that drive the CAD decision.
+3. **Isotropic stock vs anisotropic print** — treat many metals and molded
+   plastics as **isotropic** only when the process supports it; treat FDM /
+   composites / heavily rolled plate as **anisotropic**. Primary tension with
+   layers when the part allows
+   ([FDM load / layers / infill](am-fdm-load-layers-infill.md),
+   [AM thin walls](am-thin-walls.md)).
+4. **Couple material ↔ process on the callout** — FDM PETG ≠ injection PET;
+   6061-T6 bar ≠ cast “aluminum”; filament brand color ≠ grade sheet.
+5. **Prefer cited datasheet / licensed pattern over scrapes** — vendor grade
+   sheet, ASTM/ISO designation, or open JSON *pattern*
+   (`kittycad-materials`). Keep MatWeb / MakeItFrom **out** of the repo and
+   title block ([SOURCES](../SOURCES.md)).
+6. **Say educational ≠ allowable** — any Help or notebook number is teaching
+   range until the responsible engineer cites an approved source. Selection /
+   allowables tables stay **planned** (taxonomy D).
+7. **VERIFY before freeze** — process, environment, load story, mating
+   materials / CTE / galvanic, and no untitled strength number on the drawing
+   ([research before commit](../../concepts/research-before-commit.md),
+   [requirements → BOM](design-hygiene-requirements-bom.md)).
+
+## CAD owns vs datasheet owns
+
+| CAD owns (lock in the model / notes) | Datasheet / coupon owns (VERIFY out-of-band) |
+|--------------------------------------|-----------------------------------------------|
+| Process family and print/machine orientation intent | Certified **E / Sy / Sut** (and allowables) |
+| Class + grade/temper/condition **name** | Heat-treat / moisture / strain-rate conditions |
+| Isotropic vs anisotropic **assumption** | Orientation-matched coupon results for AM |
+| CTE / galvanic / chemical callouts for mixed stacks | Coatings and finish specs |
+| Density for envelope / mass goals (order-of-magnitude) | Shipping mass from measured or catalog density |
+| “Educational range ≠ allowable” marking | Drawing allowables from approved source only |
+
+Changing grade, temper, filament lot, or bed face past process tolerance ⇒
+reopen VERIFY; do not patch Sy from hardness or blog charts.
+
+## Prefer these patterns
+
+| Need | Prefer |
+|------|--------|
+| Stiffness / deflection | Talk **E** and geometry; do not say “stronger plastic” |
+| Permanent set / proof | Named **Sy** from grade sheet or coupon |
+| Wear / machinability feel | **Hardness** as proxy — still VERIFY Sy when load-critical |
+| FDM bracket / strap | Anisotropic plan: bed face + shells; coupon load path |
+| Mixed metal + plastic stack | Name **CTE** and clamp/locate so stacks can move |
+| Mystery “strong filament” | Buy the machine element; print the mount |
+| Untitled MPa on a drawing | Stop — cite datasheet or mark educational and remove from title block |
+| Allowables / selection chart | Leave planned — do not invent or scrape MatWeb into Help |
+
+## Classes you will specify (coupled to process)
 
 Carbon steels, alloy steels, stainless, aluminum, copper alloys, engineering
 plastics, composites, elastomers. Each class **couples to a process** (weld,
 machine, mold, print). Naming a class without a process is incomplete.
 
-## Checklist before freezing a material callout
-
-1. **Process first** — CNC bar, sheet, FDM filament, injection resin?
-2. **Environment** — wet, UV, solvents, food-adjacent, elevated temp?
-3. **Load story** — static, cyclic, impact, press-fit hoop stress?
-4. **Mating materials** — galvanic pairs, CTE mismatch, galling.
-5. **Purchased vs printed** — catalog stock beats mystery filament claims.
-6. **Say “educational range ≠ allowable”** on any numeric teaching value.
-
-## Open data rules
-
-- Prefer cited, licensed datasets (for example KittyCAD `material-properties`,
-  Apache-2.0) as a **pattern**, not as certified allowables.
-- Prefer link-out datasheets; keep MatWeb/MakeItFrom outside the repo.
-- Educational ranges are not design allowables. Say so on the page and in
-  answers that quote numbers.
+When the class is plastic/AM, open [AM thin walls](am-thin-walls.md),
+[FDM load / layers](am-fdm-load-layers-infill.md), and
+[warpage / flatness](am-warpage-cooling-flatness.md). When metal stock, open
+[DFM process guidelines](dfm-process-guidelines.md) for the cut/form family
+before inventing exotic alloys.
 
 ## Preferred material callouts
 
 - Name filament/resin with process notes (nozzle, temp, orientation) before locking ABS vs PETG
 - Keep help-page teaching ranges in the notebook; put drawing allowables only from a cited datasheet
-- Specify alloy/grade from stock or datasheet text — viewport metal color is display only
+- Specify alloy/grade/temper from stock or datasheet text — viewport metal color is display only
+- Mark print parts as anisotropic in notes when load-critical; point at orientation + coupon
 
-## Pair with process pages
+## Open data rules
 
-When the class is plastic/AM, open [AM thin walls](am-thin-walls.md) and
-[warpage / flatness](am-warpage-cooling-flatness.md). When metal stock,
-open [DFM process guidelines](dfm-process-guidelines.md) for the cut/form
-family before inventing exotic alloys.
-
+- Prefer cited, licensed datasets (for example KittyCAD `material-properties`,
+  Apache-2.0) as a **pattern**, not as certified allowables.
+- Prefer link-out datasheets; keep MatWeb / MakeItFrom outside the repo.
+- Educational ranges are not design allowables. Say so on the page and in
+  answers that quote numbers.
+- Materials Project / OQMD / COD are crystalline or DFT complements — not shop
+  steel charts (`materials-project` in [SOURCES](../SOURCES.md)).
 
 ## Allowables honesty checklist
 
@@ -78,14 +141,27 @@ Materials **vocabulary** is not an allowables table. Before quoting a number:
 6. **Couple material ↔ process** — FDM PETG ≠ injection PET; 6061-T6 bar ≠ cast “aluminum.”
 7. **CTE / galvanic / chemical** called out when mixed stacks exist.
 8. **Mass/density** only after envelope is real; density does not fix a bad load path.
+9. **Isotropic assumption stated** — or anisotropic load-vs-layer plan named for AM / composites.
 
 ## Freeze gate
 
 - [ ] Process named (stock / print / mold / fab)
+- [ ] Property roles named (E / Sy / Sut / … as needed) — not untitled MPa
+- [ ] Isotropic vs anisotropic assumption stated
 - [ ] Environment and load story named
-- [ ] Mating materials / coatings noted
+- [ ] Mating materials / CTE / coatings noted
 - [ ] No untitled strength number on the drawing
 - [ ] Filament strength claims backed by a datasheet or coupon, not appearance
+- [ ] Educational ranges marked; allowables left to cited source (tables still planned)
+
+## Further reading (link only)
+
+- KittyCAD material-properties JSON pattern (`kittycad-materials`) — schema only
+- Materials Project (`materials-project`) — computed crystalline props; not shop allowables
+- NWTC / Guns DFM process chapters (`nwtc-guns-dfm`) — process couples to material
+- DOE Module 3D (`doe-3d`) — buy-before-invent / standardize habits
 
 Related: [DFM overview](dfm-overview.md), [Fasteners & joints](fasteners-joints.md),
-[AM thin walls](am-thin-walls.md), [SOURCES](../SOURCES.md).
+[FDM load / layers](am-fdm-load-layers-infill.md), [AM thin walls](am-thin-walls.md),
+[requirements → BOM](design-hygiene-requirements-bom.md),
+[SOURCES](../SOURCES.md), [taxonomy](../taxonomy.md).
