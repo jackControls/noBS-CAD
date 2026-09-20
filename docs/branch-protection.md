@@ -80,14 +80,20 @@ require them.
   in the Windows MCP job.
   New pushes cancel obsolete runs; lockfiles are enforced. Windows reuses the
   desktop SDK cache keyed by runner, MSVC version, vcpkg pin, and manifest.
+  Core, turbine and vise acceptance run on separate runners per platform; the
+  existing top-level MCP checks require all three before publishing demo artifacts.
 - **Desktop packages** classifies build inputs before starting Windows x64/ARM64,
-  macOS ARM64, and Ubuntu packages. Retain native launch checks: frontend or MCP
+  macOS ARM64, and Ubuntu packages, and waits for frontend/version preflights to
+  pass. Retain native launch checks: frontend or MCP
   tests do not establish that a packaged viewport starts correctly.
 - **pages-knowledge** validates and publishes the active knowledge site. It is
   scoped to knowledge changes and is not a CAD runtime gate.
 - **Version guard** checks `VERSION` against every carrier and unit-tests those
   carriers on every pull request and main push. It installs no dependencies, so
   it is the cheapest always-reporting gate available.
+
+The default-branch ARM SDK warmer, acceptance sharding, artifact gates and their
+performance tradeoffs are documented in [CI performance](ci-performance.md).
 
 Local checks:
 
