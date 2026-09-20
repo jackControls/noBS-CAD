@@ -4,6 +4,7 @@ use crate::replay::Client;
 use anyhow::{ensure, Context, Result};
 use serde_json::{json, Value};
 use std::{fs, path::Path};
+mod planes;
 
 fn capture(client: &mut Client, out: &Path, name: &str) -> Result<()> {
     ui(
@@ -168,6 +169,13 @@ pub(super) fn run(args: impl Iterator<Item = String>) -> Result<()> {
                 .call("cad_attach", json!({"session_id":new["active_session_id"]}))?;
         }
         cases.push(combine(&mut fixture.client, &fixture.out, operation, keep)?);
+    }
+    for mirror in [true, false] {
+        let new = control(&mut fixture.client, "New document", None)?;
+        fixture
+            .client
+            .call("cad_attach", json!({"session_id":new["active_session_id"]}))?;
+        cases.push(planes::run(&mut fixture.client, &fixture.out, mirror)?);
     }
     fs::write(
         &fixture.report,

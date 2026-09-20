@@ -1,6 +1,6 @@
 use super::*;
 
-fn volume(body: &nbcad_solid::BodyDto) -> f64 {
+pub(super) fn volume(body: &nbcad_solid::BodyDto) -> f64 {
     body.mesh
         .indices
         .chunks_exact(3)

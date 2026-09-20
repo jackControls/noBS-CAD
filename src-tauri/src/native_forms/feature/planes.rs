@@ -69,7 +69,7 @@ pub(crate) fn reference_basis(
             .ok_or_else(|| "The construction plane is missing or rolled back".into()),
     }
 }
-fn reference_label(reference: Option<PlaneRef>, model: &FormModel<'_>) -> String {
+pub(super) fn reference_label(reference: Option<PlaneRef>, model: &FormModel<'_>) -> String {
     match reference {
         Some(PlaneRef::OriginPlane { plane }) => {
             format!("{} origin plane", format!("{plane:?}").to_uppercase())
@@ -144,6 +144,13 @@ impl SolidForm {
         Ok(form)
     }
     pub(crate) fn plane_reference(&self, field: SolidField) -> Option<PlaneRef> {
+        if let Some(fields) = &self.body_planes {
+            return if field == SolidField::FirstPlane {
+                fields.plane
+            } else {
+                None
+            };
+        }
         self.planes.as_ref().and_then(|p| match field {
             SolidField::FirstPlane => p.first,
             SolidField::SecondPlane => p.second,
@@ -159,6 +166,14 @@ impl SolidForm {
         self.editing(model)?;
         if let Some(reference) = reference {
             reference_basis(reference, model)?;
+        }
+        if let Some(fields) = &mut self.body_planes {
+            if field != SolidField::FirstPlane {
+                return Err("This feature has only one reference plane".into());
+            }
+            fields.plane = reference;
+            self.changed();
+            return Ok(());
         }
         let planes = self
             .planes

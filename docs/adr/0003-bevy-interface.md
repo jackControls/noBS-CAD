@@ -166,3 +166,11 @@ The isolated editor restores dependent sketches and solids in one Undo step.
 `cargo xtask test-mcp native-planes` checks these controls, invalid input, exact
 plane placement, history editing, Cancel, Undo/Redo, dependent sketches, captures
 and Save. Kernel tests also verify dependent-solid rebuilds and exact restoration.
+
+Mirror and Split Body reuse these persistent plane references and the shared
+body selector. Their isolated history editor preserves consumed source bodies;
+invalid split edits leave the live document untouched and can be corrected in
+the same form. The `native-body` suite also checks body toggling, origin and datum
+selection, exact mirrored/split extents, both history entry points, Cancel,
+Undo/Redo, capture and Save. Fixture controls are scoped to their actual surface
+when a form reference, browser item and history entry share a name.

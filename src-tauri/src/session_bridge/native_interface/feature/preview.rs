@@ -16,6 +16,17 @@ pub(super) fn references(
     let mut segments = Vec::new();
     let mut triangles = Vec::new();
     let mut plane_lines = Vec::new();
+    for body in form.body_plane_bodies() {
+        triangles.push(body_fill(model.scene, *body, [1., 0.65, 0.25, 0.25])?);
+        if triangles
+            .iter()
+            .map(|t| t.positions.len() / 9)
+            .sum::<usize>()
+            > MAX_SEGMENTS
+        {
+            return Err("Selected bodies are too large to highlight together".into());
+        }
+    }
     let axis_center = form.plane_axis().and_then(|(body, edge)| {
         let edge = model
             .scene

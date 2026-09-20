@@ -24,6 +24,7 @@ pub(crate) fn hover_references(
                         | SolidField::FirstPlane
                         | SolidField::SecondPlane
                         | SolidField::AxisEdge
+                        | SolidField::Bodies
                 )
             ) && !e.form.is_busy()
         }) else {
@@ -64,7 +65,7 @@ pub(crate) fn hover_references(
                 .flatten();
             if matches!(
                 editor.pick_target,
-                Some(SolidField::TargetBody | SolidField::ToolBodies)
+                Some(SolidField::TargetBody | SolidField::ToolBodies | SolidField::Bodies)
             ) {
                 let next = hit
                     .filter(|hit| editor.snapshot.source_local(hit.body_id, hit.occurrence_id))
@@ -444,6 +445,18 @@ pub(crate) fn handle_canvas_pick(
                     return Err("Open the component before selecting its references".into());
                 }
                 match target {
+                    SolidField::Bodies => {
+                        let id = BodyId(hit.body_id);
+                        let mut bodies = editor.form.body_plane_bodies().to_vec();
+                        if editor.form.kind() == SolidFormKind::SplitBody {
+                            bodies = vec![id];
+                        } else if let Some(index) = bodies.iter().position(|b| *b == id) {
+                            bodies.remove(index);
+                        } else {
+                            bodies.push(id);
+                        }
+                        Ok(FeaturePick::Bodies(bodies))
+                    }
                     SolidField::TargetBody | SolidField::ToolBodies => {
                         let id = BodyId(hit.body_id);
                         let mut bodies = editor.form.combine_bodies(target);

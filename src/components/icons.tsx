@@ -64,13 +64,7 @@ const GLYPHS: Record<string, ReactNode> = {
     </>
   ),
   combine: <SharedRibbonGlyph id="combine" />,
-  splitBody: (
-    <>
-      <path d="M5 5h14v14H5z" />
-      <path d="M4 15L20 9" strokeDasharray="2 2" />
-      <path d="M8 8l-3-3M16 16l3 3" />
-    </>
-  ),
+  splitBody: <SharedRibbonGlyph id="splitBody" />,
   moveCopy: <SharedRibbonGlyph id="moveCopy" />,
 
   // Repetition and transforms.

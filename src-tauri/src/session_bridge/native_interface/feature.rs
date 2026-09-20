@@ -306,7 +306,9 @@ pub(crate) fn synchronize(
         {
             let editor = state.editor.take().unwrap();
             if native_viewport::interface_preview_revision(world) == editor.preview_revision {
-                if editor.form.kind().is_plane() && editor.snapshot.receipt.owner.document_id == owner.document_id {
+                if editor.form.kind().has_plane_references()
+                    && editor.snapshot.receipt.owner.document_id == owner.document_id
+                {
                     plane_view(world, owner, false, None)?;
                 }
                 native_viewport::apply_interface_preview(
@@ -363,8 +365,15 @@ fn plane_view(
 
 fn update_preview(editor: &mut Editor, world: &mut World) -> Result<(), String> {
     let model = editor.snapshot.model(editor.form.parameter_sketch());
-    if editor.form.kind().is_plane() {
-        plane_view(world, model.owner, true, editor.hovered_plane)?;
+    if editor.form.kind().has_plane_references() {
+        let enabled = editor.form.kind().is_plane()
+            || matches!(editor.pick_target, Some(SolidField::FirstPlane));
+        plane_view(
+            world,
+            model.owner,
+            enabled,
+            if enabled { editor.hovered_plane } else { None },
+        )?;
     }
     // Invalid text remains the actual field draft, but must not leave a
     // stale last-valid extrusion appearing to describe the invalid input.
@@ -423,10 +432,11 @@ fn update_preview(editor: &mut Editor, world: &mut World) -> Result<(), String> 
         }
     }
     if let Some(body) = editor.hovered_body {
-        if !editor
-            .form
-            .combine_bodies(SolidField::TargetBody)
-            .contains(&body)
+        if !editor.form.body_plane_bodies().contains(&body)
+            && !editor
+                .form
+                .combine_bodies(SolidField::TargetBody)
+                .contains(&body)
             && !editor
                 .form
                 .combine_bodies(SolidField::ToolBodies)
@@ -474,6 +484,9 @@ fn selected_source(world: &World, snapshot: &Snapshot) -> Result<Option<FeatureP
 fn apply_pick(editor: &mut Editor, pick: FeaturePick) -> Result<(), String> {
     let model = editor.snapshot.model(editor.form.parameter_sketch());
     match (editor.pick_target, pick) {
+        (Some(SolidField::Bodies), FeaturePick::Bodies(bodies)) => {
+            editor.form.set_body_plane_bodies(bodies, &model)
+        }
         (
             Some(field @ (SolidField::FirstPlane | SolidField::SecondPlane)),
             FeaturePick::Plane(plane),
@@ -644,6 +657,8 @@ fn reduce_owned(
                     | SolidFormKind::OffsetPlane
                     | SolidFormKind::Midplane
                     | SolidFormKind::AnglePlane
+                    | SolidFormKind::Mirror
+                    | SolidFormKind::SplitBody
             )
         }) {
             return editing::begin(
@@ -744,7 +759,9 @@ fn reduce_owned(
                 previous_preview: native_viewport::interface_preview_snapshot(world),
                 preview_revision: native_viewport::interface_preview_revision(world),
                 preview_notice: None,
-                pick_target: Some(if kind.is_plane() {
+                pick_target: Some(if kind.is_body_plane() {
+                    SolidField::Bodies
+                } else if kind.is_plane() {
                     SolidField::FirstPlane
                 } else if matches!(kind, SolidFormKind::Fillet | SolidFormKind::Chamfer) {
                     SolidField::Edges
@@ -838,6 +855,23 @@ fn reduce_owned(
                         )?;
                     }
                 }
+            } else if feature_id.is_none() && kind.is_body_plane() {
+                let (_, _, presentation, _) = native_viewport::interface_view_snapshot(world);
+                let mut bodies: Vec<_> = presentation
+                    .selected_body_ids
+                    .iter()
+                    .copied()
+                    .filter(|body| {
+                        editor
+                            .snapshot
+                            .source_local(*body, presentation.selected_occurrence_id)
+                    })
+                    .map(BodyId)
+                    .collect();
+                if *kind == SolidFormKind::SplitBody {
+                    bodies.truncate(1);
+                }
+                apply_pick(&mut editor, FeaturePick::Bodies(bodies))?;
             } else if feature_id.is_none() && !kind.is_plane() && *kind != SolidFormKind::Rib {
                 if let Some(pick) = selected_source(world, &editor.snapshot)? {
                     if !matches!(pick, FeaturePick::Face(_)) || *kind == SolidFormKind::Extrude {
@@ -884,7 +918,7 @@ fn reduce_owned(
             model.owner = &receipt.owner;
             model.engine_revision = receipt.revision;
             editor.form.cancel(&model)?;
-            if editor.form.kind().is_plane() {
+            if editor.form.kind().has_plane_references() {
                 plane_view(world, owner, false, None)?;
             }
             let restoration = if can_restore {
@@ -1004,6 +1038,7 @@ fn reduce_owned(
                         | SolidField::FirstPlane
                         | SolidField::SecondPlane
                         | SolidField::AxisEdge
+                        | SolidField::Bodies
                         | SolidField::Edges
                         | SolidField::Targets
                         | SolidField::StopFace
@@ -1017,6 +1052,7 @@ fn reduce_owned(
                 editor.choice_field = None;
             }
             FeatureControl::Clear(field) => match field {
+                SolidField::Bodies => editor.form.set_body_plane_bodies(vec![], &model)?,
                 SolidField::FirstPlane | SolidField::SecondPlane => {
                     editor.form.set_plane_reference(*field, None, &model)?;
                     editor.pick_target = Some(*field);

@@ -290,6 +290,10 @@ fn synchronize_owned(
                     super::SolidField::Edges => "EDGES",
                     super::SolidField::Faces => "FACES TO REMOVE",
                     super::SolidField::TargetBody => "TARGET BODY",
+                    super::SolidField::Bodies if panel.kind == super::SolidFormKind::SplitBody => {
+                        "BODY TO SPLIT"
+                    }
+                    super::SolidField::Bodies => "BODIES",
                     super::SolidField::ToolBodies => "TOOL BODIES",
                     super::SolidField::FirstPlane
                         if panel.kind == super::SolidFormKind::Midplane =>
@@ -374,6 +378,10 @@ fn synchronize_owned(
                         "Click faces on one body to add or remove openings."
                     }
                     super::SolidField::TargetBody => "Click the body that will receive the result.",
+                    super::SolidField::Bodies if panel.kind == super::SolidFormKind::SplitBody => {
+                        "Click the body to divide at the reference plane."
+                    }
+                    super::SolidField::Bodies => "Click bodies to add or remove.",
                     super::SolidField::ToolBodies => {
                         "The target stays separate from the tool bodies."
                     }

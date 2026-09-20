@@ -21,6 +21,8 @@ mod combine;
 use combine::CombineFields;
 mod planes;
 use planes::PlaneFields;
+mod body_planes;
+use body_planes::BodyPlaneFields;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SolidFormKind {
@@ -36,6 +38,8 @@ pub(crate) enum SolidFormKind {
     OffsetPlane,
     Midplane,
     AnglePlane,
+    Mirror,
+    SplitBody,
 }
 impl SolidFormKind {
     pub(crate) fn from_feature_kind(kind: FeatureKind) -> Option<Self> {
@@ -50,6 +54,8 @@ impl SolidFormKind {
             FeatureKind::Shell => Self::Shell,
             FeatureKind::Combine => Self::Combine,
             FeatureKind::ConstructionPlane => Self::OffsetPlane,
+            FeatureKind::Mirror => Self::Mirror,
+            FeatureKind::SplitBody => Self::SplitBody,
             _ => return None,
         })
     }
@@ -71,6 +77,8 @@ impl SolidFormKind {
             Self::OffsetPlane => "Offset Plane",
             Self::Midplane => "Midplane",
             Self::AnglePlane => "Plane at Angle",
+            Self::Mirror => "Mirror",
+            Self::SplitBody => "Split Body",
         }
     }
     pub(crate) fn operation(self) -> &'static str {
@@ -87,6 +95,8 @@ impl SolidFormKind {
             Self::OffsetPlane => "construction_plane_offset",
             Self::Midplane => "construction_plane_midplane",
             Self::AnglePlane => "construction_plane_at_angle",
+            Self::Mirror => "solid_mirror",
+            Self::SplitBody => "solid_split_body",
         }
     }
 }
@@ -143,6 +153,7 @@ pub(crate) enum SolidField {
     FirstPlane,
     SecondPlane,
     AxisEdge,
+    Bodies,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -237,6 +248,7 @@ pub(crate) struct SolidForm {
     shell: Option<ShellFields>,
     combine: Option<CombineFields>,
     planes: Option<PlaneFields>,
+    body_planes: Option<BodyPlaneFields>,
 }
 
 impl SolidForm {
@@ -269,6 +281,7 @@ impl SolidForm {
             shell: None,
             combine: None,
             planes: None,
+            body_planes: None,
         }
     }
 
@@ -286,12 +299,17 @@ impl SolidForm {
             form.shell = Some(ShellFields::new(model.document.settings.units));
         } else if kind == SolidFormKind::Combine {
             form.combine = Some(CombineFields::default());
+        } else if kind.is_body_plane() {
+            form.body_planes = Some(BodyPlaneFields::new(kind));
         } else if kind.is_plane() {
             form.planes = Some(PlaneFields::new(kind, model.document.settings.units));
         }
         form
     }
     pub(crate) fn kind(&self) -> SolidFormKind {
+        if let Some(fields) = &self.body_planes {
+            return fields.kind;
+        }
         if let Some(planes) = &self.planes {
             return planes.kind;
         }
@@ -814,6 +832,9 @@ impl SolidForm {
     }
 
     pub(crate) fn fields(&self, model: &FormModel<'_>) -> Vec<SolidFieldView> {
+        if self.body_planes.is_some() {
+            return self.body_plane_fields(model);
+        }
         if self.planes.is_some() {
             return self.plane_fields(model);
         }
@@ -963,6 +984,9 @@ impl SolidForm {
         &self,
         model: &FormModel<'_>,
     ) -> Result<(&'static str, Value), Vec<(SolidField, String)>> {
+        if self.body_planes.is_some() {
+            return self.body_plane_payload(model);
+        }
         if self.planes.is_some() {
             return self.plane_payload(model);
         }

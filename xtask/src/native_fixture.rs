@@ -16,9 +16,26 @@ pub(super) fn ui(client: &mut Client, request: Value) -> Result<Value> {
     Ok(result)
 }
 pub(super) fn control(client: &mut Client, label: &str, value: Option<&str>) -> Result<Value> {
+    control_matching(client, None, label, value)
+}
+pub(super) fn control_in(
+    client: &mut Client,
+    surface: &str,
+    label: &str,
+    value: Option<&str>,
+) -> Result<Value> {
+    control_matching(client, Some(surface), label, value)
+}
+fn control_matching(
+    client: &mut Client,
+    surface: Option<&str>,
+    label: &str,
+    value: Option<&str>,
+) -> Result<Value> {
     let inspected = ui(client, json!({"action":"inspect"}))?;
     let found: Vec<_> = controls(&inspected)
         .filter(|c| c["label"] == label && c["disabled"] == false)
+        .filter(|c| surface.is_none_or(|surface| c["surface"] == surface))
         .collect();
     ensure!(
         found.len() == 1,

@@ -144,7 +144,7 @@ fn complete(
                 });
             let completion = if matches {
                 let mut editor = state.editor.take().unwrap();
-                let view = if editor.form.kind().is_plane() {
+                let view = if editor.form.kind().has_plane_references() {
                     plane_view(world, &result.context, false, None)
                 } else {
                     Ok(())
