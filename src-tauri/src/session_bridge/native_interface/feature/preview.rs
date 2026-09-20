@@ -16,7 +16,7 @@ pub(super) fn references(
     let mut segments = Vec::new();
     let mut triangles = Vec::new();
     let mut plane_lines = Vec::new();
-    for body in form.body_plane_bodies() {
+    for body in form.selected_bodies() {
         triangles.push(body_fill(model.scene, *body, [1., 0.65, 0.25, 0.25])?);
         if triangles
             .iter()
@@ -74,7 +74,7 @@ pub(super) fn references(
             &mut plane_lines,
         )?;
     }
-    if let Some((body, edge)) = form.plane_axis() {
+    for (body, edge) in form.plane_axis().into_iter().chain(form.pattern_edges()) {
         if let Some(edge) = model
             .scene
             .bodies

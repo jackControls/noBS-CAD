@@ -24,6 +24,8 @@ pub(crate) fn hover_references(
                         | SolidField::FirstPlane
                         | SolidField::SecondPlane
                         | SolidField::AxisEdge
+                        | SolidField::DirectionEdge
+                        | SolidField::SecondDirectionEdge
                         | SolidField::Bodies
                 )
             ) && !e.form.is_busy()
@@ -52,7 +54,10 @@ pub(crate) fn hover_references(
                         world,
                         &owner.document_id,
                         p,
-                        if editor.pick_target == Some(SolidField::AxisEdge) {
+                        if editor
+                            .pick_target
+                            .is_some_and(SolidField::is_straight_reference)
+                        {
                             NativePickPurpose::StraightEdge
                         } else if editor.pick_target == Some(SolidField::Edges) {
                             NativePickPurpose::RefinableEdge
@@ -106,7 +111,10 @@ pub(crate) fn hover_references(
                         .iter()
                         .find(|e| {
                             e.id == edge
-                                && (e.refinable || editor.pick_target == Some(SolidField::AxisEdge))
+                                && (e.refinable
+                                    || editor
+                                        .pick_target
+                                        .is_some_and(SolidField::is_straight_reference))
                         })?;
                     Some((body, edge))
                 });
@@ -197,7 +205,7 @@ pub(crate) fn handle_canvas_pick(
                     world,
                     &owner.document_id,
                     point,
-                    if target == SolidField::AxisEdge {
+                    if target.is_straight_reference() {
                         NativePickPurpose::StraightEdge
                     } else if target == SolidField::Edges {
                         NativePickPurpose::RefinableEdge
@@ -205,8 +213,8 @@ pub(crate) fn handle_canvas_pick(
                         NativePickPurpose::Geometry
                     },
                 )?;
-                if target == SolidField::AxisEdge {
-                    let hit = hit.ok_or("Pick a straight edge on the reference plane")?;
+                if target.is_straight_reference() {
+                    let hit = hit.ok_or("Pick a straight edge")?;
                     if !editor.snapshot.source_local(hit.body_id, hit.occurrence_id) {
                         return Err("Open the component before selecting its axis".into());
                     }
@@ -447,7 +455,7 @@ pub(crate) fn handle_canvas_pick(
                 match target {
                     SolidField::Bodies => {
                         let id = BodyId(hit.body_id);
-                        let mut bodies = editor.form.body_plane_bodies().to_vec();
+                        let mut bodies = editor.form.selected_bodies().to_vec();
                         if editor.form.kind() == SolidFormKind::SplitBody {
                             bodies = vec![id];
                         } else if let Some(index) = bodies.iter().position(|b| *b == id) {

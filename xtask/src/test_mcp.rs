@@ -20,6 +20,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     if suite == "native-body" {
         return crate::native_body_test::run(args);
     }
+    if suite == "native-pattern" {
+        return crate::native_body_test::run_patterns(args);
+    }
     if suite == "native-planes" {
         return crate::native_planes_test::run(args);
     }

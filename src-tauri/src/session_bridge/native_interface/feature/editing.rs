@@ -112,6 +112,8 @@ impl SessionBridgeState {
                 | "construction_plane_edit_at_angle"
                 | "solid_edit_mirror"
                 | "solid_edit_split_body"
+                | "solid_edit_rectangular_pattern"
+                | "solid_edit_circular_pattern"
         ) || arguments["feature_id"].as_u64() != Some(stage.feature_id)
         {
             return Err("This prepared model belongs to another feature edit".into());
@@ -190,7 +192,9 @@ fn prepare(
             SolidFormKind::Shell
             | SolidFormKind::Combine
             | SolidFormKind::Mirror
-            | SolidFormKind::SplitBody => "body_feature_definitions",
+            | SolidFormKind::SplitBody
+            | SolidFormKind::RectangularPattern
+            | SolidFormKind::CircularPattern => "body_feature_definitions",
             SolidFormKind::OffsetPlane | SolidFormKind::Midplane | SolidFormKind::AnglePlane => {
                 "datum_plane_definitions"
             }
@@ -203,7 +207,9 @@ fn prepare(
         .and_then(|items| items.iter().find(|d| d["feature_id"].as_u64() == Some(id)))
         .ok_or("The feature no longer exists")?;
     let snapshot = Snapshot::capture(&stage.engine, receipt)?;
-    let form = if kind.is_body_plane() {
+    let form = if kind.is_pattern() {
+        SolidForm::edit_pattern(definition, &snapshot.model(None))?
+    } else if kind.is_body_plane() {
         SolidForm::edit_body_plane(definition, &snapshot.model(None))?
     } else if kind.is_plane() {
         SolidForm::edit_plane(definition, &snapshot.model(None))?
@@ -233,7 +239,7 @@ fn install(
         .last_id
         .checked_add(1)
         .ok_or("Feature identities exhausted")?;
-    let pick_target = Some(if prepared.form.kind().is_body_plane() {
+    let pick_target = Some(if prepared.form.kind().selects_bodies() {
         SolidField::Bodies
     } else if prepared.form.kind().is_plane() {
         SolidField::FirstPlane

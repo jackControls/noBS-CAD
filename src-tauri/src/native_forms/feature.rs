@@ -23,6 +23,8 @@ mod planes;
 use planes::PlaneFields;
 mod body_planes;
 use body_planes::BodyPlaneFields;
+mod patterns;
+use patterns::PatternFields;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SolidFormKind {
@@ -40,6 +42,8 @@ pub(crate) enum SolidFormKind {
     AnglePlane,
     Mirror,
     SplitBody,
+    RectangularPattern,
+    CircularPattern,
 }
 impl SolidFormKind {
     pub(crate) fn from_feature_kind(kind: FeatureKind) -> Option<Self> {
@@ -56,6 +60,8 @@ impl SolidFormKind {
             FeatureKind::ConstructionPlane => Self::OffsetPlane,
             FeatureKind::Mirror => Self::Mirror,
             FeatureKind::SplitBody => Self::SplitBody,
+            FeatureKind::RectangularPattern => Self::RectangularPattern,
+            FeatureKind::CircularPattern => Self::CircularPattern,
             _ => return None,
         })
     }
@@ -79,6 +85,8 @@ impl SolidFormKind {
             Self::AnglePlane => "Plane at Angle",
             Self::Mirror => "Mirror",
             Self::SplitBody => "Split Body",
+            Self::RectangularPattern => "Rectangular Pattern",
+            Self::CircularPattern => "Circular Pattern",
         }
     }
     pub(crate) fn operation(self) -> &'static str {
@@ -97,6 +105,8 @@ impl SolidFormKind {
             Self::AnglePlane => "construction_plane_at_angle",
             Self::Mirror => "solid_mirror",
             Self::SplitBody => "solid_split_body",
+            Self::RectangularPattern => "solid_rectangular_pattern",
+            Self::CircularPattern => "solid_circular_pattern",
         }
     }
 }
@@ -154,6 +164,16 @@ pub(crate) enum SolidField {
     SecondPlane,
     AxisEdge,
     Bodies,
+    DirectionEdge,
+    SecondDirectionEdge,
+    OriginZ,
+    DirectionZ,
+    SecondDirectionX,
+    SecondDirectionY,
+    SecondDirectionZ,
+    SecondEnabled,
+    Count,
+    SecondCount,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -249,6 +269,7 @@ pub(crate) struct SolidForm {
     combine: Option<CombineFields>,
     planes: Option<PlaneFields>,
     body_planes: Option<BodyPlaneFields>,
+    patterns: Option<PatternFields>,
 }
 
 impl SolidForm {
@@ -282,6 +303,7 @@ impl SolidForm {
             combine: None,
             planes: None,
             body_planes: None,
+            patterns: None,
         }
     }
 
@@ -299,6 +321,8 @@ impl SolidForm {
             form.shell = Some(ShellFields::new(model.document.settings.units));
         } else if kind == SolidFormKind::Combine {
             form.combine = Some(CombineFields::default());
+        } else if kind.is_pattern() {
+            form.patterns = Some(PatternFields::new(kind, model.document.settings.units));
         } else if kind.is_body_plane() {
             form.body_planes = Some(BodyPlaneFields::new(kind));
         } else if kind.is_plane() {
@@ -307,6 +331,9 @@ impl SolidForm {
         form
     }
     pub(crate) fn kind(&self) -> SolidFormKind {
+        if let Some(fields) = &self.patterns {
+            return fields.kind;
+        }
         if let Some(fields) = &self.body_planes {
             return fields.kind;
         }
@@ -459,6 +486,11 @@ impl SolidForm {
         model: &FormModel<'_>,
     ) -> Result<(), String> {
         self.editing(model)?;
+        if let Some(patterns) = &mut self.patterns {
+            patterns.set(field, value)?;
+            self.changed();
+            return Ok(());
+        }
         if let Some(planes) = &mut self.planes {
             planes.set(field, value)?;
             self.changed();
@@ -832,6 +864,9 @@ impl SolidForm {
     }
 
     pub(crate) fn fields(&self, model: &FormModel<'_>) -> Vec<SolidFieldView> {
+        if self.patterns.is_some() {
+            return self.pattern_fields(model);
+        }
         if self.body_planes.is_some() {
             return self.body_plane_fields(model);
         }
@@ -984,6 +1019,9 @@ impl SolidForm {
         &self,
         model: &FormModel<'_>,
     ) -> Result<(&'static str, Value), Vec<(SolidField, String)>> {
+        if self.patterns.is_some() {
+            return self.pattern_payload(model);
+        }
         if self.body_planes.is_some() {
             return self.body_plane_payload(model);
         }

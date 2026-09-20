@@ -40,6 +40,14 @@ fn node(x: f32, y: f32, width: f32, height: f32) -> Node {
     }
 }
 
+pub(crate) fn scroll_by(world: &mut World, delta: f32) -> Result<(), String> {
+    let mut state = world
+        .get_resource_mut::<PanelWidgets>()
+        .ok_or("The feature panel is not rendered")?;
+    state.scroll = (state.scroll + delta).clamp(0., state.max_scroll);
+    Ok(())
+}
+
 /// Wheel coordinates are logical window pixels, just like the published
 /// panel. The controller must call this before orbit/zoom or canvas gestures.
 pub(crate) fn scroll_panel(world: &mut World, point: [f32; 2], delta: f32) -> bool {
@@ -111,6 +119,8 @@ fn synchronize_owned(
     let width = area.width as f32;
     let height = (area.height as f32).min(content_height(&panel) + 92.);
     let body_height = height - 92.;
+    state.max_scroll = (content_height(&panel) - body_height).max(0.);
+    state.scroll = state.scroll.min(state.max_scroll);
     let root = *state.root.get_or_insert_with(|| {
         world
             .spawn((
@@ -169,7 +179,7 @@ fn synchronize_owned(
         true,
     );
     let mut y = 0.;
-    let inner = width - 24.;
+    let inner = width - 24. - if state.max_scroll > 0. { 24. } else { 0. };
     let mut close =
         InterfaceControl::button(panel.kind.group(), format!("Close {}", panel.kind.label()));
     close.disabled = panel.busy;
@@ -191,6 +201,93 @@ fn synchronize_owned(
     )?;
     for row in panel.fields.iter().filter(|row| row.visible) {
         let key = format!("{:?}", row.field);
+        if let Some((title, index, columns)) = row.field.compact_row(panel.kind) {
+            if index != 0 {
+                continue;
+            }
+            if !title.is_empty() {
+                label(
+                    world,
+                    state,
+                    &mut live_labels,
+                    &format!("{key}-group-label"),
+                    body,
+                    camera,
+                    title,
+                    node(0., y - state.scroll, inner, 18.),
+                    theme,
+                    &assets,
+                    false,
+                );
+                y += 20.;
+            }
+            let column_width = (inner - 8. * (columns.len() - 1) as f32) / columns.len() as f32;
+            let mut error = None;
+            for (i, field) in columns.iter().enumerate() {
+                let column = panel
+                    .fields
+                    .iter()
+                    .find(|r| r.field == *field && r.visible)
+                    .ok_or("Incomplete compact feature row")?;
+                let key = format!("{field:?}");
+                let x = i as f32 * (column_width + 8.);
+                label(
+                    world,
+                    state,
+                    &mut live_labels,
+                    &format!("{key}-label"),
+                    body,
+                    camera,
+                    if title.is_empty() {
+                        &column.label
+                    } else {
+                        ["X", "Y", "Z"][i]
+                    },
+                    node(x, y - state.scroll, column_width, 18.),
+                    theme,
+                    &assets,
+                    false,
+                );
+                let mut c = InterfaceControl::button(panel.kind.group(), &column.label);
+                c.disabled = !column.enabled;
+                c.field = column.value.clone();
+                widget(
+                    world,
+                    state,
+                    &mut live_controls,
+                    &key,
+                    body,
+                    camera,
+                    c,
+                    node(x, y + 20. - state.scroll, column_width, 30.),
+                    FeatureCommand::Control {
+                        form_id: panel.form_id,
+                        action: FeatureControl::Field(*field),
+                    },
+                    theme,
+                    &assets,
+                )?;
+                error = error.or(column.error.as_deref());
+            }
+            y += 56.;
+            if let Some(error) = error {
+                label(
+                    world,
+                    state,
+                    &mut live_labels,
+                    &format!("{key}-error"),
+                    body,
+                    camera,
+                    error,
+                    node(0., y - state.scroll, inner, 38.),
+                    theme,
+                    &assets,
+                    false,
+                );
+                y += 42.;
+            }
+            continue;
+        }
         if row.field == super::SolidField::Axis {
             if let Field::Choice { value, options } = &row.value {
                 label(
@@ -302,7 +399,9 @@ fn synchronize_owned(
                     }
                     super::SolidField::FirstPlane => "REFERENCE PLANE",
                     super::SolidField::SecondPlane => "SECOND REFERENCE",
-                    super::SolidField::AxisEdge => "STRAIGHT AXIS EDGE",
+                    super::SolidField::AxisEdge => "AXIS REFERENCE",
+                    super::SolidField::DirectionEdge => "FIRST DIRECTION REFERENCE",
+                    super::SolidField::SecondDirectionEdge => "SECOND DIRECTION REFERENCE",
                     super::SolidField::AxisLine => "AXIS LINE",
                     super::SolidField::Targets => "TARGET BODIES",
                     super::SolidField::StopFace => "STOP FACE",
@@ -388,7 +487,13 @@ fn synchronize_owned(
                     super::SolidField::FirstPlane | super::SolidField::SecondPlane => {
                         "Choose in the browser or click a planar face."
                     }
+                    super::SolidField::AxisEdge if panel.kind.is_pattern() => {
+                        "An edge supplies both origin and direction."
+                    }
                     super::SolidField::AxisEdge => "Choose a straight edge on the reference plane.",
+                    super::SolidField::DirectionEdge | super::SolidField::SecondDirectionEdge => {
+                        "Choose a straight edge or enter XYZ below."
+                    }
                     super::SolidField::AxisLine => "Click a straight line on the profile plane.",
                     super::SolidField::Path if panel.kind == super::SolidFormKind::Rib => {
                         "Click centerline curves to add or remove."
@@ -505,6 +610,43 @@ fn synchronize_owned(
     }
     state.max_scroll = (y - body_height).max(0.);
     state.scroll = state.scroll.min(state.max_scroll);
+    if state.max_scroll > 0. {
+        for (key, caption, delta, y, disabled) in [
+            (
+                "scroll-up",
+                "Scroll feature up",
+                -180,
+                42.,
+                state.scroll <= 0.,
+            ),
+            (
+                "scroll-down",
+                "Scroll feature down",
+                180,
+                height - 76.,
+                state.scroll >= state.max_scroll,
+            ),
+        ] {
+            let mut control = InterfaceControl::button(panel.kind.group(), caption);
+            control.disabled = panel.busy || disabled;
+            widget(
+                world,
+                state,
+                &mut live_controls,
+                key,
+                root,
+                camera,
+                control,
+                node(width - 30., y, 20., 22.),
+                FeatureCommand::Control {
+                    form_id: panel.form_id,
+                    action: FeatureControl::Scroll(delta),
+                },
+                theme,
+                &assets,
+            )?;
+        }
+    }
     let mut cancel =
         InterfaceControl::button(panel.kind.group(), format!("Cancel {}", panel.kind.label()));
     cancel.disabled = panel.busy;
@@ -719,6 +861,10 @@ fn widget(
         Some("OK")
     } else if key == "cancel" {
         Some("Cancel")
+    } else if key == "scroll-up" {
+        Some("↑")
+    } else if key == "scroll-down" {
+        Some("↓")
     } else if key.ends_with("-clear") {
         Some("Clear")
     } else {
@@ -759,6 +905,19 @@ fn widget(
 fn content_height(panel: &super::FeaturePanel) -> f32 {
     let mut height = 0.;
     for row in panel.fields.iter().filter(|row| row.visible) {
+        if let Some((title, index, columns)) = row.field.compact_row(panel.kind) {
+            if index == 0 {
+                height += 56. + if title.is_empty() { 0. } else { 20. };
+                if panel
+                    .fields
+                    .iter()
+                    .any(|r| columns.contains(&r.field) && r.error.is_some())
+                {
+                    height += 42.;
+                }
+            }
+            continue;
+        }
         if row.field == super::SolidField::Axis {
             height += 96.;
             continue;

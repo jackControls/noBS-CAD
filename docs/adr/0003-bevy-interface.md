@@ -174,3 +174,14 @@ the same form. The `native-body` suite also checks body toggling, origin and dat
 selection, exact mirrored/split extents, both history entry points, Cancel,
 Undo/Redo, capture and Save. Fixture controls are scoped to their actual surface
 when a form reference, browser item and history entry share a name.
+
+Rectangular and Circular Pattern use compact native XYZ rows, body selection,
+straight-edge direction/axis picking, units/formulas, second grid direction,
+negative spacing and partial/full-circle angles. Long feature forms expose their
+scroll buttons to the same control registry as human input. Original-input edits
+and Cancel use the shared isolated transaction. Straight-edge validation is shared
+with the native picker at f64 precision. Pattern expansion is bounded in the engine
+before allocating IDs, including both grid counts and all selected source bodies.
+`cargo xtask test-mcp native-pattern` checks these rendered controls, exact placements,
+invalid inputs, scrolling, editing, Cancel, Undo/Redo, capture and Save. Kernel tests
+also verify volumes, reference ownership and exact document restoration.

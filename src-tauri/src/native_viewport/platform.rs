@@ -5441,30 +5441,7 @@ fn draw_edge_segments<Config: GizmoConfigGroup>(
 }
 
 fn edge_is_straight(edge: &nbcad_solid::EdgeDto) -> bool {
-    if edge.circle.is_some() || edge.points.len() < 2 {
-        return false;
-    }
-    let first = Vec3::new(
-        edge.points[0].x as f32,
-        edge.points[0].y as f32,
-        edge.points[0].z as f32,
-    );
-    let last_point = &edge.points[edge.points.len() - 1];
-    let last = Vec3::new(
-        last_point.x as f32,
-        last_point.y as f32,
-        last_point.z as f32,
-    );
-    let direction = last - first;
-    let length = direction.length();
-    if length <= 1e-6 {
-        return false;
-    }
-    let unit = direction / length;
-    edge.points.iter().all(|point| {
-        let offset = Vec3::new(point.x as f32, point.y as f32, point.z as f32) - first;
-        offset.cross(unit).length() <= (length * 1e-5).max(1e-5)
-    })
+    nbcad_solid::edge_is_straight(edge)
 }
 
 fn face_boundary_segments(body: &BodyDto, face: &FaceDto) -> Vec<(Vec3, Vec3)> {

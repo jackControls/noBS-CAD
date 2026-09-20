@@ -4,7 +4,28 @@ use crate::replay::Client;
 use anyhow::{ensure, Context, Result};
 use serde_json::{json, Value};
 use std::{fs, path::Path};
+mod patterns;
 mod planes;
+
+pub(super) fn run_patterns(args: impl Iterator<Item = String>) -> Result<()> {
+    let mut fixture = start(args, "native-pattern")?;
+    let mut cases = Vec::new();
+    for circular in [false, true] {
+        if circular {
+            let new = control(&mut fixture.client, "New document", None)?;
+            fixture
+                .client
+                .call("cad_attach", json!({"session_id":new["active_session_id"]}))?;
+        }
+        cases.push(patterns::run(&mut fixture.client, &fixture.out, circular)?);
+    }
+    fs::write(
+        &fixture.report,
+        serde_json::to_string_pretty(&json!({"passed":true,"cases":cases}))?,
+    )?;
+    println!("PASS: saved {}", fixture.report.display());
+    Ok(())
+}
 
 fn capture(client: &mut Client, out: &Path, name: &str) -> Result<()> {
     ui(

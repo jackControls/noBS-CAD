@@ -89,7 +89,7 @@ Commands:
                 Repeat --server-arg for additional executable arguments.
                 --timeout-seconds N bounds each request (default: 120).
                 --desktop also checks default stdio in one owned GUI, save, disconnect and guarded exit.
-  test-mcp      Run contracts (default), live, controls, native-sketch, native-support, native-build, native-refine, native-body, native-planes, playback, scripts-workspace, exit, bench, garden-bench, or drawing. Additional
+  test-mcp      Run contracts (default), live, controls, native-sketch, native-support, native-build, native-refine, native-body, native-pattern, native-planes, playback, scripts-workspace, exit, bench, garden-bench, or drawing. Additional
                 arguments pass directly to the selected MCP test/demo driver.
                 Example: cargo xtask test-mcp live --server PATH --desktop PATH
                 Native sketch: test-mcp native-sketch --server CAD_BINARY --session BLANK_DOCUMENT_UUID --out ABSOLUTE_PATH

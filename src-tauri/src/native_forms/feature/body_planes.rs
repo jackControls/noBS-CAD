@@ -27,19 +27,27 @@ impl SolidFormKind {
     }
 }
 impl SolidForm {
-    pub(crate) fn body_plane_bodies(&self) -> &[BodyId] {
+    pub(crate) fn selected_bodies(&self) -> &[BodyId] {
+        if let Some(fields) = &self.patterns {
+            return &fields.bodies;
+        }
         self.body_planes
             .as_ref()
             .map(|f| f.bodies.as_slice())
             .unwrap_or(&[])
     }
-    pub(crate) fn set_body_plane_bodies(
+    pub(crate) fn set_bodies(
         &mut self,
         bodies: Vec<BodyId>,
         model: &FormModel<'_>,
     ) -> Result<(), String> {
         self.editing(model)?;
         validate_targets(&bodies, model)?;
+        if let Some(fields) = &mut self.patterns {
+            fields.bodies = bodies;
+            self.changed();
+            return Ok(());
+        }
         let fields = self
             .body_planes
             .as_mut()
@@ -74,7 +82,7 @@ impl SolidForm {
         };
         let mut form = Self::new_kind(kind, model);
         form.feature = Some(id);
-        form.set_body_plane_bodies(bodies, model)?;
+        form.set_bodies(bodies, model)?;
         form.set_plane_reference(SolidField::FirstPlane, Some(plane), model)?;
         form.body_plane_payload(model).map_err(first_error)?;
         Ok(form)

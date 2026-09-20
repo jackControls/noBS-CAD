@@ -51,7 +51,12 @@ pub(crate) enum FeatureControl {
     Field(SolidField),
     Pick(SolidField),
     Clear(SolidField),
-    Choose { field: SolidField, option: usize },
+    #[cfg(feature = "dev-bevy-host")]
+    Scroll(i32),
+    Choose {
+        field: SolidField,
+        option: usize,
+    },
     Apply,
     Cancel,
 }
@@ -432,7 +437,7 @@ fn update_preview(editor: &mut Editor, world: &mut World) -> Result<(), String> 
         }
     }
     if let Some(body) = editor.hovered_body {
-        if !editor.form.body_plane_bodies().contains(&body)
+        if !editor.form.selected_bodies().contains(&body)
             && !editor
                 .form
                 .combine_bodies(SolidField::TargetBody)
@@ -485,7 +490,7 @@ fn apply_pick(editor: &mut Editor, pick: FeaturePick) -> Result<(), String> {
     let model = editor.snapshot.model(editor.form.parameter_sketch());
     match (editor.pick_target, pick) {
         (Some(SolidField::Bodies), FeaturePick::Bodies(bodies)) => {
-            editor.form.set_body_plane_bodies(bodies, &model)
+            editor.form.set_bodies(bodies, &model)
         }
         (
             Some(field @ (SolidField::FirstPlane | SolidField::SecondPlane)),
@@ -507,8 +512,14 @@ fn apply_pick(editor: &mut Editor, pick: FeaturePick) -> Result<(), String> {
             };
             Ok(())
         }
-        (Some(SolidField::AxisEdge), FeaturePick::AxisEdge(body, edge)) => {
-            editor.form.set_plane_axis(Some((body, edge)), &model)?;
+        (Some(field), FeaturePick::AxisEdge(body, edge)) if field.is_straight_reference() => {
+            if editor.form.kind().is_pattern() {
+                editor
+                    .form
+                    .set_pattern_edge(field, Some((body, edge)), &model)?;
+            } else {
+                editor.form.set_plane_axis(Some((body, edge)), &model)?;
+            }
             editor.pick_target = None;
             Ok(())
         }
@@ -659,6 +670,8 @@ fn reduce_owned(
                     | SolidFormKind::AnglePlane
                     | SolidFormKind::Mirror
                     | SolidFormKind::SplitBody
+                    | SolidFormKind::RectangularPattern
+                    | SolidFormKind::CircularPattern
             )
         }) {
             return editing::begin(
@@ -759,7 +772,7 @@ fn reduce_owned(
                 previous_preview: native_viewport::interface_preview_snapshot(world),
                 preview_revision: native_viewport::interface_preview_revision(world),
                 preview_notice: None,
-                pick_target: Some(if kind.is_body_plane() {
+                pick_target: Some(if kind.selects_bodies() {
                     SolidField::Bodies
                 } else if kind.is_plane() {
                     SolidField::FirstPlane
@@ -855,7 +868,7 @@ fn reduce_owned(
                         )?;
                     }
                 }
-            } else if feature_id.is_none() && kind.is_body_plane() {
+            } else if feature_id.is_none() && kind.selects_bodies() {
                 let (_, _, presentation, _) = native_viewport::interface_view_snapshot(world);
                 let mut bodies: Vec<_> = presentation
                     .selected_body_ids
@@ -947,6 +960,14 @@ fn reduce_owned(
         check_revision(editor, &receipt)?;
         let model = editor.snapshot.model(editor.form.parameter_sketch());
         match action {
+            #[cfg(feature = "dev-bevy-host")]
+            FeatureControl::Scroll(delta) => {
+                if !super::is_activation(input) {
+                    return Err("Activate a panel scroll control".into());
+                }
+                panel::scroll_by(world, *delta as f32)?;
+                return Ok(json!({"form_id":form_id,"scrolled":true}));
+            }
             FeatureControl::Field(field) => {
                 let row = editor
                     .form
@@ -1038,6 +1059,8 @@ fn reduce_owned(
                         | SolidField::FirstPlane
                         | SolidField::SecondPlane
                         | SolidField::AxisEdge
+                        | SolidField::DirectionEdge
+                        | SolidField::SecondDirectionEdge
                         | SolidField::Bodies
                         | SolidField::Edges
                         | SolidField::Targets
@@ -1052,13 +1075,17 @@ fn reduce_owned(
                 editor.choice_field = None;
             }
             FeatureControl::Clear(field) => match field {
-                SolidField::Bodies => editor.form.set_body_plane_bodies(vec![], &model)?,
+                SolidField::Bodies => editor.form.set_bodies(vec![], &model)?,
                 SolidField::FirstPlane | SolidField::SecondPlane => {
                     editor.form.set_plane_reference(*field, None, &model)?;
                     editor.pick_target = Some(*field);
                 }
-                SolidField::AxisEdge => {
-                    editor.form.set_plane_axis(None, &model)?;
+                field if field.is_straight_reference() => {
+                    if editor.form.kind().is_pattern() {
+                        editor.form.set_pattern_edge(*field, None, &model)?;
+                    } else {
+                        editor.form.set_plane_axis(None, &model)?;
+                    }
                     editor.pick_target = Some(*field);
                 }
                 SolidField::TargetBody | SolidField::ToolBodies => {
@@ -1133,6 +1160,20 @@ fn reduce_owned(
                 })
                 .map(|r| r.field)
                 .or(Some(SolidField::Source));
+        }
+        if matches!(action, FeatureControl::Field(SolidField::SecondEnabled)) {
+            editor.pick_target = Some(
+                if editor
+                    .form
+                    .fields(&model)
+                    .iter()
+                    .any(|r| r.field == SolidField::SecondDirectionEdge && r.visible)
+                {
+                    SolidField::SecondDirectionEdge
+                } else {
+                    SolidField::DirectionEdge
+                },
+            );
         }
         update_preview(editor, world)?;
         Ok(json!({"form_id":form_id,"edited":true}))

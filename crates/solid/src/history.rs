@@ -1536,9 +1536,8 @@ impl SolidDocument {
                         "second pattern direction",
                     )?;
                 }
-                let copies = (request.count as usize * second_count as usize)
-                    .saturating_sub(1)
-                    .saturating_mul(request.body_ids.len());
+                let copies =
+                    pattern_copy_count(request.count, second_count, request.body_ids.len())?;
                 let new_body_ids = reuse_or_allocate(copies);
                 BodyFeatureDefinitionDto::RectangularPattern {
                     feature_id,
@@ -1565,7 +1564,7 @@ impl SolidDocument {
                 {
                     return Err(SolidError::InvalidAngle);
                 }
-                let copies = (request.count as usize - 1) * request.body_ids.len();
+                let copies = pattern_copy_count(request.count, 1, request.body_ids.len())?;
                 let new_body_ids = reuse_or_allocate(copies);
                 BodyFeatureDefinitionDto::CircularPattern {
                     feature_id,
@@ -3939,6 +3938,30 @@ fn validate_positive(value: f64, label: &str) -> Result<(), SolidError> {
     }
 }
 
+/// Bound expansion before allocating topology IDs or entering a kernel loop.
+/// The same check is used by native forms and every engine entry point.
+pub fn pattern_copy_count(
+    count: u32,
+    second_count: u32,
+    sources: usize,
+) -> Result<usize, SolidError> {
+    validate_pattern_count(count, "first direction")?;
+    let second_count = second_count.max(1);
+    if second_count > 1 {
+        validate_pattern_count(second_count, "second direction")?;
+    }
+    let copies = (count as usize)
+        .checked_mul(second_count as usize)
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|n| n.checked_mul(sources));
+    match copies {
+        Some(copies) if sources > 0 && copies <= 10_000 => Ok(copies),
+        _ => Err(SolidError::InvalidExtent(
+            "A pattern can create at most 10000 bodies; reduce the counts or selection".into(),
+        )),
+    }
+}
+
 fn validate_pattern_count(count: u32, label: &str) -> Result<(), SolidError> {
     if (2..=10_000).contains(&count) {
         Ok(())
@@ -4601,6 +4624,19 @@ pub fn plane_bases_coplanar(first: PlaneBasis, second: PlaneBasis) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pattern_expansion_is_bounded_before_allocation() {
+        assert_eq!(super::pattern_copy_count(3, 2, 2).unwrap(), 10);
+        assert_eq!(super::pattern_copy_count(10_000, 1, 1).unwrap(), 9999);
+        for (first, second, sources) in [
+            (3, 10_000, 1),
+            (u32::MAX, u32::MAX, usize::MAX),
+            (2, 1, usize::MAX),
+            (2, 1, 0),
+        ] {
+            assert!(super::pattern_copy_count(first, second, sources).is_err());
+        }
+    }
     use super::*;
     use nbcad_core::OriginPlane;
 
