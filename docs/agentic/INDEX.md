@@ -2,7 +2,7 @@
 
 - [Eval goldens](EVALS.md) — modeling E1–E5 and help H1–H8+ wire checks (`cad_help` + resources).
 - [How humans find help today](HUMAN_HELP.md) — index/taxonomy/MCP/Pages doors; Scripts deep-link; prompts gap.
-- Design package VERSION / `gen_v*` naming: Help id `concepts.design-version-scripts`.
+- Design package VERSION / `design_v*.nbcad.jsonc` naming: Help id `concepts.design-version-scripts`.
 
 Committed operating docs for humans and coding agents working on noBS CAD.
 Prefer leaving root `AGENTS.md` / `.cursor/rules` out of git (project policy).

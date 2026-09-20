@@ -1854,9 +1854,9 @@ mod tests {
     fn design_version_scripts_searchable() {
         let store = HelpStore::bundled();
         for query in [
-            "design VERSION gen_v script naming",
-            "VERSION DESIGN_VERSION gen_vM_N.py",
-            "gen_meta version prune obsolete generators",
+            "design VERSION JSONC script naming design_v",
+            "VERSION DESIGN_VERSION design_vM_N.nbcad.jsonc",
+            "prune prior design_v nbcad.jsonc VERSION metadata",
         ] {
             let hits = store.search(query, Some(5));
             assert!(

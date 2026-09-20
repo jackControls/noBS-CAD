@@ -1,12 +1,16 @@
-## 2026-09-20 — Design VERSION / gen_v script naming
+## 2026-09-20 — Design VERSION / JSONC script golden path (correction)
 
-- Seeded `concepts.design-version-scripts` (one authoritative VERSION /
-  DESIGN_VERSION; filename `gen_vM_N.py`; embed in script/gen_meta/JSONC; cut
-  prior gen_v*.py in the same change set; blank-doc + versioned recipe ids).
-- Taxonomy H → seeded; index doctrine table + Concepts bullet; soft pointer
-  from agent-mcp-workflow; one-line docs/agentic INDEX note.
-- Rust embed + BM25/unit tests; wire goldens H76+. Design Ops handoff blurb
-  lives under cad-design-ops/guidance (not product).
+- Rewrote `concepts.design-version-scripts`: authoritative artifact is
+  versioned / VERSION-embedded `.nbcad.jsonc` — **not** a Python `gen_v*.py`
+  generator. Prefer hand-authored JSONC chunks.
+- Working designs (INJS): **version in filename AND inside JSONC**
+  (`design_vM_N.nbcad.jsonc`). Catalog demos may keep stable unversioned ids
+  with VERSION only in metadata.
+- Cut/prune prior `design_v*.nbcad.jsonc` (+ leftover `gen_v*.py`). Chunking /
+  section headers for edit-tool-sized hunks; chaptered includes preferred
+  when/if supported.
+- Soft pointers: agent-mcp-workflow, index, taxonomy, docs/agentic INDEX;
+  Design Ops guidance; goldens H76–H78 + Rust BM25 queries retargeted.
 
 ## 2026-09-20 — Bearings / hubs / seats CAD-time deepen
 

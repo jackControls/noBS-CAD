@@ -129,10 +129,11 @@ document (or one you intentionally wiped).
 `related_recipes` on help pages match `cad_interface` `recipes`. Humans open
 the same `.nbcad.jsonc` via Scripts / presentation.
 
-Design package generators: keep one authoritative `VERSION` /
-`DESIGN_VERSION` string, name `gen_vM_N.py` from it, embed the same string in
-meta/JSONC, and prune prior `gen_v*.py` when cutting — see
-[design VERSION / gen scripts](design-version-scripts.md).
+Design package scripts: keep one authoritative `VERSION` /
+`DESIGN_VERSION` string; for working designs prefer `design_vM_N.nbcad.jsonc`
+(version in filename **and** inside JSONC metadata), prune prior
+`design_v*.nbcad.jsonc` (and leftover `gen_v*.py`) when cutting — see
+[design VERSION / JSONC scripts](design-version-scripts.md).
 
 ## Export format (AM)
 
@@ -148,5 +149,5 @@ Role-based clearances and fit coupons beat a single global XY offset — see
 
 Related: [MCP harness](mcp-harness.md), [research before commit](research-before-commit.md),
 [validate before show](validate-before-show.md),
-[design VERSION / gen scripts](design-version-scripts.md),
+[design VERSION / JSONC scripts](design-version-scripts.md),
 [STEERABLE_MCP](../../docs/agentic/STEERABLE_MCP.md).
