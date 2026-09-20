@@ -3363,6 +3363,10 @@ export interface ArcCenterRequest {
   start: Vec2;
   sweep: Vec2;
   ctrl_held: boolean;
+  /** Locked radius: the cursor only supplies each pick's direction, and a
+   *  typed value creates a driving Radius dimension (D9). */
+  radius_mm?: number | null;
+  radius_text?: string | null;
 }
 
 export interface MidpointLineRequest {

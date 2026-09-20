@@ -750,13 +750,20 @@ pub struct Arc3PointRequest {
     pub ctrl_held: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// Not `Copy`: a typed radius expression is carried as text (D9).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArcCenterRequest {
     pub center: Vec2,
     pub start: Vec2,
     pub sweep: Vec2,
     #[serde(default)]
     pub ctrl_held: bool,
+    /// Locked radius. The cursor only supplies each pick's direction, and a
+    /// typed value creates a driving Radius dimension (D9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

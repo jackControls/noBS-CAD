@@ -156,6 +156,8 @@ fn draw_semicircle_against_boundary(manager: &mut SketchManager) {
             start: Vec2::new(5.0, FACE_HEIGHT),
             sweep: Vec2::new(15.0, FACE_HEIGHT),
             ctrl_held: true,
+            radius_mm: None,
+            radius_text: None,
         })
         .unwrap();
 }

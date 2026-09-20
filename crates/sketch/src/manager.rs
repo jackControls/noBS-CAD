@@ -4535,11 +4535,13 @@ impl SketchManager {
         &mut self,
         request: ArcCenterRequest,
     ) -> Result<ToolResult, SessionError> {
-        self.active_mut()?.add_arc_center_selective(
+        self.active_mut()?.add_arc_center_locked(
             request.center,
             request.start,
             request.sweep,
             request.ctrl_held,
+            request.radius_mm,
+            request.radius_text.as_deref(),
         )
     }
 

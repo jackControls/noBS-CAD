@@ -747,6 +747,31 @@ impl SketchSession {
         );
     }
 
+    /// Typed radius while drawing a center arc → Radius dim. The arc's radius
+    /// is already resolved by the locked pick, so the dimension only records
+    /// the driving value and stays editable like any other radius.
+    pub(crate) fn auto_dim_arc_radius(&mut self, arc: EntityId, text: &str) {
+        let Some((center, r)) = self.circle_spec(arc) else {
+            return;
+        };
+        let Ok(param) = self.param_from_text(ParamKind::Length, Some(text), r) else {
+            return;
+        };
+        let _ = self.add_constraint_bound(
+            Constraint::Radius {
+                entity: arc,
+                value: r,
+            },
+            param,
+            center
+                + Vec2::new(
+                    r + default_radial_dimension_gap(r * 2.0),
+                    r + default_radial_dimension_gap(r * 2.0),
+                ),
+            false,
+        );
+    }
+
     // --- DTO ---
 
     pub(crate) fn dimension_dtos(&self) -> Vec<DimensionDto> {

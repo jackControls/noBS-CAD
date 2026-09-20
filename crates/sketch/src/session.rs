@@ -646,6 +646,16 @@ impl SketchSession {
         self.snap_inner(raw, !ctrl_held, false, None)
     }
 
+    /// Creation snap that also acquires midpoints: a support-face edge
+    /// midpoint or a line midpoint is a valid pick for the center-point arc,
+    /// exactly as it is for a line endpoint. Unlike the line flow these picks
+    /// stay geometric (no durable midpoint relation is manufactured), matching
+    /// how every other curve creation consumes an acquisition. Holding Ctrl
+    /// suppresses the acquisition.
+    fn snap_creation_with_midpoints(&self, raw: Vec2, ctrl_held: bool) -> (Vec2, SnapTarget) {
+        self.snap_inner(raw, !ctrl_held, !ctrl_held, None)
+    }
+
     /// Line-flow snap (M1d): midpoint snapping is enabled here only, because
     /// the line flow is the one that also auto-creates the matching Midpoint
     /// constraint on commit (D4.1 parity). Holding Ctrl suppresses the
@@ -2943,9 +2953,71 @@ impl SketchSession {
         sweep: Vec2,
         ctrl_held: bool,
     ) -> Result<ToolResult, SessionError> {
-        let (center, center_target) = self.snap_creation(center, ctrl_held);
-        let (start, start_target) = self.snap_creation(start, ctrl_held);
-        let (sweep, sweep_target) = self.snap_creation(sweep, ctrl_held);
+        self.build_center_arc(center, start, sweep, ctrl_held, None, None)
+    }
+
+    /// Center Arc honoring a locked radius field (typed value auto-creates a
+    /// Radius dimension, D9). While the radius is locked the cursor supplies
+    /// each pick's direction only, so the second and third clicks still aim
+    /// the arc.
+    pub fn add_arc_center_locked(
+        &mut self,
+        center: Vec2,
+        start: Vec2,
+        sweep: Vec2,
+        ctrl_held: bool,
+        radius_mm: Option<f64>,
+        radius_text: Option<&str>,
+    ) -> Result<ToolResult, SessionError> {
+        let radius = match radius_text {
+            Some(text) => Some(self.eval_text(text)?),
+            None => radius_mm,
+        };
+        self.build_center_arc(center, start, sweep, ctrl_held, radius, radius_text)
+    }
+
+    /// Place a locked-radius pick on the authored radius in the cursor's
+    /// direction. A vertex already at that radius wins when it is under the
+    /// cursor, so a radius lock still composes with point acquisition.
+    fn radius_locked_point(&self, center: Vec2, radius: f64, hint: Vec2) -> Vec2 {
+        let direction = hint - center;
+        let length = direction.length();
+        let unit = if length < MERGE_EPS {
+            Vec2::new(1.0, 0.0)
+        } else {
+            direction * (1.0 / length)
+        };
+        let edge = center + unit * radius;
+        self.point_on_circle_locus(center, radius, hint)
+            .map(|(_, point)| point)
+            .unwrap_or(edge)
+    }
+
+    fn build_center_arc(
+        &mut self,
+        center: Vec2,
+        start: Vec2,
+        sweep: Vec2,
+        ctrl_held: bool,
+        locked_radius: Option<f64>,
+        radius_text: Option<&str>,
+    ) -> Result<ToolResult, SessionError> {
+        let (center, center_target) = self.snap_creation_with_midpoints(center, ctrl_held);
+        let lock = locked_radius.filter(|value| *value >= MIN_LINE_LENGTH_MM);
+        let (start, start_target) = match lock {
+            Some(radius) => (
+                self.radius_locked_point(center, radius, start),
+                SnapTarget::None,
+            ),
+            None => self.snap_creation_with_midpoints(start, ctrl_held),
+        };
+        let (sweep, sweep_target) = match lock {
+            Some(radius) => (
+                self.radius_locked_point(center, radius, sweep),
+                SnapTarget::None,
+            ),
+            None => self.snap_creation_with_midpoints(sweep, ctrl_held),
+        };
         let radius = center.distance(start);
         if radius < MIN_LINE_LENGTH_MM {
             return Err(SessionError::DegenerateSegment);
@@ -3003,6 +3075,14 @@ impl SketchSession {
         if !ctrl_held {
             self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::Start, start_point);
             self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::End, end_point);
+        }
+        // A typed/locked radius becomes a driving Radius dimension inside the
+        // same undoable command, exactly as a locked circle diameter does.
+        let dim_text = radius_text
+            .map(str::to_owned)
+            .or_else(|| lock.map(format_number));
+        if let Some(text) = dim_text.as_deref() {
+            self.auto_dim_arc_radius(id, text);
         }
         self.recompute();
         self.push_command(before);

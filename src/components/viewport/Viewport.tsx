@@ -6205,6 +6205,7 @@ export function Viewport() {
       offset: ['distance'],
       scale: ['factor'],
       polygon: ['edges', 'radius'],
+      arcCenter: ['radius'],
       slot: ['width'],
     };
 
@@ -6473,6 +6474,51 @@ export function Viewport() {
           return {
             point: { ...bestReference.point },
             target: { kind: 'reference_midpoint', edge: bestReference.edge },
+          };
+        }
+        // The projected support-face boundary is a snap locus, not just its
+        // midpoint: any point along the face edge the sketch was created from
+        // is a legitimate landing place for new geometry.
+        let bestProjected:
+          | { edge: number; position: Vec2; distance: number }
+          | null = null;
+        for (const edge of sketch?.projected_edges ?? []) {
+          for (let index = 0; index + 1 < edge.points.length; index += 1) {
+            const a = edge.points[index];
+            const b = edge.points[index + 1];
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const length2 = dx * dx + dy * dy;
+            if (length2 <= Number.EPSILON) continue;
+            const t = Math.min(
+              1,
+              Math.max(0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length2),
+            );
+            const position = { x: a.x + dx * t, y: a.y + dy * t };
+            if (
+              excludePosition
+              && Math.hypot(position.x - excludePosition.x, position.y - excludePosition.y)
+                <= 1e-7
+            ) {
+              continue;
+            }
+            const distance = Math.hypot(position.x - p.x, position.y - p.y);
+            if (
+              distance <= tolerance
+              && (!bestProjected || distance < bestProjected.distance)
+            ) {
+              bestProjected = { edge: edge.edge_id, position, distance };
+            }
+          }
+        }
+        if (bestProjected) {
+          return {
+            point: { ...bestProjected.position },
+            target: {
+              kind: 'projected_edge',
+              edge: bestProjected.edge,
+              position: { ...bestProjected.position },
+            },
           };
         }
       }
@@ -7097,6 +7143,22 @@ export function Viewport() {
       );
     };
 
+    /** Locked-radius pick: keep the cursor's direction, force the distance.
+     * Typing a radius must not drag the arc's centre or stop the second and
+     * third picks from aiming, so only the length is replaced. */
+    const pointOnRadius = (center: Vec2, radius: number, hint: Vec2): Vec2 => {
+      const dx = hint.x - center.x;
+      const dy = hint.y - center.y;
+      const length = Math.hypot(dx, dy);
+      if (!Number.isFinite(length) || length <= 1e-9) {
+        return { x: center.x + radius, y: center.y };
+      }
+      return {
+        x: center.x + (dx / length) * radius,
+        y: center.y + (dy / length) * radius,
+      };
+    };
+
     /** Live preview for the active tool run (per pointer move). */
     const previewToolRun = (run: ToolRun, p: Vec2, e: PointerEvent) => {
       if (!engine) return;
@@ -7292,26 +7354,53 @@ export function Viewport() {
           break;
         }
         case 'arcCenter': {
-          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
+          // Midpoint/midpoint-locus acquisition matches the line tool: the
+          // support-face edge midpoint (triangle marker) and the projected
+          // face boundary are valid pick targets, not only points.
+          void snapCursorInfo(p, true, inferenceOverride).then((snap) => {
             if (seq !== previewSeq) return;
             const snapped = snap.snapped_to;
+            const lockedRadius = locks.radius;
+            const radiusLocked = lockedRadius !== undefined && lockedRadius > 0;
             let tangentInference = false;
             if (run.points.length === 1) {
-              const r = Math.hypot(snapped.x - anchor.x, snapped.y - anchor.y);
+              // Second pick: the radius follows the cursor until a value is
+              // typed. A locked radius keeps the cursor's direction only.
+              const r = radiusLocked
+                ? lockedRadius
+                : Math.hypot(snapped.x - anchor.x, snapped.y - anchor.y);
+              const aim = radiusLocked ? pointOnRadius(anchor, lockedRadius, snapped) : snapped;
               if (r > 1e-6) setPreviewPositions(tessellateCircle(anchor, r, 0.12));
               tangentInference = !inferenceOverride
-                && arcEndpointHasConnectedTangent(anchor, snapped);
+                && arcEndpointHasConnectedTangent(anchor, aim);
+              store.getState().updateDynInput(
+                { radius: r.toFixed(2) },
+                {},
+                pos.x,
+                pos.y,
+              );
             } else {
-              const start = run.points[1];
+              // Third pick: sweep direction. The sweep always keeps the
+              // authored/locked radius, so the cursor only chooses the angle.
+              const start = radiusLocked
+                ? pointOnRadius(anchor, lockedRadius, run.points[1])
+                : run.points[1];
               const r = Math.hypot(start.x - anchor.x, start.y - anchor.y);
+              const sweep = radiusLocked ? pointOnRadius(anchor, r, snapped) : snapped;
               const a0 = angleOf(anchor, start);
-              const a1 = angleOf(anchor, snapped);
+              const a1 = angleOf(anchor, sweep);
               setPreviewPositions(tessellateArc(anchor, r, a0, a1, 0.12));
               tangentInference = !inferenceOverride
                 && (
                   arcEndpointHasConnectedTangent(anchor, start)
-                  || arcEndpointHasConnectedTangent(anchor, snapped)
+                  || arcEndpointHasConnectedTangent(anchor, sweep)
                 );
+              store.getState().updateDynInput(
+                { radius: r.toFixed(2) },
+                {},
+                pos.x,
+                pos.y,
+              );
             }
             showSnapMarker(snapped, nativeSnapKind(snap.snap.kind));
             const rect = surface.domElement.getBoundingClientRect();
@@ -7513,14 +7602,35 @@ export function Viewport() {
           break;
         }
         case 'arcCenter': {
-          const next = acquireCreateSnap(p, false, null, suppressInference).point;
-          if (run.points.length < 2) {
+          // Same acquisition as the preview, including support-face edge
+          // midpoints and the projected face boundary.
+          const acquired = acquireCreateSnap(p, true, null, suppressInference).point;
+          if (run.points.length === 0) {
+            // The radius field is already armed by `startToolRun`, so a value
+            // typed before or during the sweep survives this pick.
+            run.points.push(acquired);
+            break;
+          }
+          const lockedRadius = locks.radius;
+          const radiusLocked = lockedRadius !== undefined && lockedRadius > 0;
+          const next = radiusLocked
+            ? pointOnRadius(run.points[0], lockedRadius, acquired)
+            : acquired;
+          if (run.points.length === 1) {
             run.points.push(next);
             break;
           }
           const [center, start] = run.points;
+          const texts = dynTexts();
           void engine
-            .addArcCenter({ center, start, sweep: next, ctrl_held: suppressInference })
+            .addArcCenter({
+              center,
+              start,
+              sweep: next,
+              ctrl_held: suppressInference,
+              radius_mm: radiusLocked ? lockedRadius : null,
+              radius_text: radiusLocked ? texts.radius ?? null : null,
+            })
             .then((r) => {
               store.getState().setActiveSketch(r.sketch);
               done();
@@ -7591,9 +7701,15 @@ export function Viewport() {
       }
       startSnapPending = true;
       const seq = ++startSeq;
+      // Midpoint acquisition on the first pick: line endpoints have always
+      // had it, and the center-point-arc centre is the same kind of pick
+      // (support-face edge midpoints included). Other creation tools stay
+      // point/endpoint only.
+      const firstPickAcquiresMidpoints =
+        tool === 'line' || tool === 'midpointLine' || tool === 'arcCenter';
       void snapCursorInfo(
         p,
-        !inferenceOverride && (tool === 'line' || tool === 'midpointLine'),
+        !inferenceOverride && firstPickAcquiresMidpoints,
         inferenceOverride,
       )
         .then((preview) => {
