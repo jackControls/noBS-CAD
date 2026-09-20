@@ -41,8 +41,12 @@ const moveSketch = async (x, y, offsetPx = 0) => {
 };
 const clickSketch = async (x, y, offsetPx = 0) => {
   const screen = await screenOf(x, y, offsetPx);
+  // Move first: the floating value cluster follows the pointer, so an
+  // instantaneous jump would land the pick on its still-stale position.
+  await page.mouse.move(screen.x, screen.y, { steps: 3 });
+  await page.waitForTimeout(120);
   await page.mouse.click(screen.x, screen.y);
-  await page.waitForTimeout(180);
+  await page.waitForTimeout(200);
 };
 const arm = async (tool) => {
   await page.evaluate((next) => window.__appStore.getState().setActiveTool(next), tool);
@@ -173,7 +177,7 @@ try {
     assert.equal(
       marker.kind,
       'reference_midpoint',
-      `${tool}: the marker must be the midpoint glyph, got ${marker.kind}`,
+      `${tool}: the marker must be the midpoint triangle, got ${marker.kind}`,
     );
     const expected = worldOf(basis, reference.x, reference.y);
     assert.ok(
@@ -192,10 +196,11 @@ try {
     });
     const edgeMarker = await markerAt(boundary.x, boundary.y, 5);
     assert.ok(edgeMarker, `${tool}: hovering the projected boundary must show a marker`);
+    // A long edge is a locus, not a midpoint: it must not borrow the triangle.
     assert.equal(
       edgeMarker.kind,
-      'reference_midpoint',
-      `${tool}: the projected boundary uses the reference glyph, got ${edgeMarker.kind}`,
+      'curve',
+      `${tool}: the projected boundary is a locus glyph, got ${edgeMarker.kind}`,
     );
     // The projected boundary is a locus: acquisition pins the perpendicular
     // coordinate and keeps where the cursor aimed along the edge.
@@ -304,6 +309,44 @@ try {
     Math.abs(normalize(endAngle - sweptAngle)) < 1e-6
       || Math.abs(normalize(endAngle - sweptAngle) - 2 * Math.PI) < 1e-6,
     `the third pick aims at the acquired midpoint: ${endAngle} vs ${normalize(sweptAngle)}`,
+  );
+
+  console.log('5. The third pick decides the sweep side (and Alt takes the long way)');
+  const drawDirectedArc = async ({ start, sweep, longWay }) => {
+    await arm('arcCenter');
+    const before = (await sketch()).entities.filter((entity) => entity.kind === 'arc').length;
+    await clickSketch(frame.center.x, frame.center.y);
+    await clickSketch(frame.center.x + start.x, frame.center.y + start.y);
+    if (longWay) await page.keyboard.down('Alt');
+    await clickSketch(frame.center.x + sweep.x, frame.center.y + sweep.y);
+    if (longWay) await page.keyboard.up('Alt');
+    await page.waitForFunction(
+      (count) =>
+        window.__appStore.getState().activeSketch.entities.filter(
+          (entity) => entity.kind === 'arc',
+        ).length === count + 1,
+      before,
+    );
+    await cancel();
+    const arcs = (await sketch()).entities.filter((entity) => entity.kind === 'arc');
+    return arcs[arcs.length - 1];
+  };
+  // Signed sweep: clockwise is negative, counter-clockwise positive.
+  const sweepOf = (arc) => arc.end_angle - arc.start_angle;
+  // Same centre and start, sweep pick below the start ray.
+  const shortWay = await drawDirectedArc({ start: { x: 5, y: 0 }, sweep: { x: 0, y: -5 } });
+  assert.ok(
+    Math.abs(sweepOf(shortWay) + Math.PI / 2) < 1e-6,
+    `the shorter side must be drawn clockwise (negative sweep), got ${sweepOf(shortWay)}`,
+  );
+  const longWay = await drawDirectedArc({ start: { x: 5, y: 0 }, sweep: { x: 0, y: -5 }, longWay: true });
+  assert.ok(
+    Math.abs(sweepOf(longWay) - 3 * Math.PI / 2) < 1e-6,
+    `Alt must take the long way around (positive sweep), got ${sweepOf(longWay)}`,
+  );
+  assert.ok(
+    Math.abs(shortWay.radius - longWay.radius) < 1e-9,
+    'both directions share the start-pick radius',
   );
 
   assert.deepEqual(pageErrors, []);

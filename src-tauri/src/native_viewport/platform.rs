@@ -170,6 +170,15 @@ const VIEWPORT_LINE_SCALE_MAX: f32 = 1.6;
 /// than the outline information they can convey. Bevy still renders the
 /// retained shaded mesh and selected/hovered geometry always bypasses LOD.
 const OCCURRENCE_EDGE_LOD_MIN_RADIUS_PX: f32 = 3.0;
+/// Body edges are gizmos drawn on the exact B-rep geometry, so an edge that is
+/// coincident with a face (a pocket floor arc, a cut boundary) ties with it in
+/// depth. Bevy's line pipeline compares `Greater`, so an exact tie loses and
+/// the stroke silently disappears while silhouette edges stay visible. Bevy's
+/// documented remedy for a wireframe fighting the model is a small negative
+/// bias: 1e-5 of the depth range is a few depth-buffer steps at any zoom (the
+/// step size grows with the square of the view distance, and so does the bias
+/// it buys) yet far below the depth of geometry that must stay hidden.
+const MODEL_EDGE_DEPTH_BIAS: f32 = -1.0e-5;
 const SKETCH_DEPTH_BIAS: f32 = -0.90;
 const SKETCH_POINT_OUTLINE_WIDTH: f32 = 2.0;
 const SKETCH_POINT_OUTLINE_DEPTH_BIAS: f32 = -0.89;
@@ -2493,6 +2502,10 @@ fn setup_scene(
         .config_mut::<CamCompletedPathGizmos>()
         .0
         .depth_bias = -0.995;
+    // Body edges and the ground/sketch grid share the default group; the grid
+    // is lifted by the same sub-pixel amount, which is invisible.
+    let (model_edge_config, _) = gizmo_config.config_mut::<DefaultGizmoConfigGroup>();
+    model_edge_config.depth_bias = MODEL_EDGE_DEPTH_BIAS;
     let (sketch_config, _) = gizmo_config.config_mut::<CadSketchGizmos>();
     // Visible sketches are reference graphics, not occluded model edges.
     // Match the browser renderer's depthTest:false contract so a sketch on a

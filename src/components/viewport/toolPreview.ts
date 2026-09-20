@@ -109,15 +109,24 @@ export function ccwSweep(a0: number, a1: number): number {
   return sweep;
 }
 
-/** Tessellate a circle/arc into a flat xyz polyline (local sketch coords). */
+/** Signed shortest angular delta from `a0` to `a1`, in (-PI, PI]. */
+export function signedSweep(a0: number, a1: number): number {
+  const tau = Math.PI * 2;
+  return ((a1 - a0 + Math.PI) % tau + tau) % tau - Math.PI;
+}
+
+/** Tessellate a circle/arc into a flat xyz polyline (local sketch coords).
+ * `clockwise` sweeps the negative way from `a0` to `a1` instead. */
 export function tessellateArc(
   center: Vec2,
   radius: number,
   a0: number,
   a1: number,
   z = 0.05,
+  clockwise = false,
 ): number[] {
-  const sweep = ccwSweep(a0, a1);
+  const ccw = ccwSweep(a0, a1);
+  const sweep = clockwise ? ccw - Math.PI * 2 : ccw;
   const segments = Math.max(8, Math.min(96, Math.ceil((sweep / (Math.PI * 2)) * 96)));
   const positions: number[] = [];
   for (let i = 0; i <= segments; i++) {

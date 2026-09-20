@@ -109,6 +109,7 @@ fn a_typed_radius_locks_the_arc_and_adds_a_driving_dimension() {
             false,
             None,
             Some("12"),
+            None,
         )
         .unwrap();
     let (center, radius, start_angle, end_angle) = arc_of(&session, result.entities[0]);
@@ -155,6 +156,7 @@ fn a_typed_radius_expression_is_evaluated() {
             false,
             None,
             Some("=6*2"),
+            None,
         )
         .unwrap();
     let (_, radius, _, _) = arc_of(&session, result.entities[0]);
@@ -176,6 +178,7 @@ fn one_undo_removes_a_locked_arc_and_its_dimension() {
             false,
             None,
             Some("12"),
+            None,
         )
         .unwrap();
     assert_eq!(session.dto().dimensions.len(), 1);
@@ -183,4 +186,55 @@ fn one_undo_removes_a_locked_arc_and_its_dimension() {
     let dto = session.dto();
     assert!(dto.entities.is_empty(), "arc removed: {:?}", dto.entities);
     assert!(dto.dimensions.is_empty(), "dimension removed with it");
+}
+
+#[test]
+fn the_third_pick_chooses_the_sweep_side() {
+    // Same centre and start, sweep pick below the start ray: counter-clockwise
+    // takes the long way (270°), clockwise takes the short way (90°). One start
+    // point can therefore place the arc on either side.
+    let mut ccw = face_session();
+    ccw.add_arc_center(v(0.0, 0.0), v(5.0, 0.0), v(0.0, -5.0))
+        .unwrap();
+    let (_, _, start_angle, end_angle) = arc_of(&ccw, nbcad_sketch::EntityId(1));
+    assert!(close(radius_point(0.0, 0.0, 5.0, start_angle), v(5.0, 0.0)));
+    let ccw_sweep = end_angle - start_angle;
+    assert!(
+        (ccw_sweep - 3.0 * std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+        "counter-clockwise sweep {ccw_sweep}"
+    );
+
+    let mut cw = face_session();
+    cw.add_arc_center_locked(
+        v(0.0, 0.0),
+        v(5.0, 0.0),
+        v(0.0, -5.0),
+        false,
+        None,
+        None,
+        Some(true),
+    )
+    .unwrap();
+    let (_, radius, start_angle, end_angle) = arc_of(&cw, nbcad_sketch::EntityId(1));
+    assert!(close(
+        radius_point(0.0, 0.0, radius, start_angle),
+        v(5.0, 0.0)
+    ));
+    let cw_sweep = end_angle - start_angle;
+    assert!(
+        (cw_sweep + std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+        "clockwise sweep {cw_sweep}"
+    );
+    // The end point is the sweep pick's bearing at the authored radius.
+    assert!(close(
+        radius_point(0.0, 0.0, radius, end_angle),
+        v(0.0, -radius)
+    ));
+}
+
+fn radius_point(center_x: f64, center_y: f64, radius: f64, angle: f64) -> Vec2 {
+    v(
+        center_x + radius * angle.cos(),
+        center_y + radius * angle.sin(),
+    )
 }

@@ -149,6 +149,7 @@ import {
   circumcircle,
   rectCorner,
   rectCorners,
+  signedSweep,
   slotCapsulePreview,
   tessellateArc,
   tessellateCircle,
@@ -1373,7 +1374,7 @@ export function Viewport() {
         : kind === 'intersection'
           ? 'point'
           : kind === 'projected_edge'
-            ? 'reference_midpoint'
+            ? 'curve'
             : kind;
     const showSnapMarker = (
       point: Vec2,
@@ -7209,6 +7210,14 @@ export function Viewport() {
       };
     };
 
+    /** Sweep direction for the center arc: the third pick's own side decides,
+     * and Alt/Option takes the long way around. Preview and commit share this
+     * so the drawn arc cannot flip on release. */
+    const arcSweepIsClockwise = (startAngle: number, cursorAngle: number, longWay: boolean) => {
+      const delta = signedSweep(startAngle, cursorAngle);
+      return longWay ? delta >= 0 : delta < 0;
+    };
+
     /** Live preview for the active tool run (per pointer move). */
     const previewToolRun = (run: ToolRun, p: Vec2, e: PointerEvent) => {
       if (!engine) return;
@@ -7407,6 +7416,7 @@ export function Viewport() {
           // Midpoint/midpoint-locus acquisition matches the line tool: the
           // support-face edge midpoint (triangle marker) and the projected
           // face boundary are valid pick targets, not only points.
+          const longWay = e.altKey;
           void snapCursorInfo(p, toolAcquiresMidpoints(run.tool), inferenceOverride).then((snap) => {
             if (seq !== previewSeq) return;
             const snapped = snap.snapped_to;
@@ -7439,7 +7449,10 @@ export function Viewport() {
               const sweep = radiusLocked ? pointOnRadius(anchor, r, snapped) : snapped;
               const a0 = angleOf(anchor, start);
               const a1 = angleOf(anchor, sweep);
-              setPreviewPositions(tessellateArc(anchor, r, a0, a1, 0.12));
+              // The cursor picks the side: the shorter way normally, the long
+              // way around while Alt/Option is held (>180 degree sweeps).
+              const clockwise = arcSweepIsClockwise(a0, a1, longWay);
+              setPreviewPositions(tessellateArc(anchor, r, a0, a1, 0.12, clockwise));
               tangentInference = !inferenceOverride
                 && (
                   arcEndpointHasConnectedTangent(anchor, start)
@@ -7519,7 +7532,12 @@ export function Viewport() {
     };
 
     /** Commit the active tool run at cursor `p` (click or Enter). */
-    const commitToolRun = (run: ToolRun, p: Vec2, ctrlHeld: boolean) => {
+    const commitToolRun = (
+      run: ToolRun,
+      p: Vec2,
+      ctrlHeld: boolean,
+      altHeld = false,
+    ) => {
       if (!engine) return;
       const suppressInference = ctrlHeld || Boolean(run.suppressInference);
       run.suppressInference = suppressInference;
@@ -7672,14 +7690,22 @@ export function Viewport() {
           }
           const [center, start] = run.points;
           const texts = dynTexts();
+          const directed = radiusLocked
+            ? pointOnRadius(center, lockedRadius, next)
+            : next;
           void engine
             .addArcCenter({
               center,
               start,
-              sweep: next,
+              sweep: directed,
               ctrl_held: suppressInference,
               radius_mm: radiusLocked ? lockedRadius : null,
               radius_text: radiusLocked ? texts.radius ?? null : null,
+              clockwise: arcSweepIsClockwise(
+                angleOf(center, start),
+                angleOf(center, directed),
+                altHeld,
+              ),
             })
             .then((r) => {
               store.getState().setActiveSketch(r.sketch);
@@ -7731,7 +7757,7 @@ export function Viewport() {
      * move the snap marker). */
     let startSnapPending = false;
     let startSeq = 0;
-    let queuedCommit: { point: Vec2; suppressInference: boolean } | null = null;
+    let queuedCommit: { point: Vec2; suppressInference: boolean; altHeld: boolean } | null = null;
     const startToolRun = (tool: ToolId, p: Vec2, e: PointerEvent) => {
       if (!engine) return;
       const inferenceOverride = e.ctrlKey || e.metaKey;
@@ -7784,7 +7810,7 @@ export function Viewport() {
           if (queuedCommit) {
             const q = queuedCommit;
             queuedCommit = null;
-            commitToolRun(toolRun, q.point, q.suppressInference);
+            commitToolRun(toolRun, q.point, q.suppressInference, q.altHeld);
           }
         })
         .catch((error) => {
@@ -11598,12 +11624,13 @@ export function Viewport() {
             queuedCommit = {
               point: p,
               suppressInference: e.ctrlKey || e.metaKey,
+              altHeld: e.altKey,
             };
             return;
           }
           startToolRun(state.activeTool, p, e);
         } else {
-          commitToolRun(toolRun, p, e.ctrlKey || e.metaKey);
+          commitToolRun(toolRun, p, e.ctrlKey || e.metaKey, e.altKey);
         }
         return;
       }

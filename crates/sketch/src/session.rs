@@ -2959,7 +2959,7 @@ impl SketchSession {
         sweep: Vec2,
         ctrl_held: bool,
     ) -> Result<ToolResult, SessionError> {
-        self.build_center_arc(center, start, sweep, ctrl_held, None, None)
+        self.build_center_arc(center, start, sweep, ctrl_held, None, None, None)
     }
 
     /// Center Arc honoring a locked radius field (typed value auto-creates a
@@ -2974,12 +2974,21 @@ impl SketchSession {
         ctrl_held: bool,
         radius_mm: Option<f64>,
         radius_text: Option<&str>,
+        clockwise: Option<bool>,
     ) -> Result<ToolResult, SessionError> {
         let radius = match radius_text {
             Some(text) => Some(self.eval_text(text)?),
             None => radius_mm,
         };
-        self.build_center_arc(center, start, sweep, ctrl_held, radius, radius_text)
+        self.build_center_arc(
+            center,
+            start,
+            sweep,
+            ctrl_held,
+            radius,
+            radius_text,
+            clockwise,
+        )
     }
 
     /// Place a locked-radius pick on the authored radius in the cursor's
@@ -3007,6 +3016,7 @@ impl SketchSession {
         ctrl_held: bool,
         locked_radius: Option<f64>,
         radius_text: Option<&str>,
+        clockwise: Option<bool>,
     ) -> Result<ToolResult, SessionError> {
         let (center, center_target) = self.snap_creation(center, ctrl_held);
         let lock = locked_radius.filter(|value| *value >= MIN_LINE_LENGTH_MM);
@@ -3030,7 +3040,13 @@ impl SketchSession {
         }
         let start_angle = (start.y - center.y).atan2(start.x - center.x);
         let mut end_angle = (sweep.y - center.y).atan2(sweep.x - center.x);
-        if end_angle <= start_angle {
+        // The third pick decides which way round the arc goes, so the same
+        // start point can place the arc on either side of the centre.
+        if clockwise == Some(true) {
+            if end_angle >= start_angle {
+                end_angle -= std::f64::consts::TAU;
+            }
+        } else if end_angle <= start_angle {
             end_angle += std::f64::consts::TAU;
         }
         let before = self.sketch.snapshot();

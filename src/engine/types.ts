@@ -3367,6 +3367,10 @@ export interface ArcCenterRequest {
    *  typed value creates a driving Radius dimension (D9). */
   radius_mm?: number | null;
   radius_text?: string | null;
+  /** Sweep direction from the start pick to the third pick. Omitted keeps the
+   *  counter-clockwise sweep; true sweeps clockwise, so one start point can
+   *  place the arc on either side. */
+  clockwise?: boolean | null;
 }
 
 export interface MidpointLineRequest {

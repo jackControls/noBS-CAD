@@ -764,6 +764,11 @@ pub struct ArcCenterRequest {
     pub radius_mm: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radius_text: Option<String>,
+    /// Sweep direction from the start pick to the third pick. `None` keeps the
+    /// historical counter-clockwise sweep; `Some(true)` sweeps clockwise, so
+    /// one start point can place the arc on either side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clockwise: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

@@ -158,6 +158,7 @@ fn draw_semicircle_against_boundary(manager: &mut SketchManager) {
             ctrl_held: true,
             radius_mm: None,
             radius_text: None,
+            clockwise: None,
         })
         .unwrap();
 }
