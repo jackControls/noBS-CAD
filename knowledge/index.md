@@ -40,6 +40,10 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Review shot pack | `concepts.validate-before-show` | Validate before show |
 | Mesh / wall probe audit | `concepts.adversarial-mesh-audit` | Adversarial mesh audit |
 | Assembly overlap @ pose | `concepts.assembly-interference` | Assembly interference check |
+| Inspect between mutates | `concepts.inspect-between-mutates` | Inspect between mutates |
+| Edit history discipline | `concepts.edit-history-not-delete-rebuild` | Edit history — do not delete-rebuild |
+| Export preflight 3MF/STL | `concepts.export-preflight-3mf-stl` | Export preflight — 3MF vs STL |
+| Unit systems / mm | `concepts.unit-systems-mm-default` | Unit systems — mm default |
 
 ### Machine design (seeded highlights)
 
@@ -61,6 +65,8 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Glue / screw / snap choice | `machine-design.concepts.am-assembly-join-choice` | AM assembly join choice |
 | Warpage / flatness | `machine-design.concepts.am-warpage-cooling-flatness` | AM warpage… |
 | Fit coupons / recipes hub | `machine-design.concepts.fit-coupons-recipes-map` | Fit coupons and recipes map |
+| Datum / sketch plane (MCP) | `machine-design.concepts.datum-sketch-plane-choice` | Datum / sketch plane choice |
+| Hole feature vs modeled | `machine-design.concepts.hole-wizard-vs-modeled` | Hole wizard vs modeled hole |
 
 Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 
@@ -74,6 +80,10 @@ Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 - [Assembly interference check](concepts/assembly-interference.md) - Geometric overlap/clearance at solved poses vs fit classes.
 - [Validate before show](concepts/validate-before-show.md) - Mandatory review shot pack; reject blank/inside-solid frames.
 - [Adversarial mesh audit](concepts/adversarial-mesh-audit.md) - Manifold, wall probes, shards; printable-solid gate.
+- [Inspect between mutates](concepts/inspect-between-mutates.md) - `solid_scene` discipline between geometry writes.
+- [Edit history not delete-rebuild](concepts/edit-history-not-delete-rebuild.md) - Prefer `solid_edit_*` over remodel.
+- [Export preflight 3MF vs STL](concepts/export-preflight-3mf-stl.md) - AM format choice + preflight checklist.
+- [Unit systems mm default](concepts/unit-systems-mm-default.md) - mm default; formula dim pitfalls.
 - [Contribution process](concepts/process.md) - Lightweight contribution and review expectations.
 - [Export & print](concepts/export-print.md) - Interchange, print export and qualification boundaries.
 - [Gear identification and compatible pairs](concepts/gears.md) - Module/DP, OD limits, pressure angle, ratio changes and mounting.

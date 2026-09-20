@@ -71,6 +71,8 @@ Goal: find a **fit coupon** demo after reading enclosure join guidance.
 5. Optional: `get` a teaching page first (e.g.
    `machine-design.concepts.am-enclosure-lid-gasket-labyrinth`), then follow its
    `related_recipes` the same way.
+6. CAD-program ops: search `inspect between mutates`, `edit history not delete-rebuild`,
+   `3MF vs STL`, `unit systems mm`, or `datum sketch plane` for agent-ops Concepts.
 
 Agents use the identical `search` → `get` → recipe path; humans may instead
 click links from [knowledge/index.md](../../knowledge/index.md) or

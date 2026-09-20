@@ -3,9 +3,9 @@ type: Concept
 title: DFM overview
 description: Design-for-manufacturing mindset for CAD-time decisions; process selection before detail.
 status: draft
-updated: 2026-09-11
+updated: 2026-09-20
 topics: dfm, dfa, manufacturing
-keywords: DFM, DFA, DFMA, process selection, tolerance cost, standard parts
+keywords: DFM, DFA, DFMA, process selection, tolerance cost, standard parts, manufacturability, buy before invent
 related_recipes: turbine-fit-coupons, d-screw-vise-fit, garden-bench, vertical-axis-turbine, d-screw-vise
 sources: nwtc-guns-dfm, palni-dfma
 ---
@@ -41,18 +41,35 @@ proprietary timing tables.
 - **Design out secondary ops** when you can (extra grind, paint-critical seams,
   must-machine faces that could have been as-cast/as-printed).
 
+## Process-selection checklist
+
+1. **Volume & life** — one-off, dozens, thousands?
+2. **Envelope & material** — size, temperature, chemicals.
+3. **Critical features** — fits, sealing faces, optical, structural.
+4. **Candidate processes** — shortlist 1–2; open
+   [process guidelines](dfm-process-guidelines.md).
+5. **Buy list** — fasteners, bearings, stock shapes named early.
+6. **Coupon plan** — which joints need physical evidence first?
+7. **Assembly story** — order, tools, rework path
+   ([join choice](am-assembly-join-choice.md) for AM).
+
 ## Workflow
 
 Concept → **process selection** → detail under that process’s rules →
 coupon/prototype → feedback → release. Talk to manufacturing early; write down
 trade-offs.
 
-Process heuristics: [DFM process guidelines](dfm-process-guidelines.md).
-
 ## In noBS CAD
 
 Flagship recipes are manufacturing **candidates**. Replay and drawings are
-software evidence. Fit coupons bridge to a specific printer and material.
+software evidence. Fit coupons bridge to a specific printer and material
+([fit coupons map](fit-coupons-recipes-map.md)).
+
+## Anti-patterns
+
+- Detailing fillets and GD&T before naming a process
+- Inventing custom fasteners when catalog hardware works
+- Treating flagship recipe replay as shop qualification
 
 ## Further reading (link only)
 

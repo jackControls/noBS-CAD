@@ -35,7 +35,8 @@ folklore. Prefer: **physical calipers → coupon → lock**. Numbers below are
 | Beam thickness | ~7.4–8 mm class | Varies by generation and clone |
 
 Treat every cell as **suspect until measured**. Do not paste these into a
-shipping drawing as certified.
+shipping drawing as certified. Prefer **mm** project units
+([unit systems](../../concepts/unit-systems-mm-default.md)).
 
 ## Design rules if you proceed
 
@@ -46,11 +47,22 @@ shipping drawing as certified.
 4. Avoid trademarked logos/word marks in CAD exports meant for distribution.
 5. Overconstraint still applies — a dense pin field fights shrink
    ([locating schemes](locating-scheme-dof.md)).
+6. Name **clearance fit vs friction** explicitly
+   ([fits & clearances](fits-clearances.md)).
+
+## Checklist
+
+- [ ] Caliper measurements recorded (pitch, hole ID, pin OD)
+- [ ] Fit class named (slip vs press/friction)
+- [ ] Coupon printed and measured after cool-down
+- [ ] No trademarked marks on distributable geometry
+- [ ] Locator count reviewed for overconstraint
 
 ## Anti-patterns
 
 - Shipping “LEGO-compatible” claims from this help page alone
 - Mixing stud-pitch and proprietary clone pitches in one lattice
 - Using undocumented forum screenshots as the only source
+- Treating community mm figures as ISO preferred fits
 
 Related: [fits & clearances](fits-clearances.md), [gears](../../concepts/gears.md).

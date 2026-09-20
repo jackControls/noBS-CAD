@@ -35,6 +35,18 @@ charts, bilateral tables, or closed numeric stacks you can copy into a drawing.
 5. **Decide** — open a tolerance, change the locate scheme, add adjustment, or
    coupon the critical joint.
 
+## Checklist for agents
+
+1. Write the **functional requirement** in one sentence before any math.
+2. List contributors in a VERIFY table
+   ([research before commit](../../concepts/research-before-commit.md)).
+3. Mark each as **radial vs diametral** when sizes are involved
+   ([fits & clearances](fits-clearances.md)).
+4. Check for **fighting locators**
+   ([locating schemes](locating-scheme-dof.md)).
+5. Prefer a **coupon** over a hand-wavy closed stack for AM mates.
+6. Never paste proprietary handbook stack tables into this KB or a drawing note.
+
 ## Where teaching sources help
 
 - NIST / Berez GD&T Part I–II (**CC BY 4.0**) — datum and limits-and-fits
@@ -58,5 +70,7 @@ so you are not stacking six fighting locators.
 - Treating nominal CAD clearance as the as-built gap
 - Mixing radial and diametral allowances in one loop
   ([fits](fits-clearances.md))
+- Claiming RSS without process capability data
 
-Related: [GD&T intro](gdt-intro.md), [research before commit](../../concepts/research-before-commit.md).
+Related: [GD&T intro](gdt-intro.md), [research before commit](../../concepts/research-before-commit.md),
+[unit systems / formula dims](../../concepts/unit-systems-mm-default.md).

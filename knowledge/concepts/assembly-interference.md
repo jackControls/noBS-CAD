@@ -1,11 +1,11 @@
 ---
 type: Concept
 title: Assembly interference check
-description: Geometric overlap and gap reporting at solved occurrence poses — distinct from hole/shaft class selection.
+description: Geometric overlap and gap reporting at solved occurrence poses — not clearance/transition/interference fit class selection.
 status: draft
 updated: 2026-09-19
 topics: assembly, mcp, validation
-keywords: interference check, assembly clearance, overlap volume, assembly_interference_check, touching faces, volumetric interference, occurrence pose, near miss
+keywords: interference check, assembly clearance gap, overlap volume, collision check, assembly_interference_check, touching faces, volumetric overlap, occurrence pose, near miss, multi-body collision
 related_recipes: repeated-bracket-assembly, garden-bench, vertical-axis-turbine
 ---
 
@@ -15,16 +15,17 @@ Use **`assembly_interference_check`** to ask whether retained solids **collide o
 leave a gap** at their **solved occurrence poses**. That is a **geometry probe**,
 not hole/shaft **class** selection.
 
-Design **intent** for mating features of size (always-gap, locate, or press)
-lives on [fits & clearances](../machine-design/concepts/fits-clearances.md). Do
-not treat a preferred-designation chart as a substitute for an assembly check,
-or vice versa.
+Design **intent** for a **clearance fit**, **transition fit**, or **interference fit**
+(press class) lives on [fits & clearances](../machine-design/concepts/fits-clearances.md).
+An **interference fit** is a hole/shaft class — it is **not** what this tool
+reports. Do not treat a preferred-designation chart as a substitute for an
+assembly collision check, or vice versa.
 
 ## What the tool reports
 
 | Signal | Meaning |
 |--------|---------|
-| **Overlap / interference volume** | Exact volumetric intersection between solids after broad-phase culling. Non-zero ⇒ bodies occupy the same space at the solved pose. |
+| **Overlap / collision volume** | Exact volumetric intersection between solids after broad-phase culling. Non-zero ⇒ bodies occupy the same space at the solved pose. |
 | **Assembly clearance** | Closest gap between non-overlapping pairs (when reported). Compare to your functional gap, not to a preferred letter/number pair from a standards chart. |
 | **Scope** | Empty `occurrence_ids` ⇒ all **visible** occurrences; otherwise the listed ids only. Optional `clearance_threshold_mm` surfaces near-misses above zero gap. |
 

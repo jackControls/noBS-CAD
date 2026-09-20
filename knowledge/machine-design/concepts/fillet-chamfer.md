@@ -3,9 +3,9 @@ type: Concept
 title: Fillet vs chamfer
 description: When to use fillets versus chamfers for stress, lead-in, printability, and machining — not decoration.
 status: draft
-updated: 2026-09-19
+updated: 2026-09-20
 topics: dfm, modeling, edges
-keywords: fillet, chamfer, break edge, lead-in, stress concentration, corner radius, when to use
+keywords: fillet, chamfer, break edge, lead-in, stress concentration, corner radius, when to use, edge blend
 related_recipes: fillet-basics, mounting-plate, angle-bracket
 sources: nwtc-guns-dfm, doe-3d
 ---
@@ -44,13 +44,27 @@ checklists (public domain). Confirm with your shop or print profile.
 | **FDM** | Large horizontal fillets can force supports or droop; chamfers often print cleaner on upper edges. |
 | **Sheet** | Bend radii ≠ decorative fillets; keep features clear of bend lines. |
 
-## CAD habits
+## CAD habits checklist
 
 1. Decide **load path and assembly lead-in** before clicking fillet everywhere.
 2. Match fillet radius to tool or mold capability — tiny cosmetic fillets that
    the process cannot hold are noise.
 3. Do not use a fillet to hide an undersized wall or an impossible undercut.
-4. Recipe: `fillet-basics` on a blank document for the product fillet op.
+4. Prefer **edit history** (`solid_edit_fillet` / `solid_edit_chamfer`) over
+   delete-rebuild — see
+   [edit history not delete-rebuild](../../concepts/edit-history-not-delete-rebuild.md).
+5. Recipe: `fillet-basics` on a blank document for the product fillet op.
+
+## Anti-patterns
+
+- Filleting every edge “because SolidWorks tutorials do”
+- Chamfering a stress-critical internal corner that needed a radius
+- Changing radius by deleting the feature and remodeling the solid from scratch
+
+## Sibling concepts
+
+Stress vs lead-in is the decision; process decides the geometry. For AM upper edges prefer chamfer until a coupon proves a fillet.
 
 Related: [DFM overview](dfm-overview.md),
-[agent MCP workflow](../../concepts/agent-mcp-workflow.md).
+[agent MCP workflow](../../concepts/agent-mcp-workflow.md),
+[inspect between mutates](../../concepts/inspect-between-mutates.md).

@@ -3,9 +3,9 @@ type: Concept
 title: DFM process guidelines
 description: Starting manufacturability heuristics by process family; confirm with your shop.
 status: draft
-updated: 2026-09-19
-topics: dfm, cnc, sheet-metal, casting, injection-molding, welding, edm
-keywords: draft, wall thickness, bend radius, tool access, fillet, pocket depth, additive, FDM, anisotropy
+updated: 2026-09-20
+topics: dfm, cnc, sheet-metal, casting, injection-molding, welding, edm, additive
+keywords: draft angle, wall thickness, bend radius, tool access, fillet, pocket depth, additive, FDM, anisotropy, manufacturability heuristics
 related_recipes: mounting-plate, angle-bracket, fillet-basics
 sources: nwtc-guns-dfm
 ---
@@ -20,7 +20,7 @@ your process, material, and vendor.
 
 ## Injection molding
 
-Aim for even walls; avoid sudden thick-to-thin jumps. Add draft on walls
+Aim for even walls; avoid sudden thick-to-thin jumps. Add **draft** on walls
 parallel to pull. Prefer ribs and supported bosses over massive sections.
 Round sharp corners; put gates and parting lines where cosmetics matter least.
 
@@ -56,7 +56,24 @@ tolerances; prefer near-net blanks over hogging air.
 Orientation, supports, anisotropy, and hole shrinkage dominate. Use
 [fit coupons](fits-clearances.md) before locking mating geometry
 (`turbine-fit-coupons`, `d-screw-vise-fit`). Deepen with
-[AM thin walls and print orientation](am-thin-walls.md) and
-[AM snap-fits](am-snap-fit.md). Edge breaks: [fillet vs chamfer](fillet-chamfer.md).
+[AM thin walls and print orientation](am-thin-walls.md),
+[AM snap-fits](am-snap-fit.md),
+[ribs / gussets / draft](am-ribs-gussets-draft.md),
+[supports / overhangs](am-supports-overhangs.md).
+Edge breaks: [fillet vs chamfer](fillet-chamfer.md).
+
+## Cross-process checklist
+
+1. **Draft / pull / layer normal** named for the process.
+2. **Internal corners** have a real tool or print radius.
+3. **Walls** even enough for the process (mold shrink / FDM beads).
+4. **Tool / support access** sketched before detail.
+5. **Secondary ops** listed (tap, ream, face, coat) — or designed out.
+6. **Critical fits** couponed ([fit coupons map](fit-coupons-recipes-map.md)).
+
+## Agent search tip
+
+Query **draft angle**, **bend radius**, or **pocket depth** here first;
+use DFAM pages when the answer is print-orientation-specific.
 
 Related: [DFM overview](dfm-overview.md), [taxonomy](../taxonomy.md).

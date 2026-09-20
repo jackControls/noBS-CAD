@@ -95,13 +95,40 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Validate before show (shot pack) | **seeded** | `concepts.validate-before-show` — [validate-before-show](../concepts/validate-before-show.md) |
 | Adversarial mesh / wall probe audit | **seeded** | `concepts.adversarial-mesh-audit` — [adversarial-mesh-audit](../concepts/adversarial-mesh-audit.md) |
 
+
+## H. CAD program / mechanical agent ops
+
+| Topic | Status | Id / title |
+|-------|--------|------------|
+| Datum / CS / sketch plane choice (MCP) | **seeded** | `machine-design.concepts.datum-sketch-plane-choice` — [datum-sketch-plane-choice](concepts/datum-sketch-plane-choice.md) |
+| Inspect between mutates / `solid_scene` | **seeded** | `concepts.inspect-between-mutates` — [inspect-between-mutates](../concepts/inspect-between-mutates.md) |
+| Hole feature vs modeled / patterns | **seeded** | `machine-design.concepts.hole-wizard-vs-modeled` — [hole-wizard-vs-modeled](concepts/hole-wizard-vs-modeled.md) |
+| Edit history not delete-rebuild | **seeded** | `concepts.edit-history-not-delete-rebuild` — [edit-history-not-delete-rebuild](../concepts/edit-history-not-delete-rebuild.md) |
+| Export preflight / 3MF vs STL | **seeded** | `concepts.export-preflight-3mf-stl` — [export-preflight-3mf-stl](../concepts/export-preflight-3mf-stl.md) (pair with [export-print](../concepts/export-print.md), [adversarial-mesh-audit](../concepts/adversarial-mesh-audit.md)) |
+| Unit systems / mm / formula dims | **seeded** | `concepts.unit-systems-mm-default` — [unit-systems-mm-default](../concepts/unit-systems-mm-default.md) |
+
+## Still thin / planned (honest)
+
+| Gap | Notes |
+|-----|-------|
+| Drawing vs MBD / PMI walkthrough | still **planned** |
+| Inspection / metrology bridge | still **planned** |
+| Shafts, keys, retaining rings | still **planned** |
+| Springs / couplings (beyond lid seal) | still **planned** |
+| Power screws / lead screws distill | vise recipe exists; concept **planned** |
+| Linkages / gears / cams / belts mobility | gears product page exists; mechanisms **planned** |
+| Materials allowables tables | **planned** (no MatWeb); vocabulary seeded |
+| Full NASA fastener preload distill | overview + hole/insert pages seeded; deep sizing **TODO** |
+| MCP `prompts` capability | product gap — pages + skills only ([HUMAN_HELP](../../docs/agentic/HUMAN_HELP.md)) |
+
 ## `cad_help` topics labels (useful seeds)
 
 Frontmatter `topics:` on Concept pages feed `cad_help` **topics**. Expect labels
 such as: `dfam`, `am`, `fdm`, `fasteners`, `joints`, `hardware`, `enclosures`,
 `cables`, `seals`, `threads`, `fits`, `gdt`, `locators`, `print`, `snap-fit`,
 `recipes`, `manufacturing`, `research`, `validation`, `assembly`, `mcp`, `bearings`,
-`mechanisms`, `dfa`. Use `topics` then `search` with those words; `get` with an id
+`mechanisms`, `dfa`, `datums`, `sketch`, `holes`, `history`, `export`, `units`,
+`modeling`, `workflow`. Use `topics` then `search` with those words; `get` with an id
 from the tables above.
 
 ## Live examples

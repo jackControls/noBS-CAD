@@ -796,6 +796,30 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/machine-design/concepts/fit-coupons-recipes-map.md"),
     },
     KnowledgeFile {
+        path: "machine-design/concepts/datum-sketch-plane-choice.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/datum-sketch-plane-choice.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/hole-wizard-vs-modeled.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/hole-wizard-vs-modeled.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/inspect-between-mutates.md",
+        text: include_str!("../../../knowledge/concepts/inspect-between-mutates.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/edit-history-not-delete-rebuild.md",
+        text: include_str!("../../../knowledge/concepts/edit-history-not-delete-rebuild.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/export-preflight-3mf-stl.md",
+        text: include_str!("../../../knowledge/concepts/export-preflight-3mf-stl.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/unit-systems-mm-default.md",
+        text: include_str!("../../../knowledge/concepts/unit-systems-mm-default.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/taxonomy.md",
         text: include_str!("../../../knowledge/machine-design/taxonomy.md"),
     },
@@ -1385,10 +1409,137 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn interference_fit_hits_fits_not_only_assembly_check() {
+        let store = HelpStore::bundled();
+        for query in [
+            "interference fit shaft hole",
+            "clearance fit running sliding",
+            "press fit class allowance",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("fits-clearances")),
+                "expected fits-clearances for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+            if query.starts_with("interference fit") {
+                assert!(
+                    hits[0].id.contains("fits-clearances"),
+                    "fits-clearances should top interference fit query, got {:?}",
+                    hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn datum_sketch_plane_mcp_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "datum sketch plane coordinate system MCP",
+            "sketch plane choice origin XY",
+            "datum_plane_create offset plane",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("datum-sketch-plane-choice")),
+                "expected datum-sketch-plane-choice for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn inspect_between_mutates_solid_scene_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "inspect between mutates solid_scene",
+            "solid_scene discipline between writes",
+            "blind mutate feature errors inspect",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("inspect-between-mutates")),
+                "expected inspect-between-mutates for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn hole_wizard_vs_modeled_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "hole wizard vs modeled hole",
+            "solid_edit_hole hole pattern bolt circle",
+            "simple hole pattern clearance positions",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("hole-wizard-vs-modeled")),
+                "expected hole-wizard-vs-modeled for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn edit_history_not_delete_rebuild_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "edit history not delete-rebuild",
+            "solid_edit_fillet prefer edit feature",
+            "fillet-basics edit extrude not remodel",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("edit-history-not-delete-rebuild")),
+                "expected edit-history-not-delete-rebuild for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn export_preflight_3mf_vs_stl_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "export preflight 3MF vs STL",
+            "3MF vs STL for AM print package",
+            "mesh preflight prefer 3MF",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("export-preflight-3mf-stl")),
+                "expected export-preflight-3mf-stl for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn unit_systems_mm_formula_dims_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "unit systems mm default formula dims",
+            "millimetre project units inch mix",
+            "formula dimension pitfalls parametric",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("unit-systems-mm-default")),
+                "expected unit-systems-mm-default for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
     #[test]
     fn check_corpus_ok() {
         let n = check_corpus().expect("corpus check");
-        assert!(n >= 42);
+        assert!(n >= 48);
     }
 
     #[test]
@@ -1420,6 +1571,12 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-assembly-join-choice.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-warpage-cooling-flatness.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/fit-coupons-recipes-map.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/datum-sketch-plane-choice.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/hole-wizard-vs-modeled.md"));
+        assert!(files.iter().any(|f| f.path == "concepts/inspect-between-mutates.md"));
+        assert!(files.iter().any(|f| f.path == "concepts/edit-history-not-delete-rebuild.md"));
+        assert!(files.iter().any(|f| f.path == "concepts/export-preflight-3mf-stl.md"));
+        assert!(files.iter().any(|f| f.path == "concepts/unit-systems-mm-default.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));
         assert!(knowledge_file_by_uri("nbcad://knowledge/../etc/passwd").is_none());

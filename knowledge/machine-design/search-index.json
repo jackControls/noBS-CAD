@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated": "2026-09-20",
-  "count": 28,
+  "count": 30,
   "entries": [
     {
       "id": "machine-design.concepts.alignment-nubs-pins",
@@ -602,6 +602,41 @@
       "snippet": "CAD threads are often cosmetic: a helix or textured face that communicates “this is threaded” without defining the manufactured hole. Agents who treat the helix major as a drill size, or who boolean-subtract a pretty th…"
     },
     {
+      "id": "machine-design.concepts.datum-sketch-plane-choice",
+      "path": "knowledge/machine-design/concepts/datum-sketch-plane-choice.md",
+      "title": "Datum, coordinate system, and sketch plane choice (MCP)",
+      "description": "Pick origin planes, datum planes, and sketch planes deliberately for one-step MCP modeling — avoid wrong-face sketches and flipped extrudes.",
+      "status": "draft",
+      "topics": [
+        "modeling",
+        "mcp",
+        "gdt",
+        "datums",
+        "sketch"
+      ],
+      "keywords": [
+        "datum plane",
+        "sketch plane",
+        "coordinate system",
+        "origin plane",
+        "XY YZ ZX",
+        "plane choice",
+        "MCP one-step",
+        "datum_plane_create",
+        "sketch on face",
+        "normal direction"
+      ],
+      "related_recipes": [
+        "fillet-basics",
+        "mounting-plate",
+        "angle-bracket"
+      ],
+      "sources": [
+        "nist-gdt-1"
+      ],
+      "snippet": "Agents fail one-step models when the sketch plane is wrong: profile on the wrong face, extrude flipped into solid, or a “datum” that is really a floating construction plane with no story. Choose coordinate frame → plane…"
+    },
+    {
       "id": "machine-design.concepts.dfm-overview",
       "path": "knowledge/machine-design/concepts/dfm-overview.md",
       "title": "DFM overview",
@@ -618,7 +653,9 @@
         "DFMA",
         "process selection",
         "tolerance cost",
-        "standard parts"
+        "standard parts",
+        "manufacturability",
+        "buy before invent"
       ],
       "related_recipes": [
         "turbine-fit-coupons",
@@ -646,10 +683,11 @@
         "casting",
         "injection-molding",
         "welding",
-        "edm"
+        "edm",
+        "additive"
       ],
       "keywords": [
-        "draft",
+        "draft angle",
         "wall thickness",
         "bend radius",
         "tool access",
@@ -657,7 +695,8 @@
         "pocket depth",
         "additive",
         "FDM",
-        "anisotropy"
+        "anisotropy",
+        "manufacturability heuristics"
       ],
       "related_recipes": [
         "mounting-plate",
@@ -724,11 +763,15 @@
         "locking",
         "NASA RP-1228",
         "screw joint",
-        "engagement"
+        "engagement",
+        "grip length",
+        "purchased hardware",
+        "BOM fastener"
       ],
       "related_recipes": [
         "d-screw-vise",
-        "garden-bench"
+        "garden-bench",
+        "mounting-plate"
       ],
       "sources": [
         "nasa-fastener"
@@ -753,7 +796,8 @@
         "lead-in",
         "stress concentration",
         "corner radius",
-        "when to use"
+        "when to use",
+        "edge blend"
       ],
       "related_recipes": [
         "fillet-basics",
@@ -812,22 +856,28 @@
     {
       "id": "machine-design.concepts.fits-clearances",
       "path": "knowledge/machine-design/concepts/fits-clearances.md",
-      "title": "Fits and clearances",
-      "description": "Clearance, transition, and interference fits as design intent; link-out for preferred-fit charts.",
+      "title": "Fits and clearances — clearance, transition, and interference fits",
+      "description": "Clearance fit, transition fit, and interference fit (press fit) as hole/shaft design intent; distinct from assembly interference checks.",
       "status": "draft",
       "topics": [
         "fits",
         "gdt",
-        "manufacturing"
+        "manufacturing",
+        "clearances"
       ],
       "keywords": [
-        "fit",
-        "clearance",
-        "interference",
-        "transition",
+        "clearance fit",
+        "transition fit",
+        "interference fit",
+        "press fit",
+        "running fit",
+        "locational fit",
+        "fit class",
         "allowance",
-        "radial",
-        "diametral",
+        "radial clearance",
+        "diametral clearance",
+        "shaft hole fit",
+        "hole basis",
         "coupon"
       ],
       "related_recipes": [
@@ -839,7 +889,7 @@
         "iso-286",
         "asme-b4"
       ],
-      "snippet": "A fit is the designed relationship between two mating features of size (typically hole and shaft). Choose it from function, process capability, and whether the joint should slide, locate, or press. Teaching rewrite info…"
+      "snippet": "A fit is the designed relationship between two mating features of size (typically hole and shaft). Choose a fit class from function, process capability, and whether the joint should slide, locate, or press. This page is…"
     },
     {
       "id": "machine-design.concepts.gdt-intro",
@@ -876,6 +926,42 @@
         "iso-gps"
       ],
       "snippet": "Manufacturing is imprecise. A CAD solid is exact; a machined or printed part is not. Geometric dimensioning and tolerancing (GD&T) states which variation is allowed, relative to datums, so design, make, and inspect shar…"
+    },
+    {
+      "id": "machine-design.concepts.hole-wizard-vs-modeled",
+      "path": "knowledge/machine-design/concepts/hole-wizard-vs-modeled.md",
+      "title": "Hole wizard vs modeled hole and simple patterns",
+      "description": "Prefer solid hole features (roles, positions, threads) over sketch-circle boolean subtracts; pattern positions deliberately.",
+      "status": "draft",
+      "topics": [
+        "modeling",
+        "fasteners",
+        "holes",
+        "mcp",
+        "dfm"
+      ],
+      "keywords": [
+        "hole wizard",
+        "modeled hole",
+        "simple hole",
+        "hole pattern",
+        "solid_edit_hole",
+        "solid_hole_definitions",
+        "sketch circle subtract",
+        "clearance hole pattern",
+        "bolt circle",
+        "PCD"
+      ],
+      "related_recipes": [
+        "mounting-plate",
+        "d-screw-vise",
+        "garden-bench"
+      ],
+      "sources": [
+        "nasa-fastener",
+        "nwtc-guns-dfm"
+      ],
+      "snippet": "“Hole wizard” here means the product hole feature path (solidhole / solidedithole) with explicit roles and positions — not a SolidWorks brand feature. Prefer it over sketching circles and boolean-subtracting cylinders f…"
     },
     {
       "id": "machine-design.concepts.locating-scheme-dof",
@@ -917,10 +1003,12 @@
       "id": "machine-design.concepts.materials-vocabulary",
       "path": "knowledge/machine-design/concepts/materials-vocabulary.md",
       "title": "Materials vocabulary",
-      "description": "Stub — property vocabulary for CAD; not an allowables database.",
+      "description": "Property vocabulary for CAD-time talk — modulus, yield, fatigue, CTE — not certified allowables or MatWeb scrapes.",
       "status": "draft",
       "topics": [
-        "materials"
+        "materials",
+        "dfm",
+        "manufacturing"
       ],
       "keywords": [
         "modulus",
@@ -929,13 +1017,23 @@
         "CTE",
         "density",
         "alloy",
-        "polymer"
+        "polymer",
+        "Sy",
+        "Sut",
+        "hardness",
+        "endurance",
+        "corrosion",
+        "allowables",
+        "filament"
       ],
-      "related_recipes": [],
+      "related_recipes": [
+        "turbine-fit-coupons",
+        "garden-bench"
+      ],
       "sources": [
         "kittycad-materials"
       ],
-      "snippet": "Pick materials with properties and process, not only a viewport color. Filament appearance in the manufacturing catalog is not an engineering allowables table. Useful symbols (SI primary): - E — elastic modulus (stiffne…"
+      "snippet": "Defines words for CAD-time decisions — not certified allowables. Materials Project is crystalline DFT data, not shop steel charts. Prefer KittyCAD JSON as a pattern only (kittycad-materials). Filament appearance in the …"
     },
     {
       "id": "machine-design.concepts.technic-envelope",

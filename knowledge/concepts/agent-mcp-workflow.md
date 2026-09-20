@@ -3,7 +3,7 @@ type: Concept
 title: Agent MCP workflow
 description: Tenacity and local help-first doctrine for MCP agents driving noBS CAD.
 status: draft
-updated: 2026-09-19
+updated: 2026-09-20
 topics: mcp, agents, workflow, help
 keywords: cad_help, tenacity, soft focus, list_all_tools, inspect, blank document, recipes, examples
 related_recipes: fillet-basics, mounting-plate, angle-bracket
@@ -44,7 +44,7 @@ dumping pages.
 
 - Default disclosure is **dynamic**; soft packs expire.
 - Inspect between mutates: `solid_scene` / `cad_document` / sketch status before
-  the next write.
+  the next write — see [inspect between mutates](inspect-between-mutates.md).
 - Prefer blank-document scripts (`cad_interface` action `script` with a recipe
   id or JSONC source) over hand-rolling every call for known lessons.
 

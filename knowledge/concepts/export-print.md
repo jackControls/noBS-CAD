@@ -3,7 +3,10 @@ type: Concept
 title: Export and print
 description: CAD interchange, mesh print export, preflight and physical qualification boundaries.
 status: stable
-updated: 2026-09-11
+updated: 2026-09-20
+topics: export, print, am
+keywords: STEP, 3MF, STL, interchange
+related_recipes: turbine-fit-coupons
 ---
 
 # Export and print
@@ -23,7 +26,8 @@ Keep `.nbcad` for editable project history and STEP for CAD interchange. Prefer
 slicer interpretation. A manifold mesh, material name or successful preflight
 does not validate strength, support strategy, fit or manufacturing settings.
 Qualify mating parts with process-specific samples; see
-[additive workholding](additive-workholding.md).
+[additive workholding](additive-workholding.md). Agent checklist:
+[export preflight 3MF vs STL](export-preflight-3mf-stl.md).
 
 Older release snapshots can predate these exports. Read the operation catalog
 and export result for the running version rather than assuming every format
