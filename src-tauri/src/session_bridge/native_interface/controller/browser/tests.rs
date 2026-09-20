@@ -2,6 +2,146 @@ use super::*;
 use crate::session_bridge::native_interface::tests::Fixture;
 
 #[test]
+fn face_sketch_origin_cancel_and_revisions_preserve_the_support_contract() {
+    use crate::native_editor::{execute, support, EditorCommand};
+    use nbcad_sketch::FaceSketchOrigin;
+    let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let owner = fixture.owner();
+    for (op, args) in [
+        (
+            "sketch_begin",
+            json!({"plane":{"type":"origin_plane","plane":"xy"}}),
+        ),
+        (
+            "sketch_add_rectangle",
+            json!({"mode":"two_point","p1":{"x":10.,"y":20.},"p2":{"x":40.,"y":60.},"ctrl_held":true}),
+        ),
+        ("sketch_finish", json!({})),
+        (
+            "solid_extrude",
+            json!({"sketch_name":"Sketch1","profile_indices":[0],"extent":{"type":"distance","distance":12.}}),
+        ),
+    ] {
+        fixture
+            .bridge
+            .apply_native_mutation(&fixture.engine, &owner, op, &args, || Ok(()))
+            .unwrap();
+    }
+    let face = fixture.engine.viewport_snapshot().2.bodies[0]
+        .faces
+        .iter()
+        .find(|f| f.plane.is_some_and(|p| p.normal[2] > 0.99))
+        .unwrap()
+        .id;
+    let services = NativeServices {
+        engine: fixture.engine.clone(),
+        bridge: fixture.bridge.clone(),
+    };
+    let mut app = native_viewport::interface_scene_fixture();
+    refresh_native_model(&fixture.engine, app.world_mut(), true).unwrap();
+    worker::install(
+        app.world_mut(),
+        services.clone(),
+        NativeInterfaceHandle::new(|| {}),
+    )
+    .unwrap();
+    let set_face = |world: &mut World| {
+        let (_, _, mut view, _) = native_viewport::interface_view_snapshot(world);
+        view.selected_face_ids = vec![face.0];
+        native_viewport::apply_interface_view(world, &owner.document_id, None, Some(view)).unwrap();
+    };
+    let command = |world: &mut World, c| {
+        execute(
+            world,
+            &fixture.engine,
+            &fixture.bridge,
+            &owner,
+            c,
+            || Ok(()),
+        )
+    };
+    let drain = |world: &mut World| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            if let Some(outcome) = worker::poll(world, &services) {
+                outcome.value.unwrap();
+                if !worker::busy(world) {
+                    break;
+                }
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    };
+    set_face(app.world_mut());
+    let original = fixture.engine.document_snapshot().features;
+    command(
+        app.world_mut(),
+        EditorCommand::Support(support::Command::Start),
+    )
+    .unwrap();
+    assert_eq!(support::modal(app.world()), Some("sketch-origin"));
+    command(app.world_mut(), EditorCommand::Cancel).unwrap();
+    assert!(support::modal(app.world()).is_none());
+    assert_eq!(fixture.engine.document_snapshot().features, original);
+    assert_eq!(
+        native_viewport::interface_view_snapshot(app.world()).2.mode,
+        native_viewport::ViewportMode::Solid
+    );
+    for (origin, expected) in [
+        (FaceSketchOrigin::FaceCenter, [25., 40., 12.]),
+        (FaceSketchOrigin::GlobalOriginProjection, [0., 0., 12.]),
+    ] {
+        set_face(app.world_mut());
+        command(
+            app.world_mut(),
+            EditorCommand::Support(support::Command::Start),
+        )
+        .unwrap();
+        command(
+            app.world_mut(),
+            EditorCommand::Support(support::Command::Origin(origin)),
+        )
+        .unwrap();
+        command(
+            app.world_mut(),
+            EditorCommand::Support(support::Command::Confirm),
+        )
+        .unwrap();
+        drain(app.world_mut());
+        let sketch = crate::native_editor::active(&fixture.engine)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            sketch.plane,
+            nbcad_core::PlaneRef::PlanarFace { face_id: face }
+        );
+        for (actual, expected) in sketch.basis.origin.into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-6, "{sketch:?}");
+        }
+        command(app.world_mut(), EditorCommand::Finish).unwrap();
+        drain(app.world_mut());
+    }
+    set_face(app.world_mut());
+    command(
+        app.world_mut(),
+        EditorCommand::Support(support::Command::Start),
+    )
+    .unwrap();
+    fixture.rename(&owner, "Revised support").unwrap();
+    assert!(command(
+        app.world_mut(),
+        EditorCommand::Support(support::Command::Confirm)
+    )
+    .is_err());
+    assert!(crate::native_editor::active(&fixture.engine)
+        .unwrap()
+        .is_none());
+    assert!(!support::picking(app.world()));
+}
+
+#[test]
 fn finishing_an_existing_sketch_rebuilds_its_solid_without_duplicating_history() {
     use crate::native_editor::{execute, EditorCommand};
     let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();

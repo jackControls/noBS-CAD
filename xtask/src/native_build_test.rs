@@ -29,7 +29,7 @@ fn rib_case(client: &mut Client, out: &std::path::Path) -> Result<Value> {
     );
     let new = control(client, "New document", None)?;
     client.call("cad_attach", json!({"session_id":new["active_session_id"]}))?;
-    control(client, "Sketch on XY", None)?;
+    crate::native_fixture::begin_sketch(client, "XY")?;
     control(client, "Line", None)?;
     click(client, [-20., 0.], false)?;
     click(client, [20., 0.], false)?;
@@ -117,13 +117,13 @@ fn path_case(client: &mut Client, out: &std::path::Path, kind: &str) -> Result<V
         .as_str()
         .context("New document session missing")?;
     client.call("cad_attach", json!({"session_id":session}))?;
-    control(client, "Sketch on XY", None)?;
+    crate::native_fixture::begin_sketch(client, "XY")?;
     control(client, "Rectangle", None)?;
     click(client, [-8., -6.], false)?;
     click(client, [8., 6.], false)?;
     control(client, "Finish sketch", None)?;
     if kind == "Sweep" {
-        control(client, "Sketch on XZ", None)?;
+        crate::native_fixture::begin_sketch(client, "XZ")?;
         control(client, "Line", None)?;
         for world in [[0., 0., 0.], [0., 0., 30.]] {
             ui(
@@ -133,8 +133,8 @@ fn path_case(client: &mut Client, out: &std::path::Path, kind: &str) -> Result<V
         }
         control(client, "Finish sketch", None)?;
     } else {
-        // Datum editing has its own parity work. Seed this support through the
-        // real MCP/engine contract; all Loft selections and edits below use UI.
+        // Datum creation still has its own parity work. Create the datum with
+        // MCP, then select that support through native Create Sketch/browser.
         let datum=client.call("construction_plane_offset",json!({"name":"Upper section","reference":{"type":"origin_plane","plane":"xy"},"distance":30.}))?;
         let datum_id = datum["planes"]
             .as_array()
@@ -142,10 +142,12 @@ fn path_case(client: &mut Client, out: &std::path::Path, kind: &str) -> Result<V
             .context("New datum missing")?["datum_id"]
             .clone();
         ensure!(datum_id.is_number(), "Datum id missing: {datum}");
-        client.call(
-            "sketch_begin",
-            json!({"type":"datum_plane","datum_id":datum_id}),
-        )?;
+        control(client, "Create Sketch", None)?;
+        crate::native_fixture::browser_select(client, "Construction", "Upper section")?;
+        ensure!(
+            crate::native_fixture::sketch(client)?["plane"]["datum_id"] == datum_id,
+            "Loft sketch used the wrong support"
+        );
         client.call("sketch_add_rectangle",json!({"mode":"two_point","p1":{"x":-5.,"y":-4.},"p2":{"x":5.,"y":4.},"ctrl_held":true}))?;
         client.call("sketch_finish", json!({}))?;
     }
@@ -246,7 +248,7 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
         capture,
         report,
     } = start(args, "native-build")?;
-    control(&mut client, "Sketch on XY", None)?;
+    crate::native_fixture::begin_sketch(&mut client, "XY")?;
     control(&mut client, "Rectangle", None)?;
     click(&mut client, [10., 0.], false)?;
     click(&mut client, [30., 20.], false)?;

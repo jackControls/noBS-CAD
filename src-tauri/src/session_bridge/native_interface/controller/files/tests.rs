@@ -40,6 +40,93 @@ fn path(name: &str) -> PathBuf {
 }
 
 #[test]
+fn new_documents_reset_the_camera_and_tabs_restore_their_own_views() {
+    let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let (mut app, services, handle) = setup(&fixture);
+    let first = fixture.owner();
+    refresh_native_model(&fixture.engine, app.world_mut(), true).unwrap();
+    let camera = |world: &World| native_viewport::interface_view_snapshot(world).1;
+    let first_view = native_viewport::ViewportCamera {
+        position: [20., 30., 40.],
+        target: [1., 2., 3.],
+        ..default()
+    };
+    native_viewport::apply_interface_view(
+        app.world_mut(),
+        &first.document_id,
+        Some(first_view),
+        None,
+    )
+    .unwrap();
+    execute(
+        app.world_mut(),
+        &handle,
+        &services,
+        &first,
+        FileCommand::New,
+    )
+    .unwrap();
+    let result = drain(app.world_mut(), &services).unwrap();
+    assert!(result["presentation_error"].is_null(), "{result}");
+    let second = fixture.owner();
+    assert_eq!(camera(app.world()).target, [0.; 3]);
+    assert!(
+        (Vec3::from_array(camera(app.world()).position).length()
+            - Vec3::from_array(native_viewport::ViewportCamera::default().position).length())
+        .abs()
+            < 1e-4
+    );
+    let second_view = native_viewport::ViewportCamera {
+        position: [-100., 20., 40.],
+        target: [10., 0., 5.],
+        ..default()
+    };
+    native_viewport::apply_interface_view(
+        app.world_mut(),
+        &second.document_id,
+        Some(second_view),
+        None,
+    )
+    .unwrap();
+    execute(
+        app.world_mut(),
+        &handle,
+        &services,
+        &second,
+        FileCommand::Activate(first.clone()),
+    )
+    .unwrap();
+    drain(app.world_mut(), &services).unwrap();
+    assert_eq!(camera(app.world()), first_view);
+    execute(
+        app.world_mut(),
+        &handle,
+        &services,
+        &first,
+        FileCommand::Activate(second.clone()),
+    )
+    .unwrap();
+    drain(app.world_mut(), &services).unwrap();
+    assert_eq!(camera(app.world()), second_view);
+    execute(
+        app.world_mut(),
+        &handle,
+        &services,
+        &second,
+        FileCommand::Close,
+    )
+    .unwrap();
+    drain(app.world_mut(), &services).unwrap();
+    assert_eq!(camera(app.world()), first_view);
+    assert!(!app
+        .world()
+        .resource::<Files>()
+        .views
+        .contains_key(&second.document_id));
+}
+
+#[test]
 fn save_open_tabs_and_exit_protect_inactive_edits_and_recognize_saved_checkpoints() {
     let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
     let fixture = Fixture::new();

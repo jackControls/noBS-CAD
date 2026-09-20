@@ -59,6 +59,69 @@ pub(super) struct Files {
     next_token: u64,
     dialog: Option<Dialog>,
     picker: Option<Picker>,
+    views: HashMap<String, (u64, native_viewport::ViewportCamera)>,
+}
+
+fn remember_view(world: &mut World, owner: &DocumentContext) {
+    let (document, camera, _, _) = native_viewport::interface_view_snapshot(world);
+    if document == owner.document_id {
+        world
+            .resource_mut::<Files>()
+            .views
+            .insert(document, (owner.epoch, camera));
+    }
+}
+
+fn finish_document_transition(
+    world: &mut World,
+    services: &NativeServices,
+    operation: &str,
+    result: NativeMutationResult,
+) -> Value {
+    let owner = result.context.clone();
+    let mut output = finish_mutation(&services.engine, &services.bridge, world, operation, result);
+    if output["render_error"].is_string() {
+        return output;
+    }
+    let restored = (|| {
+        let live = tabs(world, services, &owner)?;
+        let mut files = world.resource_mut::<Files>();
+        files.views.retain(|document, (epoch, _)| {
+            live.iter()
+                .any(|tab| tab.owner.document_id == *document && tab.owner.epoch == *epoch)
+        });
+        let remembered = files
+            .views
+            .get(&owner.document_id)
+            .filter(|(epoch, _)| *epoch == owner.epoch)
+            .map(|(_, camera)| *camera);
+        drop(files);
+        let (_, _, presentation, size) = native_viewport::interface_view_snapshot(world);
+        let camera = if let Some(camera) = remembered {
+            camera
+        } else {
+            view::fit_camera(
+                world,
+                &model_snapshot(&services.engine),
+                &presentation,
+                native_viewport::ViewportCamera::default(),
+                size,
+                Some(ViewDirection::Isometric),
+            )?
+        };
+        services
+            .bridge
+            .with_native_document_owner(&services.engine, &owner, || {
+                native_viewport::apply_interface_view(world, &owner.document_id, Some(camera), None)
+            })
+    })();
+    if let Err(error) = restored {
+        // The document transition already committed. Report presentation
+        // repair separately rather than inviting a duplicate Open/New.
+        output["presentation_pending"] = json!(true);
+        output["presentation_error"] = json!(error);
+    }
+    output
 }
 
 pub(super) fn initialize(world: &mut World, workspace: Arc<Mutex<DocumentWorkspace>>) {
@@ -121,7 +184,7 @@ fn require_idle_model(world: &World) -> Result<(), String> {
         return Err("Wait for the current operation to finish".into());
     }
     if build::panel(world).is_some() {
-        return Err("Apply or cancel Extrude before changing files".into());
+        return Err("Apply or cancel the feature before changing files".into());
     }
     let (_, _, view, _) = native_viewport::interface_view_snapshot(world);
     if view.mode == native_viewport::ViewportMode::Sketch {
@@ -359,6 +422,7 @@ fn perform_intent(
         }
         Intent::Close => transition(world, receipt, None, Some(discard)),
         Intent::Open(path) => {
+            remember_view(world, &receipt.owner);
             let workspace = world.resource::<Files>().workspace.clone();
             worker::enqueue_transaction(
                 world,
@@ -379,10 +443,9 @@ fn perform_intent(
                 |world, services, result| {
                     let result = result?;
                     world.resource_mut::<Files>().dialog = None;
-                    Ok(finish_mutation(
-                        &services.engine,
-                        &services.bridge,
+                    Ok(finish_document_transition(
                         world,
+                        services,
                         "open_project",
                         result,
                     ))
@@ -429,6 +492,7 @@ fn save_all_and_exit(
     }
     let target = next.owner.clone();
     let receipt = receipt.clone();
+    remember_view(world, &receipt.owner);
     let workspace = world.resource::<Files>().workspace.clone();
     worker::enqueue_transaction(
         world,
@@ -456,13 +520,8 @@ fn save_all_and_exit(
                 owner: result.context.clone(),
                 revision: result.engine_revision,
             };
-            let presentation = finish_mutation(
-                &services.engine,
-                &services.bridge,
-                world,
-                "save_all_activate",
-                result,
-            );
+            let presentation =
+                finish_document_transition(world, services, "save_all_activate", result);
             if presentation["render_error"].is_string() {
                 return Ok(presentation);
             }
@@ -477,6 +536,7 @@ fn transition(
     target: Option<DocumentContext>,
     close: Option<bool>,
 ) -> Result<Value, String> {
+    remember_view(world, &receipt.owner);
     let workspace = world.resource::<Files>().workspace.clone();
     worker::enqueue_transaction(
         world,
@@ -515,10 +575,9 @@ fn transition(
         |world, services, result| {
             let result = result?;
             world.resource_mut::<Files>().dialog = None;
-            Ok(finish_mutation(
-                &services.engine,
-                &services.bridge,
+            Ok(finish_document_transition(
                 world,
+                services,
                 "document_tab",
                 result,
             ))

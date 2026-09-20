@@ -36,6 +36,26 @@ pub(super) fn control(client: &mut Client, label: &str, value: Option<&str>) -> 
 pub(super) fn sketch(client: &mut Client) -> Result<Value> {
     client.call("sketch_active", json!({}))
 }
+pub(super) fn begin_sketch(client: &mut Client, plane: &str) -> Result<Value> {
+    control(client, "Create Sketch", None)?;
+    browser_select(client, "Origin", plane)
+}
+pub(super) fn browser_select(client: &mut Client, folder: &str, name: &str) -> Result<Value> {
+    let mut inspected = ui(client, json!({"action":"inspect"}))?;
+    let matches = |c: &&Value| {
+        c["label"] == name
+            && c["surface"] == "solid/selection"
+            && c["role"] == "treeitem"
+            && c["disabled"] == false
+    };
+    if controls(&inspected).filter(matches).next().is_none() {
+        control(client, &format!("Expand {folder}"), None)?;
+        inspected = ui(client, json!({"action":"inspect"}))?;
+    }
+    let found: Vec<_> = controls(&inspected).filter(matches).collect();
+    ensure!(found.len() == 1, "Expected one visible browser row {name}");
+    ui(client, json!({"action":"click","target":found[0]["id"]}))
+}
 pub(super) fn click(client: &mut Client, point: [f64; 2], shift: bool) -> Result<Value> {
     ui(
         client,

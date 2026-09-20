@@ -763,6 +763,7 @@ pub(crate) fn reduce_control_input(
                     "file-menu" | "file-dialog" => files::escape(world),
                     "history-menu" | "delete-feature" => history::escape(world),
                     "sketch-menu" => crate::native_editor::panel::escape(world),
+                    "sketch-origin" => return crate::native_editor::execute(world,engine,bridge,&action.context,crate::native_editor::EditorCommand::Cancel,||handle.validate_action(action)),
                     "close-document" => return Ok(json!({"close_decision":"cancel"})),
                     _ => return Err("This dialog does not handle Escape".into()),
                 }
@@ -779,9 +780,7 @@ pub(crate) fn reduce_control_input(
                     engine,
                     bridge,
                     &action.context,
-                    crate::native_editor::EditorCommand::Interaction(
-                        crate::native_editor::InteractionCommand::Select,
-                    ),
+                    crate::native_editor::EditorCommand::Cancel,
                     || handle.validate_action(action),
                 );
             }
@@ -1519,7 +1518,7 @@ fn synchronize(
             text: None,
         }))
         .chain(
-            crate::native_editor::panel::modal(world).map(|name| Surface {
+            crate::native_editor::panel::modal(world).or_else(|| crate::native_editor::support::modal(world)).map(|name| Surface {
                 name: name.into(),
                 text: None,
             }),
@@ -1531,6 +1530,7 @@ fn synchronize(
             files::modal(world)
                 .or_else(|| history::modal(world))
                 .or_else(|| crate::native_editor::panel::modal(world))
+                .or_else(|| crate::native_editor::support::modal(world))
                 .into_iter()
                 .map(str::to_owned)
                 .collect()

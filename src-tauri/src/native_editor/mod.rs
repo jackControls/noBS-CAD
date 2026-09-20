@@ -3,6 +3,7 @@
 
 mod annotations;
 mod dynamic;
+pub(crate) mod support;
 pub(crate) use dynamic::SizeField;
 mod modify_preview;
 mod palette;
@@ -46,6 +47,7 @@ use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum EditorCommand {
+    Support(support::Command),
     Begin(PlaneRef),
     Edit(String),
     Finish,
@@ -74,6 +76,7 @@ struct Editor {
     error: String,
     interaction: interaction::Interaction,
     form_serial: u64,
+    support: support::Picker,
 }
 
 fn initialize(world: &mut World) {
@@ -121,6 +124,7 @@ fn synchronize_stamp(editor: &mut Editor, next: Stamp) -> bool {
     editor.press = None;
     editor.error.clear();
     editor.interaction = Default::default();
+    editor.support = Default::default();
     editor.stamp = Some(next);
     true
 }
@@ -129,6 +133,8 @@ pub(crate) fn status(world: &World) -> Option<String> {
     let editor = world.get_resource::<Editor>()?;
     if !editor.error.is_empty() {
         Some(editor.error.clone())
+    } else if editor.support.active {
+        Some("Select a plane or planar face (Esc to cancel)".into())
     } else if editor.draft.tool.is_some() {
         Some(editor.draft.instruction().into())
     } else {
@@ -248,6 +254,7 @@ pub(crate) fn execute(
     world.resource_scope(|world, mut editor: Mut<Editor>| {
         synchronize_stamp(&mut editor, next);
         match command {
+            EditorCommand::Support(command) => support::execute(world, engine, bridge, owner, &mut editor, command, validate),
             EditorCommand::Edit(name) => {
                 if editor
                     .stamp
@@ -319,6 +326,10 @@ pub(crate) fn execute(
                 editor.draft.escape();
                 editor.error.clear();
                 editor.press = None;
+                editor.support = Default::default();
+                support::present(world, owner, &editor.support)?;
+                editor.interaction = Default::default();
+                interaction::present(world, owner, &editor.interaction)?;
                 clear_preview(world, engine, bridge, owner)?;
                 Ok(json!({"active_tool":editor.draft.tool.map(CreateTool::label)}))
             }
@@ -412,6 +423,7 @@ fn queue_mutation(
                         Completion::Begin | Completion::Finish => {
                             editor.draft.select(None);
                             editor.interaction = Default::default();
+                            editor.support = Default::default();
                             Ok(())
                         }
                         Completion::Modify => {
@@ -437,6 +449,7 @@ fn queue_mutation(
                     accepted?;
                     editor.stamp = Some(stamp(engine, bridge, &owner, None)?);
                     interaction::present(world,&owner,&editor.interaction)?;
+                    support::present(world, &owner, &editor.support)?;
                     if matches!(kind, Completion::Begin) {
                         look_at_sketch(world, engine, bridge, &owner)?;
                     }
@@ -534,6 +547,17 @@ pub(crate) fn process_one(
             WindowEvent::CursorLeft(_) => {
                 editor.press = None;
                 clear_preview(world, &services.engine, &services.bridge, &frame.context)?;
+                support::hover(world, &frame.context, &mut editor.support, None)?;
+            }
+            WindowEvent::CursorMoved(moved) if editor.support.active => {
+                if let Some(canvas) = frame.canvases.iter().find(|c| c.name == "viewport") {
+                    let p = moved.position;
+                    let a = canvas.bounds;
+                    let inside = f64::from(p.x) >= a.x && f64::from(p.x) < a.x+a.width &&
+                        f64::from(p.y) >= a.y && f64::from(p.y) < a.y+a.height && !handle.owns_pointer([f64::from(p.x),f64::from(p.y)]);
+                    support::hover(world, &frame.context, &mut editor.support, inside.then_some([p.x-a.x as f32,p.y-a.y as f32]))?;
+                    result = json!({"handled":true,"hover":inside});
+                }
             }
             WindowEvent::CursorMoved(moved) if editor.draft.tool.is_some() => {
                 let Some(basis) = editor.stamp.as_ref().and_then(|stamp| stamp.basis) else { return Ok(result); };
@@ -575,6 +599,8 @@ pub(crate) fn process_one(
                         interaction::present(world,&frame.context,&editor.interaction)?;
                         editor.error.clear();
                         editor.press = None;
+                        editor.support = Default::default();
+                        support::present(world, &frame.context, &editor.support)?;
                         clear_preview(world, &services.engine, &services.bridge, &frame.context)?;
                         result = json!({"handled":true,"cancelled":true});
                     }
@@ -630,6 +656,10 @@ pub(crate) fn process_one(
                         return interaction::pointer(world,services,&owner,&mut editor,start,cursor,canvas.bounds,event.modifiers.shift,event.modifiers.ctrl);
                     }
                     if start.distance(cursor)>3. {return Ok(result);}
+                    if editor.support.active {
+                        return support::pick(world, services, &owner, &mut editor,
+                            [cursor.x-canvas.bounds.x as f32,cursor.y-canvas.bounds.y as f32]);
+                    }
                     if let Some(value) = crate::session_bridge::native_interface::build::handle_canvas_pick(
                         world, services, &owner,
                         [cursor.x-canvas.bounds.x as f32,cursor.y-canvas.bounds.y as f32],
@@ -708,6 +738,7 @@ pub(crate) fn synchronize_controls(
     let theme = ViewportUiTheme::from_palette(&ViewportPalette::default());
     world.resource_scope(|world, mut editor: Mut<Editor>| {
         synchronize_stamp(&mut editor, next);
+        support::present(world, owner, &editor.support)?;
         interaction::present(world, owner, &editor.interaction)?;
         let rows: Vec<(String, EditorCommand)> =
             if editor.stamp.as_ref().is_some_and(|s| s.sketch.is_some()) {
@@ -757,11 +788,7 @@ pub(crate) fn synchronize_controls(
                 }
                 rows
             } else {
-                PlaneRef::ORIGIN_PLANES
-                    .into_iter()
-                    .zip(["Sketch on XY", "Sketch on XZ", "Sketch on YZ"])
-                    .map(|(plane, label)| (label.into(), EditorCommand::Begin(plane)))
-                    .collect()
+                vec![("Create Sketch".into(), EditorCommand::Support(support::Command::Start))]
             };
         editor.controls.retain(|label, entity| {
             if rows.iter().any(|row| &row.0 == label) {
@@ -818,7 +845,7 @@ pub(crate) fn synchronize_controls(
                 };
                 system.apply(world);
                 let icon = match &command {
-                    EditorCommand::Begin(_) | EditorCommand::Edit(_) => Icon::Sketch,
+                    EditorCommand::Support(_) | EditorCommand::Begin(_) | EditorCommand::Edit(_) => Icon::Sketch,
                     EditorCommand::Finish | EditorCommand::Complete => Icon::Finish,
                     EditorCommand::Cancel => Icon::Cancel,
                     EditorCommand::Palette(_) => Icon::Settings,
@@ -859,11 +886,13 @@ pub(crate) fn synchronize_controls(
             if world.get::<Node>(entity) != Some(&node) {
                 world.entity_mut(entity).insert(node);
             }
+            let build_open = crate::session_bridge::native_interface::build::panel(world).is_some();
             let mut control = world
                 .get_mut::<InterfaceControl>(entity)
                 .ok_or("Sketch control was removed")?;
             control.visible = visible;
             control.selected = match command {
+                EditorCommand::Support(support::Command::Start) => Some(editor.support.active),
                 EditorCommand::Tool(tool) => Some(editor.draft.tool == Some(tool)),
                 EditorCommand::Interaction(InteractionCommand::Modify(tool)) => {
                     Some(editor.interaction.modify == Some(tool))
@@ -880,11 +909,12 @@ pub(crate) fn synchronize_controls(
                 ),
                 _ => None,
             };
-            control.disabled =
-                matches!(command, EditorCommand::Complete) && editor.draft.points.len() < 2;
+            control.disabled = (matches!(command, EditorCommand::Complete) && editor.draft.points.len() < 2)
+                || (matches!(command, EditorCommand::Support(_) | EditorCommand::Begin(_)) && build_open);
             x += width + 2.;
         }
         panel::synchronize(world, camera, &mut editor, area)?;
+        support::synchronize(world, camera, &editor, canvas)?;
         dynamic::synchronize(world,camera,&services.engine,owner,&editor,canvas)?;
         palette::synchronize(world, camera, services, owner, &editor, canvas)?;
         annotations::synchronize(world, camera, services, owner, &editor, canvas)

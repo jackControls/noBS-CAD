@@ -425,6 +425,8 @@ fn reduce_owned(
                 return Err("The rendered design is not current".into());
             }
             let model = snapshot.model(None);
+            #[cfg(feature = "dev-bevy-host")]
+            crate::native_editor::support::cancel(world, owner)?;
             let form = if let (BuildKind::Rib, Some(id)) = (kind, feature_id) {
                 let definitions: Vec<nbcad_solid::RibDefinitionDto> = serde_json::from_value(
                     parse_engine_envelope(engine.engine_call("rib_definitions", ""))?,

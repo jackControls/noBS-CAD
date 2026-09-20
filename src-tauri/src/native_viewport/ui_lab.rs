@@ -154,7 +154,7 @@ fn setup_ribbon_lab(world: &mut World) {
             ("Circle", Icon::Circle),
             ("Fit-point spline", Icon::Spline),
             ("Center-to-center slot", Icon::Slot),
-            ("Sketch on XY", Icon::Sketch),
+            ("Create Sketch", Icon::Sketch),
             ("Extrude", Icon::Extrude),
         ]
         .into_iter()

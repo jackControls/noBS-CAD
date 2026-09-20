@@ -111,7 +111,18 @@ it does not launch or close a desktop window, discard work or upload evidence.
 The corresponding `native-build` suite uses the same arguments and safety
 checks. It drives native Revolve, Sweep, Loft and Rib reference selection, creation,
 history editing, close/Cancel, Undo/Redo, rendered capture and Save. Each case
-is saved before the next blank tab is created. Loft's support datum and second
-sketch are seeded through the shared MCP contract while their native editing
-is still being migrated. Kernel-backed form tests also exercise invalid values,
+is saved before the next blank tab is created. Loft's datum and section geometry
+are seeded through the shared MCP contract; the datum is selected through native
+Create Sketch and the browser. Kernel-backed form tests also exercise invalid values,
 reference ownership, connected paths, ordered sections and coplanar axes.
+
+`native-support` uses the same arguments to check Create Sketch, all three origin
+planes, face selection and both coordinate-zero choices, datum selection in the
+browser and canvas, Escape/close cancellation, capture and Save. It uses engine
+MCP to seed precise support geometry so this suite does not depend on viewport
+zoom or duplicate the native drawing-gesture checks.
+
+Native document tabs retain their own cameras. New and newly opened files fit
+their model; changing tabs or closing a tab restores that document's view rather
+than inheriting the previous model's zoom. AccessKit publishes native radio and
+checkbox states and text field values from the same retained control registry.

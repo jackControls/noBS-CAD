@@ -1047,6 +1047,83 @@ struct PrimaryButton;
 #[derive(Component)]
 struct CheckboxDecoration { square: Entity, check: Entity }
 
+#[derive(Component)]
+struct RadioDecoration {
+    circle: Entity,
+    dot: Entity,
+}
+
+/// One accessible radio control with a retained, font-independent indicator.
+pub(crate) fn radio_card(world: &mut World, entity: Entity, camera: Entity, checked: bool) {
+    let theme = world.get::<InterfaceButtonStyle>(entity).unwrap().0;
+    let (circle, dot) = if let Some(parts) = world.get::<RadioDecoration>(entity) {
+        (parts.circle, parts.dot)
+    } else {
+        compact_label(world, entity, 26.);
+        let dot = world
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(3.),
+                    top: px(3.),
+                    width: px(6.),
+                    height: px(6.),
+                    border_radius: BorderRadius::MAX,
+                    ..default()
+                },
+                UiTargetCamera(camera),
+                BackgroundColor(theme.accent),
+            ))
+            .id();
+        let circle = world
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(8.),
+                    top: px(10.),
+                    width: px(14.),
+                    height: px(14.),
+                    border: UiRect::all(px(1.)),
+                    border_radius: BorderRadius::MAX,
+                    ..default()
+                },
+                UiTargetCamera(camera),
+            ))
+            .add_child(dot)
+            .id();
+        world
+            .entity_mut(entity)
+            .add_child(circle)
+            .insert(RadioDecoration { circle, dot });
+        (circle, dot)
+    };
+    let border = BorderColor::all(if checked { theme.accent } else { theme.mute });
+    if world.get::<BorderColor>(circle) != Some(&border) {
+        world.entity_mut(circle).insert(border);
+    }
+    let visibility = if checked {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    if world.get::<Visibility>(dot) != Some(&visibility) {
+        world.entity_mut(dot).insert(visibility);
+    }
+    world.entity_mut(entity).remove::<InterfaceFlat>();
+    let label = world.get::<InterfaceLabel>(entity).unwrap().0;
+    let bounds = Node {
+        position_type: PositionType::Absolute,
+        left: px(30.),
+        right: px(8.),
+        top: px(6.),
+        height: px(22.),
+        ..default()
+    };
+    if world.get::<Node>(label) != Some(&bounds) {
+        world.entity_mut(label).insert(bounds);
+    }
+}
+
 /// Use a drawn checkbox rather than relying on font-specific checkbox glyphs.
 /// The enclosing control remains the single focus and activation target.
 pub(crate) fn checkbox_button(world: &mut World, entity: Entity, camera: Entity, checked: bool) {

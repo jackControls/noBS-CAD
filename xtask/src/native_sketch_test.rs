@@ -118,7 +118,7 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
         capture,
         report,
     } = start(args, "native-sketch")?;
-    control(&mut client, "Sketch on XY", None)?;
+    crate::native_fixture::begin_sketch(&mut client, "XY")?;
     let palette = ui(&mut client, json!({"action":"inspect"}))?;
     ensure!(
         controls(&palette).any(|c| c["label"] == "Sketch Palette" && c["expanded"] == true),

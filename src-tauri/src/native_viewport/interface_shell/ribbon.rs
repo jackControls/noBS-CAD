@@ -401,7 +401,7 @@ pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
         "Three-point arc" => "Arc",
         "Fit-point spline" => "Spline",
         "Center-to-center slot" => "Slot",
-        "Sketch on XY" => "Create\nSketch",
+        "Create Sketch" => "Create\nSketch",
         "Finish sketch" => "FINISH SKETCH",
         "Finish spline" => "FINISH SPLINE",
         other => other,

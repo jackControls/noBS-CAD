@@ -31,7 +31,7 @@ pub(crate) use platform::{
     interface_view_snapshot, interface_visible_occurrences, interface_world_point,
 };
 #[cfg(feature = "dev-bevy-host")]
-pub(crate) use platform::{apply_interface_sketch_lines, apply_interface_viewport};
+pub(crate) use platform::{apply_interface_sketch_lines, apply_interface_viewport, interface_support_pick};
 #[cfg(all(
     any(target_os = "macos", target_os = "windows", target_os = "linux"),
     feature = "dev-ui-lab"
@@ -346,7 +346,7 @@ impl Default for ViewportHud {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportCamera {
     pub position: [f32; 3],

@@ -6341,6 +6341,108 @@ pub(crate) fn interface_pick(
     ))
 }
 
+/// Pick the visible support using the same trimmed faces, camera ray and
+/// screen-sized reference quads as the renderer. Construction overlays win
+/// before origin overlays, then trimmed faces, as in the original picker.
+#[cfg(feature = "dev-bevy-host")]
+pub(crate) fn interface_support_pick(
+    world: &World,
+    session_id: &str,
+    point: [f32; 2],
+) -> Result<Option<nbcad_core::PlaneRef>, String> {
+    use nbcad_core::PlaneRef;
+    let model = world.resource::<ModelResource>();
+    if model.session_id != session_id {
+        return Err("Native viewport has not bound the requested document".into());
+    }
+    let size = *world.resource::<ViewportSizeResource>();
+    let camera = world.resource::<CameraResource>().camera;
+    let state = &world.resource::<PresentationResource>().0;
+    let Some((origin, direction, _)) = camera_pick_ray(
+        camera,
+        (size.logical_width, size.logical_height),
+        point[0],
+        point[1],
+    ) else {
+        return Ok(None);
+    };
+    let mut distance = f32::INFINITY;
+    let mut result = None;
+    let mut check = |reference, basis: PlaneBasis| {
+        let half = reference_plane_half_size(
+            camera,
+            size,
+            Vec3::from_array(basis.origin.map(|v| v as f32)),
+        );
+        if let Some(t) = ray_reference_quad(origin, direction, basis, half) {
+            if t < distance {
+                distance = t;
+                result = Some(reference);
+            }
+        }
+    };
+    for plane in &model.datum_planes {
+        if !state.hidden_datum_plane_ids.contains(&plane.datum_id.0) {
+            check(
+                PlaneRef::DatumPlane {
+                    datum_id: plane.datum_id,
+                },
+                plane.basis,
+            );
+        }
+    }
+    drop(check);
+    if result.is_some() {
+        return Ok(result);
+    }
+    for reference in PlaneRef::ORIGIN_PLANES {
+        let basis = reference.origin_basis().unwrap();
+        let half = reference_plane_half_size(camera, size, Vec3::ZERO);
+        if let Some(t) = ray_reference_quad(origin, direction, basis, half) {
+            if t < distance {
+                distance = t;
+                result = Some(reference);
+            }
+        }
+    }
+    if result.is_some() {
+        return Ok(result);
+    }
+    // Most support picks hit a small overlay; do not traverse body meshes
+    // until both overlay layers have missed.
+    let hit = interface_pick(world, session_id, point, NativePickPurpose::Geometry)?;
+    Ok(hit.as_ref().and_then(|h| {
+        model
+            .scene
+            .bodies
+            .iter()
+            .find(|b| b.id.0 == h.body_id)?
+            .faces
+            .iter()
+            .find(|f| f.id.0 == h.face_id && f.plane.is_some())
+            .map(|f| PlaneRef::PlanarFace { face_id: f.id })
+    }))
+}
+
+#[cfg(feature = "dev-bevy-host")]
+fn ray_reference_quad(origin: Vec3, direction: Vec3, basis: PlaneBasis, half: f32) -> Option<f32> {
+    let normal = Vec3::from_array(basis.normal.map(|v| v as f32));
+    let denominator = direction.dot(normal);
+    if !denominator.is_finite() || denominator.abs() < 1e-8 || !half.is_finite() || half <= 0. {
+        return None;
+    }
+    let distance =
+        (Vec3::from_array(basis.origin.map(|v| v as f32)) - origin).dot(normal) / denominator;
+    if !distance.is_finite() || distance < 0. {
+        return None;
+    }
+    let local = basis.to_2d((origin + direction * distance).to_array().map(f64::from));
+    (local
+        .iter()
+        .all(|v| v.is_finite() && v.abs() <= f64::from(half)))
+    .then_some(distance)
+}
+
 /// Apply a transient layer only under its live document's owner guard. A stale
 /// form cannot clear or restore another document's in-progress presentation.
 pub(crate) fn apply_interface_preview(
@@ -8112,6 +8214,18 @@ mod tests {
             .fold(f32::NEG_INFINITY, f32::max);
         assert_eq!(max_x - min_x, 100.0);
         assert_eq!(max_y - min_y, 100.0);
+    }
+
+    #[cfg(feature = "dev-bevy-host")]
+    #[test]
+    fn support_picking_uses_finite_visible_quads_and_forward_rays() {
+        let xy=nbcad_core::PlaneRef::ORIGIN_PLANES[0].origin_basis().unwrap();
+        assert_eq!(ray_reference_quad(Vec3::new(3.,4.,20.),Vec3::NEG_Z,xy,10.),Some(20.));
+        assert!(ray_reference_quad(Vec3::new(11.,4.,20.),Vec3::NEG_Z,xy,10.).is_none());
+        assert!(ray_reference_quad(Vec3::new(3.,4.,20.),Vec3::X,xy,10.).is_none());
+        assert!(ray_reference_quad(Vec3::new(3.,4.,20.),Vec3::Z,xy,10.).is_none());
+        assert!(ray_reference_quad(Vec3::NAN,Vec3::NEG_Z,xy,10.).is_none());
+        assert!(ray_reference_quad(Vec3::new(3.,4.,20.),Vec3::NEG_Z,xy,f32::INFINITY).is_none());
     }
 
     #[test]

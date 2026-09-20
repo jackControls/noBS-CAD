@@ -185,6 +185,20 @@ pub(crate) fn reduce(
     }
     match command {
         BrowserCommand::Select(_) => {
+            if crate::native_editor::support::picking(world) {
+                use nbcad_core::{FaceId, PlaneRef};
+                let plane = match node.kind {
+                    Kind::OriginPlaneXy => Some(PlaneRef::ORIGIN_PLANES[0]),
+                    Kind::OriginPlaneXz => Some(PlaneRef::ORIGIN_PLANES[1]),
+                    Kind::OriginPlaneYz => Some(PlaneRef::ORIGIN_PLANES[2]),
+                    Kind::ConstructionPlane => node.reference_id.map(|id| PlaneRef::DatumPlane {datum_id:FaceId(id)}),
+                    _ => None,
+                };
+                if let Some(plane) = plane {
+                    return crate::native_editor::execute(world,engine,bridge,&action.context,
+                        crate::native_editor::EditorCommand::Begin(plane),||handle.validate_action(action));
+                }
+            }
             world.resource_mut::<Browser>().selected = Some(id);
             let command = if node.kind == Kind::Body {
                 NativeCommand::SelectBody {

@@ -5,14 +5,14 @@
 use super::super::interface_shell::{
     InterfaceLayout, NativeInterfaceAction, NativeInterfaceHandle,
 };
-use accesskit::{Action, Node, Role};
+use accesskit::{Action, Node, Role, Toggled};
 use bevy::{
     a11y::{AccessibilityNode, AccessibilitySystems, ActionRequest},
     input_focus::{FocusCause, InputFocus},
     prelude::*,
     window::PrimaryWindow,
 };
-use nbcad_interface::{ControlKey, Rect as ControlRect};
+use nbcad_interface::{ControlKey, Field, Rect as ControlRect};
 use std::collections::HashMap;
 
 #[derive(Component)]
@@ -26,6 +26,7 @@ struct AccessibleControl {
     bounds: ControlRect,
     disabled: bool,
     selected: Option<bool>,
+    field: Field,
     action: Option<NativeInterfaceAction>,
 }
 
@@ -74,6 +75,7 @@ fn publish(world: &mut World) {
                     bounds: control.bounds,
                     disabled: control.disabled,
                     selected: control.selected,
+                    field: control.field.clone(),
                     action: None,
                 })
                 .collect::<Vec<_>>(),
@@ -108,6 +110,7 @@ fn publish(world: &mut World) {
             "treeitem" => Role::TreeItem,
             "menuitem" => Role::MenuItem,
             "checkbox" => Role::CheckBox,
+            "radio" => Role::RadioButton,
             "slider" => Role::Slider,
             "textbox" => Role::TextInput,
             _ => Role::Button,
@@ -122,8 +125,29 @@ fn publish(world: &mut World) {
         if control.disabled {
             node.set_disabled();
         }
-        if let Some(selected) = control.selected {
+        if matches!(control.role.as_str(), "radio" | "checkbox") {
+            let checked = match control.field {
+                Field::Toggle(value) => Some(value),
+                _ => control.selected,
+            };
+            if let Some(checked) = checked {
+                node.set_toggled(if checked {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                });
+            }
+        } else if let Some(selected) = control.selected {
             node.set_selected(selected);
+        }
+        if let Field::Text {
+            value, read_only, ..
+        } = &control.field
+        {
+            node.set_value(value.clone());
+            if *read_only {
+                node.set_read_only();
+            }
         }
         if control.action.is_some() {
             node.add_action(Action::Click);
@@ -187,6 +211,67 @@ fn apply_requests(
 mod tests {
     use super::*;
     use crate::native_viewport::interface_shell::{tests::fixture, InterfaceControl};
+
+    #[test]
+    fn native_field_states_are_exposed_to_assistive_technology() {
+        let (mut app, _, control, _) = fixture();
+        app.add_message::<ActionRequest>();
+        install(&mut app);
+        let key = ControlKey(control.to_bits());
+        let read = |app: &App| {
+            let proxy = app.world().resource::<AccessibleControls>().0[&key].0;
+            app.world()
+                .get::<AccessibilityNode>(proxy)
+                .unwrap()
+                .0
+                .clone()
+        };
+        {
+            let mut widget = app
+                .world_mut()
+                .get_mut::<InterfaceControl>(control)
+                .unwrap();
+            widget.role = "radio".into();
+            widget.selected = Some(true);
+        }
+        app.update();
+        assert_eq!(read(&app).role(), Role::RadioButton);
+        assert_eq!(read(&app).toggled(), Some(Toggled::True));
+        app.world_mut()
+            .get_mut::<InterfaceControl>(control)
+            .unwrap()
+            .selected = Some(false);
+        app.update();
+        assert_eq!(read(&app).toggled(), Some(Toggled::False));
+        {
+            let mut widget = app
+                .world_mut()
+                .get_mut::<InterfaceControl>(control)
+                .unwrap();
+            widget.role = "checkbox".into();
+            widget.selected = None;
+            widget.field = Field::Toggle(true);
+        }
+        app.update();
+        assert_eq!(read(&app).role(), Role::CheckBox);
+        assert_eq!(read(&app).toggled(), Some(Toggled::True));
+        {
+            let mut widget = app
+                .world_mut()
+                .get_mut::<InterfaceControl>(control)
+                .unwrap();
+            widget.role = "textbox".into();
+            widget.field = Field::Text {
+                value: "12 mm".into(),
+                read_only: true,
+                selection: None,
+            };
+        }
+        app.update();
+        assert_eq!(read(&app).value(), Some("12 mm"));
+        assert!(read(&app).is_read_only());
+        assert_eq!(read(&app).toggled(), None);
+    }
 
     #[test]
     fn assistive_actions_use_live_controls_and_old_proxy_ids_retire_on_rebind() {
