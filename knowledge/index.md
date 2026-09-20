@@ -19,6 +19,7 @@ Keep concepts **thin**. Longer material lives in the repository’s
 - [MCP harness](concepts/mcp-harness.md) - Headless/live routing and engineering resources.
 - [Agent MCP workflow](concepts/agent-mcp-workflow.md) - Tenacity, cad_help-first, soft focus, recipes.
 - [Research before commit](concepts/research-before-commit.md) - VERIFY table and local help before freezing geometry.
+- [Assembly interference check](concepts/assembly-interference.md) - Geometric overlap/clearance at solved poses vs fit classes.
 - [Contribution process](concepts/process.md) - Lightweight contribution and review expectations.
 - [Export & print](concepts/export-print.md) - Interchange, print export and qualification boundaries.
 - [Gear identification and compatible pairs](concepts/gears.md) - Module/DP, OD limits, pressure angle, ratio changes and mounting.

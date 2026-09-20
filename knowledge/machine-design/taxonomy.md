@@ -66,6 +66,14 @@ Provenance: [SOURCES](SOURCES.md).
 |-------|--------|
 | Requirements → embodiment → BOM / purchased parts | **planned** |
 
+
+## G. Assembly validation
+
+| Topic | Status |
+|-------|--------|
+| Interference / clearance at solved poses | **seeded** — [assembly-interference](../concepts/assembly-interference.md) (product check; distinct from fit classes) |
+| Fit classes (clearance / transition / interference) | **seeded** — [fits-clearances](concepts/fits-clearances.md) |
+
 ## Live examples
 
 Scripted recipes remain the screen source. See

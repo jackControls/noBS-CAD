@@ -708,6 +708,10 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/concepts/research-before-commit.md"),
     },
     KnowledgeFile {
+        path: "concepts/assembly-interference.md",
+        text: include_str!("../../../knowledge/concepts/assembly-interference.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/taxonomy.md",
         text: include_str!("../../../knowledge/machine-design/taxonomy.md"),
     },
@@ -904,9 +908,26 @@ mod tests {
     }
 
     #[test]
+    fn interference_check_hits_assembly_interference_page() {
+        let store = HelpStore::bundled();
+        for query in ["interference check", "assembly clearance"] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                !hits.is_empty(),
+                "expected hits for {query}"
+            );
+            assert!(
+                hits.iter().any(|h| h.id.contains("assembly-interference")),
+                "expected assembly-interference for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn check_corpus_ok() {
         let n = check_corpus().expect("corpus check");
-        assert!(n >= 18);
+        assert!(n >= 21);
     }
 
     #[test]
@@ -916,6 +937,7 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/fits-clearances.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-snap-fit.md"));
         assert!(files.iter().any(|f| f.path == "concepts/research-before-commit.md"));
+        assert!(files.iter().any(|f| f.path == "concepts/assembly-interference.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));
         assert!(knowledge_file_by_uri("nbcad://knowledge/../etc/passwd").is_none());
