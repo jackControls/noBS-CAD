@@ -117,9 +117,9 @@ impl Snapshot {
         }
     }
 
-    fn model(&self, source: &ProfileSource) -> FormModel<'_> {
+    fn model(&self, source: Option<&str>) -> FormModel<'_> {
         let parameters = match source {
-            ProfileSource::Profiles { sketch_name, .. } => self
+            Some(sketch_name) => self
                 .parameters
                 .get(sketch_name)
                 .map(Vec::as_slice)
@@ -187,7 +187,7 @@ fn check_revision(editor: &Editor, receipt: &DocumentReceipt) -> Result<(), Stri
 
 pub(crate) fn panel(world: &World) -> Option<BuildPanel> {
     let editor = world.get_resource::<NativeBuild>()?.editor.as_ref()?;
-    let model = editor.snapshot.model(editor.form.source());
+    let model = editor.snapshot.model(editor.form.parameter_sketch());
     Some(BuildPanel {
         kind: editor.form.kind(),
         form_id: editor.id,
@@ -232,7 +232,7 @@ pub(crate) fn synchronize(
 }
 
 fn update_preview(editor: &mut Editor, world: &mut World) -> Result<(), String> {
-    let model = editor.snapshot.model(editor.form.source());
+    let model = editor.snapshot.model(editor.form.parameter_sketch());
     // Invalid text remains the actual field draft, but must not leave a
     // stale last-valid extrusion appearing to describe the invalid input.
     let (next, notice) = if editor.form.kind() != BuildKind::Extrude {
@@ -279,7 +279,7 @@ fn selected_source(world: &World) -> Result<Option<BuildPick>, String> {
 }
 
 fn apply_pick(editor: &mut Editor, pick: BuildPick) -> Result<(), String> {
-    let model = editor.snapshot.model(editor.form.source());
+    let model = editor.snapshot.model(editor.form.parameter_sketch());
     match (editor.pick_target, pick) {
         (Some(BuildField::Source), BuildPick::Profiles(profiles)) => {
             editor.form.set_profiles(profiles, &model)
@@ -424,8 +424,20 @@ fn reduce_owned(
             {
                 return Err("The rendered design is not current".into());
             }
-            let model = snapshot.model(&ProfileSource::None);
-            let form = if let (BuildKind::Sweep, Some(id)) = (kind, feature_id) {
+            let model = snapshot.model(None);
+            let form = if let (BuildKind::Rib, Some(id)) = (kind, feature_id) {
+                let definitions: Vec<nbcad_solid::RibDefinitionDto> = serde_json::from_value(
+                    parse_engine_envelope(engine.engine_call("rib_definitions", ""))?,
+                )
+                .map_err(|e| e.to_string())?;
+                BuildForm::edit_rib(
+                    definitions
+                        .iter()
+                        .find(|d| d.feature_id.0 == *id)
+                        .ok_or("The selected Rib no longer exists")?,
+                    &model,
+                )?
+            } else if let (BuildKind::Sweep, Some(id)) = (kind, feature_id) {
                 let definitions: Vec<SweepDefinitionDto> = serde_json::from_value(
                     parse_engine_envelope(engine.engine_call("sweep_definitions", ""))?,
                 )
@@ -479,12 +491,18 @@ fn reduce_owned(
                 previous_preview: native_viewport::interface_preview_snapshot(world),
                 preview_revision: native_viewport::interface_preview_revision(world),
                 preview_notice: None,
-                pick_target: Some(BuildField::Source),
+                pick_target: Some(if *kind == BuildKind::Rib {
+                    BuildField::Path
+                } else {
+                    BuildField::Source
+                }),
                 choice_field: None,
             };
-            if feature_id.is_none() {
+            if feature_id.is_none() && *kind != BuildKind::Rib {
                 if let Some(pick) = selected_source(world)? {
-                    apply_pick(&mut editor, pick)?;
+                    if !matches!(pick, BuildPick::Face(_)) || *kind == BuildKind::Extrude {
+                        apply_pick(&mut editor, pick)?;
+                    }
                 }
             }
             update_preview(&mut editor, world)?;
@@ -522,7 +540,7 @@ fn reduce_owned(
             let owns_preview =
                 native_viewport::interface_preview_revision(world) == editor.preview_revision;
             let can_restore = receipt == editor.snapshot.receipt && owns_preview;
-            let mut model = editor.snapshot.model(editor.form.source());
+            let mut model = editor.snapshot.model(editor.form.parameter_sketch());
             model.owner = &receipt.owner;
             model.engine_revision = receipt.revision;
             editor.form.cancel(&model)?;
@@ -547,7 +565,7 @@ fn reduce_owned(
             );
         }
         check_revision(editor, &receipt)?;
-        let model = editor.snapshot.model(editor.form.source());
+        let model = editor.snapshot.model(editor.form.parameter_sketch());
         match action {
             BuildControl::Field(field) => {
                 let row = editor
@@ -671,6 +689,27 @@ fn reduce_owned(
                 .iter()
                 .any(|r| r.field == BuildField::AxisLine && r.visible)
                 .then_some(BuildField::AxisLine);
+        }
+        if matches!(
+            action,
+            BuildControl::Field(BuildField::Extent)
+                | BuildControl::Choose {
+                    field: BuildField::Extent,
+                    ..
+                }
+        ) {
+            let to_face = editor
+                .form
+                .fields(&model)
+                .iter()
+                .any(|row| row.field == BuildField::StopFace && row.visible);
+            editor.pick_target = if to_face {
+                Some(BuildField::StopFace)
+            } else if editor.form.kind() == BuildKind::Rib {
+                Some(BuildField::Path)
+            } else {
+                Some(BuildField::Source)
+            };
         }
         if matches!(
             action,

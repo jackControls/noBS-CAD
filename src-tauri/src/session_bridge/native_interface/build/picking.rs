@@ -67,7 +67,7 @@ pub(crate) fn handle_canvas_pick(
             return Ok(BuildPick::Path(path));
         }
         if target==BuildField::AxisLine {
-            let model=editor.snapshot.model(editor.form.source());
+            let model=editor.snapshot.model(editor.form.parameter_sketch());
             let cursor=bevy::math::Vec2::from_array(point);
             let mut candidate=None;
             for sketch in &editor.snapshot.viewport.profile_catalog {

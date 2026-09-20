@@ -286,12 +286,13 @@ fn synchronize_owned(
             }
             Field::None => {
                 let label_text = match row.field {
+                    super::BuildField::Source if panel.kind == super::BuildKind::Loft => "SECTIONS",
                     super::BuildField::Source => "PROFILES",
                     super::BuildField::AxisLine => "AXIS LINE",
                     super::BuildField::Targets => "TARGET BODIES",
                     super::BuildField::StopFace => "STOP FACE",
                     super::BuildField::Path => {
-                        if panel.kind == super::BuildKind::Loft {
+                        if matches!(panel.kind, super::BuildKind::Loft | super::BuildKind::Rib) {
                             "CENTERLINE"
                         } else {
                             "PATH"
@@ -355,6 +356,9 @@ fn synchronize_owned(
                     }
                     super::BuildField::Source => "Click a profile in the viewport.",
                     super::BuildField::AxisLine => "Click a straight line on the profile plane.",
+                    super::BuildField::Path if panel.kind == super::BuildKind::Rib => {
+                        "Click centerline curves to add or remove."
+                    }
                     super::BuildField::Path | super::BuildField::Guide => {
                         "Click connected curves to add or remove."
                     }

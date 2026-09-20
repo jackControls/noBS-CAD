@@ -109,7 +109,7 @@ requires an explicitly selected blank document and fresh output filenames;
 it does not launch or close a desktop window, discard work or upload evidence.
 
 The corresponding `native-build` suite uses the same arguments and safety
-checks. It drives native Revolve, Sweep and Loft reference selection, creation,
+checks. It drives native Revolve, Sweep, Loft and Rib reference selection, creation,
 history editing, close/Cancel, Undo/Redo, rendered capture and Save. Each case
 is saved before the next blank tab is created. Loft's support datum and second
 sketch are seeded through the shared MCP contract while their native editing

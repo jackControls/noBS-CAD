@@ -120,6 +120,145 @@ fn maximum_z(fixture: &Fixture) -> f32 {
 }
 
 #[test]
+fn rib_native_form_applies_edits_and_cancels_with_real_geometry() {
+    let _lock = super::super::super::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let owner = fixture.owner();
+    for (op, args) in [
+        ("sketch_begin", json!({"type":"origin_plane","plane":"xy"})),
+        (
+            "sketch_add_line",
+            json!({"from":{"x":0.,"y":0.},"to_raw":{"x":40.,"y":0.},"ctrl_held":true}),
+        ),
+        ("sketch_finish", json!({})),
+    ] {
+        fixture
+            .bridge
+            .apply_native_mutation(&fixture.engine, &owner, op, &args, || Ok(()))
+            .unwrap();
+    }
+    let mut app = scene(&fixture, &owner);
+    let open_rib = |world: &mut World, feature_id| {
+        reduce(
+            &fixture.engine,
+            &fixture.bridge,
+            world,
+            &owner,
+            &BuildCommand::Open {
+                kind: BuildKind::Rib,
+                feature_id,
+            },
+            &ControlInput::Click,
+            || Ok(()),
+        )
+        .unwrap()["form_id"]
+            .as_u64()
+            .unwrap()
+    };
+    let id = open_rib(app.world_mut(), None);
+    assert!(!panel(app.world()).unwrap().can_apply);
+    let snapshot = model_snapshot(&fixture.engine);
+    let curve = snapshot.profile_catalog[0].path_curves[0].entity_id();
+    accept_pick(
+        &fixture.engine,
+        &fixture.bridge,
+        app.world_mut(),
+        &owner,
+        id,
+        BuildPick::Path(PathRefDto {
+            sketch_name: "Sketch1".into(),
+            entity_ids: vec![curve],
+        }),
+        || Ok(()),
+    )
+    .unwrap();
+    field(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        BuildField::Thickness,
+        "3 mm",
+    );
+    field(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        BuildField::Distance,
+        "1 cm",
+    );
+    let created = action(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        BuildControl::Apply,
+        ControlInput::Click,
+    )
+    .unwrap();
+    assert!(
+        created["form_error"].is_null() && created["render_error"].is_null(),
+        "{created}"
+    );
+    assert_eq!(fixture.engine.viewport_snapshot().2.bodies.len(), 1);
+    assert!((maximum_z(&fixture) - 10.).abs() < 1e-4);
+    let defs = || parse_engine_envelope(fixture.engine.engine_call("rib_definitions", "")).unwrap();
+    let original = defs();
+    let feature = original[0]["feature_id"].as_u64().unwrap();
+    let id = open_rib(app.world_mut(), Some(feature));
+    field(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        BuildField::Distance,
+        "15",
+    );
+    action(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        BuildControl::Cancel,
+        ControlInput::Click,
+    )
+    .unwrap();
+    assert_eq!(defs(), original);
+    let id = open_rib(app.world_mut(), Some(feature));
+    field(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        BuildField::Distance,
+        "15",
+    );
+    action(
+        &fixture,
+        app.world_mut(),
+        &owner,
+        id,
+        BuildControl::Apply,
+        ControlInput::Click,
+    )
+    .unwrap();
+    assert!((maximum_z(&fixture) - 15.).abs() < 1e-4);
+    let undone = fixture
+        .bridge
+        .apply_native_history(&fixture.engine, &owner, false, || Ok(()))
+        .unwrap();
+    assert!((maximum_z(&fixture) - 10.).abs() < 1e-4);
+    fixture
+        .bridge
+        .apply_native_history(&fixture.engine, &undone.context, true, || Ok(()))
+        .unwrap();
+    assert!((maximum_z(&fixture) - 15.).abs() < 1e-4);
+    assert_eq!(defs()[0]["feature_id"], feature);
+    assert_eq!(defs()[0]["thickness"], 3.);
+}
+
+#[test]
 fn sweep_and_loft_native_forms_create_edit_cancel_and_undo_exact_solids() {
     let _lock = super::super::super::tests::TEST_LOCK.lock().unwrap();
     for kind in [BuildKind::Sweep, BuildKind::Loft] {

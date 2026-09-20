@@ -34,13 +34,7 @@ const GLYPHS: Record<string, ReactNode> = {
   revolve: <SharedRibbonGlyph id="revolve" />,
   sweep: <SharedRibbonGlyph id="sweep" />,
   loft: <SharedRibbonGlyph id="loft" />,
-  rib: (
-    <>
-      <path d="M3 18l7 3 11-5-7-3-11 5z" />
-      <path d="M9 17.5l3-11 4 8.2" />
-      <path d="M12 6.5l2.2 1v7" strokeDasharray="2 2" />
-    </>
-  ),
+  rib: <SharedRibbonGlyph id="rib" />,
 
   // Solid refinement and body operations use section diagrams.
   hole: (

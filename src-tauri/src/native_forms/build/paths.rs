@@ -154,6 +154,11 @@ impl BuildForm {
         Ok(())
     }
     pub(crate) fn path(&self, field: BuildField) -> Option<&PathRefDto> {
+        if let Some(rib) = &self.rib {
+            return (field == BuildField::Path)
+                .then_some(rib.centerline.as_ref())
+                .flatten();
+        }
         let p = self.paths.as_ref()?;
         match field {
             BuildField::Path => p.path.as_ref(),
@@ -162,6 +167,9 @@ impl BuildForm {
         }
     }
     pub(crate) fn selected_paths(&self) -> Vec<&PathRefDto> {
+        if let Some(rib) = &self.rib {
+            return rib.centerline.iter().collect();
+        }
         let Some(p) = &self.paths else { return vec![] };
         let mut paths = vec![];
         if p.kind == BuildKind::Sweep || p.centerline_enabled {
@@ -181,6 +189,14 @@ impl BuildForm {
         self.editing(model)?;
         if let Some(path) = &path {
             validate_path(path, model)?;
+        }
+        if let Some(rib) = &mut self.rib {
+            if field != BuildField::Path {
+                return Err("Rib uses centerline curves".into());
+            }
+            rib.centerline = path;
+            self.changed();
+            return Ok(());
         }
         let p = self
             .paths

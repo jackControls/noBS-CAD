@@ -2,6 +2,77 @@ use super::*;
 use nbcad_core::{Document, FaceId, Feature, UnitSystem};
 
 #[test]
+fn rib_uses_typed_lengths_and_extent_specific_references() {
+    use nbcad_solid::{PathRefDto, RibExtent, RibRequest};
+    let mut fixture = Fixture::new();
+    fixture.profiles[0].path_curves = serde_json::from_value(json!([
+        {"kind":"line","entity_id":20,"start":{"x":0.,"y":0.},"end":{"x":20.,"y":0.}},
+        {"kind":"line","entity_id":21,"start":{"x":30.,"y":5.},"end":{"x":40.,"y":5.}}
+    ]))
+    .unwrap();
+    let mut model = fixture.model();
+    let parameters = vec![ParameterValue {
+        name: "stock".into(),
+        kind: DimensionKind::Length,
+        value: 20.,
+    }];
+    model.parameters = &parameters;
+    let mut form = BuildForm::new_kind(BuildKind::Rib, &model);
+    form.set_path(
+        BuildField::Path,
+        Some(PathRefDto {
+            sketch_name: "Sketch1".into(),
+            entity_ids: vec![20, 21],
+        }),
+        &model,
+    )
+    .unwrap();
+    assert_eq!(form.parameter_sketch(), Some("Sketch1"));
+    assert!(
+        form.can_apply(&model),
+        "Rib centerlines need not be connected"
+    );
+    form.set_value(BuildField::Thickness, "stock/10", &model)
+        .unwrap();
+    form.set_value(BuildField::Distance, "1/4 in", &model)
+        .unwrap();
+    let (_, request) = form.rib_payload(&model).unwrap();
+    let request: RibRequest = serde_json::from_value(request).unwrap();
+    assert_eq!(request.thickness, 2.);
+    assert_eq!(request.extent, Some(RibExtent::Distance { depth: 6.35 }));
+    form.set_value(BuildField::Thickness, "0", &model).unwrap();
+    assert!(!form.can_apply(&model));
+    form.set_value(BuildField::Thickness, "2", &model).unwrap();
+    form.set_value(BuildField::Extent, "to_next", &model)
+        .unwrap();
+    assert!(!form.can_apply(&model));
+    form.set_value(BuildField::Operation, "join", &model)
+        .unwrap();
+    form.set_targets(vec![BodyId(1)], &model).unwrap();
+    form.set_value(BuildField::Distance, "unfinished+", &model)
+        .unwrap();
+    assert!(form.can_apply(&model));
+    form.set_value(BuildField::Extent, "to_face", &model)
+        .unwrap();
+    assert!(!form.can_apply(&model));
+    form.set_stop_face(
+        Some(PlanarFaceSourceDto {
+            body_id: BodyId(1),
+            face_id: FaceId(12),
+        }),
+        &model,
+    )
+    .unwrap();
+    form.set_value(BuildField::Symmetric, "true", &model)
+        .unwrap();
+    let ticket = form.prepare_apply(&model).unwrap();
+    assert_eq!(ticket.operation(), "solid_rib");
+    assert_eq!(ticket.arguments()["extent"]["face_id"], 12);
+    assert_eq!(ticket.arguments()["symmetric"], true);
+    assert_eq!(ticket.arguments()["target_body_ids"], json!([1]));
+}
+
+#[test]
 fn sweep_paths_preserve_curve_order_validate_connectivity_and_ignore_disabled_guides() {
     use nbcad_solid::{PathRefDto, ProfileRefDto, SweepRequest};
     let mut fixture = Fixture::new();

@@ -11,6 +11,8 @@ mod revolve;
 use revolve::RevolveFields;
 mod paths;
 use paths::PathFields;
+mod rib;
+use rib::RibFields;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BuildKind {
@@ -18,6 +20,7 @@ pub(crate) enum BuildKind {
     Revolve,
     Sweep,
     Loft,
+    Rib,
 }
 impl BuildKind {
     pub(crate) fn label(self) -> &'static str {
@@ -26,6 +29,7 @@ impl BuildKind {
             Self::Revolve => "Revolve",
             Self::Sweep => "Sweep",
             Self::Loft => "Loft",
+            Self::Rib => "Rib",
         }
     }
     pub(crate) fn operation(self) -> &'static str {
@@ -34,6 +38,7 @@ impl BuildKind {
             Self::Revolve => "solid_revolve",
             Self::Sweep => "solid_sweep",
             Self::Loft => "solid_loft",
+            Self::Rib => "solid_rib",
         }
     }
 }
@@ -76,6 +81,8 @@ pub(crate) enum BuildField {
     ForceC1,
     Ruled,
     Continuity,
+    Thickness,
+    Symmetric,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -165,6 +172,7 @@ pub(crate) struct BuildForm {
     engine_error: Option<String>,
     revolve: Option<RevolveFields>,
     paths: Option<PathFields>,
+    rib: Option<RibFields>,
 }
 
 impl BuildForm {
@@ -192,6 +200,7 @@ impl BuildForm {
             engine_error: None,
             revolve: None,
             paths: None,
+            rib: None,
         }
     }
 
@@ -201,10 +210,15 @@ impl BuildForm {
             form.revolve = Some(RevolveFields::new(model.document.settings.units));
         } else if matches!(kind, BuildKind::Sweep | BuildKind::Loft) {
             form.paths = Some(PathFields::new(kind));
+        } else if kind == BuildKind::Rib {
+            form.rib = Some(RibFields::new(model.document.settings.units));
         }
         form
     }
     pub(crate) fn kind(&self) -> BuildKind {
+        if self.rib.is_some() {
+            return BuildKind::Rib;
+        }
         if let Some(paths) = &self.paths {
             return paths.kind;
         }
@@ -287,8 +301,17 @@ impl BuildForm {
     pub(crate) fn engine_error(&self) -> Option<&str> {
         self.engine_error.as_deref()
     }
-    pub(crate) fn source(&self) -> &ProfileSource {
-        &self.source
+    pub(crate) fn parameter_sketch(&self) -> Option<&str> {
+        if let Some(rib) = &self.rib {
+            return rib
+                .centerline
+                .as_ref()
+                .map(|path| path.sketch_name.as_str());
+        }
+        match &self.source {
+            ProfileSource::Profiles { sketch_name, .. } => Some(sketch_name),
+            _ => None,
+        }
     }
 
     fn check_model(&self, model: &FormModel<'_>) -> Result<(), String> {
@@ -327,6 +350,19 @@ impl BuildForm {
         model: &FormModel<'_>,
     ) -> Result<(), String> {
         self.editing(model)?;
+        if let Some(rib) = &mut self.rib {
+            if matches!(
+                field,
+                BuildField::Thickness
+                    | BuildField::Distance
+                    | BuildField::Extent
+                    | BuildField::Symmetric
+            ) {
+                rib.set(field, value)?;
+                self.changed();
+                return Ok(());
+            }
+        }
         if matches!(
             field,
             BuildField::GuideEnabled
@@ -667,6 +703,9 @@ impl BuildForm {
     }
 
     pub(crate) fn fields(&self, model: &FormModel<'_>) -> Vec<BuildFieldView> {
+        if self.rib.is_some() {
+            return self.rib_fields(model);
+        }
         if self.paths.is_some() {
             return self.path_fields(model);
         }
@@ -801,6 +840,9 @@ impl BuildForm {
         &self,
         model: &FormModel<'_>,
     ) -> Result<(&'static str, Value), Vec<(BuildField, String)>> {
+        if self.rib.is_some() {
+            return self.rib_payload(model);
+        }
         if self.paths.is_some() {
             return self.path_payload(model);
         }

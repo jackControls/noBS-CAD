@@ -17,7 +17,7 @@ fn prepare(
         validate()?;
         editor
             .form
-            .prepare_apply(&editor.snapshot.model(editor.form.source()))
+            .prepare_apply(&editor.snapshot.model(editor.form.parameter_sketch()))
     })
 }
 
@@ -144,7 +144,7 @@ fn complete(
                 {
                     editor.form.apply_failed(
                         ticket,
-                        &editor.snapshot.model(editor.form.source()),
+                        &editor.snapshot.model(editor.form.parameter_sketch()),
                         error.clone(),
                     )?;
                 }

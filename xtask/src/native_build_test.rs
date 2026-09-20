@@ -20,6 +20,91 @@ fn edit_feature(client: &mut Client, label: &str) -> Result<()> {
     Ok(())
 }
 
+fn rib_case(client: &mut Client, out: &std::path::Path) -> Result<Value> {
+    let project = out.join("native-rib.nbcad");
+    let capture = out.join("native-rib.png");
+    ensure!(
+        !project.exists() && !capture.exists(),
+        "Existing Rib evidence must be preserved"
+    );
+    let new = control(client, "New document", None)?;
+    client.call("cad_attach", json!({"session_id":new["active_session_id"]}))?;
+    control(client, "Sketch on XY", None)?;
+    control(client, "Line", None)?;
+    click(client, [-20., 0.], false)?;
+    click(client, [20., 0.], false)?;
+    control(client, "Finish sketch", None)?;
+    control(client, "Rib", None)?;
+    click(client, [0., 0.], false)?;
+    control(client, "Thickness (mm)", Some("0"))?;
+    let invalid = ui(client, json!({"action":"inspect"}))?;
+    ensure!(
+        controls(&invalid).any(|c| c["label"] == "Apply Rib" && c["disabled"] == true),
+        "Zero Rib thickness should block Apply"
+    );
+    control(client, "Thickness (mm)", Some("0.3 cm"))?;
+    control(client, "Depth (mm)", Some("12 mm"))?;
+    control(client, "Extent: Distance", Some("to_next"))?;
+    let next = ui(client, json!({"action":"inspect"}))?;
+    ensure!(
+        controls(&next).any(|c| c["label"] == "Apply Rib" && c["disabled"] == true),
+        "To Next needs a target body"
+    );
+    control(client, "Extent: To Next", Some("distance"))?;
+    ui(
+        client,
+        json!({"action":"capture","path":out.join("rib-form.png")}),
+    )?;
+    control(client, "Apply Rib", None)?;
+    let method = "solid_rib_definitions";
+    let original = client.call(method, json!({}))?;
+    ensure!(
+        original.as_array().is_some_and(|a| a.len() == 1)
+            && original[0]["thickness"] == 3.
+            && original[0]["depth"] == 12.,
+        "Rib dimensions incorrect: {original}"
+    );
+    let name = original[0]["name"].as_str().context("Rib name missing")?;
+    edit_feature(client, name)?;
+    control(client, "Depth (mm)", Some("18"))?;
+    control(client, "Close Rib", None)?;
+    ensure!(
+        client.call(method, json!({}))? == original,
+        "Cancel changed Rib"
+    );
+    edit_feature(client, name)?;
+    control(client, "Depth (mm)", Some("18"))?;
+    control(client, "Apply Rib", None)?;
+    ensure!(
+        client.call(method, json!({}))?[0]["depth"] == 18.,
+        "Rib edit failed"
+    );
+    control(client, "Undo", None)?;
+    ensure!(
+        client.call(method, json!({}))?[0]["depth"] == 12.,
+        "Rib Undo failed"
+    );
+    control(client, "Redo", None)?;
+    ensure!(
+        client.call(method, json!({}))?[0]["depth"] == 18.,
+        "Rib Redo failed"
+    );
+    let scene = client.call("solid_scene", json!({}))?;
+    ensure!(
+        scene["errors"].as_array().is_some_and(Vec::is_empty)
+            && scene["bodies"].as_array().is_some_and(|b| b.len() == 1),
+        "Rib did not create one valid solid"
+    );
+    control(client, "Isometric", None)?;
+    ui(client, json!({"action":"capture","path":capture}))?;
+    ui(
+        client,
+        json!({"action":"file","command":"save","path":project}),
+    )?;
+    println!("PASS: Rib native curve picking, units, invalid thickness/extent, edit, Cancel, Undo/Redo and Save");
+    Ok(json!({"definitions":client.call(method,json!({}))?,"capture":capture,"project":project}))
+}
+
 fn path_case(client: &mut Client, out: &std::path::Path, kind: &str) -> Result<Value> {
     let project = out.join(format!("native-{}.nbcad", kind.to_lowercase()));
     let capture = out.join(format!("native-{}.png", kind.to_lowercase()));
@@ -245,11 +330,12 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
     let revolve = revolve(&mut client)?;
     let sweep = path_case(&mut client, &out, "Sweep")?;
     let loft = path_case(&mut client, &out, "Loft")?;
+    let rib = rib_case(&mut client, &out)?;
     fs::write(
         &report,
         serde_json::to_vec_pretty(&json!({"status":"passed","server":server,"session":session,
         "checks":["profile_pick","axis_line_pick","axis_preset","revolve_apply","history_edit","close_cancel","undo_redo","render_capture","save"],
-        "definitions":revolve,"capture":capture,"project":project,"sweep":sweep,"loft":loft}))?,
+        "definitions":revolve,"capture":capture,"project":project,"sweep":sweep,"loft":loft,"rib":rib}))?,
     )?;
     println!("PASS: native build saved; report {}", report.display());
     Ok(())

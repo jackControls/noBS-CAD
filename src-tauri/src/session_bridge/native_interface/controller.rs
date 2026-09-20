@@ -1175,7 +1175,7 @@ fn synchronize(
             320.,34.,48.,
         ),
     ];
-    for (key,kind,x) in [("sweep",build::BuildKind::Sweep,370.),("loft",build::BuildKind::Loft,420.)] {
+    for (key,kind,x) in [("sweep",build::BuildKind::Sweep,370.),("loft",build::BuildKind::Loft,420.),("rib",build::BuildKind::Rib,470.)] {
         rows.push((key.into(),kind.label().into(),NativeCommand::Build(build::BuildCommand::Open {kind,feature_id:None}),
             presentation.mode==native_viewport::ViewportMode::Sketch||build::panel(world).is_some(),x,34.,48.));
     }
@@ -1332,8 +1332,8 @@ fn synchronize(
         }
     });
     for (key, label, command, disabled, x, y, width) in rows {
-        let is_extrude = matches!(key.as_str(), "extrude" | "revolve" | "sweep" | "loft");
-        let build_icon = match key.as_str() {"revolve"=>interface_shell::ribbon::Icon::Revolve,"sweep"=>interface_shell::ribbon::Icon::Sweep,"loft"=>interface_shell::ribbon::Icon::Loft,_=>interface_shell::ribbon::Icon::Extrude};
+        let is_extrude = matches!(key.as_str(), "extrude" | "revolve" | "sweep" | "loft" | "rib");
+        let build_icon = match key.as_str() {"revolve"=>interface_shell::ribbon::Icon::Revolve,"sweep"=>interface_shell::ribbon::Icon::Sweep,"loft"=>interface_shell::ribbon::Icon::Loft,"rib"=>interface_shell::ribbon::Icon::Rib,_=>interface_shell::ribbon::Icon::Extrude};
         let is_body = key.starts_with("body-") || key.starts_with("visibility-");
         let surface = command_group(&command);
         let entity = if let Some(entity) = state.controls.get(&key) {
