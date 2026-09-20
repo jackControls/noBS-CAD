@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated": "2026-09-20",
-  "count": 44,
+  "count": 46,
   "entries": [
     {
       "id": "machine-design.concepts.alignment-nubs-pins",
@@ -679,6 +679,48 @@
       "snippet": "Agents fail one-step models when the sketch plane is wrong: profile on the wrong face, extrude flipped into solid, or a “datum” that is really a floating construction plane with no story. Choose coordinate frame → plane…"
     },
     {
+      "id": "machine-design.concepts.design-hygiene-requirements-bom",
+      "path": "knowledge/machine-design/concepts/design-hygiene-requirements-bom.md",
+      "title": "Requirements → embodiment → BOM (CAD-time)",
+      "description": "CAD-time hygiene — name requirements, pick embodiment, decide purchased vs print, assign BOM roles before freezing mates.",
+      "status": "draft",
+      "topics": [
+        "design-hygiene",
+        "bom",
+        "requirements",
+        "embodiment",
+        "hardware",
+        "dfm",
+        "workflow"
+      ],
+      "keywords": [
+        "requirements",
+        "embodiment",
+        "BOM",
+        "purchased part",
+        "printed part",
+        "make vs buy",
+        "COTS",
+        "SKU",
+        "BOM role",
+        "phantom",
+        "reference designator",
+        "VERIFY table",
+        "freeze geometry"
+      ],
+      "related_recipes": [
+        "mounting-plate",
+        "turbine-fit-coupons",
+        "d-screw-vise-fit",
+        "vertical-axis-turbine"
+      ],
+      "sources": [
+        "doe-3d",
+        "nasa-fastener"
+      ],
+      "snippet": "Before mating geometry freezes, name what must be true, how the CAD embodiment realizes it, and which items are purchased vs printed / machined in-house. Help stays CAD-time roles — not a Stage-Gate or ERP lecture. Attr…"
+    },
+    {
       "id": "machine-design.concepts.dfam-fdm-overview",
       "path": "knowledge/machine-design/concepts/dfam-fdm-overview.md",
       "title": "DFAM for FDM — design-for-additive overview",
@@ -1073,7 +1115,7 @@
       "id": "machine-design.concepts.inspection-metrology-bridge",
       "path": "knowledge/machine-design/concepts/inspection-metrology-bridge.md",
       "title": "Inspection / metrology bridge (CAD-time)",
-      "description": "Thin bridge from GD&T / drawing-vs-MBD packs to what inspection must receive — roles and VERIFY gates, not gage recipes or CMM programs.",
+      "description": "Bridge from GD&T / drawing-vs-MBD packs to inspection handoff — characteristic roles, pack choice, method class, VERIFY gates; not gage recipes or CMM programs.",
       "status": "draft",
       "topics": [
         "gdt",
@@ -1094,9 +1136,12 @@
         "FAIR",
         "balloon",
         "characteristic",
+        "critical characteristic",
+        "reference dimension",
         "datum scheme",
         "as-built",
-        "MBD to shop"
+        "MBD to shop",
+        "handoff pack"
       ],
       "related_recipes": [
         "mounting-plate",
@@ -1300,6 +1345,44 @@
         "nasa-bearing"
       ],
       "snippet": "Roller (and similar) chains transmit rotary motion across a center distance with a tension path you can sketch. CAD owns sprocket envelopes, hubs, shaft seats, guards, and idler locations; pitch / strand / length and te…"
+    },
+    {
+      "id": "machine-design.concepts.mechanisms-intermittent-geneva",
+      "path": "knowledge/machine-design/concepts/mechanisms-intermittent-geneva.md",
+      "title": "Intermittent motion / Geneva (CAD-time)",
+      "description": "CAD-time intermittent / Geneva roles — index, dwell, lock arc, envelopes; VERIFY purchased indexer or analyzed cam — no invented slot charts.",
+      "status": "draft",
+      "topics": [
+        "mechanisms",
+        "machine-elements",
+        "joints"
+      ],
+      "keywords": [
+        "intermittent motion",
+        "Geneva drive",
+        "Geneva wheel",
+        "Maltese cross",
+        "indexing",
+        "dwell",
+        "lock arc",
+        "driver pin",
+        "slot",
+        "center distance",
+        "indexer",
+        "rotary table",
+        "rise dwell return"
+      ],
+      "related_recipes": [
+        "revolved-spacer",
+        "d-screw-vise",
+        "vertical-axis-turbine",
+        "turbine-fit-coupons"
+      ],
+      "sources": [
+        "mit-272",
+        "doe-3d"
+      ],
+      "snippet": "Intermittent motion advances a load through discrete indexes with a dwell between steps. A Geneva (Maltese-cross style) is one classic embodiment: a driver pin enters a slot, indexes the wheel, then a lock arc holds the…"
     },
     {
       "id": "machine-design.concepts.mechanisms-linkages-mobility",

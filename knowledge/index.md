@@ -67,7 +67,7 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Shafts / keys / retaining rings | `machine-design.concepts.shafts-keys-retaining-rings` | Shafts, keys, and retaining rings |
 | Springs / couplings | `machine-design.concepts.springs-couplings` | Springs and couplings |
 | Drawing vs MBD / PMI | `machine-design.concepts.drawing-vs-mbd-pmi` | Drawing vs MBD / PMI |
-| Inspection / metrology bridge | `machine-design.concepts.inspection-metrology-bridge` | Inspection / metrology bridge (thin) |
+| Inspection / metrology bridge | `machine-design.concepts.inspection-metrology-bridge` | Inspection / metrology bridge |
 | DFAM / FDM overview | `machine-design.concepts.dfam-fdm-overview` | DFAM for FDM overview |
 | FDM holes / printed fits | `machine-design.concepts.am-fdm-holes-fit-allowances` | FDM holes and printed-fit allowances |
 | FDM load / layers / infill | `machine-design.concepts.am-fdm-load-layers-infill` | FDM load path vs layer orientation / infill roles |
@@ -77,6 +77,8 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Belts & pulleys | `machine-design.concepts.mechanisms-belts-pulleys` | Belts and pulleys |
 | Chains & sprockets | `machine-design.concepts.mechanisms-chains-sprockets` | Chains and sprockets |
 | Printed gears (FDM DFAM) | `machine-design.concepts.am-printed-gears-dfam` | Printed gears — FDM DFAM |
+| Intermittent / Geneva | `machine-design.concepts.mechanisms-intermittent-geneva` | Intermittent motion / Geneva |
+| Requirements → BOM hygiene | `machine-design.concepts.design-hygiene-requirements-bom` | Requirements → embodiment → BOM |
 
 Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 
@@ -137,6 +139,8 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [Belts & pulleys](machine-design/concepts/mechanisms-belts-pulleys.md) - Center distance, wrap, tension path; purchased profiles.
 - [Chains & sprockets](machine-design/concepts/mechanisms-chains-sprockets.md) - Center distance, wrap, tension path; purchased pitch.
 - [Printed gears (FDM DFAM)](machine-design/concepts/am-printed-gears-dfam.md) - Orientation vs tooth load; min tooth vs nozzle; backlash coupon; no module-strength tables.
+- [Intermittent / Geneva](machine-design/concepts/mechanisms-intermittent-geneva.md) - Index/dwell/lock-arc roles; envelopes; VERIFY purchased indexer or analyzed cam.
+- [Requirements → BOM hygiene](machine-design/concepts/design-hygiene-requirements-bom.md) - Requirements → embodiment → purchased vs print → BOM roles.
 
 - [DFM process guidelines](machine-design/concepts/dfm-process-guidelines.md) - Molding, cast, sheet, weld, EDM, CNC.
 - [AM snap-fits](machine-design/concepts/am-snap-fit.md) - Cantilever clips, latches, living hinges (sizing).
@@ -165,7 +169,7 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [Shafts / keys / retaining rings](machine-design/concepts/shafts-keys-retaining-rings.md) - Stepped shafts, keyseats, circlip grooves (CAD-time).
 - [Springs / couplings](machine-design/concepts/springs-couplings.md) - Spring seats and shaft couplings (CAD-time; datasheet rates).
 - [Drawing vs MBD / PMI](machine-design/concepts/drawing-vs-mbd-pmi.md) - 2D drawing notes vs model PMI; VERIFY process match.
-- [Inspection / metrology bridge](machine-design/concepts/inspection-metrology-bridge.md) - Characteristic set → pack → method class → as-built loop (thin).
+- [Inspection / metrology bridge](machine-design/concepts/inspection-metrology-bridge.md) - Characteristic roles → pack → method class → as-built loop.
 - [Fit coupons & recipes map](machine-design/concepts/fit-coupons-recipes-map.md) - Concept → `related_recipes` hub.
 
 Use the listed resources for their stated scope, then consult the cited sources

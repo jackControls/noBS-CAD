@@ -54,7 +54,7 @@ Do **not** invent tooth, cam, or belt charts in Help — cite datasheets and
 |--------------|--------------|-------|
 | Rotary → rotary (ratio) | Gears or timing belts | Same module/DP + PA for gears; purchased belt profile for sync |
 | Rotary → linear | Power/lead screw or cam + follower | Lead ↔ travel documented; cam law from datasheet |
-| Intermittent / dwell | Cam or indexed linkage | Rise–dwell–return as a **motion story**, not a pretty lobe |
+| Intermittent / dwell | Cam, Geneva, or purchased indexer | Rise–dwell–return / index+lock as a **motion story**; see [Geneva](mechanisms-intermittent-geneva.md) |
 | Path / guidance | Linkage or slide + guides | Name joints/DOFs before fancy coupler curves |
 | Soft sync / long span | Belt or chain + idlers | Center distance, wrap, tension path |
 
@@ -65,6 +65,7 @@ Do **not** invent tooth, cam, or belt charts in Help — cite datasheets and
 | Gears (identify / pair) | `concepts.gears` | [gears](../../concepts/gears.md) |
 | Linkages / mobility | `machine-design.concepts.mechanisms-linkages-mobility` | [mechanisms-linkages-mobility](mechanisms-linkages-mobility.md) |
 | Cams (CAD-time) | `machine-design.concepts.mechanisms-cams` | [mechanisms-cams](mechanisms-cams.md) |
+| Intermittent / Geneva | `machine-design.concepts.mechanisms-intermittent-geneva` | [mechanisms-intermittent-geneva](mechanisms-intermittent-geneva.md) |
 | Belts & pulleys | `machine-design.concepts.mechanisms-belts-pulleys` | [mechanisms-belts-pulleys](mechanisms-belts-pulleys.md) |
 | Chains & sprockets | `machine-design.concepts.mechanisms-chains-sprockets` | [mechanisms-chains-sprockets](mechanisms-chains-sprockets.md) |
 | Power / lead screws | `machine-design.concepts.power-screws-lead-screws` | [power-screws-lead-screws](power-screws-lead-screws.md) |

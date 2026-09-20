@@ -66,6 +66,7 @@ pressure-angle charts here.
 | Axial indexing along a shaft | Cylindrical cam with purchased or cited groove law |
 | Accurate high-cycle timing | Purchased cam / indexer; CAD owns envelope only |
 | Soft rotary→linear without a cam law | [Power / lead screw](power-screws-lead-screws.md) or [slider-crank](mechanisms-linkages-mobility.md) |
+| Discrete index with dwell lock | [Geneva / intermittent](mechanisms-intermittent-geneva.md) or purchased indexer |
 
 ## Live examples
 
@@ -74,6 +75,7 @@ pressure-angle charts here.
 - `turbine-fit-coupons` — qualify seats before product
 
 Related: [mechanisms overview](mechanisms-overview.md),
+[intermittent / Geneva](mechanisms-intermittent-geneva.md),
 [linkages / mobility](mechanisms-linkages-mobility.md),
 [gears](../../concepts/gears.md),
 [power screws](power-screws-lead-screws.md),

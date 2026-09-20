@@ -1,3 +1,18 @@
+## 2026-09-20 — Design hygiene BOM + intermittent/Geneva
+
+- Seeded `machine-design.concepts.design-hygiene-requirements-bom` (requirements
+  → embodiment → purchased vs print → BOM roles; golden-path checklist; link
+  research-before-commit + hardware-pocket; no process lecture).
+- Seeded `machine-design.concepts.mechanisms-intermittent-geneva` (index/dwell/
+  lock-arc roles; envelopes; VERIFY purchased indexer or analyzed cam; cite
+  `mit-272`; link mechanisms hub + cams).
+- Light thicken `inspection-metrology-bridge` (characteristic/balloon roles +
+  handoff checklist; keep short).
+- Taxonomy F → **seeded (partial)**; C intermittent/Geneva **seeded**; Still-thin
+  + inspection row updated. Index table + bullets; cross-links from overview,
+  cams, research-before-commit, hardware-pocket.
+- Rebuilt search-index.json; Rust embed + BM25/unit tests; wire goldens H68+.
+
 ## 2026-09-20 — Chains/sprockets + printed gears DFAM
 
 - Seeded `machine-design.concepts.mechanisms-chains-sprockets` (center distance,

@@ -856,6 +856,14 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/machine-design/concepts/am-printed-gears-dfam.md"),
     },
     KnowledgeFile {
+        path: "machine-design/concepts/mechanisms-intermittent-geneva.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/mechanisms-intermittent-geneva.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/design-hygiene-requirements-bom.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/design-hygiene-requirements-bom.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/concepts/inspection-metrology-bridge.md",
         text: include_str!("../../../knowledge/machine-design/concepts/inspection-metrology-bridge.md"),
     },
@@ -1732,6 +1740,40 @@ mod tests {
     }
 
     #[test]
+    fn mechanisms_intermittent_geneva_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "Geneva drive intermittent index dwell",
+            "lock arc driver pin Geneva wheel",
+            "purchased indexer intermittent motion",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("mechanisms-intermittent-geneva")),
+                "expected mechanisms-intermittent-geneva for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn design_hygiene_requirements_bom_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "requirements embodiment BOM purchased",
+            "purchased vs print BOM roles",
+            "make vs buy COTS SKU freeze geometry",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("design-hygiene-requirements-bom")),
+                "expected design-hygiene-requirements-bom for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn inspection_metrology_bridge_searchable() {
         let store = HelpStore::bundled();
         for query in [
@@ -1833,6 +1875,8 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-belts-pulleys.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-chains-sprockets.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-printed-gears-dfam.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-intermittent-geneva.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/design-hygiene-requirements-bom.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/inspection-metrology-bridge.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));

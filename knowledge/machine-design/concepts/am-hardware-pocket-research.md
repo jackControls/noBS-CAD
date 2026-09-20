@@ -71,3 +71,6 @@ Record numbers with units and source (datasheet rev, caliper note, coupon).
   [clamshell retainer](am-clamshell-retainer.md)).
 - Keep melt heat (heat-set inserts) away from thin pocket walls —
   [heat-set inserts](am-heat-set-inserts.md).
+
+Related: [Requirements → BOM hygiene](design-hygiene-requirements-bom.md),
+[Research before commit](../../concepts/research-before-commit.md).

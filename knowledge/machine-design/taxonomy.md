@@ -32,7 +32,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Tolerance stack-up (method) | **seeded (citation-only)** | `machine-design.concepts.tolerance-stackup-intro` — [tolerance-stackup-intro](concepts/tolerance-stackup-intro.md) |
 | Cosmetic threads vs clearance / tap / insert | **seeded** | `machine-design.concepts.cosmetic-threads-vs-clearance` — [cosmetic-threads-vs-clearance](concepts/cosmetic-threads-vs-clearance.md) |
 | Drawing vs MBD / PMI walkthrough | **seeded** | `machine-design.concepts.drawing-vs-mbd-pmi` — [drawing-vs-mbd-pmi](concepts/drawing-vs-mbd-pmi.md) |
-| Inspection / metrology bridge | **seeded (thin)** | `machine-design.concepts.inspection-metrology-bridge` — [inspection-metrology-bridge](concepts/inspection-metrology-bridge.md) |
+| Inspection / metrology bridge | **seeded** | `machine-design.concepts.inspection-metrology-bridge` — [inspection-metrology-bridge](concepts/inspection-metrology-bridge.md) |
 
 ## B. Machine elements
 
@@ -57,8 +57,9 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Gears (product page) | **seeded** | `concepts.gears` — [gears](../concepts/gears.md) |
 | Printed gears (FDM DFAM) | **seeded** | `machine-design.concepts.am-printed-gears-dfam` — [am-printed-gears-dfam](concepts/am-printed-gears-dfam.md) |
 | Technic-style beam/pin envelope | **seeded (unofficial)** | `machine-design.concepts.technic-envelope` — [technic-envelope](concepts/technic-envelope.md) |
+| Intermittent / Geneva-style | **seeded** | `machine-design.concepts.mechanisms-intermittent-geneva` — [mechanisms-intermittent-geneva](concepts/mechanisms-intermittent-geneva.md) |
 | Product joints demo | recipe | `vertical-axis-turbine` |
-| Deep tooth / cam-law / belt-tension charts | **planned** | datasheets + `mit-272` link-out; Help stays roles only |
+| Deep tooth / cam-law / belt-tension / Geneva slot charts | **planned** | datasheets + `mit-272` link-out; Help stays roles only |
 
 ## D. Materials
 
@@ -89,9 +90,9 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 
 ## F. Design hygiene
 
-| Topic | Status |
-|-------|--------|
-| Requirements → embodiment → BOM / purchased parts | **planned** (partially covered by hardware-pocket + research-before-commit) |
+| Topic | Status | Id / title |
+|-------|--------|------------|
+| Requirements → embodiment → BOM / purchased parts | **seeded (partial)** | `machine-design.concepts.design-hygiene-requirements-bom` — [design-hygiene-requirements-bom](concepts/design-hygiene-requirements-bom.md); also [research-before-commit](../concepts/research-before-commit.md), [am-hardware-pocket-research](concepts/am-hardware-pocket-research.md) |
 
 ## G. Assembly validation
 
@@ -116,11 +117,11 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 
 | Gap | Notes |
 |-----|-------|
-| Deep Y14.41 / semantic PMI export recipes | drawing-vs-mbd-pmi seeded (CAD-time packs); vendor/tutorial dumps **out**; inspection bridge seeded thin; deep CMM/GR&R still out |
-| Deep CMM / GR&R / gage design | inspection bridge **seeded (thin)**; numeric/procedure dumps **out** |
+| Deep Y14.41 / semantic PMI export recipes | drawing-vs-mbd-pmi seeded (CAD-time packs); vendor/tutorial dumps **out**; inspection bridge seeded (roles); deep CMM/GR&R still out |
+| Deep CMM / GR&R / gage design | inspection bridge **seeded** (roles + handoff checklist); numeric/procedure dumps **out** |
 | Deep key stress / groove charts | shafts page seeded (roles only); numeric charts **TODO** |
 | Deep spring-rate / coupling misalignment charts | springs-couplings seeded (roles only); numeric charts **TODO** (datasheets) |
-| Deep cam-law / belt-tension / chain-tension / tooth charts | mechanisms hub + linkages/cams/belts/chains **seeded (partial)**; printed-gears DFAM seeded (no module-strength tables); numeric charts stay datasheet / `mit-272` |
+| Deep cam-law / belt-tension / chain-tension / tooth / Geneva-slot charts | mechanisms hub + linkages/cams/belts/chains/Geneva **seeded (partial)**; printed-gears DFAM seeded (no module-strength tables); numeric charts stay datasheet / `mit-272` |
 | Materials allowables tables | **planned** (no MatWeb); vocabulary seeded |
 | Full NASA fastener preload distill | overview + hole/insert pages seeded; deep sizing **TODO** |
 | More MCP `prompts` (beyond `help_search`) | design-flow prompts still pages + skills ([HUMAN_HELP](../../docs/agentic/HUMAN_HELP.md)) |

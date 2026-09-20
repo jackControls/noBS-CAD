@@ -55,3 +55,6 @@ Also record: function + constraints, print process, open questions.
   features; keep edits on the intended faces.
 - If research flips mechanism class (tabs vs clips, press vs slip), scrap the
   wrong embodiment — prefer a clean redesign over a patch.
+
+Related: [Requirements → BOM hygiene](../machine-design/concepts/design-hygiene-requirements-bom.md),
+[Hardware pocket research](../machine-design/concepts/am-hardware-pocket-research.md).

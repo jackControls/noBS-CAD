@@ -1,11 +1,11 @@
 ---
 type: Concept
 title: Inspection / metrology bridge (CAD-time)
-description: Thin bridge from GD&T / drawing-vs-MBD packs to what inspection must receive — roles and VERIFY gates, not gage recipes or CMM programs.
+description: Bridge from GD&T / drawing-vs-MBD packs to inspection handoff — characteristic roles, pack choice, method class, VERIFY gates; not gage recipes or CMM programs.
 status: draft
 updated: 2026-09-20
 topics: gdt, inspection, metrology, mbd, pmi, drawings, dfm
-keywords: inspection, metrology, CMM, gage, functional gage, first article, FAIR, balloon, characteristic, datum scheme, as-built, MBD to shop
+keywords: inspection, metrology, CMM, gage, functional gage, first article, FAIR, balloon, characteristic, critical characteristic, reference dimension, datum scheme, as-built, MBD to shop, handoff pack
 related_recipes: mounting-plate, turbine-fit-coupons, d-screw-vise-fit
 sources: nist-gdt-2, nist-pmi, doe-3d
 ---
@@ -42,6 +42,25 @@ or probe recipes in Help.
    Help stays roles + checklist
    ([research before commit](../../concepts/research-before-commit.md)).
 
+## Characteristic / balloon roles
+
+| Role | CAD-time meaning |
+|------|------------------|
+| **Critical characteristic** | Must prove as-built — balloon / PMI callout with method class |
+| **Reference / basic** | Locates or informs; not a pass/fail gate by itself |
+| **Coupon / process check** | Qualifies print or process before product FCFs multiply |
+
+Prefer fewer criticals. Each critical needs a named method class (attribute,
+variable, CMM, optical, functional) — not a gadget shopping list.
+
+## Handoff checklist
+
+- [ ] Critical vs reference characteristics named
+- [ ] Datum scheme matches model, pack, and fixture intent
+- [ ] One readable pack (drawing balloons, MBD, or dual)
+- [ ] Method class per critical (cited procedure — not invented GR&R)
+- [ ] As-built path back into allowances / coupons
+
 ## Prefer these patterns
 
 | Need | Prefer |
@@ -49,6 +68,7 @@ or probe recipes in Help.
 | Clear shop handoff | One pack (drawing or MBD) with named critical characteristics |
 | Functional fit | Coupon + fit class before tightening every FCF |
 | Datum fight between model and fixture | Reconcile locate scheme before more PMI |
+| Balloon sprawl | Fewer criticals; demote the rest to reference |
 | Deep CMM / GR&R / gage design | Outside Help — shop procedure or cited standard |
 
 ## Related
