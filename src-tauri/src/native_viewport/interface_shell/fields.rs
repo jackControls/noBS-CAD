@@ -257,7 +257,17 @@ pub(crate) fn adapt_control_input(
     }
     validate_editor(world, handle, action)?;
     if chord.key == "Enter" {
-        return commit_active(world, handle);
+        let commit = commit_active(world, handle)?;
+        if submits_on_enter(world, entity) {
+            if commit.is_some() {
+                // Commit the visible buffer before invoking the field's submit
+                // action, keeping the original owner and binding on both.
+                handle.enqueue_action(action.clone())?;
+            } else {
+                return Ok(Some(action.clone()));
+            }
+        }
+        return Ok(commit);
     }
     let logical_key = match chord.key.as_str() {
         "ArrowLeft" => Key::ArrowLeft,
@@ -282,6 +292,16 @@ pub(crate) fn adapt_control_input(
     }
     handle.invalidate_presentation();
     commit_active(world, handle)
+}
+
+fn submits_on_enter(world: &World, entity: Entity) -> bool {
+    world
+        .get::<InterfaceControl>(entity)
+        .is_some_and(|control| {
+            control
+                .owned_keys
+                .contains(&nbcad_interface::KeyChord::plain("Enter"))
+        })
 }
 
 fn changes_value(edit: &TextEdit) -> bool {
@@ -472,6 +492,9 @@ pub(crate) fn before_window_input(
             if input.logical_key == Key::Tab || input.logical_key == Key::Enter {
                 if let Some(commit) = commit_active(world, handle)? {
                     handle.enqueue_action(commit)?;
+                }
+                if input.logical_key == Key::Enter && submits_on_enter(world, entity) {
+                    handle.key(nbcad_interface::KeyChord::plain("Enter"))?;
                 }
                 return Ok(input.logical_key == Key::Enter);
             }

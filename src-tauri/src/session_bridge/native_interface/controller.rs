@@ -589,8 +589,10 @@ fn update_inner(
         })?;
         if view::pending(world) { handle.request_redraw(); }
     }
-    if assembly::motion::active(world) && state.pending.is_none() && !state.close_pending && !state.exit_after_receipt && !files::awaiting(world) {
+    if (assembly::motion::active(world) || assembly::studies::active(world)) && state.pending.is_none() && !state.close_pending && !state.exit_after_receipt && !files::awaiting(world) {
         let owner=bridge.native_document_context(&state.window_id,engine)?;
+        assembly::studies::tick(world,handle,services,&owner)?;
+        if worker::busy(world) {return maintain_busy_window(world,handle,state);}
         assembly::motion::tick(world,handle,services,&owner)?;
         if worker::busy(world) {return maintain_busy_window(world,handle,state);}
     }
@@ -1605,6 +1607,7 @@ fn decorate(
 fn command_group(command: &NativeCommand) -> &'static str {
     match command {
         NativeCommand::Sketch(_) => "sketch/draw",
+        NativeCommand::Assembly(assembly::Command::Study(_)) => "assembly/motion",
         NativeCommand::Assembly(assembly::Command::Inspect(_)) => "assembly/inspect",
         NativeCommand::Assembly(_) => "assembly/joints",
         NativeCommand::Feature(feature::FeatureCommand::Open { kind, .. }) => kind.group(),

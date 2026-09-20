@@ -14,7 +14,7 @@ fn browser(c: &mut Client, label: &str) -> Result<Value> {
 fn assembly(c: &mut Client) -> Result<Value> {
     c.call("assembly_document", json!({}))
 }
-fn open(c: &mut Client, kind: &str) -> Result<()> {
+pub(super) fn open(c: &mut Client, kind: &str) -> Result<()> {
     control(c, "Joint", None)?;
     field(c, "Joint name", Some(&format!("Native {kind}")))?;
     field(c, "Joint type", Some(kind))?;

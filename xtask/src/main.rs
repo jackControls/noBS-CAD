@@ -17,6 +17,7 @@ mod native_move_test;
 mod native_planes_test;
 mod native_refine_test;
 mod native_sketch_test;
+mod native_studies_test;
 mod native_support_test;
 mod native_thread_test;
 mod native_view_test;

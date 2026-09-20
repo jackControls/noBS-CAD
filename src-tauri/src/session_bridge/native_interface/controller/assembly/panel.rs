@@ -75,7 +75,9 @@ impl Paint<'_> {
             return Ok(());
         }
         let mut control = InterfaceControl::button(
-            if matches!(command, Command::Inspect(_)) {
+            if matches!(command, Command::Study(_)) {
+                "assembly/motion"
+            } else if matches!(command, Command::Inspect(_)) {
                 "assembly/inspect"
             } else {
                 "assembly/joints"
@@ -129,7 +131,8 @@ impl Paint<'_> {
             None
         };
         let mut bounds = chrome::rect(self.x + x, y, w, h);
-        let primary = matches!(command, Command::Inspect(inspect::Action::Check));
+        let primary = matches!(command, Command::Inspect(inspect::Action::Check)
+            | Command::Study(studies::Action::Capture | studies::Action::Play));
         if matches!(control.field, Field::Text { .. } | Field::Choice { .. })
             || matches!(
                 command,
@@ -137,6 +140,7 @@ impl Paint<'_> {
                     | Command::Add(_)
                     | Command::Rename(..)
                     | Command::ApplyTransform(..)
+                    | Command::Study(_)
                     | Command::Motion(
                         motion::Action::Demo | motion::Action::Revert | motion::Action::Save
                     )
@@ -292,7 +296,7 @@ pub(super) fn paint(
         Field::None,
     )?;
     p.text("title", "ASSEMBLY", width - 110., 5., 100., 22., 10.);
-    for (i, (tab, label)) in [(Tab::Structure, "Structure"), (Tab::Inspect, "Inspect")]
+    for (i, (tab, label)) in [(Tab::Structure, "Structure"), (Tab::Motion,"Motion"), (Tab::Inspect, "Inspect")]
         .into_iter()
         .enumerate()
     {
@@ -301,9 +305,9 @@ pub(super) fn paint(
             &format!("Assembly {label}"),
             Some(label),
             Command::Tab(tab),
-            4. + i as f32 * (width - 8.) / 2.,
+            4. + i as f32 * (width - 8.) / 3.,
             34.,
-            (width - 8.) / 2.,
+            (width - 8.) / 3.,
             28.,
             None,
             blocked,
@@ -315,7 +319,9 @@ pub(super) fn paint(
     p.bottom -= 24.;
     p.scroll = state.scroll;
     let mut y = 0.;
-    if state.tab == Tab::Inspect {
+    if state.tab == Tab::Motion {
+        y = studies::panel::paint(&mut p, &mut state.studies, a, width, blocked)?;
+    } else if state.tab == Tab::Inspect {
         y = inspect::panel::paint(&mut p, &mut state.inspect, a, state.units, width, blocked)?;
     } else {
         p.button(

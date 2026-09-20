@@ -2181,6 +2181,7 @@
     }
   ],
   "groups": [
+    {"id":"assembly/motion","labelKey":"assembly.browser.motionStudy","operations":["assembly_create_position","assembly_update_position","assembly_delete_position","assembly_apply_position","assembly_create_motion_study","assembly_update_motion_study","assembly_delete_motion_study","assembly_evaluate_motion_study","assembly_sample_motion_study","assembly_export_motion_path_csv"]},
     {
       "id": "document/scripts",
       "labelKey": "document/scripts",

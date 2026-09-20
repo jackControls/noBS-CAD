@@ -13,6 +13,7 @@ use std::collections::HashSet;
 mod inspect;
 pub(crate) mod joint;
 pub(crate) mod motion;
+pub(crate) mod studies;
 mod panel;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -20,6 +21,7 @@ pub(crate) enum Tab {
     #[default]
     Structure,
     Inspect,
+    Motion,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +34,7 @@ pub(crate) enum EditField {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Command {
     Motion(motion::Action),
+    Study(studies::Action),
     Tab(Tab),
     Inspect(inspect::Action),
     Joint(joint::Command),
@@ -140,6 +143,7 @@ impl Draft {
 #[derive(Resource)]
 struct Browser {
     motion: motion::State,
+    studies: studies::State,
     tab: Tab,
     inspect: inspect::State,
     enabled: bool,
@@ -162,6 +166,7 @@ impl Default for Browser {
     fn default() -> Self {
         Self {
             motion: default(),
+            studies: default(),
             tab: Tab::Structure,
             inspect: default(),
             enabled: false,
@@ -297,7 +302,8 @@ pub(crate) fn reduce(
     if let Some(command) = joint_command {
         bridge.with_native_document_receipt(engine, &action.context, |revision| {
             handle.validate_action(action)?;
-            motion::cancel(world, &action.context, revision)
+            motion::cancel(world, &action.context, revision)?;
+            studies::cancel(world, &action.context, revision)
         })?;
         world.init_resource::<Browser>();
         world.resource_mut::<Browser>().enabled = true;
@@ -319,6 +325,7 @@ pub(crate) fn reduce(
         }
         if !enabled {
             motion::cancel(world, &action.context, receipt.revision)?;
+            studies::cancel(world, &action.context, receipt.revision)?;
         }
         world.init_resource::<Browser>();
         world.resource_mut::<Browser>().enabled = *enabled;
@@ -339,6 +346,10 @@ pub(crate) fn reduce(
             .clone()
             .ok_or("Assembly structure is unavailable")?;
         let input = &action.control.input;
+        if let Command::Study(command) = command {
+            if feature::panel(world).is_some() || joint::active(world) || native_viewport::interface_geometry(world).active_sketch.is_some() {return Err("Finish the active modeling command before editing motion studies".into());}
+            return studies::reduce(world,handle,engine,bridge,&receipt.owner,receipt.revision,&mut state.studies,&a,command,input);
+        }
         if let Command::Motion(command) = command {
             if feature::panel(world).is_some()
                 || joint::active(world)
@@ -481,6 +492,7 @@ pub(crate) fn reduce(
         match *command {
             Command::Tab(tab) => {
                 if tab != state.tab {
+                    studies::restore(world, &mut state.studies, &receipt.owner)?;
                     motion::restore(world, &mut state.motion, &receipt.owner)?;
                     state.motion.changed(&a);
                 }
@@ -502,6 +514,7 @@ pub(crate) fn reduce(
                     );
                 }
                 motion::restore(world, &mut state.motion, &receipt.owner)?;
+                studies::restore(world, &mut state.studies, &receipt.owner)?;
                 state.motion = default();
                 select(world, &receipt.owner, &a, id)?;
             }
@@ -668,7 +681,7 @@ pub(crate) fn reduce(
             | Command::Edit(..)
             | Command::Joint(_)
             | Command::Inspect(_)
-            | Command::Motion(_) => {
+            | Command::Motion(_) | Command::Study(_) => {
                 unreachable!()
             }
         }
@@ -729,6 +742,7 @@ pub(crate) fn synchronize(
             state.definitions_open = false;
             state.inspect = default();
             state.motion = default();
+            state.studies = default();
         }
         if state.assembly.is_none() || state.revision != revision {
             let a = services
@@ -749,6 +763,7 @@ pub(crate) fn synchronize(
                 state.definition = a.component_structure.definitions.first().map(|d| d.id.0);
             }
             state.motion.changed(&a);
+            state.studies.changed(&a);
             state.assembly = Some(Arc::new(a));
             state.revision = revision;
             state.draft = None;

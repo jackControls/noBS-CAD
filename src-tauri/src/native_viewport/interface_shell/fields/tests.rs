@@ -2,6 +2,35 @@ use super::*;
 use crate::native_viewport::interface_shell::tests::fixture;
 
 #[test]
+fn submit_fields_commit_the_visible_buffer_before_forwarding_enter() {
+    let (mut app, handle, entity) = editor_fixture_with_submit(true);
+    apply_edit(app.world_mut(), entity, TextEdit::Insert("3".into())).unwrap();
+    let owner = handle.frame().unwrap().context;
+    let enter = handle
+        .resolve_input(
+            ControlKey(entity.to_bits()),
+            ControlInput::Key(nbcad_interface::KeyChord::plain("Enter")),
+            &owner,
+        )
+        .unwrap();
+    let value = adapt_control_input(app.world_mut(), &handle, &enter)
+        .unwrap()
+        .unwrap();
+    assert_eq!(value.control.input, ControlInput::SetValue("123".into()));
+    acknowledge_control_input(app.world_mut(), &value, true);
+    let queued = handle.take_actions().unwrap();
+    assert_eq!(queued.len(), 1);
+    let submit = adapt_control_input(app.world_mut(), &handle, &queued[0])
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        submit.control.input,
+        ControlInput::Key(nbcad_interface::KeyChord::plain("Enter"))
+    );
+    assert!(handle.take_actions().unwrap().is_empty());
+}
+
+#[test]
 fn cancelling_a_form_discards_its_buffer_without_blocking_the_next_action() {
     let (mut app, handle, entity) = editor_fixture();
     apply_edit(app.world_mut(), entity, TextEdit::Insert("invalid".into())).unwrap();
@@ -89,6 +118,10 @@ fn field_undo_redo_changes_only_its_draft_and_new_input_discards_redo() {
 }
 
 fn editor_fixture() -> (App, NativeInterfaceHandle, Entity) {
+    editor_fixture_with_submit(false)
+}
+
+fn editor_fixture_with_submit(submit: bool) -> (App, NativeInterfaceHandle, Entity) {
     let (mut app, handle, entity, _) = fixture();
     app.add_plugins((
         MinimalPlugins,
@@ -105,6 +138,11 @@ fn editor_fixture() -> (App, NativeInterfaceHandle, Entity) {
     };
     control.text_editing = true;
     control.role = "textbox".into();
+    if submit {
+        control
+            .owned_keys
+            .push(nbcad_interface::KeyChord::plain("Enter"));
+    }
     drop(control);
     app.world_mut().entity_mut(entity).insert((
         EditableText::new(&value),

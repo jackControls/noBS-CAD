@@ -9,6 +9,8 @@ mod drawing_instances;
 pub use drawing_instances::{project_drawing, resolve_drawing_anchor, resolve_drawing_line};
 mod interference;
 pub use interference::{exact_interference_report, exact_pair_result};
+mod motion_evaluation;
+pub use motion_evaluation::evaluate_motion_study;
 mod motion_inspection;
 pub use motion_inspection::exact_swept_collision_check;
 

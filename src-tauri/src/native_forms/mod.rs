@@ -4,6 +4,8 @@
 mod feature;
 #[cfg(feature = "dev-bevy-host")]
 pub(crate) mod joint;
+#[cfg(feature = "dev-bevy-host")]
+pub(crate) mod motion_study;
 mod measurement;
 
 pub(crate) use feature::{
