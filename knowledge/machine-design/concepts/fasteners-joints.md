@@ -1,20 +1,16 @@
 ---
 type: Concept
 title: Fasteners and joints
-description: Stub — threaded joints and purchased hardware; deepen from NASA RP-1228.
+description: Threaded joints and purchased hardware — preload basics plus pointers to clearance holes, counterbores, and AM heat-set inserts.
 status: draft
-updated: 2026-09-11
+updated: 2026-09-20
 topics: fasteners, joints, machine-elements
-keywords: bolt, preload, thread, washer, locking, NASA RP-1228
+keywords: bolt, preload, thread, washer, locking, NASA RP-1228, screw joint, engagement
 related_recipes: d-screw-vise, garden-bench
 sources: nasa-fastener
 ---
 
 # Fasteners and joints
-
-> **Stub.** High-level only. Full preload/torque/engagement distill from
-> NASA-RP-1228 is still TODO — do not treat this page as sizing guidance.
-
 
 Most assemblies are held by **purchased fasteners**, not by modeled threads
 alone. Call out the real hardware (size, grade/class, length, head, locking)
@@ -34,6 +30,16 @@ Core ideas (NASA Fastener Design Manual, public domain — see
 
 Modeled ISO/UN holes in noBS CAD are geometry aids. They do not certify
 strength. Do not publish load ratings from CAD alone.
+
+## Hole and insert roles (deepen here)
+
+For **clearance vs counterbore vs tap vs insert**, use
+[Fastener clearance & counterbore](fastener-clearance-counterbore.md).
+For FDM bosses and crush ribs, use
+[AM heat-set inserts](am-heat-set-inserts.md).
+
+Full preload/torque/engagement distill from NASA-RP-1228 remains a longer TODO —
+do not treat this overview as sizing guidance.
 
 ## In this product
 

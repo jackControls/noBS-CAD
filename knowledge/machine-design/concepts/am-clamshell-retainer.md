@@ -7,6 +7,7 @@ updated: 2026-09-20
 topics: dfam, am, snap-fit, joints, fdm
 keywords: clamshell retainer, slide fit, detent, clamp face, retainer clip, C-clip, frame retainer, removable slide, retention bump
 related_recipes: turbine-fit-coupons
+sources: nwtc-guns-dfm, doe-3d
 ---
 
 # AM clamshell retainer (slide first, detent second)

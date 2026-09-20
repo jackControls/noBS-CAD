@@ -7,6 +7,7 @@ updated: 2026-09-20
 topics: dfam, am, locators, joints, fdm
 keywords: alignment nubs, locating pin, dowel pin, locator, sock, wedding-cake nub, lofted cap, overconstraint, pilot feature, mate alignment
 related_recipes: turbine-fit-coupons, repeated-bracket-assembly
+sources: nwtc-guns-dfm, doe-3d
 ---
 
 # Alignment nubs vs pins

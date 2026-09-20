@@ -24,6 +24,7 @@ Provenance: [SOURCES](SOURCES.md).
 |-------|--------|
 | GD&T intro, datums, FCF, Rule #1 teaching | **seeded** — [gdt-intro](concepts/gdt-intro.md) |
 | Fits & clearances (class-level) | **seeded** — [fits-clearances](concepts/fits-clearances.md) |
+| Tolerance stack-up (method) | **seeded (citation-only)** — [tolerance-stackup-intro](concepts/tolerance-stackup-intro.md) |
 | Drawing vs MBD / PMI walkthrough | **planned** |
 | Inspection / metrology bridge | **planned** |
 
@@ -31,9 +32,9 @@ Provenance: [SOURCES](SOURCES.md).
 
 | Topic | Status |
 |-------|--------|
-| Fasteners & joints (stub→deepen) | **seeded (thin)** — [fasteners-joints](concepts/fasteners-joints.md) |
+| Fasteners & joints | **seeded** — [fasteners-joints](concepts/fasteners-joints.md), [fastener-clearance-counterbore](concepts/fastener-clearance-counterbore.md), [am-heat-set-inserts](concepts/am-heat-set-inserts.md) |
 | Shafts, keys, retaining rings | **planned** |
-| Bearings | **planned** |
+| Bearings / hubs / seats | **seeded (partial)** — [bearing-stacks](../concepts/bearing-stacks.md) |
 | Springs, seals, couplings | **planned** |
 | Power screws / lead screws | **planned** (vise recipe exists) |
 
@@ -42,6 +43,7 @@ Provenance: [SOURCES](SOURCES.md).
 | Topic | Status |
 |-------|--------|
 | Linkages, gears, cams, belts, mobility | **planned** — until then link MIT OCW (`mit-272`) |
+| Technic-style beam/pin envelope | **seeded (unofficial)** — [technic-envelope](concepts/technic-envelope.md) |
 | Product joints demo | use recipe `vertical-axis-turbine` |
 
 ## D. Materials
@@ -57,9 +59,12 @@ Provenance: [SOURCES](SOURCES.md).
 |-------|--------|
 | DFM overview | **seeded** — [dfm-overview](concepts/dfm-overview.md) |
 | Process guidelines | **seeded** — [dfm-process-guidelines](concepts/dfm-process-guidelines.md) |
-| DFAM deep dive | **seeded (partial)** — [am-snap-fit](concepts/am-snap-fit.md), [am-thin-walls](concepts/am-thin-walls.md), [am-clamshell-retainer](concepts/am-clamshell-retainer.md) |
+| DFAM deep dive | **seeded (partial)** — [am-snap-fit](concepts/am-snap-fit.md), [am-thin-walls](concepts/am-thin-walls.md), [am-clamshell-retainer](concepts/am-clamshell-retainer.md), [am-heat-set-inserts](concepts/am-heat-set-inserts.md), [am-ribs-gussets-draft](concepts/am-ribs-gussets-draft.md), [am-supports-overhangs](concepts/am-supports-overhangs.md) |
 | Fillet vs chamfer | **seeded** — [fillet-chamfer](concepts/fillet-chamfer.md) |
 | Alignment nubs vs pins | **seeded** — [alignment-nubs-pins](concepts/alignment-nubs-pins.md) |
+| Locating schemes / DOF | **seeded** — [locating-scheme-dof](concepts/locating-scheme-dof.md) |
+| Tolerance stack-up intro | **seeded (citation-only)** — [tolerance-stackup-intro](concepts/tolerance-stackup-intro.md) |
+| Technic-style envelope | **seeded (unofficial P2)** — [technic-envelope](concepts/technic-envelope.md) |
 
 ## F. Design hygiene
 

@@ -728,6 +728,34 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/machine-design/concepts/am-clamshell-retainer.md"),
     },
     KnowledgeFile {
+        path: "machine-design/concepts/am-heat-set-inserts.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-heat-set-inserts.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/fastener-clearance-counterbore.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/fastener-clearance-counterbore.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/am-ribs-gussets-draft.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-ribs-gussets-draft.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/locating-scheme-dof.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/locating-scheme-dof.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/tolerance-stackup-intro.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/tolerance-stackup-intro.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/am-supports-overhangs.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/am-supports-overhangs.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/technic-envelope.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/technic-envelope.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/taxonomy.md",
         text: include_str!("../../../knowledge/machine-design/taxonomy.md"),
     },
@@ -1008,10 +1036,148 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn heat_set_insert_boss_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "heat-set insert boss crush ribs",
+            "brass threaded insert FDM boss",
+            "melt insert pilot hole",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("am-heat-set-inserts")),
+                "expected am-heat-set-inserts for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn fastener_clearance_counterbore_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "fastener clearance counterbore",
+            "tap drill vs heat-set insert",
+            "screw clearance hole head recess",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter()
+                    .any(|h| h.id.contains("fastener-clearance-counterbore")),
+                "expected fastener-clearance-counterbore for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn ribs_gussets_draft_am_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "ribs gussets draft AM",
+            "stiffener rib FDM even wall",
+            "boss gusset brace",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("am-ribs-gussets-draft")),
+                "expected am-ribs-gussets-draft for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn press_fit_hub_bearing_seat_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "press fit hub bearing seat",
+            "hub lead-in shaft shoulder",
+            "bearing bore journal shoulder",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("bearing-stacks")),
+                "expected bearing-stacks for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn locating_scheme_overconstraint_dof_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "overconstraint DOF locating scheme",
+            "pin and slot primary secondary locator",
+            "3-2-1 kinematic location",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("locating-scheme-dof")),
+                "expected locating-scheme-dof for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn tolerance_stackup_intro_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "tolerance stack-up dimensional loop",
+            "worst case stackup RSS",
+            "assembly tolerance accumulation",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("tolerance-stackup-intro")),
+                "expected tolerance-stackup-intro for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn supports_bridging_overhangs_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "support strategy overhang bridging",
+            "FDM overhang angle self-supporting",
+            "bridge length support cleanup",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("am-supports-overhangs")),
+                "expected am-supports-overhangs for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn technic_lego_envelope_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "Technic Lego pin beam envelope",
+            "LEGO compatible pin diameter pitch",
+            "technic beam hole pitch unofficial",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("technic-envelope")),
+                "expected technic-envelope for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
     #[test]
     fn check_corpus_ok() {
         let n = check_corpus().expect("corpus check");
-        assert!(n >= 25);
+        assert!(n >= 32);
     }
 
     #[test]
@@ -1026,6 +1192,13 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "concepts/adversarial-mesh-audit.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/alignment-nubs-pins.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-clamshell-retainer.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-heat-set-inserts.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/fastener-clearance-counterbore.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-ribs-gussets-draft.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/locating-scheme-dof.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/tolerance-stackup-intro.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-supports-overhangs.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/technic-envelope.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));
         assert!(knowledge_file_by_uri("nbcad://knowledge/../etc/passwd").is_none());

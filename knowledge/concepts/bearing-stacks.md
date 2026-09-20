@@ -1,12 +1,16 @@
 ---
 type: Concept
-title: Bearing supports and axial retention
-description: Purchased bearing variants, inner-race contact, spacer stacks, shaft collars, access and low-drag assembly.
+title: Bearing supports, hubs, and axial retention
+description: Purchased bearing seats, press-fit hubs, shaft lead-in, shoulders, spacer stacks, and low-drag assembly for printed housings.
 status: stable
-updated: 2026-09-11
+updated: 2026-09-20
+topics: bearings, machine-elements, fits, am, dfm
+keywords: bearing seat, press fit hub, hub lead-in, shaft shoulder, bearing bore, journal, inner race, outer race, spacer stack, shaft collar, H7, interference seat, slip fit housing
+related_recipes: turbine-fit-coupons, vertical-axis-turbine, d-screw-vise-fit
+sources: nasa-bearing, nist-gdt-2
 ---
 
-# Bearing supports and axial retention
+# Bearing supports, hubs, and axial retention
 
 Use this when a printed housing supports a rotating shaft or when a collar,
 washer or spacer retains a bearing. Trace the radial and axial load paths and
@@ -31,6 +35,34 @@ two-piece clamp MSP-8-F is 18 mm OD and 9 mm wide. These are different parts,
 not interchangeable clearance envelopes.
 [Set-screw catalog](https://www.ruland.com/shaft-collars/set-screw-shaft-collar/msc-metric.html?p=4),
 [clamp collar](https://www.ruland.com/msp-8-f.html).
+
+## Press-fit hub and bearing seat (roles)
+
+Name **which ring** is stationary and which rotates, then assign fit **roles**
+(not tribal “H7 everywhere”):
+
+| Interface | Common intent | Notes |
+|-----------|---------------|-------|
+| Shaft ↔ **inner** ring | Often light press / firm locate | Press on the inner ring only |
+| Housing bore ↔ **outer** ring | Slip, transition, or light press | Printed bores shrink — coupon first |
+| Hub OD ↔ mate bore | Press hub / pulley / gear | Lead-in + shoulder stop |
+
+See [fits & clearances](../machine-design/concepts/fits-clearances.md) for class
+language. Preferred-fit codes stay **link-out**; do not treat this page as an
+ISO 286 chart.
+
+### Hub / seat geometry checklist
+
+1. **Lead-in** — short chamfer or radius on the entering end of shaft, hub, or
+   housing bore so the ring starts square ([fillet vs chamfer](../machine-design/concepts/fillet-chamfer.md)).
+2. **Shoulder / abutment** — positive axial stop at the correct race face;
+   diameter must clear seals/shields per the bearing drawing.
+3. **Relief / undercut** — optional grind relief so the fillet does not hold the
+   race off the shoulder.
+4. **Depth** — seat depth ≥ bearing width (or intentional stand-proud); do not
+   bury seals against a flat floor that rubs.
+5. **Wall around printed seats** — remaining housing wall after the bore must
+   meet process min ([AM thin walls](../machine-design/concepts/am-thin-walls.md)).
 
 ## Separate contact from clearance
 
@@ -64,3 +96,6 @@ Catalog bearing load ratings do not rate the printed housing or its clamps.
 An ideal revolute joint proves a kinematic relationship, not bearing friction,
 alignment, retention or durability. See [additive workholding](additive-workholding.md)
 and [small generators](small-wind-generators.md) for related checks.
+
+Related: [locating schemes](../machine-design/concepts/locating-scheme-dof.md),
+[tolerance stack-up intro](../machine-design/concepts/tolerance-stackup-intro.md).

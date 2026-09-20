@@ -6,7 +6,7 @@ status: draft
 updated: 2026-09-20
 topics: dfam, mesh, export, validation, am, fdm
 keywords: adversarial mesh audit, manifold, watertight, wall probe, thin wall seat, clip shard, boolean artifact, non-manifold, export preflight, solid_export_preflight, printable solid, IFC
-related_recipes: turbine-fit-coupons, export-print
+related_recipes: turbine-fit-coupons
 ---
 
 # Adversarial mesh and artifact audit

@@ -27,7 +27,7 @@ Keep concepts **thin**. Longer material lives in the repository’s
 - [Gear identification and compatible pairs](concepts/gears.md) - Module/DP, OD limits, pressure angle, ratio changes and mounting.
 - [Additive workholding](concepts/additive-workholding.md) - Captured guides, assembly access, D-flat roots and qualification.
 - [Small wind rotors and low-speed generators](concepts/small-wind-generators.md) - Power, startup, gearing, motor dimensions and measured loads.
-- [Bearing supports and axial retention](concepts/bearing-stacks.md) - Hardware variants, inner-race contact, spacer stacks and low-drag assembly.
+- [Bearing supports, hubs, and axial retention](concepts/bearing-stacks.md) - Seats, press-fit hubs, lead-in, shoulders, spacer stacks.
 
 ## Read through MCP
 
@@ -65,6 +65,13 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [Fillet vs chamfer](machine-design/concepts/fillet-chamfer.md) - When to blend vs bevel.
 - [Alignment nubs vs pins](machine-design/concepts/alignment-nubs-pins.md) - Locator class: short AM nubs/socks vs pins/dowels.
 - [AM clamshell retainer](machine-design/concepts/am-clamshell-retainer.md) - Slide-fit first, then optional detents.
+- [AM heat-set inserts](machine-design/concepts/am-heat-set-inserts.md) - Bosses, crush ribs, heat-set vs tapped plastic.
+- [Fastener clearance & counterbore](machine-design/concepts/fastener-clearance-counterbore.md) - Clearance, counterbore, tap vs insert roles.
+- [AM ribs, gussets, and draft](machine-design/concepts/am-ribs-gussets-draft.md) - Stiffen with ribs; draft and even sections.
+- [Locating schemes & DOF](machine-design/concepts/locating-scheme-dof.md) - Primary/secondary locate; avoid overconstraint.
+- [Tolerance stack-up intro](machine-design/concepts/tolerance-stackup-intro.md) - Dimensional loops; citation-only, no closed tables.
+- [AM supports & overhangs](machine-design/concepts/am-supports-overhangs.md) - Support strategy, bridging, overhang design.
+- [Technic-style envelope (unofficial)](machine-design/concepts/technic-envelope.md) - Approximate pitch/pin notes; verify; unofficial.
 
 Use the listed resources for their stated scope, then consult the cited sources
 for more detail. The bundle is guidance for design decisions; it does not supply

@@ -1,5 +1,13 @@
 # noBS CAD knowledge update log
 
+## 2026-09-20 — AM/mechanical Concept wave (searchable KB)
+
+Added heat-set inserts, fastener clearance/counterbore, ribs/gussets/draft,
+locating-scheme DOF, tolerance stack-up intro (citation-only), supports/overhangs,
+and unofficial Technic envelope. Deepened bearing-stacks (press-fit hub / lead-in /
+shoulder). Wired embeds + BM25 unit tests; corpus now 32 Concept pages.
+
+
 ## 2026-09-19 — sync docs/machine-design-kb onto main
 
 Replayed help/KB unique work onto `origin/main` tip (full 139-commit rebase abandoned:

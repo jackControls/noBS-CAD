@@ -6,7 +6,7 @@ status: draft
 updated: 2026-09-19
 topics: dfam, am, fdm, dfm, print
 keywords: wall thickness, thin wall, min wall, FDM, layer lines, anisotropy, print orientation, overhang, support, nozzle
-related_recipes: turbine-fit-coupons, export-print
+related_recipes: turbine-fit-coupons
 sources: nwtc-guns-dfm, doe-3d
 ---
 
