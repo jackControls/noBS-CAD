@@ -2391,6 +2391,18 @@ fn tool_specs() -> Vec<ToolSpec> {
             ),
         ),
         ToolSpec::direct(
+            "sketch_delete_constraint", "Delete geometric constraint",
+            "Remove a geometric constraint by its stable constraint id.",
+            "delete_constraint", Payload::Object,
+            object_schema(json!({"constraint_id":{"type":"integer","minimum":1}}), &["constraint_id"]),
+        ),
+        ToolSpec::direct(
+            "sketch_set_dimension_mode", "Set dimension mode",
+            "Choose a driving dimension or a reference measurement without deleting its annotation.",
+            "set_dimension_mode", Payload::Object,
+            object_schema(json!({"constraint_id":{"type":"integer","minimum":1},"mode":{"type":"string","enum":["driving","reference"]}}), &["constraint_id","mode"]),
+        ),
+        ToolSpec::direct(
             "sketch_add_dimension",
             "Add driving dimension",
             "Add a driving dimension to selected entities, optionally using a formula.",
@@ -3426,6 +3438,12 @@ fn tool_specs() -> Vec<ToolSpec> {
                 }),
                 &["component_id", "name"],
             ),
+        ),
+        ToolSpec::direct(
+            "assembly_duplicate_occurrence", "Duplicate component instance",
+            "Copy a component instance and its complete subtree, preserving reusable definitions and internal joints. Parent and local pose are optional.",
+            "assembly_duplicate_occurrence", Payload::Object,
+            object_schema(json!({"occurrence_id":{"type":"integer","minimum":1},"parent_occurrence_id":{"type":["integer","null"],"minimum":1},"local_pose":assembly_transform.clone()}), &["occurrence_id"]),
         ),
         ToolSpec::direct(
             "assembly_update_occurrence",

@@ -679,6 +679,12 @@ pub static MUTATES: &[MutateSpec] = &[
         execution: ExecutionKind::Direct,
     },
     MutateSpec {
+        name: "assembly_duplicate_occurrence",
+        engine_method: "assembly_duplicate_occurrence",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
         name: "assembly_update_occurrence",
         engine_method: "assembly_update_occurrence",
         payload: PayloadKind::Object,
