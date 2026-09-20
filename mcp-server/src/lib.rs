@@ -3735,7 +3735,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                 json!({
                     "focus": {
                         "type": "string",
-                        "enum": ["document", "assembly", "sketch", "solid", "modify", "body_ops", "datums", "history", "inspect", "print"]
+                        "enum": ["document", "assembly", "sketch", "solid", "modify", "body_ops", "datums", "history", "inspect", "print", "cam"]
                     },
                     "explicit": {
                         "type": "boolean",
