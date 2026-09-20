@@ -28,7 +28,7 @@ pub(super) fn begin(
     owner: &DocumentContext,
     form_id: u64,
     validate_control: impl FnOnce() -> Result<(), String>,
-    state: &mut NativeBuild,
+    state: &mut NativeFeature,
 ) -> Result<Value, String> {
     let editor = state
         .editor
@@ -44,14 +44,35 @@ pub(super) fn begin(
         if worker::available(world) {
             let ticket = prepare(engine, bridge, owner, editor, validate_control)?;
             let callback_ticket = ticket.clone();
-            let queued = worker::enqueue_operation(
+            let stage = editor.stage.clone();
+            let dispatch_ticket = ticket.clone();
+            let queued = worker::enqueue_transaction(
                 world,
-                ticket.owner().clone(),
-                ticket.model_revision(),
                 ticket.operation().to_owned(),
-                ticket.arguments().clone(),
+                move |services, guard| {
+                    if let Some(stage) = stage {
+                        services.bridge.apply_native_prepared_edit_at(
+                            &services.engine,
+                            dispatch_ticket.owner(),
+                            dispatch_ticket.model_revision(),
+                            dispatch_ticket.operation(),
+                            dispatch_ticket.arguments(),
+                            &stage,
+                            || guard.validate(),
+                        )
+                    } else {
+                        services.bridge.apply_native_mutation_at(
+                            &services.engine,
+                            dispatch_ticket.owner(),
+                            dispatch_ticket.model_revision(),
+                            dispatch_ticket.operation(),
+                            dispatch_ticket.arguments(),
+                            || guard.validate(),
+                        )
+                    }
+                },
                 move |world, services, outcome| {
-                    let mut state = world.remove_resource::<NativeBuild>().unwrap_or_default();
+                    let mut state = world.remove_resource::<NativeFeature>().unwrap_or_default();
                     let result = complete(
                         &services.engine,
                         &services.bridge,
@@ -76,14 +97,26 @@ pub(super) fn begin(
     // Embedded hosts without a native worker still use the exact shared
     // mutation dispatcher and validate the original control at the write.
     let ticket = prepare(engine, bridge, owner, editor, || Ok(()))?;
-    let outcome = bridge.apply_native_mutation_at(
-        engine,
-        ticket.owner(),
-        ticket.model_revision(),
-        ticket.operation(),
-        ticket.arguments(),
-        validate_control,
-    );
+    let outcome = if let Some(stage) = &editor.stage {
+        bridge.apply_native_prepared_edit_at(
+            engine,
+            ticket.owner(),
+            ticket.model_revision(),
+            ticket.operation(),
+            ticket.arguments(),
+            stage,
+            validate_control,
+        )
+    } else {
+        bridge.apply_native_mutation_at(
+            engine,
+            ticket.owner(),
+            ticket.model_revision(),
+            ticket.operation(),
+            ticket.arguments(),
+            validate_control,
+        )
+    };
     complete(engine, bridge, world, state, form_id, &ticket, outcome)
 }
 
@@ -91,7 +124,7 @@ fn complete(
     engine: &AppState,
     bridge: &SessionBridgeState,
     world: &mut World,
-    state: &mut NativeBuild,
+    state: &mut NativeFeature,
     form_id: u64,
     ticket: &ApplyTicket,
     outcome: Result<NativeMutationResult, String>,

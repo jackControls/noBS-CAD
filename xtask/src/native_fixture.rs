@@ -99,6 +99,10 @@ pub(super) fn start(mut args: impl Iterator<Item = String>, name: &str) -> Resul
             .context("Use --out PATH for local evidence")?,
     );
     ensure!(out.is_absolute(), "The evidence directory must be absolute");
+    ensure!(
+        !out.exists() || fs::read_dir(&out)?.next().is_none(),
+        "Choose an empty evidence directory; preserve partial runs as well as completed results"
+    );
     let project = out.join(format!("{name}.nbcad"));
     let capture = out.join(format!("{name}.png"));
     let report = out.join(format!("{name}.json"));

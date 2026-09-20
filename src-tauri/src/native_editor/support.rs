@@ -55,7 +55,7 @@ pub(super) fn execute(
     if editor.stamp.as_ref().is_some_and(|s| s.sketch.is_some()) {
         return Err("Finish the current sketch before starting another".into());
     }
-    if crate::session_bridge::native_interface::build::panel(world).is_some() {
+    if crate::session_bridge::native_interface::feature::panel(world).is_some() {
         return Err("Finish or cancel the feature before creating a sketch".into());
     }
     match command {

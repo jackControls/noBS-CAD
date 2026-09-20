@@ -13,16 +13,36 @@ mod paths;
 use paths::PathFields;
 mod rib;
 use rib::RibFields;
+mod edges;
+use edges::EdgeFields;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BuildKind {
+pub(crate) enum SolidFormKind {
     Extrude,
     Revolve,
     Sweep,
     Loft,
     Rib,
+    Fillet,
+    Chamfer,
 }
-impl BuildKind {
+impl SolidFormKind {
+    pub(crate) fn from_feature_kind(kind: FeatureKind) -> Option<Self> {
+        Some(match kind {
+            FeatureKind::Extrude => Self::Extrude,
+            FeatureKind::Revolve => Self::Revolve,
+            FeatureKind::Sweep => Self::Sweep,
+            FeatureKind::Loft => Self::Loft,
+            FeatureKind::Rib => Self::Rib,
+            FeatureKind::Fillet => Self::Fillet,
+            FeatureKind::Chamfer => Self::Chamfer,
+            _ => return None,
+        })
+    }
+    pub(crate) fn group(self) -> &'static str {
+        nbcad_interface::catalog::group_for(self.operation())
+            .expect("Solid feature is in the shared catalog")
+    }
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Extrude => "Extrude",
@@ -30,6 +50,8 @@ impl BuildKind {
             Self::Sweep => "Sweep",
             Self::Loft => "Loft",
             Self::Rib => "Rib",
+            Self::Fillet => "Fillet",
+            Self::Chamfer => "Chamfer",
         }
     }
     pub(crate) fn operation(self) -> &'static str {
@@ -39,6 +61,8 @@ impl BuildKind {
             Self::Sweep => "solid_sweep",
             Self::Loft => "solid_loft",
             Self::Rib => "solid_rib",
+            Self::Fillet => "solid_fillet",
+            Self::Chamfer => "solid_chamfer",
         }
     }
 }
@@ -55,7 +79,7 @@ pub(crate) struct FormModel<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum BuildField {
+pub(crate) enum SolidField {
     Source,
     Operation,
     Extent,
@@ -83,6 +107,9 @@ pub(crate) enum BuildField {
     Continuity,
     Thickness,
     Symmetric,
+    Edges,
+    Radius,
+    TangentChain,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,8 +123,8 @@ pub(crate) enum ProfileSource {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct BuildFieldView {
-    pub field: BuildField,
+pub(crate) struct SolidFieldView {
+    pub field: SolidField,
     pub label: String,
     pub value: Field,
     pub error: Option<String>,
@@ -155,7 +182,7 @@ enum Phase {
 /// Profile feature fields, separated from rendering and event delivery. The
 /// payload is always the established nbcad-solid DTO consumed by MCP too.
 #[derive(Debug)]
-pub(crate) struct BuildForm {
+pub(crate) struct SolidForm {
     stamp: Stamp,
     feature: Option<FeatureId>,
     source: ProfileSource,
@@ -173,9 +200,10 @@ pub(crate) struct BuildForm {
     revolve: Option<RevolveFields>,
     paths: Option<PathFields>,
     rib: Option<RibFields>,
+    edges: Option<EdgeFields>,
 }
 
-impl BuildForm {
+impl SolidForm {
     pub(crate) fn new(model: &FormModel<'_>) -> Self {
         let units = model.document.settings.units;
         Self {
@@ -201,31 +229,37 @@ impl BuildForm {
             revolve: None,
             paths: None,
             rib: None,
+            edges: None,
         }
     }
 
-    pub(crate) fn new_kind(kind: BuildKind, model: &FormModel<'_>) -> Self {
+    pub(crate) fn new_kind(kind: SolidFormKind, model: &FormModel<'_>) -> Self {
         let mut form = Self::new(model);
-        if kind == BuildKind::Revolve {
+        if kind == SolidFormKind::Revolve {
             form.revolve = Some(RevolveFields::new(model.document.settings.units));
-        } else if matches!(kind, BuildKind::Sweep | BuildKind::Loft) {
+        } else if matches!(kind, SolidFormKind::Sweep | SolidFormKind::Loft) {
             form.paths = Some(PathFields::new(kind));
-        } else if kind == BuildKind::Rib {
+        } else if kind == SolidFormKind::Rib {
             form.rib = Some(RibFields::new(model.document.settings.units));
+        } else if matches!(kind, SolidFormKind::Fillet | SolidFormKind::Chamfer) {
+            form.edges = Some(EdgeFields::new(kind, model.document.settings.units));
         }
         form
     }
-    pub(crate) fn kind(&self) -> BuildKind {
+    pub(crate) fn kind(&self) -> SolidFormKind {
+        if let Some(edges) = &self.edges {
+            return edges.kind;
+        }
         if self.rib.is_some() {
-            return BuildKind::Rib;
+            return SolidFormKind::Rib;
         }
         if let Some(paths) = &self.paths {
             return paths.kind;
         }
         if self.revolve.is_some() {
-            BuildKind::Revolve
+            SolidFormKind::Revolve
         } else {
-            BuildKind::Extrude
+            SolidFormKind::Extrude
         }
     }
 
@@ -298,6 +332,9 @@ impl BuildForm {
     pub(crate) fn is_busy(&self) -> bool {
         self.phase == Phase::Applying
     }
+    pub(crate) fn is_feature_edit(&self) -> bool {
+        self.feature.is_some()
+    }
     pub(crate) fn engine_error(&self) -> Option<&str> {
         self.engine_error.as_deref()
     }
@@ -345,18 +382,23 @@ impl BuildForm {
 
     pub(crate) fn set_value(
         &mut self,
-        field: BuildField,
+        field: SolidField,
         value: &str,
         model: &FormModel<'_>,
     ) -> Result<(), String> {
         self.editing(model)?;
+        if let Some(edges) = &mut self.edges {
+            edges.set(field, value)?;
+            self.changed();
+            return Ok(());
+        }
         if let Some(rib) = &mut self.rib {
             if matches!(
                 field,
-                BuildField::Thickness
-                    | BuildField::Distance
-                    | BuildField::Extent
-                    | BuildField::Symmetric
+                SolidField::Thickness
+                    | SolidField::Distance
+                    | SolidField::Extent
+                    | SolidField::Symmetric
             ) {
                 rib.set(field, value)?;
                 self.changed();
@@ -365,13 +407,13 @@ impl BuildForm {
         }
         if matches!(
             field,
-            BuildField::GuideEnabled
-                | BuildField::CenterlineEnabled
-                | BuildField::Orientation
-                | BuildField::Transition
-                | BuildField::ForceC1
-                | BuildField::Ruled
-                | BuildField::Continuity
+            SolidField::GuideEnabled
+                | SolidField::CenterlineEnabled
+                | SolidField::Orientation
+                | SolidField::Transition
+                | SolidField::ForceC1
+                | SolidField::Ruled
+                | SolidField::Continuity
         ) {
             self.paths
                 .as_mut()
@@ -382,12 +424,12 @@ impl BuildForm {
         }
         if matches!(
             field,
-            BuildField::Axis
-                | BuildField::OriginX
-                | BuildField::OriginY
-                | BuildField::DirectionX
-                | BuildField::DirectionY
-                | BuildField::Angle
+            SolidField::Axis
+                | SolidField::OriginX
+                | SolidField::OriginY
+                | SolidField::DirectionX
+                | SolidField::DirectionY
+                | SolidField::Angle
         ) {
             self.revolve
                 .as_mut()
@@ -397,15 +439,15 @@ impl BuildForm {
             return Ok(());
         }
         match field {
-            BuildField::Distance => self.distance.set_text(value.into()),
-            BuildField::SecondDistance => self.second_distance.set_text(value.into()),
-            BuildField::Taper => self.taper.set_text(value.into()),
-            BuildField::Operation => {
+            SolidField::Distance => self.distance.set_text(value.into()),
+            SolidField::SecondDistance => self.second_distance.set_text(value.into()),
+            SolidField::Taper => self.taper.set_text(value.into()),
+            SolidField::Operation => {
                 self.operation =
                     serde_json::from_value(json!(value)).map_err(|error| error.to_string())?;
                 self.operation_manual = true;
             }
-            BuildField::Extent => {
+            SolidField::Extent => {
                 // Deserialize the existing tagged extent type rather than
                 // maintaining a parallel variant/schema registry.
                 self.extent = serde_json::from_value(
@@ -413,7 +455,7 @@ impl BuildForm {
                 )
                 .map_err(|error| error.to_string())?;
             }
-            BuildField::Flip => {
+            SolidField::Flip => {
                 self.flip = match value {
                     "true" => true,
                     "false" => false,
@@ -432,7 +474,7 @@ impl BuildForm {
         model: &FormModel<'_>,
     ) -> Result<(), String> {
         self.editing(model)?;
-        if self.kind() != BuildKind::Extrude && matches!(source, ProfileSource::Face(_)) {
+        if self.kind() != SolidFormKind::Extrude && matches!(source, ProfileSource::Face(_)) {
             return Err("This feature needs closed sketch profiles".into());
         }
         if source != ProfileSource::None {
@@ -479,8 +521,8 @@ impl BuildForm {
         Ok(())
     }
 
-    fn request(&self, model: &FormModel<'_>) -> Result<ExtrudeRequest, Vec<(BuildField, String)>> {
-        use BuildField as F;
+    fn request(&self, model: &FormModel<'_>) -> Result<ExtrudeRequest, Vec<(SolidField, String)>> {
+        use SolidField as F;
         let mut errors = Vec::new();
         if let Err(error) = self.check_model(model) {
             return Err(vec![(F::Source, error)]);
@@ -619,7 +661,7 @@ impl BuildForm {
 
     pub(crate) fn prepare_preview(&self, model: &FormModel<'_>) -> Result<PreviewTicket, String> {
         self.editing(model)?;
-        if self.kind() != BuildKind::Extrude {
+        if self.kind() != SolidFormKind::Extrude {
             return Err("This feature uses reference highlighting".into());
         }
         let request = self.request(model).map_err(first_error)?;
@@ -702,7 +744,10 @@ impl BuildForm {
             && self.stamp.edit == other.edit
     }
 
-    pub(crate) fn fields(&self, model: &FormModel<'_>) -> Vec<BuildFieldView> {
+    pub(crate) fn fields(&self, model: &FormModel<'_>) -> Vec<SolidFieldView> {
+        if self.edges.is_some() {
+            return self.edge_fields(model);
+        }
         if self.rib.is_some() {
             return self.rib_fields(model);
         }
@@ -712,7 +757,7 @@ impl BuildForm {
         if self.revolve.is_some() {
             return self.revolve_fields(model);
         }
-        use BuildField as F;
+        use SolidField as F;
         let issues = self.request(model).err().unwrap_or_default();
         let enabled = self.phase == Phase::Editing && self.check_model(model).is_ok();
         let text = |value: &MeasurementInput| Field::Text {
@@ -820,7 +865,7 @@ impl BuildForm {
             ),
         ];
         rows.into_iter()
-            .map(|(field, label, value, visible)| BuildFieldView {
+            .map(|(field, label, value, visible)| SolidFieldView {
                 field,
                 label,
                 value,
@@ -835,11 +880,14 @@ impl BuildForm {
     }
 }
 
-impl BuildForm {
+impl SolidForm {
     fn payload(
         &self,
         model: &FormModel<'_>,
-    ) -> Result<(&'static str, Value), Vec<(BuildField, String)>> {
+    ) -> Result<(&'static str, Value), Vec<(SolidField, String)>> {
+        if self.edges.is_some() {
+            return self.edge_payload(model);
+        }
         if self.rib.is_some() {
             return self.rib_payload(model);
         }
@@ -863,11 +911,11 @@ impl BuildForm {
         };
         value
             .map(|v| (op, v))
-            .map_err(|e| vec![(BuildField::Source, e.to_string())])
+            .map_err(|e| vec![(SolidField::Source, e.to_string())])
     }
 }
 
-fn first_error(errors: Vec<(BuildField, String)>) -> String {
+fn first_error(errors: Vec<(SolidField, String)>) -> String {
     errors
         .into_iter()
         .next()

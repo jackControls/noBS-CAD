@@ -10,6 +10,7 @@ mod history;
 mod profile;
 mod stable;
 mod thread;
+mod topology;
 
 pub use dto::*;
 pub use history::{ordered_path, plane_bases_coplanar, SolidDocument, SolidError};
@@ -21,3 +22,4 @@ pub use thread::{
     iso_metric_grade6_envelope, iso_metric_thread_envelope, rounded_thread_diameters,
     IsoMetricThreadEnvelope, ThreadFit,
 };
+pub use topology::tangent_chain_edges;

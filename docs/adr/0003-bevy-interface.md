@@ -126,3 +126,14 @@ Native document tabs retain their own cameras. New and newly opened files fit
 their model; changing tabs or closing a tab restores that document's view rather
 than inheriting the previous model's zoom. AccessKit publishes native radio and
 checkbox states and text field values from the same retained control registry.
+
+The shared native solid-form transaction serves both Build and Refine; control
+surfaces come from each operation's existing catalog group. Fillet and Chamfer
+use the shared Rust tangent-chain rule, also consumed by the current desktop
+and MCP. An edge-feature editor prepares its pre-feature scene in an isolated
+kernel on the modeling worker. Opening and Cancel preserve the live document,
+revision and history cursor. Apply transfers the successfully recomputed kernel
+under the original document receipt and records one Undo boundary. Separate
+renderer cache incarnations prevent the input preview from reusing final meshes.
+The `native-refine` Rust MCP suite checks rendered picking, units, invalid sizes,
+context-menu/double-click editing, Cancel, Undo/Redo, captures and saved parts.

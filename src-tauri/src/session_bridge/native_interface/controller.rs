@@ -436,7 +436,7 @@ fn update_inner(
                 } else {
                     1.
                 };
-                if build::panel::scroll_panel(world, cursor.to_array(), wheel.y * factor)
+                if feature::panel::scroll_panel(world, cursor.to_array(), wheel.y * factor)
                     || crate::native_editor::panel::scroll_panel(
                         world,
                         cursor.to_array(),
@@ -1062,8 +1062,8 @@ fn synchronize(
     let history = services
         .bridge
         .native_history_available(&services.engine, &owner)?;
-    build::synchronize(&services.engine, &services.bridge, world, &owner)?;
-    build::panel::synchronize_panel(
+    feature::synchronize(&services.engine, &services.bridge, world, &owner)?;
+    feature::panel::synchronize_panel(
         world,
         handle,
         &owner,
@@ -1160,23 +1160,23 @@ fn synchronize(
         (
             "extrude".to_owned(),
             "Extrude".to_owned(),
-            NativeCommand::Build(build::BuildCommand::Open { kind:build::BuildKind::Extrude, feature_id: None }),
+            NativeCommand::Feature(feature::FeatureCommand::Open { kind:feature::SolidFormKind::Extrude, feature_id: None }),
             presentation.mode == native_viewport::ViewportMode::Sketch
-                || build::panel(world).is_some(),
+                || feature::panel(world).is_some(),
             270.,
             34.,
             48.,
         ),
         (
             "revolve".to_owned(),"Revolve".to_owned(),
-            NativeCommand::Build(build::BuildCommand::Open {kind:build::BuildKind::Revolve,feature_id:None}),
-            presentation.mode==native_viewport::ViewportMode::Sketch || build::panel(world).is_some(),
+            NativeCommand::Feature(feature::FeatureCommand::Open {kind:feature::SolidFormKind::Revolve,feature_id:None}),
+            presentation.mode==native_viewport::ViewportMode::Sketch || feature::panel(world).is_some(),
             320.,34.,48.,
         ),
     ];
-    for (key,kind,x) in [("sweep",build::BuildKind::Sweep,370.),("loft",build::BuildKind::Loft,420.),("rib",build::BuildKind::Rib,470.)] {
-        rows.push((key.into(),kind.label().into(),NativeCommand::Build(build::BuildCommand::Open {kind,feature_id:None}),
-            presentation.mode==native_viewport::ViewportMode::Sketch||build::panel(world).is_some(),x,34.,48.));
+    for (key,kind,x) in [("sweep",feature::SolidFormKind::Sweep,370.),("loft",feature::SolidFormKind::Loft,420.),("rib",feature::SolidFormKind::Rib,470.),("solid-fillet",feature::SolidFormKind::Fillet,530.),("solid-chamfer",feature::SolidFormKind::Chamfer,580.)] {
+        rows.push((key.into(),kind.label().into(),NativeCommand::Feature(feature::FeatureCommand::Open {kind,feature_id:None}),
+            presentation.mode==native_viewport::ViewportMode::Sketch||feature::panel(world).is_some(),x,34.,48.));
     }
     if state.close_pending {
         rows.push((
@@ -1331,8 +1331,8 @@ fn synchronize(
         }
     });
     for (key, label, command, disabled, x, y, width) in rows {
-        let is_extrude = matches!(key.as_str(), "extrude" | "revolve" | "sweep" | "loft" | "rib");
-        let build_icon = match key.as_str() {"revolve"=>interface_shell::ribbon::Icon::Revolve,"sweep"=>interface_shell::ribbon::Icon::Sweep,"loft"=>interface_shell::ribbon::Icon::Loft,"rib"=>interface_shell::ribbon::Icon::Rib,_=>interface_shell::ribbon::Icon::Extrude};
+        let is_extrude = matches!(key.as_str(), "extrude" | "revolve" | "sweep" | "loft" | "rib" | "solid-fillet" | "solid-chamfer");
+        let build_icon = match key.as_str() {"revolve"=>interface_shell::ribbon::Icon::Revolve,"sweep"=>interface_shell::ribbon::Icon::Sweep,"loft"=>interface_shell::ribbon::Icon::Loft,"rib"=>interface_shell::ribbon::Icon::Rib,"solid-fillet"=>interface_shell::ribbon::Icon::Fillet,"solid-chamfer"=>interface_shell::ribbon::Icon::Chamfer,_=>interface_shell::ribbon::Icon::Extrude};
         let is_body = key.starts_with("body-") || key.starts_with("visibility-");
         let surface = command_group(&command);
         let entity = if let Some(entity) = state.controls.get(&key) {
@@ -1601,8 +1601,8 @@ fn decorate(
 fn command_group(command: &NativeCommand) -> &'static str {
     match command {
         NativeCommand::Sketch(_) => "sketch/draw",
-        NativeCommand::Build(_) => nbcad_interface::catalog::group_for("solid_extrude")
-            .expect("Extrude is in the product catalog"),
+        NativeCommand::Feature(feature::FeatureCommand::Open { kind, .. }) => kind.group(),
+        NativeCommand::Feature(_) => "document/history",
         NativeCommand::Mutation { operation, .. } => {
             nbcad_interface::catalog::group_for(operation).unwrap_or("document/session")
         }

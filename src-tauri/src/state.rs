@@ -89,6 +89,22 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Transfer an already recomputed editor model under the caller's document
+    /// receipt fence. Moving its kernel retains the B-rep cache and avoids a
+    /// second full replay at commit. The prepared state is consumed by this call.
+    pub(crate) fn install_prepared_document(&self, prepared: &AppState) -> Result<(), String> {
+        if std::ptr::eq(self, prepared) { return Err("An edit needs an isolated model".into()); }
+        let mut current = self.inner.lock().map_err(|_| "Engine lock poisoned")?;
+        let next_geometry = current.active().geometry_revision.checked_add(1).ok_or("Geometry revision exhausted")?;
+        let mut prepared = prepared.inner.lock().map_err(|_| "Prepared engine lock poisoned")?;
+        if prepared.active_session_id != current.active_session_id { return Err("Prepared edit belongs to another document".into()); }
+        let id = current.active_session_id.clone();
+        let mut next = prepared.sessions.remove(&id).ok_or("Prepared edit was already consumed")?;
+        next.geometry_revision = next_geometry;
+        current.sessions.insert(id, next);
+        Ok(())
+    }
+
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(NativeWorkspace::new()),

@@ -58,8 +58,8 @@ fn open(
         &fixture.bridge,
         world,
         owner,
-        &BuildCommand::Open {
-            kind: BuildKind::Extrude,
+        &FeatureCommand::Open {
+            kind: SolidFormKind::Extrude,
             feature_id,
         },
         &ControlInput::Click,
@@ -75,7 +75,7 @@ fn action(
     world: &mut World,
     owner: &DocumentContext,
     form_id: u64,
-    action: BuildControl,
+    action: FeatureControl,
     input: ControlInput,
 ) -> Result<Value, String> {
     reduce(
@@ -83,7 +83,7 @@ fn action(
         &fixture.bridge,
         world,
         owner,
-        &BuildCommand::Control { form_id, action },
+        &FeatureCommand::Control { form_id, action },
         &input,
         || Ok(()),
     )
@@ -94,7 +94,7 @@ fn field(
     world: &mut World,
     owner: &DocumentContext,
     id: u64,
-    field: BuildField,
+    field: SolidField,
     value: &str,
 ) {
     action(
@@ -102,7 +102,7 @@ fn field(
         world,
         owner,
         id,
-        BuildControl::Field(field),
+        FeatureControl::Field(field),
         ControlInput::SetValue(value.into()),
     )
     .unwrap();
@@ -117,6 +117,167 @@ fn maximum_z(fixture: &Fixture) -> f32 {
         .iter()
         .flat_map(|body| body.mesh.positions.chunks_exact(3).map(|point| point[2]))
         .fold(f32::NEG_INFINITY, f32::max)
+}
+
+#[test]
+fn edge_features_stage_original_topology_without_mutating_and_commit_one_undo_step() {
+    let _lock = super::super::super::tests::TEST_LOCK.lock().unwrap();
+    for kind in [SolidFormKind::Fillet, SolidFormKind::Chamfer] {
+        let fixture = Fixture::new();
+        let owner = sketch(&fixture);
+        fixture.bridge.apply_native_mutation(&fixture.engine,&owner,"solid_extrude",
+            &json!({"sketch_name":"Sketch1","profile_indices":[0],"operation":"new_body","extent":{"type":"distance","distance":10.}}),||Ok(())).unwrap();
+        let mut app = scene(&fixture, &owner);
+        let original = exported(&fixture);
+        let open_edge = |world: &mut World, feature_id| {
+            reduce(
+                &fixture.engine,
+                &fixture.bridge,
+                world,
+                &owner,
+                &FeatureCommand::Open { kind, feature_id },
+                &ControlInput::Click,
+                || Ok(()),
+            )
+            .unwrap()["form_id"]
+                .as_u64()
+                .unwrap()
+        };
+        let id = open_edge(app.world_mut(), None);
+        assert!(!panel(app.world()).unwrap().can_apply);
+        let model = model_snapshot(&fixture.engine);
+        let body = &model.scene.bodies[0];
+        let edge = body.edges.iter().find(|e| e.refinable).unwrap().id;
+        accept_pick(
+            &fixture.engine,
+            &fixture.bridge,
+            app.world_mut(),
+            &owner,
+            id,
+            FeaturePick::Edges {
+                body: Some(body.id),
+                edges: vec![edge],
+            },
+            || Ok(()),
+        )
+        .unwrap();
+        assert!(accept_pick(
+            &fixture.engine,
+            &fixture.bridge,
+            app.world_mut(),
+            &owner,
+            id,
+            FeaturePick::Edges {
+                body: Some(body.id),
+                edges: vec![nbcad_core::EdgeId(u64::MAX)]
+            },
+            || Ok(())
+        )
+        .is_err());
+        let size = if kind == SolidFormKind::Fillet {
+            SolidField::Radius
+        } else {
+            SolidField::Distance
+        };
+        field(&fixture, app.world_mut(), &owner, id, size, "-1 mm");
+        assert!(!panel(app.world()).unwrap().can_apply);
+        assert_eq!(exported(&fixture), original);
+        field(&fixture, app.world_mut(), &owner, id, size, "1 mm");
+        action(
+            &fixture,
+            app.world_mut(),
+            &owner,
+            id,
+            FeatureControl::Apply,
+            ControlInput::Click,
+        )
+        .unwrap();
+        assert!(fixture.engine.viewport_snapshot().2.errors.is_empty());
+        let created = exported(&fixture);
+        let feature = fixture
+            .engine
+            .document_snapshot()
+            .features
+            .last()
+            .unwrap()
+            .id
+            .0;
+        let receipt = fixture
+            .bridge
+            .native_document_receipt(&fixture.engine, &owner)
+            .unwrap();
+        let id = open_edge(app.world_mut(), Some(feature));
+        assert_eq!(
+            fixture
+                .bridge
+                .native_document_receipt(&fixture.engine, &owner)
+                .unwrap(),
+            receipt
+        );
+        assert_eq!(
+            exported(&fixture),
+            created,
+            "opening a feature must leave the live cursor and document untouched"
+        );
+        assert!(
+            panel(app.world()).unwrap().can_apply,
+            "the original edge must be selectable in the input model"
+        );
+        field(&fixture, app.world_mut(), &owner, id, size, "2 mm");
+        action(
+            &fixture,
+            app.world_mut(),
+            &owner,
+            id,
+            FeatureControl::Cancel,
+            ControlInput::Click,
+        )
+        .unwrap();
+        assert_eq!(exported(&fixture), created);
+        let id = open_edge(app.world_mut(), Some(feature));
+        field(&fixture, app.world_mut(), &owner, id, size, "1000 mm");
+        assert!(action(
+            &fixture,
+            app.world_mut(),
+            &owner,
+            id,
+            FeatureControl::Apply,
+            ControlInput::Click
+        )
+        .is_err());
+        assert_eq!(
+            exported(&fixture),
+            created,
+            "kernel failure must preserve the complete live document"
+        );
+        field(&fixture, app.world_mut(), &owner, id, size, "2 mm");
+        action(
+            &fixture,
+            app.world_mut(),
+            &owner,
+            id,
+            FeatureControl::Apply,
+            ControlInput::Click,
+        )
+        .unwrap();
+        let edited = exported(&fixture);
+        assert_ne!(edited, created);
+        assert_eq!(fixture.engine.document_snapshot().rollback_index, 3);
+        let result = fixture
+            .bridge
+            .apply_native_history(&fixture.engine, &owner, false, || Ok(()))
+            .unwrap();
+        assert_eq!(
+            exported(&fixture),
+            created,
+            "one Undo must restore the pre-edit feature and original cursor"
+        );
+        fixture
+            .bridge
+            .apply_native_history(&fixture.engine, &result.context, true, || Ok(()))
+            .unwrap();
+        assert_eq!(exported(&fixture), edited);
+    }
 }
 
 #[test]
@@ -144,8 +305,8 @@ fn rib_native_form_applies_edits_and_cancels_with_real_geometry() {
             &fixture.bridge,
             world,
             &owner,
-            &BuildCommand::Open {
-                kind: BuildKind::Rib,
+            &FeatureCommand::Open {
+                kind: SolidFormKind::Rib,
                 feature_id,
             },
             &ControlInput::Click,
@@ -165,7 +326,7 @@ fn rib_native_form_applies_edits_and_cancels_with_real_geometry() {
         app.world_mut(),
         &owner,
         id,
-        BuildPick::Path(PathRefDto {
+        FeaturePick::Path(PathRefDto {
             sketch_name: "Sketch1".into(),
             entity_ids: vec![curve],
         }),
@@ -177,7 +338,7 @@ fn rib_native_form_applies_edits_and_cancels_with_real_geometry() {
         app.world_mut(),
         &owner,
         id,
-        BuildField::Thickness,
+        SolidField::Thickness,
         "3 mm",
     );
     field(
@@ -185,7 +346,7 @@ fn rib_native_form_applies_edits_and_cancels_with_real_geometry() {
         app.world_mut(),
         &owner,
         id,
-        BuildField::Distance,
+        SolidField::Distance,
         "1 cm",
     );
     let created = action(
@@ -193,7 +354,7 @@ fn rib_native_form_applies_edits_and_cancels_with_real_geometry() {
         app.world_mut(),
         &owner,
         id,
-        BuildControl::Apply,
+        FeatureControl::Apply,
         ControlInput::Click,
     )
     .unwrap();
@@ -212,7 +373,7 @@ fn rib_native_form_applies_edits_and_cancels_with_real_geometry() {
         app.world_mut(),
         &owner,
         id,
-        BuildField::Distance,
+        SolidField::Distance,
         "15",
     );
     action(
@@ -220,7 +381,7 @@ fn rib_native_form_applies_edits_and_cancels_with_real_geometry() {
         app.world_mut(),
         &owner,
         id,
-        BuildControl::Cancel,
+        FeatureControl::Cancel,
         ControlInput::Click,
     )
     .unwrap();
@@ -231,7 +392,7 @@ fn rib_native_form_applies_edits_and_cancels_with_real_geometry() {
         app.world_mut(),
         &owner,
         id,
-        BuildField::Distance,
+        SolidField::Distance,
         "15",
     );
     action(
@@ -239,7 +400,7 @@ fn rib_native_form_applies_edits_and_cancels_with_real_geometry() {
         app.world_mut(),
         &owner,
         id,
-        BuildControl::Apply,
+        FeatureControl::Apply,
         ControlInput::Click,
     )
     .unwrap();
@@ -261,7 +422,7 @@ fn rib_native_form_applies_edits_and_cancels_with_real_geometry() {
 #[test]
 fn sweep_and_loft_native_forms_create_edit_cancel_and_undo_exact_solids() {
     let _lock = super::super::super::tests::TEST_LOCK.lock().unwrap();
-    for kind in [BuildKind::Sweep, BuildKind::Loft] {
+    for kind in [SolidFormKind::Sweep, SolidFormKind::Loft] {
         let fixture = Fixture::new();
         let owner = sketch(&fixture);
         let mutate = |op, args| {
@@ -270,12 +431,12 @@ fn sweep_and_loft_native_forms_create_edit_cancel_and_undo_exact_solids() {
                 .apply_native_mutation(&fixture.engine, &owner, op, &args, || Ok(()))
                 .unwrap()
         };
-        let definition_method = if kind == BuildKind::Sweep {
+        let definition_method = if kind == SolidFormKind::Sweep {
             "sweep_definitions"
         } else {
             "loft_definitions"
         };
-        if kind == BuildKind::Sweep {
+        if kind == SolidFormKind::Sweep {
             mutate("sketch_begin", json!({"type":"origin_plane","plane":"xz"}));
             mutate(
                 "sketch_add_line",
@@ -321,7 +482,7 @@ fn sweep_and_loft_native_forms_create_edit_cancel_and_undo_exact_solids() {
                 &fixture.bridge,
                 world,
                 &owner,
-                &BuildCommand::Open { kind, feature_id },
+                &FeatureCommand::Open { kind, feature_id },
                 &ControlInput::Click,
                 || Ok(()),
             )
@@ -332,13 +493,13 @@ fn sweep_and_loft_native_forms_create_edit_cancel_and_undo_exact_solids() {
         let id = open_kind(app.world_mut(), None);
         assert!(!panel(app.world()).unwrap().can_apply);
         let before = exported(&fixture);
-        let pick = if kind == BuildKind::Sweep {
+        let pick = if kind == SolidFormKind::Sweep {
             action(
                 &fixture,
                 app.world_mut(),
                 &owner,
                 id,
-                BuildControl::Pick(BuildField::Path),
+                FeatureControl::Pick(SolidField::Path),
                 ControlInput::Click,
             )
             .unwrap();
@@ -348,12 +509,12 @@ fn sweep_and_loft_native_forms_create_edit_cancel_and_undo_exact_solids() {
                 .iter()
                 .find(|s| s.sketch_name == "Sketch2")
                 .unwrap();
-            BuildPick::Path(PathRefDto {
+            FeaturePick::Path(PathRefDto {
                 sketch_name: path.sketch_name.clone(),
                 entity_ids: vec![path.path_curves[0].entity_id()],
             })
         } else {
-            BuildPick::Profiles(vec![
+            FeaturePick::Profiles(vec![
                 ProfileRefDto {
                     sketch_name: "Sketch1".into(),
                     profile_index: 0,
@@ -389,7 +550,7 @@ fn sweep_and_loft_native_forms_create_edit_cancel_and_undo_exact_solids() {
             app.world_mut(),
             &owner,
             id,
-            BuildControl::Apply,
+            FeatureControl::Apply,
             ControlInput::Click,
         )
         .unwrap();
@@ -411,12 +572,12 @@ fn sweep_and_loft_native_forms_create_edit_cancel_and_undo_exact_solids() {
         let definitions =
             || parse_engine_envelope(fixture.engine.engine_call(definition_method, "")).unwrap();
         let original = definitions();
-        let edited_field = if kind == BuildKind::Sweep {
-            BuildField::ForceC1
+        let edited_field = if kind == SolidFormKind::Sweep {
+            SolidField::ForceC1
         } else {
-            BuildField::Ruled
+            SolidField::Ruled
         };
-        let prop = if kind == BuildKind::Sweep {
+        let prop = if kind == SolidFormKind::Sweep {
             "force_c1"
         } else {
             "ruled"
@@ -428,7 +589,7 @@ fn sweep_and_loft_native_forms_create_edit_cancel_and_undo_exact_solids() {
             app.world_mut(),
             &owner,
             id,
-            BuildControl::Cancel,
+            FeatureControl::Cancel,
             ControlInput::Click,
         )
         .unwrap();
@@ -440,7 +601,7 @@ fn sweep_and_loft_native_forms_create_edit_cancel_and_undo_exact_solids() {
             app.world_mut(),
             &owner,
             id,
-            BuildControl::Apply,
+            FeatureControl::Apply,
             ControlInput::Click,
         )
         .unwrap();
@@ -471,8 +632,8 @@ fn revolve_controls_commit_edit_cancel_and_undo_a_real_parametric_solid() {
             &fixture.bridge,
             world,
             &owner,
-            &BuildCommand::Open {
-                kind: BuildKind::Revolve,
+            &FeatureCommand::Open {
+                kind: SolidFormKind::Revolve,
                 feature_id,
             },
             &ControlInput::Click,
@@ -485,13 +646,13 @@ fn revolve_controls_commit_edit_cancel_and_undo_a_real_parametric_solid() {
     let before = exported(&fixture);
     let id = open_revolve(app.world_mut(), None);
     assert!(!panel(app.world()).unwrap().can_apply);
-    field(&fixture, app.world_mut(), &owner, id, BuildField::Axis, "x");
+    field(&fixture, app.world_mut(), &owner, id, SolidField::Axis, "x");
     field(
         &fixture,
         app.world_mut(),
         &owner,
         id,
-        BuildField::Angle,
+        SolidField::Angle,
         "180",
     );
     assert!(panel(app.world()).unwrap().can_apply);
@@ -506,7 +667,7 @@ fn revolve_controls_commit_edit_cancel_and_undo_a_real_parametric_solid() {
         app.world_mut(),
         &owner,
         id,
-        BuildControl::Apply,
+        FeatureControl::Apply,
         ControlInput::Click,
     )
     .unwrap();
@@ -531,7 +692,7 @@ fn revolve_controls_commit_edit_cancel_and_undo_a_real_parametric_solid() {
         app.world_mut(),
         &owner,
         id,
-        BuildField::Angle,
+        SolidField::Angle,
         "270",
     );
     action(
@@ -539,7 +700,7 @@ fn revolve_controls_commit_edit_cancel_and_undo_a_real_parametric_solid() {
         app.world_mut(),
         &owner,
         id,
-        BuildControl::Cancel,
+        FeatureControl::Cancel,
         ControlInput::Click,
     )
     .unwrap();
@@ -550,7 +711,7 @@ fn revolve_controls_commit_edit_cancel_and_undo_a_real_parametric_solid() {
         app.world_mut(),
         &owner,
         id,
-        BuildField::Angle,
+        SolidField::Angle,
         "270",
     );
     let result = action(
@@ -558,7 +719,7 @@ fn revolve_controls_commit_edit_cancel_and_undo_a_real_parametric_solid() {
         app.world_mut(),
         &owner,
         id,
-        BuildControl::Apply,
+        FeatureControl::Apply,
         ControlInput::Click,
     )
     .unwrap();
@@ -619,7 +780,7 @@ fn actual_preview_and_invalid_fields_never_mutate_the_model_and_cancel_restores_
         app.world_mut(),
         &owner,
         id,
-        BuildField::Distance,
+        SolidField::Distance,
         "2 + (",
     );
     let panel = panel(app.world()).unwrap();
@@ -627,7 +788,7 @@ fn actual_preview_and_invalid_fields_never_mutate_the_model_and_cancel_restores_
     let distance = panel
         .fields
         .iter()
-        .find(|field| field.field == BuildField::Distance)
+        .find(|field| field.field == SolidField::Distance)
         .unwrap();
     assert!(distance.error.is_some());
     assert!(matches!(&distance.value, nbcad_interface::Field::Text {value,..} if value == "2 + ("));
@@ -639,7 +800,7 @@ fn actual_preview_and_invalid_fields_never_mutate_the_model_and_cancel_restores_
         app.world_mut(),
         &owner,
         id,
-        BuildControl::Apply,
+        FeatureControl::Apply,
         ControlInput::Click
     )
     .is_err());
@@ -649,7 +810,7 @@ fn actual_preview_and_invalid_fields_never_mutate_the_model_and_cancel_restores_
         app.world_mut(),
         &owner,
         id,
-        BuildControl::Cancel,
+        FeatureControl::Cancel,
         ControlInput::Click,
     )
     .unwrap();
@@ -667,7 +828,7 @@ fn actual_preview_and_invalid_fields_never_mutate_the_model_and_cancel_restores_
         app.world_mut(),
         &owner,
         id,
-        BuildControl::Apply,
+        FeatureControl::Apply,
         ControlInput::Click
     )
     .is_err());
@@ -686,7 +847,7 @@ fn native_apply_and_edit_recompute_the_real_parametric_extrusion_and_cancel_pres
         app.world_mut(),
         &owner,
         id,
-        BuildField::Distance,
+        SolidField::Distance,
         "=(2 + 3) * 5 mm",
     );
     let result = action(
@@ -694,7 +855,7 @@ fn native_apply_and_edit_recompute_the_real_parametric_extrusion_and_cancel_pres
         app.world_mut(),
         &owner,
         id,
-        BuildControl::Apply,
+        FeatureControl::Apply,
         ControlInput::Click,
     )
     .unwrap();
@@ -719,7 +880,7 @@ fn native_apply_and_edit_recompute_the_real_parametric_extrusion_and_cancel_pres
         app.world_mut(),
         &owner,
         edit_id,
-        BuildField::Distance,
+        SolidField::Distance,
         "35 mm",
     );
     assert_eq!(
@@ -732,7 +893,7 @@ fn native_apply_and_edit_recompute_the_real_parametric_extrusion_and_cancel_pres
         app.world_mut(),
         &owner,
         edit_id,
-        BuildControl::Cancel,
+        FeatureControl::Cancel,
         ControlInput::Click,
     )
     .unwrap();
@@ -743,7 +904,7 @@ fn native_apply_and_edit_recompute_the_real_parametric_extrusion_and_cancel_pres
         app.world_mut(),
         &owner,
         edit_id,
-        BuildField::Distance,
+        SolidField::Distance,
         "35 mm",
     );
     let result = action(
@@ -751,7 +912,7 @@ fn native_apply_and_edit_recompute_the_real_parametric_extrusion_and_cancel_pres
         app.world_mut(),
         &owner,
         edit_id,
-        BuildControl::Apply,
+        FeatureControl::Apply,
         ControlInput::Click,
     )
     .unwrap();
@@ -787,9 +948,9 @@ fn stale_owner_revision_and_cancelled_activation_cannot_commit_or_repaint_old_wo
         &fixture.bridge,
         app.world_mut(),
         &owner,
-        &BuildCommand::Control {
+        &FeatureCommand::Control {
             form_id: id,
-            action: BuildControl::Apply,
+            action: FeatureControl::Apply,
         },
         &ControlInput::Click,
         || Err("Control binding changed".into()),
@@ -807,7 +968,7 @@ fn stale_owner_revision_and_cancelled_activation_cannot_commit_or_repaint_old_wo
         app.world_mut(),
         &owner,
         id,
-        BuildControl::Apply,
+        FeatureControl::Apply,
         ControlInput::Click
     )
     .is_err());
@@ -845,7 +1006,7 @@ fn stale_owner_revision_and_cancelled_activation_cannot_commit_or_repaint_old_wo
         app.world_mut(),
         &owner,
         id,
-        BuildControl::Cancel,
+        FeatureControl::Cancel,
         ControlInput::Click
     )
     .is_err());
@@ -876,7 +1037,7 @@ fn focused_escape_closes_its_form_without_overwriting_a_newer_preview() {
         app.world_mut(),
         &owner,
         id,
-        BuildControl::Field(BuildField::Distance),
+        FeatureControl::Field(SolidField::Distance),
         ControlInput::Key(nbcad_interface::KeyChord::plain("Escape")),
     )
     .unwrap();
@@ -914,7 +1075,7 @@ fn native_apply_enqueues_once_and_completes_the_original_form_with_real_geometry
         app.world_mut(),
         &owner,
         id,
-        BuildField::Distance,
+        SolidField::Distance,
         "25 mm",
     );
     let pending = action(
@@ -922,7 +1083,7 @@ fn native_apply_enqueues_once_and_completes_the_original_form_with_real_geometry
         app.world_mut(),
         &owner,
         id,
-        BuildControl::Apply,
+        FeatureControl::Apply,
         ControlInput::Click,
     )
     .unwrap();
@@ -935,7 +1096,7 @@ fn native_apply_enqueues_once_and_completes_the_original_form_with_real_geometry
         app.world_mut(),
         &owner,
         id,
-        BuildControl::Apply,
+        FeatureControl::Apply,
         ControlInput::Click
     )
     .unwrap_err()

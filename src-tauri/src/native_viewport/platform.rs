@@ -2235,6 +2235,7 @@ struct ModelResource {
     instance_body_poses: Vec<InstanceBodyPoseDto>,
     instance_revision: u64,
     revision: u64,
+    transient_model: bool,
 }
 
 #[derive(Resource, Default)]
@@ -6264,6 +6265,12 @@ fn apply_render_command(
 
 fn apply_model_state(world: &mut World, next: &ViewportModel) {
     let mut resource = world.resource_mut::<ModelResource>();
+    if resource.transient_model {
+        // An isolated edit kernel can reuse the live kernel's numeric geometry
+        // revision. Retire its cache incarnation before any real-model update.
+        resource.instance_revision = resource.instance_revision.wrapping_add(1);
+        resource.transient_model = false;
+    }
     let reset_sketch = resource.session_id != next.session_id || next.active_sketch.is_none();
     resource.session_id.clone_from(&next.session_id);
     resource.geometry_revision = next.geometry_revision;
@@ -6504,6 +6511,16 @@ pub(crate) fn apply_interface_model(world: &mut World, next: ViewportModel) -> R
         .instance_body_poses
         .clone_from(&next.instance_body_poses);
     apply_model_state(world, &next);
+    Ok(())
+}
+
+/// A real pre-feature model prepared in an isolated kernel. Its local geometry
+/// counter cannot authorize reuse of meshes from the live document (or vice versa).
+pub(crate) fn apply_interface_edit_model(world: &mut World, next: ViewportModel) -> Result<(), String> {
+    apply_interface_model(world, next)?;
+    let mut model = world.resource_mut::<ModelResource>();
+    model.instance_revision = model.instance_revision.wrapping_add(1);
+    model.transient_model = true;
     Ok(())
 }
 
@@ -6989,6 +7006,8 @@ fn camera_pick_ray(
         .then_some((origin, direction, world_per_pixel_factor))
 }
 
+mod edge_picking;
+
 fn pick_occt_scene(
     scene: &SolidSceneDto,
     camera: ViewportCamera,
@@ -7000,6 +7019,9 @@ fn pick_occt_scene(
     instance_body_poses: &[InstanceBodyPoseDto],
     purpose: NativePickPurpose,
 ) -> Option<NativePick> {
+    if purpose == NativePickPurpose::RefinableEdge {
+        return edge_picking::pick(scene,camera,viewport,[x,y],hidden_body_ids,body_poses,instance_body_poses);
+    }
     let (origin, direction, world_per_pixel_factor) = camera_pick_ray(camera, viewport, x, y)?;
     let mut best: Option<NativePick> = None;
     for body in &scene.bodies {
@@ -8842,6 +8864,22 @@ mod tests {
         assert!((color.red - 12.0 / 255.0).abs() < 1.0e-6);
         assert!((color.green - 123.0 / 255.0).abs() < 1.0e-6);
         assert!((color.blue - 240.0 / 255.0).abs() < 1.0e-6);
+    }
+
+    #[cfg(feature = "dev-bevy-host")]
+    #[test]
+    fn isolated_edit_model_cannot_reuse_live_meshes_with_the_same_geometry_counter() {
+        let mut app = interface_scene_fixture();
+        let snapshot = crate::session_bridge::native_interface::model_snapshot(&crate::state::AppState::new());
+        apply_interface_model(app.world_mut(), snapshot.clone()).unwrap();
+        let before = app.world().resource::<ModelResource>().instance_revision;
+        apply_interface_edit_model(app.world_mut(), snapshot.clone()).unwrap();
+        let staged = app.world().resource::<ModelResource>().instance_revision;
+        assert_ne!(staged, before);
+        assert!(app.world().resource::<ModelResource>().transient_model);
+        apply_interface_model(app.world_mut(), snapshot).unwrap();
+        assert_ne!(app.world().resource::<ModelResource>().instance_revision, staged);
+        assert!(!app.world().resource::<ModelResource>().transient_model);
     }
 
     #[test]

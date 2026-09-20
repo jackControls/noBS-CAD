@@ -548,6 +548,7 @@ pub(crate) fn process_one(
                 editor.press = None;
                 clear_preview(world, &services.engine, &services.bridge, &frame.context)?;
                 support::hover(world, &frame.context, &mut editor.support, None)?;
+                crate::session_bridge::native_interface::feature::hover_edges(world,services,&frame.context,None)?;
             }
             WindowEvent::CursorMoved(moved) if editor.support.active => {
                 if let Some(canvas) = frame.canvases.iter().find(|c| c.name == "viewport") {
@@ -557,6 +558,14 @@ pub(crate) fn process_one(
                         f64::from(p.y) >= a.y && f64::from(p.y) < a.y+a.height && !handle.owns_pointer([f64::from(p.x),f64::from(p.y)]);
                     support::hover(world, &frame.context, &mut editor.support, inside.then_some([p.x-a.x as f32,p.y-a.y as f32]))?;
                     result = json!({"handled":true,"hover":inside});
+                }
+            }
+            WindowEvent::CursorMoved(moved) if editor.draft.tool.is_none() && editor.stamp.as_ref().is_none_or(|s|s.sketch.is_none()) => {
+                if let Some(canvas)=frame.canvases.iter().find(|c|c.name=="viewport") {
+                    let p=moved.position;let a=canvas.bounds;
+                    let inside=f64::from(p.x)>=a.x&&f64::from(p.x)<a.x+a.width&&f64::from(p.y)>=a.y&&f64::from(p.y)<a.y+a.height&&!handle.owns_pointer([f64::from(p.x),f64::from(p.y)]);
+                    let handled=crate::session_bridge::native_interface::feature::hover_edges(world,services,&frame.context,inside.then_some([p.x-a.x as f32,p.y-a.y as f32]))?;
+                    result=json!({"handled":handled,"hover":inside});
                 }
             }
             WindowEvent::CursorMoved(moved) if editor.draft.tool.is_some() => {
@@ -660,7 +669,7 @@ pub(crate) fn process_one(
                         return support::pick(world, services, &owner, &mut editor,
                             [cursor.x-canvas.bounds.x as f32,cursor.y-canvas.bounds.y as f32]);
                     }
-                    if let Some(value) = crate::session_bridge::native_interface::build::handle_canvas_pick(
+                    if let Some(value) = crate::session_bridge::native_interface::feature::handle_canvas_pick(
                         world, services, &owner,
                         [cursor.x-canvas.bounds.x as f32,cursor.y-canvas.bounds.y as f32],
                     )? {
@@ -886,7 +895,7 @@ pub(crate) fn synchronize_controls(
             if world.get::<Node>(entity) != Some(&node) {
                 world.entity_mut(entity).insert(node);
             }
-            let build_open = crate::session_bridge::native_interface::build::panel(world).is_some();
+            let build_open = crate::session_bridge::native_interface::feature::panel(world).is_some();
             let mut control = world
                 .get_mut::<InterfaceControl>(entity)
                 .ok_or("Sketch control was removed")?;

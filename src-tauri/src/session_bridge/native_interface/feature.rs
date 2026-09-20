@@ -1,7 +1,7 @@
 //! Native profile-feature transaction: retained fields, real shared engine commands,
 //! and transient renderer data all belong to one exact document revision.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::{Resource, World};
 use nbcad_core::{BodyId, DocumentDto};
@@ -14,41 +14,42 @@ use serde_json::{json, Value};
 
 use super::{check_owner, finish_mutation, model_snapshot, workspace::DocumentReceipt};
 use crate::{
-    native_forms::{BuildForm, DimensionKind, FormModel, ParameterValue, ProfileSource},
+    native_forms::{DimensionKind, FormModel, ParameterValue, ProfileSource, SolidForm},
     native_viewport::{self, ViewportModel, ViewportPreview},
     session_bridge::{parse_engine_envelope, SessionBridgeState},
     state::AppState,
 };
 
-pub(crate) use crate::native_forms::{BuildField, BuildFieldView, BuildKind};
+pub(crate) use crate::native_forms::{SolidField, SolidFieldView, SolidFormKind};
 
 mod apply;
+pub(super) mod editing;
 #[cfg(feature = "dev-bevy-host")]
 pub(crate) mod panel;
 #[cfg(feature = "dev-bevy-host")]
 mod picking;
 mod preview;
 #[cfg(feature = "dev-bevy-host")]
-pub(crate) use picking::handle_canvas_pick;
+pub(crate) use picking::{handle_canvas_pick, hover_edges};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum BuildCommand {
+pub(crate) enum FeatureCommand {
     Open {
-        kind: BuildKind,
+        kind: SolidFormKind,
         feature_id: Option<u64>,
     },
     Control {
         form_id: u64,
-        action: BuildControl,
+        action: FeatureControl,
     },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BuildControl {
-    Field(BuildField),
-    Pick(BuildField),
-    Clear(BuildField),
-    Choose { field: BuildField, option: usize },
+pub(crate) enum FeatureControl {
+    Field(SolidField),
+    Pick(SolidField),
+    Clear(SolidField),
+    Choose { field: SolidField, option: usize },
     Apply,
     Cancel,
 }
@@ -57,24 +58,32 @@ pub(crate) enum BuildControl {
 /// Occurrence picks must be resolved to the edited component by the caller;
 /// a placed assembly face is not a source-local face with the same integer ID.
 #[derive(Clone, Debug)]
-pub(crate) enum BuildPick {
+pub(crate) enum FeaturePick {
+    Edges {
+        body: Option<BodyId>,
+        edges: Vec<nbcad_core::EdgeId>,
+    },
     Profiles(Vec<ProfileRefDto>),
     Bodies(Vec<BodyId>),
     Face(PlanarFaceSourceDto),
-    AxisLine { sketch_name: String, entity_id: u64 },
+    AxisLine {
+        sketch_name: String,
+        entity_id: u64,
+    },
     Path(PathRefDto),
 }
 
-pub(crate) struct BuildPanel {
-    pub kind: BuildKind,
+pub(crate) struct FeaturePanel {
+    pub title: String,
+    pub kind: SolidFormKind,
     pub form_id: u64,
-    pub fields: Vec<BuildFieldView>,
+    pub fields: Vec<SolidFieldView>,
     pub can_apply: bool,
     pub busy: bool,
     pub error: Option<String>,
     pub preview_notice: Option<String>,
-    pub pick_target: Option<BuildField>,
-    pub choice_field: Option<BuildField>,
+    pub pick_target: Option<SolidField>,
+    pub choice_field: Option<SolidField>,
 }
 
 struct Snapshot {
@@ -82,11 +91,51 @@ struct Snapshot {
     document: DocumentDto,
     viewport: ViewportModel,
     parameters: HashMap<String, Vec<ParameterValue>>,
+    source_occurrences: HashSet<(u64, u64)>,
 }
 
 impl Snapshot {
-    fn capture(engine: &AppState, receipt: DocumentReceipt) -> Self {
+    fn capture(engine: &AppState, receipt: DocumentReceipt) -> Result<Self, String> {
         let viewport = model_snapshot(engine);
+        let assembly: nbcad_sketch::AssemblyDocumentDto = serde_json::from_value(
+            parse_engine_envelope(engine.engine_call("assembly_document", ""))?,
+        )
+        .map_err(|e| e.to_string())?;
+        let structure = &assembly.component_structure;
+        let mut counts = HashMap::new();
+        for pose in &viewport.instance_body_poses {
+            *counts.entry(pose.body_id.0).or_insert(0usize) += 1;
+        }
+        let promoted: HashSet<_> = structure
+            .definitions
+            .iter()
+            .filter(|d| d.promoted)
+            .flat_map(|d| d.body_ids.iter().map(move |b| (d.id.0, b.0)))
+            .collect();
+        let roots: HashSet<_> = structure
+            .occurrences
+            .iter()
+            .filter(|o| o.parent_occurrence_id.is_none())
+            .map(|o| o.id.0)
+            .collect();
+        let source_occurrences = viewport
+            .instance_body_poses
+            .iter()
+            .filter(|pose| {
+                pose.visible
+                    && pose
+                        .translation
+                        .iter()
+                        .all(|v| v.is_finite() && v.abs() < 1e-9)
+                    && pose.rotation.iter().all(|v| v.is_finite())
+                    && pose.rotation[..3].iter().all(|v| v.abs() < 1e-9)
+                    && (pose.rotation[3].abs() - 1.).abs() < 1e-9
+                    && counts.get(&pose.body_id.0) == Some(&1)
+                    && promoted.contains(&(pose.component_id.0, pose.body_id.0))
+                    && roots.contains(&pose.occurrence_id.0)
+            })
+            .map(|p| (p.body_id.0, p.occurrence_id.0))
+            .collect();
         let parameters = viewport
             .finished_sketches
             .iter()
@@ -109,12 +158,17 @@ impl Snapshot {
                 (sketch.name.clone(), values)
             })
             .collect();
-        Self {
+        Ok(Self {
             receipt,
             document: engine.document_snapshot(),
             viewport,
             parameters,
-        }
+            source_occurrences,
+        })
+    }
+
+    fn source_local(&self, body: u64, occurrence: Option<u64>) -> bool {
+        occurrence.is_none_or(|id| self.source_occurrences.contains(&(body, id)))
     }
 
     fn model(&self, source: Option<&str>) -> FormModel<'_> {
@@ -139,17 +193,20 @@ impl Snapshot {
 
 struct Editor {
     id: u64,
-    form: BuildForm,
+    form: SolidForm,
     snapshot: Snapshot,
     previous_preview: ViewportPreview,
     preview_revision: u64,
     preview_notice: Option<String>,
-    pick_target: Option<BuildField>,
-    choice_field: Option<BuildField>,
+    pick_target: Option<SolidField>,
+    choice_field: Option<SolidField>,
+    stage: Option<std::sync::Arc<editing::Stage>>,
+    original_view: Option<ViewportModel>,
+    hovered_edge: Option<(BodyId, nbcad_core::EdgeId)>,
 }
 
 #[derive(Resource, Default)]
-struct NativeBuild {
+struct NativeFeature {
     last_id: u64,
     editor: Option<Editor>,
 }
@@ -185,10 +242,27 @@ fn check_revision(editor: &Editor, receipt: &DocumentReceipt) -> Result<(), Stri
     Ok(())
 }
 
-pub(crate) fn panel(world: &World) -> Option<BuildPanel> {
-    let editor = world.get_resource::<NativeBuild>()?.editor.as_ref()?;
+pub(crate) fn panel(world: &World) -> Option<FeaturePanel> {
+    let editor = world.get_resource::<NativeFeature>()?.editor.as_ref()?;
     let model = editor.snapshot.model(editor.form.parameter_sketch());
-    Some(BuildPanel {
+    Some(FeaturePanel {
+        title: format!(
+            "{}{}{}",
+            if editor.form.is_feature_edit() {
+                "Edit "
+            } else {
+                ""
+            },
+            if matches!(
+                editor.form.kind(),
+                SolidFormKind::Fillet | SolidFormKind::Chamfer
+            ) {
+                "Solid "
+            } else {
+                ""
+            },
+            editor.form.kind().label()
+        ),
         kind: editor.form.kind(),
         form_id: editor.id,
         fields: editor.form.fields(&model),
@@ -209,7 +283,7 @@ pub(crate) fn synchronize(
     world: &mut World,
     owner: &DocumentContext,
 ) -> Result<(), String> {
-    let mut state = world.remove_resource::<NativeBuild>().unwrap_or_default();
+    let mut state = world.remove_resource::<NativeFeature>().unwrap_or_default();
     let result = with_receipt(bridge, engine, owner, |receipt| {
         if state
             .editor
@@ -235,7 +309,7 @@ fn update_preview(editor: &mut Editor, world: &mut World) -> Result<(), String> 
     let model = editor.snapshot.model(editor.form.parameter_sketch());
     // Invalid text remains the actual field draft, but must not leave a
     // stale last-valid extrusion appearing to describe the invalid input.
-    let (next, notice) = if editor.form.kind() != BuildKind::Extrude {
+    let (mut next, notice) = if editor.form.kind() != SolidFormKind::Extrude {
         match preview::references(&editor.form, &model, &editor.snapshot.viewport) {
             Ok(value) => (value, None),
             Err(e) => (ViewportPreview::default(), Some(e)),
@@ -250,27 +324,59 @@ fn update_preview(editor: &mut Editor, world: &mut World) -> Result<(), String> 
             Err(_) => (ViewportPreview::default(), None),
         }
     };
+    if let Some((body, edge)) = editor.hovered_edge {
+        if let Some(edge) = model
+            .scene
+            .bodies
+            .iter()
+            .find(|b| b.id == body)
+            .and_then(|b| b.edges.iter().find(|e| e.id == edge))
+            .filter(|e| e.points.len() <= 100_001)
+        {
+            let segments: Vec<f32> = edge
+                .points
+                .windows(2)
+                .flat_map(|pair| {
+                    pair.iter()
+                        .flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
+                })
+                .collect();
+            if segments.len() <= 600_000 && segments.iter().all(|v| v.is_finite()) {
+                next.lines.push(native_viewport::ViewportLineLayer {
+                    color: [1., 0.66, 0.25, 1.],
+                    width: 3.,
+                    segments,
+                    ..Default::default()
+                });
+            }
+        }
+    }
     native_viewport::apply_interface_preview(world, &model.owner.document_id, next)?;
     editor.preview_revision = native_viewport::interface_preview_revision(world);
     editor.preview_notice = notice;
     Ok(())
 }
 
-fn selected_source(world: &World) -> Result<Option<BuildPick>, String> {
+fn selected_source(world: &World, snapshot: &Snapshot) -> Result<Option<FeaturePick>, String> {
     let (_, _, presentation, _) = native_viewport::interface_view_snapshot(world);
-    if presentation.selected_occurrence_id.is_some() {
+    if presentation.selected_occurrence_id.is_some()
+        && presentation
+            .selected_body_ids
+            .iter()
+            .any(|body| !snapshot.source_local(*body, presentation.selected_occurrence_id))
+    {
         return Err(
             "Open the component for editing before extruding an assembly occurrence".into(),
         );
     }
     if !presentation.selected_profiles.is_empty() {
-        return Ok(Some(BuildPick::Profiles(presentation.selected_profiles)));
+        return Ok(Some(FeaturePick::Profiles(presentation.selected_profiles)));
     }
     match (
         presentation.selected_body_ids.as_slice(),
         presentation.selected_face_ids.as_slice(),
     ) {
-        ([body], [face]) => Ok(Some(BuildPick::Face(PlanarFaceSourceDto {
+        ([body], [face]) => Ok(Some(FeaturePick::Face(PlanarFaceSourceDto {
             body_id: BodyId(*body),
             face_id: nbcad_core::FaceId(*face),
         }))),
@@ -278,27 +384,30 @@ fn selected_source(world: &World) -> Result<Option<BuildPick>, String> {
     }
 }
 
-fn apply_pick(editor: &mut Editor, pick: BuildPick) -> Result<(), String> {
+fn apply_pick(editor: &mut Editor, pick: FeaturePick) -> Result<(), String> {
     let model = editor.snapshot.model(editor.form.parameter_sketch());
     match (editor.pick_target, pick) {
-        (Some(BuildField::Source), BuildPick::Profiles(profiles)) => {
+        (Some(SolidField::Edges), FeaturePick::Edges { body, edges }) => {
+            editor.form.set_edges(body, edges, &model)
+        }
+        (Some(SolidField::Source), FeaturePick::Profiles(profiles)) => {
             editor.form.set_profiles(profiles, &model)
         }
-        (Some(field @ (BuildField::Path | BuildField::Guide)), BuildPick::Path(path)) => editor
+        (Some(field @ (SolidField::Path | SolidField::Guide)), FeaturePick::Path(path)) => editor
             .form
             .set_path(field, (!path.entity_ids.is_empty()).then_some(path), &model),
-        (Some(BuildField::Source), BuildPick::Face(face)) => {
+        (Some(SolidField::Source), FeaturePick::Face(face)) => {
             editor.form.set_source(ProfileSource::Face(face), &model)
         }
-        (Some(BuildField::Targets), BuildPick::Bodies(bodies)) => {
+        (Some(SolidField::Targets), FeaturePick::Bodies(bodies)) => {
             editor.form.set_targets(bodies, &model)
         }
-        (Some(BuildField::StopFace), BuildPick::Face(face)) => {
+        (Some(SolidField::StopFace), FeaturePick::Face(face)) => {
             editor.form.set_stop_face(Some(face), &model)
         }
         (
-            Some(BuildField::AxisLine),
-            BuildPick::AxisLine {
+            Some(SolidField::AxisLine),
+            FeaturePick::AxisLine {
                 sketch_name,
                 entity_id,
             },
@@ -313,10 +422,10 @@ pub(crate) fn accept_pick(
     world: &mut World,
     owner: &DocumentContext,
     form_id: u64,
-    pick: BuildPick,
+    pick: FeaturePick,
     validate_control: impl FnOnce() -> Result<(), String>,
 ) -> Result<Value, String> {
-    let mut state = world.remove_resource::<NativeBuild>().unwrap_or_default();
+    let mut state = world.remove_resource::<NativeFeature>().unwrap_or_default();
     let result = with_receipt(bridge, engine, owner, |receipt| {
         validate_control()?;
         let editor = state
@@ -338,13 +447,13 @@ pub(crate) fn reduce(
     bridge: &SessionBridgeState,
     world: &mut World,
     owner: &DocumentContext,
-    command: &BuildCommand,
+    command: &FeatureCommand,
     input: &ControlInput,
     validate_control: impl FnOnce() -> Result<(), String>,
 ) -> Result<Value, String> {
     if matches!(input, ControlInput::Key(key) if key.key == "Escape" && !key.ctrl && !key.meta && !key.alt && !key.shift)
     {
-        if let BuildCommand::Control { form_id, .. } = command {
+        if let FeatureCommand::Control { form_id, .. } = command {
             // The focused field's original binding/owner still authorize
             // this input; Escape closes that same form, not a later editor.
             return reduce(
@@ -352,9 +461,9 @@ pub(crate) fn reduce(
                 bridge,
                 world,
                 owner,
-                &BuildCommand::Control {
+                &FeatureCommand::Control {
                     form_id: *form_id,
-                    action: BuildControl::Cancel,
+                    action: FeatureControl::Cancel,
                 },
                 &ControlInput::Click,
                 validate_control,
@@ -363,8 +472,8 @@ pub(crate) fn reduce(
     }
     let field_edit = matches!(
         command,
-        BuildCommand::Control {
-            action: BuildControl::Field(_),
+        FeatureCommand::Control {
+            action: FeatureControl::Field(_),
             ..
         }
     );
@@ -380,7 +489,7 @@ pub(crate) fn reduce(
     {
         return Err("This input does not match the feature control".into());
     }
-    let mut state = world.remove_resource::<NativeBuild>().unwrap_or_default();
+    let mut state = world.remove_resource::<NativeFeature>().unwrap_or_default();
     let result = reduce_owned(
         engine,
         bridge,
@@ -400,12 +509,26 @@ fn reduce_owned(
     bridge: &SessionBridgeState,
     world: &mut World,
     owner: &DocumentContext,
-    command: &BuildCommand,
+    command: &FeatureCommand,
     input: &ControlInput,
     validate_control: impl FnOnce() -> Result<(), String>,
-    state: &mut NativeBuild,
+    state: &mut NativeFeature,
 ) -> Result<Value, String> {
-    if let BuildCommand::Open { kind, feature_id } = command {
+    if let FeatureCommand::Open { kind, feature_id } = command {
+        if let Some(feature_id) =
+            feature_id.filter(|_| matches!(kind, SolidFormKind::Fillet | SolidFormKind::Chamfer))
+        {
+            return editing::begin(
+                engine,
+                bridge,
+                world,
+                owner,
+                *kind,
+                feature_id,
+                validate_control,
+                state,
+            );
+        }
         return with_receipt(bridge, engine, owner, |receipt| {
             validate_control()?;
             if state.editor.is_some() {
@@ -415,7 +538,7 @@ fn reduce_owned(
                 .last_id
                 .checked_add(1)
                 .ok_or("Feature form identities exhausted")?;
-            let snapshot = Snapshot::capture(engine, receipt);
+            let snapshot = Snapshot::capture(engine, receipt)?;
             if snapshot.viewport.active_sketch.is_some() {
                 return Err("Finish the active sketch before opening a solid feature".into());
             }
@@ -427,43 +550,43 @@ fn reduce_owned(
             let model = snapshot.model(None);
             #[cfg(feature = "dev-bevy-host")]
             crate::native_editor::support::cancel(world, owner)?;
-            let form = if let (BuildKind::Rib, Some(id)) = (kind, feature_id) {
+            let form = if let (SolidFormKind::Rib, Some(id)) = (kind, feature_id) {
                 let definitions: Vec<nbcad_solid::RibDefinitionDto> = serde_json::from_value(
                     parse_engine_envelope(engine.engine_call("rib_definitions", ""))?,
                 )
                 .map_err(|e| e.to_string())?;
-                BuildForm::edit_rib(
+                SolidForm::edit_rib(
                     definitions
                         .iter()
                         .find(|d| d.feature_id.0 == *id)
                         .ok_or("The selected Rib no longer exists")?,
                     &model,
                 )?
-            } else if let (BuildKind::Sweep, Some(id)) = (kind, feature_id) {
+            } else if let (SolidFormKind::Sweep, Some(id)) = (kind, feature_id) {
                 let definitions: Vec<SweepDefinitionDto> = serde_json::from_value(
                     parse_engine_envelope(engine.engine_call("sweep_definitions", ""))?,
                 )
                 .map_err(|e| e.to_string())?;
-                BuildForm::edit_sweep(
+                SolidForm::edit_sweep(
                     definitions
                         .iter()
                         .find(|d| d.feature_id.0 == *id)
                         .ok_or("The selected Sweep no longer exists")?,
                     &model,
                 )?
-            } else if let (BuildKind::Loft, Some(id)) = (kind, feature_id) {
+            } else if let (SolidFormKind::Loft, Some(id)) = (kind, feature_id) {
                 let definitions: Vec<LoftDefinitionDto> = serde_json::from_value(
                     parse_engine_envelope(engine.engine_call("loft_definitions", ""))?,
                 )
                 .map_err(|e| e.to_string())?;
-                BuildForm::edit_loft(
+                SolidForm::edit_loft(
                     definitions
                         .iter()
                         .find(|d| d.feature_id.0 == *id)
                         .ok_or("The selected Loft no longer exists")?,
                     &model,
                 )?
-            } else if let (BuildKind::Revolve, Some(id)) = (kind, feature_id) {
+            } else if let (SolidFormKind::Revolve, Some(id)) = (kind, feature_id) {
                 let definitions: Vec<RevolveDefinitionDto> = serde_json::from_value(
                     parse_engine_envelope(engine.engine_call("revolve_definitions", ""))?,
                 )
@@ -472,7 +595,7 @@ fn reduce_owned(
                     .iter()
                     .find(|d| d.feature_id.0 == *id)
                     .ok_or("The selected Revolve no longer exists")?;
-                BuildForm::edit_revolve(definition, &model)?
+                SolidForm::edit_revolve(definition, &model)?
             } else if let Some(id) = feature_id {
                 let definitions: Vec<ExtrudeDefinitionDto> = serde_json::from_value(
                     parse_engine_envelope(engine.engine_call("extrude_definitions", ""))?,
@@ -482,9 +605,9 @@ fn reduce_owned(
                     .iter()
                     .find(|definition| definition.feature_id.0 == *id)
                     .ok_or("The selected Extrude feature no longer exists")?;
-                BuildForm::edit(definition, &model)?
+                SolidForm::edit(definition, &model)?
             } else {
-                BuildForm::new_kind(*kind, &model)
+                SolidForm::new_kind(*kind, &model)
             };
             let mut editor = Editor {
                 id,
@@ -493,16 +616,52 @@ fn reduce_owned(
                 previous_preview: native_viewport::interface_preview_snapshot(world),
                 preview_revision: native_viewport::interface_preview_revision(world),
                 preview_notice: None,
-                pick_target: Some(if *kind == BuildKind::Rib {
-                    BuildField::Path
-                } else {
-                    BuildField::Source
-                }),
+                pick_target: Some(
+                    if matches!(kind, SolidFormKind::Fillet | SolidFormKind::Chamfer) {
+                        SolidField::Edges
+                    } else if *kind == SolidFormKind::Rib {
+                        SolidField::Path
+                    } else {
+                        SolidField::Source
+                    },
+                ),
                 choice_field: None,
+                stage: None,
+                original_view: None,
+                hovered_edge: None,
             };
-            if feature_id.is_none() && *kind != BuildKind::Rib {
-                if let Some(pick) = selected_source(world)? {
-                    if !matches!(pick, BuildPick::Face(_)) || *kind == BuildKind::Extrude {
+            if feature_id.is_none()
+                && matches!(kind, SolidFormKind::Fillet | SolidFormKind::Chamfer)
+            {
+                let (_, _, presentation, _) = native_viewport::interface_view_snapshot(world);
+                if presentation.selected_occurrence_id.is_some()
+                    && presentation.selected_body_ids.iter().any(|body| {
+                        !editor
+                            .snapshot
+                            .source_local(*body, presentation.selected_occurrence_id)
+                    })
+                {
+                    return Err("Open the component before refining its edges".into());
+                }
+                if let [body] = presentation.selected_body_ids.as_slice() {
+                    if !presentation.selected_edge_ids.is_empty() {
+                        apply_pick(
+                            &mut editor,
+                            FeaturePick::Edges {
+                                body: Some(BodyId(*body)),
+                                edges: presentation
+                                    .selected_edge_ids
+                                    .iter()
+                                    .copied()
+                                    .map(nbcad_core::EdgeId)
+                                    .collect(),
+                            },
+                        )?;
+                    }
+                }
+            } else if feature_id.is_none() && *kind != SolidFormKind::Rib {
+                if let Some(pick) = selected_source(world, &editor.snapshot)? {
+                    if !matches!(pick, FeaturePick::Face(_)) || *kind == SolidFormKind::Extrude {
                         apply_pick(&mut editor, pick)?;
                     }
                 }
@@ -513,10 +672,10 @@ fn reduce_owned(
             Ok(json!({"form_id":id,"opened":true}))
         });
     }
-    let BuildCommand::Control { form_id, action } = command else {
+    let FeatureCommand::Control { form_id, action } = command else {
         unreachable!()
     };
-    if matches!(action, BuildControl::Apply) {
+    if matches!(action, FeatureControl::Apply) {
         return apply::begin(
             engine,
             bridge,
@@ -538,7 +697,7 @@ fn reduce_owned(
     let mut close = false;
     let result = with_receipt(bridge, engine, owner, |receipt| {
         validate_control()?;
-        if matches!(action, BuildControl::Cancel) {
+        if matches!(action, FeatureControl::Cancel) {
             let owns_preview =
                 native_viewport::interface_preview_revision(world) == editor.preview_revision;
             let can_restore = receipt == editor.snapshot.receipt && owns_preview;
@@ -547,6 +706,9 @@ fn reduce_owned(
             model.engine_revision = receipt.revision;
             editor.form.cancel(&model)?;
             let restoration = if can_restore {
+                if let Some(original) = editor.original_view.take() {
+                    native_viewport::apply_interface_model(world, original)?;
+                }
                 native_viewport::apply_interface_preview(
                     world,
                     &receipt.owner.document_id,
@@ -569,7 +731,7 @@ fn reduce_owned(
         check_revision(editor, &receipt)?;
         let model = editor.snapshot.model(editor.form.parameter_sketch());
         match action {
-            BuildControl::Field(field) => {
+            FeatureControl::Field(field) => {
                 let row = editor
                     .form
                     .fields(&model)
@@ -630,8 +792,8 @@ fn reduce_owned(
                     _ => return Err("This input does not match the feature field".into()),
                 }
             }
-            BuildControl::Choose { field, option } => {
-                if editor.choice_field != Some(*field) && *field != BuildField::Axis {
+            FeatureControl::Choose { field, option } => {
+                if editor.choice_field != Some(*field) && *field != SolidField::Axis {
                     return Err("This choice list is closed".into());
                 }
                 let row = editor
@@ -650,38 +812,40 @@ fn reduce_owned(
                 editor.form.set_value(*field, &option.value, &model)?;
                 editor.choice_field = None;
             }
-            BuildControl::Pick(field) => {
+            FeatureControl::Pick(field) => {
                 if !matches!(
                     field,
-                    BuildField::Source
-                        | BuildField::Targets
-                        | BuildField::StopFace
-                        | BuildField::AxisLine
-                        | BuildField::Path
-                        | BuildField::Guide
+                    SolidField::Source
+                        | SolidField::Edges
+                        | SolidField::Targets
+                        | SolidField::StopFace
+                        | SolidField::AxisLine
+                        | SolidField::Path
+                        | SolidField::Guide
                 ) {
                     return Err("This field is not a geometry reference".into());
                 }
                 editor.pick_target = Some(*field);
                 editor.choice_field = None;
             }
-            BuildControl::Clear(field) => match field {
-                BuildField::Source => editor.form.set_profiles(Vec::new(), &model)?,
-                BuildField::Targets => editor.form.set_targets(Vec::new(), &model)?,
-                BuildField::StopFace => editor.form.set_stop_face(None, &model)?,
-                BuildField::AxisLine => editor.form.set_axis(None, &model)?,
-                BuildField::Path | BuildField::Guide => {
+            FeatureControl::Clear(field) => match field {
+                SolidField::Edges => editor.form.set_edges(None, Vec::new(), &model)?,
+                SolidField::Source => editor.form.set_profiles(Vec::new(), &model)?,
+                SolidField::Targets => editor.form.set_targets(Vec::new(), &model)?,
+                SolidField::StopFace => editor.form.set_stop_face(None, &model)?,
+                SolidField::AxisLine => editor.form.set_axis(None, &model)?,
+                SolidField::Path | SolidField::Guide => {
                     editor.form.set_path(*field, None, &model)?
                 }
                 _ => return Err("This field is not a geometry reference".into()),
             },
-            BuildControl::Apply | BuildControl::Cancel => unreachable!(),
+            FeatureControl::Apply | FeatureControl::Cancel => unreachable!(),
         }
         if matches!(
             action,
-            BuildControl::Field(BuildField::Axis)
-                | BuildControl::Choose {
-                    field: BuildField::Axis,
+            FeatureControl::Field(SolidField::Axis)
+                | FeatureControl::Choose {
+                    field: SolidField::Axis,
                     ..
                 }
         ) {
@@ -689,14 +853,14 @@ fn reduce_owned(
                 .form
                 .fields(&model)
                 .iter()
-                .any(|r| r.field == BuildField::AxisLine && r.visible)
-                .then_some(BuildField::AxisLine);
+                .any(|r| r.field == SolidField::AxisLine && r.visible)
+                .then_some(SolidField::AxisLine);
         }
         if matches!(
             action,
-            BuildControl::Field(BuildField::Extent)
-                | BuildControl::Choose {
-                    field: BuildField::Extent,
+            FeatureControl::Field(SolidField::Extent)
+                | FeatureControl::Choose {
+                    field: SolidField::Extent,
                     ..
                 }
         ) {
@@ -704,18 +868,18 @@ fn reduce_owned(
                 .form
                 .fields(&model)
                 .iter()
-                .any(|row| row.field == BuildField::StopFace && row.visible);
+                .any(|row| row.field == SolidField::StopFace && row.visible);
             editor.pick_target = if to_face {
-                Some(BuildField::StopFace)
-            } else if editor.form.kind() == BuildKind::Rib {
-                Some(BuildField::Path)
+                Some(SolidField::StopFace)
+            } else if editor.form.kind() == SolidFormKind::Rib {
+                Some(SolidField::Path)
             } else {
-                Some(BuildField::Source)
+                Some(SolidField::Source)
             };
         }
         if matches!(
             action,
-            BuildControl::Field(BuildField::GuideEnabled | BuildField::CenterlineEnabled)
+            FeatureControl::Field(SolidField::GuideEnabled | SolidField::CenterlineEnabled)
         ) {
             editor.pick_target = editor
                 .form
@@ -724,14 +888,15 @@ fn reduce_owned(
                 .find(|r| {
                     r.visible
                         && r.field
-                            == if matches!(action, BuildControl::Field(BuildField::GuideEnabled)) {
-                                BuildField::Guide
+                            == if matches!(action, FeatureControl::Field(SolidField::GuideEnabled))
+                            {
+                                SolidField::Guide
                             } else {
-                                BuildField::Path
+                                SolidField::Path
                             }
                 })
                 .map(|r| r.field)
-                .or(Some(BuildField::Source));
+                .or(Some(SolidField::Source));
         }
         update_preview(editor, world)?;
         Ok(json!({"form_id":form_id,"edited":true}))

@@ -1084,12 +1084,22 @@ impl SolidDocument {
         &mut self,
         feature_id: FeatureId,
         name: impl Into<String>,
-        request: SolidFilletRequest,
+        mut request: SolidFilletRequest,
         catalog: &[ProfileCatalogItemDto],
         active_features: &BTreeSet<FeatureId>,
     ) -> Result<RecomputePlanDto, SolidError> {
         self.ensure_idle()?;
         validate_positive(request.radius, "fillet radius")?;
+        if request.tangent_chain {
+            edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
+            let body = self
+                .scene
+                .bodies
+                .iter()
+                .find(|b| b.id == request.body_id)
+                .ok_or(SolidError::MissingTarget(request.body_id))?;
+            request.edge_ids = crate::tangent_chain_edges(body, &request.edge_ids);
+        }
         let edge_keys = edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
         let mut fillets = self.fillets.clone();
         fillets.push(SolidFilletDefinitionDto {
@@ -1118,12 +1128,22 @@ impl SolidDocument {
     pub fn prepare_edit_fillet(
         &mut self,
         feature_id: FeatureId,
-        request: SolidFilletRequest,
+        mut request: SolidFilletRequest,
         catalog: &[ProfileCatalogItemDto],
         active_features: &BTreeSet<FeatureId>,
     ) -> Result<RecomputePlanDto, SolidError> {
         self.ensure_idle()?;
         validate_positive(request.radius, "fillet radius")?;
+        if request.tangent_chain {
+            edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
+            let body = self
+                .scene
+                .bodies
+                .iter()
+                .find(|b| b.id == request.body_id)
+                .ok_or(SolidError::MissingTarget(request.body_id))?;
+            request.edge_ids = crate::tangent_chain_edges(body, &request.edge_ids);
+        }
         let edge_keys = edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
         let mut fillets = self.fillets.clone();
         let definition = fillets
@@ -1153,12 +1173,22 @@ impl SolidDocument {
         &mut self,
         feature_id: FeatureId,
         name: impl Into<String>,
-        request: SolidChamferRequest,
+        mut request: SolidChamferRequest,
         catalog: &[ProfileCatalogItemDto],
         active_features: &BTreeSet<FeatureId>,
     ) -> Result<RecomputePlanDto, SolidError> {
         self.ensure_idle()?;
         validate_positive(request.distance, "chamfer distance")?;
+        if request.tangent_chain {
+            edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
+            let body = self
+                .scene
+                .bodies
+                .iter()
+                .find(|b| b.id == request.body_id)
+                .ok_or(SolidError::MissingTarget(request.body_id))?;
+            request.edge_ids = crate::tangent_chain_edges(body, &request.edge_ids);
+        }
         let edge_keys = edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
         let mut chamfers = self.chamfers.clone();
         chamfers.push(SolidChamferDefinitionDto {
@@ -1187,12 +1217,22 @@ impl SolidDocument {
     pub fn prepare_edit_chamfer(
         &mut self,
         feature_id: FeatureId,
-        request: SolidChamferRequest,
+        mut request: SolidChamferRequest,
         catalog: &[ProfileCatalogItemDto],
         active_features: &BTreeSet<FeatureId>,
     ) -> Result<RecomputePlanDto, SolidError> {
         self.ensure_idle()?;
         validate_positive(request.distance, "chamfer distance")?;
+        if request.tangent_chain {
+            edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
+            let body = self
+                .scene
+                .bodies
+                .iter()
+                .find(|b| b.id == request.body_id)
+                .ok_or(SolidError::MissingTarget(request.body_id))?;
+            request.edge_ids = crate::tangent_chain_edges(body, &request.edge_ids);
+        }
         let edge_keys = edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
         let mut chamfers = self.chamfers.clone();
         let definition = chamfers

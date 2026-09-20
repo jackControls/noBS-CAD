@@ -243,7 +243,7 @@ pub(crate) fn synchronize(
                         },
                         HistoryCommand::Edit(target.id),
                         locked
-                            || !matches!(feature.kind, FeatureKind::Sketch | FeatureKind::Extrude),
+                            || (feature.kind != FeatureKind::Sketch && super::feature::SolidFormKind::from_feature_kind(feature.kind).is_none()),
                     ),
                     (
                         "Roll back before",

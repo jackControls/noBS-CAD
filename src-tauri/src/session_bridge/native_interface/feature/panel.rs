@@ -1,7 +1,7 @@
 //! The retained native profile-feature panel. Every field comes from the typed form;
 //! its actual widget is the control inspected and driven by MCP.
 
-use super::{BuildCommand, BuildControl};
+use super::{FeatureCommand, FeatureControl};
 use crate::native_viewport::{
     interface_shell::{
         self, fields, InterfaceCamera, InterfaceControl, InterfaceOccluder, NativeInterfaceHandle,
@@ -20,7 +20,7 @@ struct PanelWidgets {
     form_id: u64,
     root: Option<Entity>,
     body: Option<Entity>,
-    controls: HashMap<String, (Entity, BuildCommand)>,
+    controls: HashMap<String, (Entity, FeatureCommand)>,
     labels: HashMap<String, Entity>,
     area: Area,
     scroll: f32,
@@ -114,9 +114,9 @@ fn synchronize_owned(
     let root = *state.root.get_or_insert_with(|| {
         world
             .spawn((
-                Name::new("Build feature panel"),
+                Name::new("Solid feature panel"),
                 Node::default(),
-                BackgroundColor(theme.panel),
+                BackgroundColor(theme.panel.with_alpha(1.)),
                 BorderColor::all(theme.accent),
                 UiTargetCamera(camera),
                 InterfaceOccluder,
@@ -162,7 +162,7 @@ fn synchronize_owned(
         "title",
         root,
         camera,
-        panel.kind.label(),
+        &panel.title,
         node(14., 8., width - 28., 24.),
         theme,
         &assets,
@@ -171,7 +171,7 @@ fn synchronize_owned(
     let mut y = 0.;
     let inner = width - 24.;
     let mut close =
-        InterfaceControl::button("solid/build", format!("Close {}", panel.kind.label()));
+        InterfaceControl::button(panel.kind.group(), format!("Close {}", panel.kind.label()));
     close.disabled = panel.busy;
     widget(
         world,
@@ -182,16 +182,16 @@ fn synchronize_owned(
         camera,
         close,
         node(width - 34., 7., 26., 26.),
-        BuildCommand::Control {
+        FeatureCommand::Control {
             form_id: panel.form_id,
-            action: BuildControl::Cancel,
+            action: FeatureControl::Cancel,
         },
         theme,
         &assets,
     )?;
     for row in panel.fields.iter().filter(|row| row.visible) {
         let key = format!("{:?}", row.field);
-        if row.field == super::BuildField::Axis {
+        if row.field == super::SolidField::Axis {
             if let Field::Choice { value, options } = &row.value {
                 label(
                     world,
@@ -208,7 +208,7 @@ fn synchronize_owned(
                 );
                 y += 20.;
                 for (index, option) in options.iter().enumerate() {
-                    let mut c = InterfaceControl::button("solid/build", &option.label);
+                    let mut c = InterfaceControl::button(panel.kind.group(), &option.label);
                     c.role = "radio".into();
                     c.selected = Some(option.value == *value);
                     c.disabled = !row.enabled || option.disabled;
@@ -226,9 +226,9 @@ fn synchronize_owned(
                             (inner - 6.) * 0.5,
                             30.,
                         ),
-                        BuildCommand::Control {
+                        FeatureCommand::Control {
                             form_id: panel.form_id,
-                            action: BuildControl::Choose {
+                            action: FeatureControl::Choose {
                                 field: row.field,
                                 option: index,
                             },
@@ -241,10 +241,7 @@ fn synchronize_owned(
                 continue;
             }
         }
-        let mut control = InterfaceControl::button(
-            nbcad_interface::catalog::group_for(panel.kind.operation()).unwrap_or("solid/build"),
-            &row.label,
-        );
+        let mut control = InterfaceControl::button(panel.kind.group(), &row.label);
         control.disabled = !row.enabled;
         control.field = row.value.clone();
         let action;
@@ -264,7 +261,7 @@ fn synchronize_owned(
                     false,
                 );
                 y += 20.;
-                action = BuildControl::Field(row.field);
+                action = FeatureControl::Field(row.field);
                 if let Field::Choice { value, options } = &row.value {
                     let selected = options
                         .iter()
@@ -280,25 +277,31 @@ fn synchronize_owned(
                 }
             }
             Field::Toggle(value) => {
-                action = BuildControl::Field(row.field);
+                action = FeatureControl::Field(row.field);
                 control.role = "checkbox".into();
                 control.selected = Some(*value);
             }
             Field::None => {
                 let label_text = match row.field {
-                    super::BuildField::Source if panel.kind == super::BuildKind::Loft => "SECTIONS",
-                    super::BuildField::Source => "PROFILES",
-                    super::BuildField::AxisLine => "AXIS LINE",
-                    super::BuildField::Targets => "TARGET BODIES",
-                    super::BuildField::StopFace => "STOP FACE",
-                    super::BuildField::Path => {
-                        if matches!(panel.kind, super::BuildKind::Loft | super::BuildKind::Rib) {
+                    super::SolidField::Source if panel.kind == super::SolidFormKind::Loft => {
+                        "SECTIONS"
+                    }
+                    super::SolidField::Source => "PROFILES",
+                    super::SolidField::Edges => "EDGES",
+                    super::SolidField::AxisLine => "AXIS LINE",
+                    super::SolidField::Targets => "TARGET BODIES",
+                    super::SolidField::StopFace => "STOP FACE",
+                    super::SolidField::Path => {
+                        if matches!(
+                            panel.kind,
+                            super::SolidFormKind::Loft | super::SolidFormKind::Rib
+                        ) {
                             "CENTERLINE"
                         } else {
                             "PATH"
                         }
                     }
-                    super::BuildField::Guide => "GUIDE RAIL",
+                    super::SolidField::Guide => "GUIDE RAIL",
                     _ => "REFERENCE",
                 };
                 label(
@@ -315,7 +318,7 @@ fn synchronize_owned(
                     false,
                 );
                 y += 20.;
-                action = BuildControl::Pick(row.field);
+                action = FeatureControl::Pick(row.field);
                 control.selected = Some(panel.pick_target == Some(row.field));
             }
         }
@@ -334,7 +337,7 @@ fn synchronize_owned(
                 inner,
                 if reference { 62. } else { 30. },
             ),
-            BuildCommand::Control {
+            FeatureCommand::Control {
                 form_id: panel.form_id,
                 action,
             },
@@ -351,18 +354,19 @@ fn synchronize_owned(
                 body,
                 camera,
                 match row.field {
-                    super::BuildField::Source if panel.kind == super::BuildKind::Loft => {
+                    super::SolidField::Source if panel.kind == super::SolidFormKind::Loft => {
                         "Click sections in order; click again to remove."
                     }
-                    super::BuildField::Source => "Click a profile in the viewport.",
-                    super::BuildField::AxisLine => "Click a straight line on the profile plane.",
-                    super::BuildField::Path if panel.kind == super::BuildKind::Rib => {
+                    super::SolidField::Source => "Click a profile in the viewport.",
+                    super::SolidField::Edges => "Click edges to add or remove from this body.",
+                    super::SolidField::AxisLine => "Click a straight line on the profile plane.",
+                    super::SolidField::Path if panel.kind == super::SolidFormKind::Rib => {
                         "Click centerline curves to add or remove."
                     }
-                    super::BuildField::Path | super::BuildField::Guide => {
+                    super::SolidField::Path | super::SolidField::Guide => {
                         "Click connected curves to add or remove."
                     }
-                    super::BuildField::Targets => "Click bodies to add or remove.",
+                    super::SolidField::Targets => "Click bodies to add or remove.",
                     _ => "Click a planar face in the viewport.",
                 },
                 node(8., y + 32. - state.scroll, inner - 16., 24.),
@@ -371,14 +375,14 @@ fn synchronize_owned(
                 false,
             );
             let mut clear = InterfaceControl::button(
-                "solid/build",
+                panel.kind.group(),
                 match row.field {
-                    super::BuildField::Source => "Clear source profiles",
-                    super::BuildField::AxisLine => "Clear axis line",
-                    super::BuildField::Targets => "Clear target bodies",
-                    super::BuildField::StopFace => "Clear stop face",
-                    super::BuildField::Path => "Clear path curves",
-                    super::BuildField::Guide => "Clear guide curves",
+                    super::SolidField::Source => "Clear source profiles",
+                    super::SolidField::AxisLine => "Clear axis line",
+                    super::SolidField::Targets => "Clear target bodies",
+                    super::SolidField::StopFace => "Clear stop face",
+                    super::SolidField::Path => "Clear path curves",
+                    super::SolidField::Guide => "Clear guide curves",
                     _ => "Clear reference",
                 },
             );
@@ -392,9 +396,9 @@ fn synchronize_owned(
                 camera,
                 clear,
                 node(inner - 54., y + 5. - state.scroll, 48., 22.),
-                BuildCommand::Control {
+                FeatureCommand::Control {
                     form_id: panel.form_id,
-                    action: BuildControl::Clear(row.field),
+                    action: FeatureControl::Clear(row.field),
                 },
                 theme,
                 &assets,
@@ -404,7 +408,7 @@ fn synchronize_owned(
         if panel.choice_field == Some(row.field) {
             if let Field::Choice { value, options } = &row.value {
                 for (index, option) in options.iter().enumerate() {
-                    let mut choice = InterfaceControl::button("solid/build", &option.label);
+                    let mut choice = InterfaceControl::button(panel.kind.group(), &option.label);
                     choice.disabled = option.disabled || !row.enabled;
                     choice.role = "option".into();
                     choice.selected = Some(&option.value == value);
@@ -417,9 +421,9 @@ fn synchronize_owned(
                         camera,
                         choice,
                         node(8., y - state.scroll, inner - 8., 28.),
-                        BuildCommand::Control {
+                        FeatureCommand::Control {
                             form_id: panel.form_id,
-                            action: BuildControl::Choose {
+                            action: FeatureControl::Choose {
                                 field: row.field,
                                 option: index,
                             },
@@ -472,7 +476,7 @@ fn synchronize_owned(
     state.max_scroll = (y - body_height).max(0.);
     state.scroll = state.scroll.min(state.max_scroll);
     let mut cancel =
-        InterfaceControl::button("solid/build", format!("Cancel {}", panel.kind.label()));
+        InterfaceControl::button(panel.kind.group(), format!("Cancel {}", panel.kind.label()));
     cancel.disabled = panel.busy;
     widget(
         world,
@@ -483,15 +487,15 @@ fn synchronize_owned(
         camera,
         cancel,
         node(12., height - 42., (inner - 8.) * 0.5, 30.),
-        BuildCommand::Control {
+        FeatureCommand::Control {
             form_id: panel.form_id,
-            action: BuildControl::Cancel,
+            action: FeatureControl::Cancel,
         },
         theme,
         &assets,
     )?;
     let mut apply = InterfaceControl::button(
-        "solid/build",
+        panel.kind.group(),
         if panel.busy {
             "Applying…".to_owned()
         } else {
@@ -509,9 +513,9 @@ fn synchronize_owned(
         camera,
         apply,
         node(16. + inner * 0.5, height - 42., (inner - 8.) * 0.5, 30.),
-        BuildCommand::Control {
+        FeatureCommand::Control {
             form_id: panel.form_id,
-            action: BuildControl::Apply,
+            action: FeatureControl::Apply,
         },
         theme,
         &assets,
@@ -545,7 +549,7 @@ fn widget(
     camera: Entity,
     mut control: InterfaceControl,
     mut node: Node,
-    command: BuildCommand,
+    command: FeatureCommand,
     theme: ViewportUiTheme,
     assets: &ViewportUiAssets,
 ) -> Result<(), String> {
@@ -594,12 +598,12 @@ fn widget(
             bounds.top = px(10.);
             world.entity_mut(glyph).insert(bounds);
         }
-        bind_command(world, entity, NativeCommand::Build(command.clone()))?;
+        bind_command(world, entity, NativeCommand::Feature(command.clone()))?;
         state.controls.insert(key.into(), (entity, command.clone()));
         entity
     };
     if state.controls[key].1 != command {
-        bind_command(world, entity, NativeCommand::Build(command.clone()))?;
+        bind_command(world, entity, NativeCommand::Feature(command.clone()))?;
         state.controls.get_mut(key).unwrap().1 = command;
     }
     control.binding = world
@@ -662,10 +666,10 @@ fn widget(
     Ok(())
 }
 
-fn content_height(panel: &super::BuildPanel) -> f32 {
+fn content_height(panel: &super::FeaturePanel) -> f32 {
     let mut height = 0.;
     for row in panel.fields.iter().filter(|row| row.visible) {
-        if row.field == super::BuildField::Axis {
+        if row.field == super::SolidField::Axis {
             height += 96.;
             continue;
         }
@@ -713,7 +717,13 @@ fn label(
                 Text::new(text),
                 theme.text(
                     assets,
-                    if strong { 16. } else { 12. },
+                    if strong {
+                        12.
+                    } else if key.ends_with("-label") {
+                        10.
+                    } else {
+                        11.
+                    },
                     if strong {
                         FontWeight::SEMIBOLD
                     } else {

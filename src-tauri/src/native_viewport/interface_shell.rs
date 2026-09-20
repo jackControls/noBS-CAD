@@ -988,6 +988,9 @@ pub(crate) struct InterfaceCaption(pub String);
 #[derive(Component)]
 pub(crate) struct InterfaceFlat;
 
+#[derive(Component)]
+struct InterfaceReference;
+
 pub(crate) fn compact_label(world: &mut World, entity: Entity, inset: f32) {
     let label = world.get::<InterfaceLabel>(entity).unwrap().0;
     let assets = world.resource::<ViewportUiAssets>().clone();
@@ -1016,6 +1019,11 @@ pub(crate) fn caption_size(world: &mut World, entity: Entity, size: f32) {
 /// Reference cards reserve room for the separate clear control and explanatory
 /// line. Keep the actual accessible name intact for keyboard/MCP selection.
 pub(crate) fn reference_caption(world: &mut World, entity: Entity) {
+    if world.get::<InterfaceReference>(entity).is_none() {
+        let mut style=world.get::<InterfaceButtonStyle>(entity).unwrap().0;
+        style.accent_soft=ribbon::css_mix(style.accent,style.panel,0.12);
+        world.entity_mut(entity).insert((InterfaceReference,InterfaceButtonStyle(style)));
+    }
     let label=world.get::<InterfaceLabel>(entity).unwrap().0;
     let assets=world.resource::<ViewportUiAssets>().clone();
     let theme=world.get::<InterfaceButtonStyle>(entity).unwrap().0;
@@ -1298,6 +1306,7 @@ fn update_controls(
         Option<&ribbon::RibbonButton>,
         Option<&InterfaceCaption>,
         Option<&InterfaceFlat>,
+        Option<&InterfaceReference>,
         &mut Node,
         &mut BackgroundColor,
         &mut BorderColor,
@@ -1323,6 +1332,7 @@ fn update_controls(
         ribbon,
         caption,
         flat,
+        reference,
         mut node,
         mut background,
         mut border,
@@ -1345,6 +1355,8 @@ fn update_controls(
         }
         let fill = if let Some(ribbon) = ribbon {
             ribbon.fill(theme, active, shared.hovered == Some(key), control.disabled)
+        } else if flat.is_some() && control.role == "checkbox" {
+            if shared.hovered == Some(key) { ribbon::css_mix(theme.edge,theme.panel,0.2) } else { Color::NONE }
         } else if flat.is_some() && active {
             ribbon::css_mix(theme.accent, theme.panel, 0.20)
         } else if active {
@@ -1359,7 +1371,7 @@ fn update_controls(
         if background.0 != fill {
             background.0 = fill;
         }
-        let edge = BorderColor::all(if shared.focused == Some(key) {
+        let edge = BorderColor::all(if shared.focused == Some(key) || (reference.is_some() && active) {
             theme.accent
         } else if ribbon.is_some() || flat.is_some() {
             Color::NONE

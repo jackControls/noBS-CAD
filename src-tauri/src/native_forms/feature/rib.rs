@@ -21,15 +21,15 @@ impl RibFields {
             symmetric: false,
         }
     }
-    pub fn set(&mut self, field: BuildField, value: &str) -> Result<(), String> {
+    pub fn set(&mut self, field: SolidField, value: &str) -> Result<(), String> {
         match field {
-            BuildField::Thickness => self.thickness.set_text(value.into()),
-            BuildField::Distance => self.depth.set_text(value.into()),
-            BuildField::Extent => {
+            SolidField::Thickness => self.thickness.set_text(value.into()),
+            SolidField::Distance => self.depth.set_text(value.into()),
+            SolidField::Extent => {
                 self.extent = serde_json::from_value(json!({"type":value,"depth":10.,"face_id":0}))
                     .map_err(|e| e.to_string())?
             }
-            BuildField::Symmetric => {
+            SolidField::Symmetric => {
                 self.symmetric = match value {
                     "true" => true,
                     "false" => false,
@@ -41,7 +41,7 @@ impl RibFields {
         Ok(())
     }
 }
-impl BuildForm {
+impl SolidForm {
     pub(crate) fn edit_rib(d: &RibDefinitionDto, model: &FormModel<'_>) -> Result<Self, String> {
         if !model
             .document
@@ -51,7 +51,7 @@ impl BuildForm {
         {
             return Err("The selected Rib no longer exists".into());
         }
-        let mut form = Self::new_kind(BuildKind::Rib, model);
+        let mut form = Self::new_kind(SolidFormKind::Rib, model);
         form.feature = Some(d.feature_id);
         form.operation = d.operation;
         form.operation_manual = true;
@@ -96,8 +96,8 @@ impl BuildForm {
     pub(super) fn rib_payload(
         &self,
         model: &FormModel<'_>,
-    ) -> Result<(&'static str, Value), Vec<(BuildField, String)>> {
-        use BuildField as F;
+    ) -> Result<(&'static str, Value), Vec<(SolidField, String)>> {
+        use SolidField as F;
         let p = self.rib.as_ref().unwrap();
         let mut errors = vec![];
         if let Err(e) = self.check_model(model) {
@@ -210,8 +210,8 @@ impl BuildForm {
             .map(|v| (op, v))
             .map_err(|e| vec![(F::Path, e.to_string())])
     }
-    pub(super) fn rib_fields(&self, model: &FormModel<'_>) -> Vec<BuildFieldView> {
-        use BuildField as F;
+    pub(super) fn rib_fields(&self, model: &FormModel<'_>) -> Vec<SolidFieldView> {
+        use SolidField as F;
         let p = self.rib.as_ref().unwrap();
         let errors = self.rib_payload(model).err().unwrap_or_default();
         let enabled = self.phase == Phase::Editing && self.check_model(model).is_ok();
@@ -315,7 +315,7 @@ impl BuildForm {
             ),
         ];
         rows.into_iter()
-            .map(|(field, label, value, visible)| BuildFieldView {
+            .map(|(field, label, value, visible)| SolidFieldView {
                 field,
                 label,
                 value,

@@ -9,11 +9,25 @@ use crate::native_viewport::{ViewportArrow, ViewportLineLayer, ViewportModel, Vi
 const MAX_SEGMENTS: usize = 100_000;
 
 pub(super) fn references(
-    form: &crate::native_forms::BuildForm,
+    form: &crate::native_forms::SolidForm,
     model: &crate::native_forms::FormModel<'_>,
     viewport: &ViewportModel,
 ) -> Result<ViewportPreview, String> {
     let mut segments = Vec::new();
+    if let Some((id, edges)) = form.selected_edges() {
+        if let Some(body) = model.scene.bodies.iter().find(|b| b.id == id) {
+            for edge in body.edges.iter().filter(|edge| edges.contains(&edge.id)) {
+                for pair in edge.points.windows(2) {
+                    if segments.len() / 6 >= MAX_SEGMENTS {
+                        return Err("Selected edges are too large to preview".into());
+                    }
+                    for point in pair {
+                        segments.extend([point.x as f32, point.y as f32, point.z as f32]);
+                    }
+                }
+            }
+        }
+    }
     for selected in form.selected_profiles() {
         if let Some(sketch) = model
             .profiles
@@ -68,7 +82,11 @@ pub(super) fn references(
     }
     Ok(ViewportPreview {
         lines: vec![ViewportLineLayer {
-            color: [0.45, 0.72, 1., 1.],
+            color: if form.selected_edges().is_some() {
+                [1., 0.88, 0.35, 1.]
+            } else {
+                [0.45, 0.72, 1., 1.]
+            },
             width: 3.,
             segments,
             ..Default::default()

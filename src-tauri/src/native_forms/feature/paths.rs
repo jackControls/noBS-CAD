@@ -8,7 +8,7 @@ use nbcad_solid::{
 
 #[derive(Debug)]
 pub(super) struct PathFields {
-    pub kind: BuildKind,
+    pub kind: SolidFormKind,
     sections: Vec<ProfileRefDto>,
     path: Option<PathRefDto>,
     guide: Option<PathRefDto>,
@@ -21,7 +21,7 @@ pub(super) struct PathFields {
     continuity: LoftContinuity,
 }
 impl PathFields {
-    pub fn new(kind: BuildKind) -> Self {
+    pub fn new(kind: SolidFormKind) -> Self {
         Self {
             kind,
             sections: vec![],
@@ -36,27 +36,27 @@ impl PathFields {
             continuity: LoftContinuity::G0,
         }
     }
-    pub fn set(&mut self, field: BuildField, value: &str) -> Result<(), String> {
+    pub fn set(&mut self, field: SolidField, value: &str) -> Result<(), String> {
         let toggle = || match value {
             "true" => Ok(true),
             "false" => Ok(false),
             _ => Err("Choose true or false".to_owned()),
         };
         match field {
-            BuildField::GuideEnabled => self.guide_enabled = toggle()?,
-            BuildField::CenterlineEnabled if self.kind == BuildKind::Loft => {
+            SolidField::GuideEnabled => self.guide_enabled = toggle()?,
+            SolidField::CenterlineEnabled if self.kind == SolidFormKind::Loft => {
                 self.centerline_enabled = toggle()?
             }
-            BuildField::Orientation if self.kind == BuildKind::Sweep => {
+            SolidField::Orientation if self.kind == SolidFormKind::Sweep => {
                 self.orientation =
                     serde_json::from_value(json!(value)).map_err(|e| e.to_string())?
             }
-            BuildField::Transition if self.kind == BuildKind::Sweep => {
+            SolidField::Transition if self.kind == SolidFormKind::Sweep => {
                 self.transition = serde_json::from_value(json!(value)).map_err(|e| e.to_string())?
             }
-            BuildField::ForceC1 if self.kind == BuildKind::Sweep => self.force_c1 = toggle()?,
-            BuildField::Ruled if self.kind == BuildKind::Loft => self.ruled = toggle()?,
-            BuildField::Continuity if self.kind == BuildKind::Loft => {
+            SolidField::ForceC1 if self.kind == SolidFormKind::Sweep => self.force_c1 = toggle()?,
+            SolidField::Ruled if self.kind == SolidFormKind::Loft => self.ruled = toggle()?,
+            SolidField::Continuity if self.kind == SolidFormKind::Loft => {
                 self.continuity = serde_json::from_value(json!(value)).map_err(|e| e.to_string())?
             }
             _ => return Err("This feature does not have that option".into()),
@@ -85,7 +85,7 @@ pub(super) fn validate_path(path: &PathRefDto, model: &FormModel<'_>) -> Result<
     Ok(())
 }
 
-impl BuildForm {
+impl SolidForm {
     pub(crate) fn selected_profiles(&self) -> Vec<ProfileRefDto> {
         if let Some(paths) = &self.paths {
             return paths.sections.clone();
@@ -114,7 +114,7 @@ impl BuildForm {
     ) -> Result<(), String> {
         self.editing(model)?;
         if let Some(paths) = &self.paths {
-            if paths.kind == BuildKind::Sweep && profiles.len() > 1 {
+            if paths.kind == SolidFormKind::Sweep && profiles.len() > 1 {
                 return Err("Sweep needs exactly one profile".into());
             }
             for (index, profile) in profiles.iter().enumerate() {
@@ -153,16 +153,16 @@ impl BuildForm {
         }
         Ok(())
     }
-    pub(crate) fn path(&self, field: BuildField) -> Option<&PathRefDto> {
+    pub(crate) fn path(&self, field: SolidField) -> Option<&PathRefDto> {
         if let Some(rib) = &self.rib {
-            return (field == BuildField::Path)
+            return (field == SolidField::Path)
                 .then_some(rib.centerline.as_ref())
                 .flatten();
         }
         let p = self.paths.as_ref()?;
         match field {
-            BuildField::Path => p.path.as_ref(),
-            BuildField::Guide => p.guide.as_ref(),
+            SolidField::Path => p.path.as_ref(),
+            SolidField::Guide => p.guide.as_ref(),
             _ => None,
         }
     }
@@ -172,7 +172,7 @@ impl BuildForm {
         }
         let Some(p) = &self.paths else { return vec![] };
         let mut paths = vec![];
-        if p.kind == BuildKind::Sweep || p.centerline_enabled {
+        if p.kind == SolidFormKind::Sweep || p.centerline_enabled {
             paths.extend(p.path.as_ref());
         }
         if p.guide_enabled {
@@ -182,7 +182,7 @@ impl BuildForm {
     }
     pub(crate) fn set_path(
         &mut self,
-        field: BuildField,
+        field: SolidField,
         path: Option<PathRefDto>,
         model: &FormModel<'_>,
     ) -> Result<(), String> {
@@ -191,7 +191,7 @@ impl BuildForm {
             validate_path(path, model)?;
         }
         if let Some(rib) = &mut self.rib {
-            if field != BuildField::Path {
+            if field != SolidField::Path {
                 return Err("Rib uses centerline curves".into());
             }
             rib.centerline = path;
@@ -203,8 +203,8 @@ impl BuildForm {
             .as_mut()
             .ok_or("This feature has no curve path")?;
         match field {
-            BuildField::Path => p.path = path,
-            BuildField::Guide => p.guide = path,
+            SolidField::Path => p.path = path,
+            SolidField::Guide => p.guide = path,
             _ => return Err("Choose a path field".into()),
         }
         self.changed();
@@ -214,7 +214,7 @@ impl BuildForm {
         d: &SweepDefinitionDto,
         model: &FormModel<'_>,
     ) -> Result<Self, String> {
-        let mut form = Self::new_kind(BuildKind::Sweep, model);
+        let mut form = Self::new_kind(SolidFormKind::Sweep, model);
         form.load_path_feature(d.feature_id, FeatureKind::Sweep, model)?;
         form.operation = d.operation;
         form.operation_manual = true;
@@ -237,7 +237,7 @@ impl BuildForm {
         Ok(form)
     }
     pub(crate) fn edit_loft(d: &LoftDefinitionDto, model: &FormModel<'_>) -> Result<Self, String> {
-        let mut form = Self::new_kind(BuildKind::Loft, model);
+        let mut form = Self::new_kind(SolidFormKind::Loft, model);
         form.load_path_feature(d.feature_id, FeatureKind::Loft, model)?;
         form.operation = d.operation;
         form.operation_manual = true;
@@ -280,14 +280,14 @@ impl BuildForm {
     pub(super) fn path_payload(
         &self,
         model: &FormModel<'_>,
-    ) -> Result<(&'static str, Value), Vec<(BuildField, String)>> {
-        use BuildField as F;
+    ) -> Result<(&'static str, Value), Vec<(SolidField, String)>> {
+        use SolidField as F;
         let p = self.paths.as_ref().unwrap();
         let mut errors = vec![];
         if let Err(e) = self.check_model(model) {
             return Err(vec![(F::Source, e)]);
         }
-        let kind = if p.kind == BuildKind::Sweep {
+        let kind = if p.kind == SolidFormKind::Sweep {
             FeatureKind::Sweep
         } else {
             FeatureKind::Loft
@@ -301,12 +301,12 @@ impl BuildForm {
         }) {
             errors.push((F::Source, "The edited feature no longer exists".into()));
         }
-        if (p.kind == BuildKind::Sweep && p.sections.len() != 1)
-            || (p.kind == BuildKind::Loft && p.sections.len() < 2)
+        if (p.kind == SolidFormKind::Sweep && p.sections.len() != 1)
+            || (p.kind == SolidFormKind::Loft && p.sections.len() < 2)
         {
             errors.push((
                 F::Source,
-                if p.kind == BuildKind::Sweep {
+                if p.kind == SolidFormKind::Sweep {
                     "Select one closed profile"
                 } else {
                     "Select at least two sections in order"
@@ -328,7 +328,7 @@ impl BuildForm {
         for (field, enabled, path) in [
             (
                 F::Path,
-                p.kind == BuildKind::Sweep || p.centerline_enabled,
+                p.kind == SolidFormKind::Sweep || p.centerline_enabled,
                 p.path.as_ref(),
             ),
             (F::Guide, p.guide_enabled, p.guide.as_ref()),
@@ -369,7 +369,7 @@ impl BuildForm {
             self.targets.clone()
         };
         let guide = p.guide_enabled.then(|| p.guide.clone()).flatten();
-        let (op, value) = if p.kind == BuildKind::Sweep {
+        let (op, value) = if p.kind == SolidFormKind::Sweep {
             let path = p.path.as_ref().unwrap();
             let request = SweepRequest {
                 profile: p.sections[0].clone(),
@@ -419,8 +419,8 @@ impl BuildForm {
             .map(|v| (op, v))
             .map_err(|e| vec![(F::Source, e.to_string())])
     }
-    pub(super) fn path_fields(&self, model: &FormModel<'_>) -> Vec<BuildFieldView> {
-        use BuildField as F;
+    pub(super) fn path_fields(&self, model: &FormModel<'_>) -> Vec<SolidFieldView> {
+        use SolidField as F;
         let p = self.paths.as_ref().unwrap();
         let errors = self.path_payload(model).err().unwrap_or_default();
         let enabled = self.phase == Phase::Editing && self.check_model(model).is_ok();
@@ -440,7 +440,7 @@ impl BuildForm {
                 .unwrap_or_else(|| empty.into())
         };
         let source = if p.sections.is_empty() {
-            if p.kind == BuildKind::Sweep {
+            if p.kind == SolidFormKind::Sweep {
                 "Select profile".into()
             } else {
                 "Select sections in order".into()
@@ -453,7 +453,7 @@ impl BuildForm {
                 .collect::<Vec<_>>()
                 .join("; ")
         };
-        let sweep = p.kind == BuildKind::Sweep;
+        let sweep = p.kind == SolidFormKind::Sweep;
         let rows = vec![
             (F::Source, source, Field::None, true),
             (
@@ -566,7 +566,7 @@ impl BuildForm {
             ),
         ];
         rows.into_iter()
-            .map(|(field, label, value, visible)| BuildFieldView {
+            .map(|(field, label, value, visible)| SolidFieldView {
                 field,
                 label,
                 value,

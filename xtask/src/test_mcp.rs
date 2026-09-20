@@ -14,6 +14,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     if suite == "native-support" {
         return crate::native_support_test::run(args);
     }
+    if suite == "native-refine" {
+        return crate::native_refine_test::run(args);
+    }
     if suite == "playback" {
         return crate::playback_test::run(&args.collect::<Vec<_>>()).map_err(anyhow::Error::msg);
     }

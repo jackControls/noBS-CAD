@@ -21,9 +21,9 @@ impl RevolveFields {
             angle: MeasurementInput::new(DimensionKind::Angle, 360., units),
         }
     }
-    pub(super) fn set(&mut self, field: BuildField, value: &str) -> Result<(), String> {
+    pub(super) fn set(&mut self, field: SolidField, value: &str) -> Result<(), String> {
         match field {
-            BuildField::Axis => {
+            SolidField::Axis => {
                 self.axis = match value {
                     "line" => "line",
                     "x" => "x",
@@ -32,18 +32,18 @@ impl RevolveFields {
                     _ => return Err("Choose a sketch line, X axis, Y axis or custom axis".into()),
                 }
             }
-            BuildField::OriginX => self.origin[0].set_text(value.into()),
-            BuildField::OriginY => self.origin[1].set_text(value.into()),
-            BuildField::DirectionX => self.direction[0].set_text(value.into()),
-            BuildField::DirectionY => self.direction[1].set_text(value.into()),
-            BuildField::Angle => self.angle.set_text(value.into()),
+            SolidField::OriginX => self.origin[0].set_text(value.into()),
+            SolidField::OriginY => self.origin[1].set_text(value.into()),
+            SolidField::DirectionX => self.direction[0].set_text(value.into()),
+            SolidField::DirectionY => self.direction[1].set_text(value.into()),
+            SolidField::Angle => self.angle.set_text(value.into()),
             _ => return Err("This is not a Revolve field".into()),
         }
         Ok(())
     }
 }
 
-impl BuildForm {
+impl SolidForm {
     pub(crate) fn revolution_axis(
         &self,
         model: &FormModel<'_>,
@@ -117,7 +117,7 @@ impl BuildForm {
         {
             return Err("The Revolve feature no longer exists".into());
         }
-        let mut form = Self::new_kind(BuildKind::Revolve, model);
+        let mut form = Self::new_kind(SolidFormKind::Revolve, model);
         form.feature = Some(definition.feature_id);
         form.source = ProfileSource::Profiles {
             sketch_name: definition.sketch_name.clone(),
@@ -211,8 +211,8 @@ impl BuildForm {
     fn revolve_request(
         &self,
         model: &FormModel<'_>,
-    ) -> Result<RevolveRequest, Vec<(BuildField, String)>> {
-        use BuildField as F;
+    ) -> Result<RevolveRequest, Vec<(SolidField, String)>> {
+        use SolidField as F;
         let mut errors = vec![];
         if let Err(e) = self.check_model(model) {
             return Err(vec![(F::Source, e)]);
@@ -324,7 +324,7 @@ impl BuildForm {
     pub(super) fn revolve_payload(
         &self,
         model: &FormModel<'_>,
-    ) -> Result<(&'static str, Value), Vec<(BuildField, String)>> {
+    ) -> Result<(&'static str, Value), Vec<(SolidField, String)>> {
         let request = self.revolve_request(model)?;
         let (op, value) = if let Some(feature_id) = self.feature {
             (
@@ -339,10 +339,10 @@ impl BuildForm {
         };
         value
             .map(|v| (op, v))
-            .map_err(|e| vec![(BuildField::Source, e.to_string())])
+            .map_err(|e| vec![(SolidField::Source, e.to_string())])
     }
-    pub(super) fn revolve_fields(&self, model: &FormModel<'_>) -> Vec<BuildFieldView> {
-        use BuildField as F;
+    pub(super) fn revolve_fields(&self, model: &FormModel<'_>) -> Vec<SolidFieldView> {
+        use SolidField as F;
         let fields = self.revolve.as_ref().unwrap();
         let issues = self.revolve_request(model).err().unwrap_or_default();
         let enabled = self.phase == Phase::Editing && self.check_model(model).is_ok();
@@ -449,7 +449,7 @@ impl BuildForm {
             ),
         ];
         rows.into_iter()
-            .map(|(field, label, value, visible)| BuildFieldView {
+            .map(|(field, label, value, visible)| SolidFieldView {
                 field,
                 label,
                 value,
