@@ -251,6 +251,7 @@ fn synchronize_owned(
                 let mut c = InterfaceControl::button(panel.kind.group(), &column.label);
                 c.disabled = !column.enabled;
                 c.field = column.value.clone();
+                describe_choice(&mut c, column, panel.choice_field);
                 widget(
                     world,
                     state,
@@ -270,6 +271,25 @@ fn synchronize_owned(
                 error = error.or(column.error.as_deref());
             }
             y += 56.;
+            for column in panel
+                .fields
+                .iter()
+                .filter(|r| columns.contains(&r.field) && r.visible)
+            {
+                choice_options(
+                    world,
+                    state,
+                    &mut live_controls,
+                    body,
+                    camera,
+                    &panel,
+                    column,
+                    inner,
+                    &mut y,
+                    theme,
+                    &assets,
+                )?;
+            }
             if let Some(error) = error {
                 label(
                     world,
@@ -359,19 +379,7 @@ fn synchronize_owned(
                 );
                 y += 20.;
                 action = FeatureControl::Field(row.field);
-                if let Field::Choice { value, options } = &row.value {
-                    let selected = options
-                        .iter()
-                        .find(|option| &option.value == value)
-                        .map(|option| option.label.as_str())
-                        .unwrap_or(value);
-                    control.label = format!("{}: {}", row.label, selected);
-                    control.role = "combobox".into();
-                    control.expanded = Some(panel.choice_field == Some(row.field));
-                    control.owned_keys = ["ArrowUp", "ArrowDown", "Home", "End"]
-                        .map(KeyChord::plain)
-                        .into();
-                }
+                describe_choice(&mut control, row, panel.choice_field);
             }
             Field::Toggle(value) => {
                 action = FeatureControl::Field(row.field);
@@ -386,6 +394,7 @@ fn synchronize_owned(
                     super::SolidField::Source => "PROFILES",
                     super::SolidField::Edges => "EDGES",
                     super::SolidField::Faces => "FACES TO REMOVE",
+                    super::SolidField::Cylinder => "CYLINDRICAL SURFACE",
                     super::SolidField::TargetBody => "TARGET BODY",
                     super::SolidField::Bodies if panel.kind == super::SolidFormKind::SplitBody => {
                         "BODY TO SPLIT"
@@ -473,6 +482,9 @@ fn synchronize_owned(
                     }
                     super::SolidField::Source => "Click a profile in the viewport.",
                     super::SolidField::Edges => "Click edges to add or remove from this body.",
+                    super::SolidField::Cylinder => {
+                        "Choose an exterior cylinder; hole walls are rejected."
+                    }
                     super::SolidField::Faces => {
                         "Click faces on one body to add or remove openings."
                     }
@@ -540,36 +552,19 @@ fn synchronize_owned(
             )?;
         }
         y += if reference { 68. } else { 36. };
-        if panel.choice_field == Some(row.field) {
-            if let Field::Choice { value, options } = &row.value {
-                for (index, option) in options.iter().enumerate() {
-                    let mut choice = InterfaceControl::button(panel.kind.group(), &option.label);
-                    choice.disabled = option.disabled || !row.enabled;
-                    choice.role = "option".into();
-                    choice.selected = Some(&option.value == value);
-                    widget(
-                        world,
-                        state,
-                        &mut live_controls,
-                        &format!("{key}-option-{}", option.value),
-                        body,
-                        camera,
-                        choice,
-                        node(8., y - state.scroll, inner - 8., 28.),
-                        FeatureCommand::Control {
-                            form_id: panel.form_id,
-                            action: FeatureControl::Choose {
-                                field: row.field,
-                                option: index,
-                            },
-                        },
-                        theme,
-                        &assets,
-                    )?;
-                    y += 30.;
-                }
-            }
-        }
+        choice_options(
+            world,
+            state,
+            &mut live_controls,
+            body,
+            camera,
+            &panel,
+            row,
+            inner,
+            &mut y,
+            theme,
+            &assets,
+        )?;
         if let Some(error) = &row.error {
             label(
                 world,
@@ -586,6 +581,22 @@ fn synchronize_owned(
             );
             y += 42.;
         }
+    }
+    for (i, message) in panel.notes.iter().enumerate() {
+        label(
+            world,
+            state,
+            &mut live_labels,
+            &format!("feature-note-{i}"),
+            body,
+            camera,
+            message,
+            node(0., y - state.scroll, inner, note_height(message) - 4.),
+            theme,
+            &assets,
+            false,
+        );
+        y += note_height(message);
     }
     for (key, message) in [
         ("engine-error", panel.error.as_deref()),
@@ -903,9 +914,14 @@ fn widget(
 }
 
 fn content_height(panel: &super::FeaturePanel) -> f32 {
-    let mut height = 0.;
+    let mut height = panel.notes.iter().map(|s| note_height(s)).sum::<f32>();
     for row in panel.fields.iter().filter(|row| row.visible) {
         if let Some((title, index, columns)) = row.field.compact_row(panel.kind) {
+            if panel.choice_field == Some(row.field) {
+                if let Field::Choice { options, .. } = &row.value {
+                    height += options.len() as f32 * 30.;
+                }
+            }
             if index == 0 {
                 height += 56. + if title.is_empty() { 0. } else { 20. };
                 if panel
@@ -996,5 +1012,82 @@ fn label(
     }
     if world.get::<Node>(entity) != Some(&node) {
         world.entity_mut(entity).insert(node);
+    }
+}
+
+fn describe_choice(
+    control: &mut InterfaceControl,
+    row: &super::SolidFieldView,
+    expanded: Option<super::SolidField>,
+) {
+    if let Field::Choice { value, options } = &row.value {
+        let selected = options
+            .iter()
+            .find(|o| &o.value == value)
+            .map(|o| o.label.as_str())
+            .unwrap_or(value);
+        control.label = format!("{}: {}", row.label, selected);
+        control.role = "combobox".into();
+        control.expanded = Some(expanded == Some(row.field));
+        control.owned_keys = ["ArrowUp", "ArrowDown", "Home", "End"]
+            .map(KeyChord::plain)
+            .into();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn choice_options(
+    world: &mut World,
+    state: &mut PanelWidgets,
+    live: &mut HashSet<String>,
+    body: Entity,
+    camera: Entity,
+    panel: &super::FeaturePanel,
+    row: &super::SolidFieldView,
+    inner: f32,
+    y: &mut f32,
+    theme: ViewportUiTheme,
+    assets: &ViewportUiAssets,
+) -> Result<(), String> {
+    let key = format!("{:?}", row.field);
+    if panel.choice_field == Some(row.field) {
+        if let Field::Choice { value, options } = &row.value {
+            for (index, option) in options.iter().enumerate() {
+                let mut choice = InterfaceControl::button(panel.kind.group(), &option.label);
+                choice.disabled = option.disabled || !row.enabled;
+                choice.role = "option".into();
+                choice.selected = Some(&option.value == value);
+                widget(
+                    world,
+                    state,
+                    live,
+                    &format!("{key}-option-{}", option.value),
+                    body,
+                    camera,
+                    choice,
+                    node(8., *y - state.scroll, inner - 8., 28.),
+                    FeatureCommand::Control {
+                        form_id: panel.form_id,
+                        action: FeatureControl::Choose {
+                            field: row.field,
+                            option: index,
+                        },
+                    },
+                    theme,
+                    assets,
+                )?;
+                *y += 30.;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn note_height(message: &str) -> f32 {
+    if message.chars().count() > 65 {
+        46.
+    } else {
+        26.
     }
 }

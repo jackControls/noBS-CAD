@@ -75,6 +75,7 @@ pub(crate) fn spawn_text_field(
                 theme,
             },
             EditableText::new(value),
+            TextLayout::no_wrap(),
             InterfaceTextRevision::default(),
             // `EditableText` does not require this component, but both our
             // `update_ime` query and Bevy's own `scroll_editable_text` do. A

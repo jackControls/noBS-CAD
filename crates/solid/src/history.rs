@@ -4322,7 +4322,7 @@ fn validate_hole_thread(
     Ok(())
 }
 
-fn validate_external_thread(
+pub fn validate_external_thread(
     thread: &HoleThreadDto,
     surface_diameter: f64,
 ) -> Result<(), SolidError> {

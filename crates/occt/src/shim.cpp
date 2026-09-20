@@ -2715,15 +2715,20 @@ static std::string topology_signature(const TopoDS_Shape& shape) {
 
 // At a tangential join, independently sampled circular and curved boundaries
 // can cross even though their exact curves do not. OCCT's ordinary wire healer
-// does not always refine adjacent edges sharing that vertex. Add the other
-// boundary's angular stations to the circle, then let OCCT rebuild all pcurves
-// of that shared edge. This changes only sampling, never the BRep or deflection.
+// can over-refine those edges independently. Couple their samples before the
+// ordinary healer: split crossing curved chords and add their angular stations
+// to the circle, then rebuild every pcurve of both shared edges. This changes
+// only sampling, never the BRep or the requested mesh deflection.
 class TangentBoundaryMeshContext : public BRepMesh_Context {
  public:
   Standard_Boolean HealModel() override {
-    if (!BRepMesh_Context::HealModel()) return false;
     const auto& model = GetModel();
-    for (int pass = 0; pass <= 4; ++pass) {
+    if (model.IsNull()) return false;
+    // Local bisection converges at tangent endpoints more slowly than at a
+    // transverse crossing. Bound the work and report failure rather than
+    // passing an unresolved boundary to the face triangulator.
+    constexpr int max_refinement_passes = 16;
+    for (int pass = 0; pass <= max_refinement_passes; ++pass) {
       std::map<IMeshData::IEdgePtr, std::vector<double>> additions;
       bool crossing = false;
       for (int fi = 0; fi < model->FacesNb(); ++fi) {
@@ -2765,10 +2770,12 @@ class TangentBoundaryMeshContext : public BRepMesh_Context {
                 BRepAdaptor_Curve other_curve(other->GetEdge());
                 const auto& other_pcurve = a_circle ? bp : ap;
                 const double first = curve.FirstParameter(), last = curve.LastParameter();
-                for (int pi = oi-1; pi <= oi; ++pi) {
-                  // SameParameter/SameRange gives the exact 3D location even
-                  // when this pcurve's sample order differs from the 3D list.
-                  const gp_Pnt point = other_curve.Value(other_pcurve->GetParameter(pi));
+                const double middle = (other_pcurve->GetParameter(oi-1) + other_pcurve->GetParameter(oi)) * 0.5;
+                additions[other].push_back(middle);
+                for (double sample : {other_pcurve->GetParameter(oi-1), middle, other_pcurve->GetParameter(oi)}) {
+                  // Refine both sides together. Projecting only existing
+                  // endpoints cannot repair a crossing of two coarse chords.
+                  const gp_Pnt point = other_curve.Value(sample);
                   double parameter = ElCLib::Parameter(curve.Circle(), point);
                   parameter += kTau * std::ceil((first - parameter) / kTau);
                   if (parameter > first+1e-10 && parameter < last-1e-10)
@@ -2779,8 +2786,11 @@ class TangentBoundaryMeshContext : public BRepMesh_Context {
           }
         }
       }
-      if (!crossing) return true;
-      if (additions.empty() || pass == 4) {
+      // Couple tangent samples before the general healer. Otherwise its
+      // independent bisection can create thousands of nearly coincident
+      // boundary points and make face triangulation pathologically slow.
+      if (!crossing) return BRepMesh_Context::HealModel();
+      if (additions.empty() || pass == max_refinement_passes) {
         throw std::runtime_error("OCCT could not discretize tangential face boundaries without crossing chords");
       }
       bool inserted = false;
@@ -2809,14 +2819,28 @@ class TangentBoundaryMeshContext : public BRepMesh_Context {
         for (int pi = 0; pi < edge->PCurvesNb(); ++pi) {
           const auto& pcurve = edge->GetPCurve(pi);
           pcurve->Clear(false);
-          pcurve->GetFace()->SetStatus(IMeshData_Outdated);
+          const auto& affected = pcurve->GetFace();
+          affected->SetStatus(IMeshData_Outdated);
+          // An earlier pass may already have marked the crossing face as
+          // failed. New boundary samples need a fresh healing pass; keeping
+          // the old failure bit makes face discretization skip valid geometry.
+          if (affected->IsSet(IMeshData_SelfIntersectingWire)) {
+            affected->UnsetStatus(IMeshData_SelfIntersectingWire);
+            affected->UnsetStatus(IMeshData_Failure);
+          }
+          for (int wi = 0; wi < affected->WiresNb(); ++wi) {
+            const auto& wire = affected->GetWire(wi);
+            if (wire->IsSet(IMeshData_SelfIntersectingWire)) {
+              wire->UnsetStatus(IMeshData_SelfIntersectingWire);
+              wire->UnsetStatus(IMeshData_Failure);
+            }
+          }
         }
         BRepMesh_EdgeDiscret::Tessellate2d(edge, true);
       }
       if (!inserted) {
         throw std::runtime_error("OCCT could not refine crossing tangential face boundaries");
       }
-      if (!BRepMesh_Context::HealModel()) return false;
     }
     return true;
   }

@@ -49,6 +49,60 @@ pub(super) fn references(
         basis
     };
     let mut arrows = Vec::new();
+    if let Some((cylinder, range)) = form.thread_guide(model) {
+        use bevy::math::DVec3;
+        let origin = DVec3::new(cylinder.origin.x, cylinder.origin.y, cylinder.origin.z);
+        let axis = DVec3::new(cylinder.axis.x, cylinder.axis.y, cylinder.axis.z).normalize();
+        let reference = DVec3::new(
+            cylinder.reference.x,
+            cylinder.reference.y,
+            cylinder.reference.z,
+        );
+        let u = (reference - axis * reference.dot(axis))
+            .try_normalize()
+            .ok_or("The cylindrical reference direction is invalid")?;
+        let v = axis.cross(u);
+        let radius = cylinder.radius + (cylinder.radius * 0.0006).max(0.0004);
+        let point = |z: f64, i: usize| {
+            let angle = std::f64::consts::TAU * i as f64 / 48.;
+            (origin + axis * z + radius * (u * angle.cos() + v * angle.sin()))
+                .as_vec3()
+                .to_array()
+        };
+        let mut positions = Vec::with_capacity(48 * 18);
+        for i in 0..48 {
+            let [a, b, c, d] = [
+                point(range[0], i),
+                point(range[0], i + 1),
+                point(range[1], i + 1),
+                point(range[1], i),
+            ];
+            positions.extend([a, b, c, a, c, d].into_iter().flatten());
+        }
+        let start = (origin + axis * range[0]).as_vec3().to_array();
+        let end = (origin + axis * range[1]).as_vec3().to_array();
+        if positions
+            .iter()
+            .chain(start.iter())
+            .chain(end.iter())
+            .any(|v| !v.is_finite())
+        {
+            return Err("The thread preview exceeds the renderer's range".into());
+        }
+        triangles.push(crate::native_viewport::ViewportTriangleLayer {
+            color: [0.45, 0.72, 1., 0.14],
+            positions,
+            xray: true,
+            ..Default::default()
+        });
+        arrows.push(ViewportArrow {
+            start,
+            end,
+            color: [0.45, 0.72, 1., 1.],
+            width: 2.,
+            xray: true,
+        });
+    }
     if let Some((basis, distance)) = form.plane_offset(model) {
         arrows.push(ViewportArrow {
             start: basis.origin.map(|v| v as f32),
@@ -110,6 +164,14 @@ pub(super) fn references(
                 return Err("Selected bodies are too large to highlight together".into());
             }
         }
+    }
+    if let Some(face) = form.thread_face() {
+        triangles.push(face_fill(
+            model.scene,
+            face.body_id,
+            &[face.face_id],
+            [1., 0.80, 0.25, 0.35],
+        )?);
     }
     if let Some((body, faces)) = form.selected_faces() {
         triangles.push(face_fill(model.scene, body, faces, [1., 0.80, 0.25, 0.35])?);

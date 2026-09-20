@@ -106,6 +106,7 @@ impl SessionBridgeState {
             "solid_edit_fillet"
                 | "solid_edit_chamfer"
                 | "solid_edit_shell"
+                | "solid_edit_external_thread"
                 | "solid_edit_combine"
                 | "construction_plane_edit_offset"
                 | "construction_plane_edit_midplane"
@@ -189,7 +190,8 @@ fn prepare(
         match kind {
             SolidFormKind::Fillet => "fillet_definitions",
             SolidFormKind::Chamfer => "chamfer_definitions",
-            SolidFormKind::Shell
+            SolidFormKind::ExternalThread
+            | SolidFormKind::Shell
             | SolidFormKind::Combine
             | SolidFormKind::Mirror
             | SolidFormKind::SplitBody
@@ -207,7 +209,9 @@ fn prepare(
         .and_then(|items| items.iter().find(|d| d["feature_id"].as_u64() == Some(id)))
         .ok_or("The feature no longer exists")?;
     let snapshot = Snapshot::capture(&stage.engine, receipt)?;
-    let form = if kind.is_pattern() {
+    let form = if kind == SolidFormKind::ExternalThread {
+        SolidForm::edit_thread(definition, &snapshot.model(None))?
+    } else if kind.is_pattern() {
         SolidForm::edit_pattern(definition, &snapshot.model(None))?
     } else if kind.is_body_plane() {
         SolidForm::edit_body_plane(definition, &snapshot.model(None))?
@@ -245,6 +249,8 @@ fn install(
         SolidField::FirstPlane
     } else if prepared.form.kind() == SolidFormKind::Combine {
         SolidField::TargetBody
+    } else if prepared.form.kind() == SolidFormKind::ExternalThread {
+        SolidField::Cylinder
     } else if prepared.form.kind() == SolidFormKind::Shell {
         SolidField::Faces
     } else {

@@ -18,6 +18,7 @@ pub(crate) fn hover_references(
                 e.pick_target,
                 Some(
                     SolidField::Edges
+                        | SolidField::Cylinder
                         | SolidField::Faces
                         | SolidField::TargetBody
                         | SolidField::ToolBodies
@@ -83,7 +84,10 @@ pub(crate) fn hover_references(
                 }
                 return Ok(true);
             }
-            if editor.pick_target == Some(SolidField::Faces) {
+            if matches!(
+                editor.pick_target,
+                Some(SolidField::Faces | SolidField::Cylinder)
+            ) {
                 let next = hit
                     .filter(|hit| editor.snapshot.source_local(hit.body_id, hit.occurrence_id))
                     .map(|hit| (BodyId(hit.body_id), FaceId(hit.face_id)));
@@ -506,7 +510,7 @@ pub(crate) fn handle_canvas_pick(
                         }
                         Ok(FeaturePick::Bodies(targets))
                     }
-                    SolidField::Source | SolidField::StopFace => {
+                    SolidField::Cylinder | SolidField::Source | SolidField::StopFace => {
                         Ok(FeaturePick::Face(PlanarFaceSourceDto {
                             body_id: BodyId(hit.body_id),
                             face_id: FaceId(hit.face_id),

@@ -26,33 +26,43 @@ impl SolidField {
         kind: SolidFormKind,
     ) -> Option<(&'static str, usize, &'static [Self])> {
         use SolidField::*;
-        if !kind.is_pattern() {
+        let groups: &[(&str, &[Self])] = if kind == SolidFormKind::ExternalThread {
+            &[
+                ("", &[ThreadStandard, ThreadSeries]),
+                ("", &[Diameter, Pitch]),
+                ("", &[ThreadClass, Designation]),
+                ("", &[ThreadHand, Representation]),
+                ("", &[RadialDepth, CornerRadius]),
+                ("", &[RadialClearance, AxialClearance]),
+            ]
+        } else if kind.is_pattern() {
+            &[
+                ("Axis origin", &[OriginX, OriginY, OriginZ]),
+                (
+                    if kind == SolidFormKind::CircularPattern {
+                        "Axis direction"
+                    } else {
+                        "First direction"
+                    },
+                    &[DirectionX, DirectionY, DirectionZ],
+                ),
+                (
+                    "Second direction",
+                    &[SecondDirectionX, SecondDirectionY, SecondDirectionZ],
+                ),
+                (
+                    "",
+                    if kind == SolidFormKind::CircularPattern {
+                        &[Count, Angle]
+                    } else {
+                        &[Distance, Count]
+                    },
+                ),
+                ("", &[SecondDistance, SecondCount]),
+            ]
+        } else {
             return None;
-        }
-        let groups: &[(&str, &[Self])] = &[
-            ("Axis origin", &[OriginX, OriginY, OriginZ]),
-            (
-                if kind == SolidFormKind::CircularPattern {
-                    "Axis direction"
-                } else {
-                    "First direction"
-                },
-                &[DirectionX, DirectionY, DirectionZ],
-            ),
-            (
-                "Second direction",
-                &[SecondDirectionX, SecondDirectionY, SecondDirectionZ],
-            ),
-            (
-                "",
-                if kind == SolidFormKind::CircularPattern {
-                    &[Count, Angle]
-                } else {
-                    &[Distance, Count]
-                },
-            ),
-            ("", &[SecondDistance, SecondCount]),
-        ];
+        };
         groups.iter().find_map(|(title, fields)| {
             fields
                 .iter()

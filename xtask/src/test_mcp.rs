@@ -23,6 +23,9 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     if suite == "native-pattern" {
         return crate::native_body_test::run_patterns(args);
     }
+    if suite == "native-thread" {
+        return crate::native_thread_test::run(args);
+    }
     if suite == "native-view" {
         return crate::native_view_test::run(args);
     }

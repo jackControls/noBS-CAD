@@ -25,6 +25,9 @@ mod body_planes;
 use body_planes::BodyPlaneFields;
 mod patterns;
 use patterns::PatternFields;
+mod thread_sizes;
+mod threads;
+use threads::ThreadFields;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SolidFormKind {
@@ -36,6 +39,7 @@ pub(crate) enum SolidFormKind {
     Fillet,
     Chamfer,
     Shell,
+    ExternalThread,
     Combine,
     OffsetPlane,
     Midplane,
@@ -56,6 +60,7 @@ impl SolidFormKind {
             FeatureKind::Fillet => Self::Fillet,
             FeatureKind::Chamfer => Self::Chamfer,
             FeatureKind::Shell => Self::Shell,
+            FeatureKind::ExternalThread => Self::ExternalThread,
             FeatureKind::Combine => Self::Combine,
             FeatureKind::ConstructionPlane => Self::OffsetPlane,
             FeatureKind::Mirror => Self::Mirror,
@@ -79,6 +84,7 @@ impl SolidFormKind {
             Self::Fillet => "Fillet",
             Self::Chamfer => "Chamfer",
             Self::Shell => "Shell",
+            Self::ExternalThread => "External Thread",
             Self::Combine => "Combine",
             Self::OffsetPlane => "Offset Plane",
             Self::Midplane => "Midplane",
@@ -99,6 +105,7 @@ impl SolidFormKind {
             Self::Fillet => "solid_fillet",
             Self::Chamfer => "solid_chamfer",
             Self::Shell => "solid_shell",
+            Self::ExternalThread => "solid_external_thread",
             Self::Combine => "solid_combine",
             Self::OffsetPlane => "construction_plane_offset",
             Self::Midplane => "construction_plane_midplane",
@@ -174,6 +181,21 @@ pub(crate) enum SolidField {
     SecondEnabled,
     Count,
     SecondCount,
+    Cylinder,
+    ThreadStandard,
+    ThreadSeries,
+    ThreadPreset,
+    Diameter,
+    Pitch,
+    ThreadClass,
+    Designation,
+    ThreadHand,
+    Representation,
+    FullThread,
+    RadialDepth,
+    CornerRadius,
+    RadialClearance,
+    AxialClearance,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -270,6 +292,7 @@ pub(crate) struct SolidForm {
     planes: Option<PlaneFields>,
     body_planes: Option<BodyPlaneFields>,
     patterns: Option<PatternFields>,
+    thread: Option<ThreadFields>,
 }
 
 impl SolidForm {
@@ -304,6 +327,7 @@ impl SolidForm {
             planes: None,
             body_planes: None,
             patterns: None,
+            thread: None,
         }
     }
 
@@ -317,6 +341,8 @@ impl SolidForm {
             form.rib = Some(RibFields::new(model.document.settings.units));
         } else if matches!(kind, SolidFormKind::Fillet | SolidFormKind::Chamfer) {
             form.edges = Some(EdgeFields::new(kind, model.document.settings.units));
+        } else if kind == SolidFormKind::ExternalThread {
+            form.thread = Some(ThreadFields::new(model.document.settings.units));
         } else if kind == SolidFormKind::Shell {
             form.shell = Some(ShellFields::new(model.document.settings.units));
         } else if kind == SolidFormKind::Combine {
@@ -331,6 +357,9 @@ impl SolidForm {
         form
     }
     pub(crate) fn kind(&self) -> SolidFormKind {
+        if self.thread.is_some() {
+            return SolidFormKind::ExternalThread;
+        }
         if let Some(fields) = &self.patterns {
             return fields.kind;
         }
@@ -486,6 +515,11 @@ impl SolidForm {
         model: &FormModel<'_>,
     ) -> Result<(), String> {
         self.editing(model)?;
+        if let Some(thread) = &mut self.thread {
+            thread.set(field, value, model)?;
+            self.changed();
+            return Ok(());
+        }
         if let Some(patterns) = &mut self.patterns {
             patterns.set(field, value)?;
             self.changed();
@@ -864,6 +898,9 @@ impl SolidForm {
     }
 
     pub(crate) fn fields(&self, model: &FormModel<'_>) -> Vec<SolidFieldView> {
+        if self.thread.is_some() {
+            return self.thread_fields(model);
+        }
         if self.patterns.is_some() {
             return self.pattern_fields(model);
         }
@@ -1019,6 +1056,9 @@ impl SolidForm {
         &self,
         model: &FormModel<'_>,
     ) -> Result<(&'static str, Value), Vec<(SolidField, String)>> {
+        if self.thread.is_some() {
+            return self.thread_payload(model);
+        }
         if self.patterns.is_some() {
             return self.pattern_payload(model);
         }

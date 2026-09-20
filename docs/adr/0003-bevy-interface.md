@@ -195,3 +195,22 @@ window close cancel the old motion without overwriting newer input. Full turns
 sample the complete path even though their endpoints coincide. The `native-view`
 MCP fixture checks all six orthographic directions, ISO fit, timed orbit receipts,
 background/foreground, posed components and active-sketch focus, capture and Save.
+
+External Thread uses the original shared glyph and compact native controls for
+ISO/Unified sizes, custom shaft dimensions, rounded printable profiles, handedness,
+modeled/cosmetic representation, full/partial length and opposite-end starts.
+The current desktop and native forms read one `interface/thread-sizes.json` catalog.
+Cylindrical reference picking rejects planar faces and internal hole walls; shaft
+bounds are computed once per accepted reference. Length and start previews use
+bounded analytic guides. Apply uses the existing kernel fit/profile validation;
+history editing recovers the original cylinder in the shared isolated transaction.
+The `native-thread` Rust MCP fixture checks actual controls, selection, dropdowns,
+scrolling, invalid sizes/depth, both thread profiles, edit/cancel, Undo/Redo and Save.
+Native kernel checks include exact history restoration and 3MF at two mesh qualities.
+
+Rounded-thread runouts exposed a mesher handoff defect: independently refined
+boundary chords could leave a missing face or grow into thousands of samples and
+stall fine-quality export. Curved chords and circular boundaries now refine
+in coupled, bounded passes before OCCT's general healer. Affected face/wire flags
+are reset before re-healing. Original validity and missing-face checks remain in
+force; model dimensions and requested export accuracy are unchanged.

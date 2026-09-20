@@ -95,6 +95,7 @@ pub(crate) struct FeaturePanel {
     pub busy: bool,
     pub error: Option<String>,
     pub preview_notice: Option<String>,
+    pub notes: Vec<String>,
     pub pick_target: Option<SolidField>,
     pub choice_field: Option<SolidField>,
 }
@@ -289,6 +290,7 @@ pub(crate) fn panel(world: &World) -> Option<FeaturePanel> {
         busy: editor.form.is_busy(),
         error: editor.form.engine_error().map(str::to_owned),
         preview_notice: editor.preview_notice.clone(),
+        notes: editor.form.thread_notes(),
         pick_target: editor.pick_target,
         choice_field: editor.choice_field,
     })
@@ -527,6 +529,11 @@ fn apply_pick(editor: &mut Editor, pick: FeaturePick) -> Result<(), String> {
             Some(field @ (SolidField::TargetBody | SolidField::ToolBodies)),
             FeaturePick::Bodies(bodies),
         ) => editor.form.set_combine_bodies(field, bodies, &model),
+        (Some(SolidField::Cylinder), FeaturePick::Face(face)) => {
+            editor.form.set_thread_face(Some(face), &model)?;
+            editor.pick_target = None;
+            Ok(())
+        }
         (Some(SolidField::Faces), FeaturePick::Faces { body, faces }) => {
             editor.form.set_faces(body, faces, &model)
         }
@@ -663,6 +670,7 @@ fn reduce_owned(
                 kind,
                 SolidFormKind::Fillet
                     | SolidFormKind::Chamfer
+                    | SolidFormKind::ExternalThread
                     | SolidFormKind::Shell
                     | SolidFormKind::Combine
                     | SolidFormKind::OffsetPlane
@@ -780,6 +788,8 @@ fn reduce_owned(
                     SolidField::Edges
                 } else if *kind == SolidFormKind::Combine {
                     SolidField::TargetBody
+                } else if *kind == SolidFormKind::ExternalThread {
+                    SolidField::Cylinder
                 } else if *kind == SolidFormKind::Shell {
                     SolidField::Faces
                 } else if *kind == SolidFormKind::Rib {
@@ -844,6 +854,25 @@ fn reduce_owned(
                     if bodies.len() > 1 {
                         editor.pick_target = Some(SolidField::ToolBodies);
                         apply_pick(&mut editor, FeaturePick::Bodies(bodies[1..].to_vec()))?;
+                    }
+                }
+            } else if feature_id.is_none() && *kind == SolidFormKind::ExternalThread {
+                let (_, _, presentation, _) = native_viewport::interface_view_snapshot(world);
+                if let ([body], [face]) = (
+                    presentation.selected_body_ids.as_slice(),
+                    presentation.selected_face_ids.as_slice(),
+                ) {
+                    if editor
+                        .snapshot
+                        .source_local(*body, presentation.selected_occurrence_id)
+                    {
+                        apply_pick(
+                            &mut editor,
+                            FeaturePick::Face(PlanarFaceSourceDto {
+                                body_id: BodyId(*body),
+                                face_id: nbcad_core::FaceId(*face),
+                            }),
+                        )?;
                     }
                 }
             } else if feature_id.is_none() && *kind == SolidFormKind::Shell {
@@ -1053,6 +1082,7 @@ fn reduce_owned(
                 if !matches!(
                     field,
                     SolidField::Source
+                        | SolidField::Cylinder
                         | SolidField::Faces
                         | SolidField::TargetBody
                         | SolidField::ToolBodies
@@ -1090,6 +1120,10 @@ fn reduce_owned(
                 }
                 SolidField::TargetBody | SolidField::ToolBodies => {
                     editor.form.set_combine_bodies(*field, Vec::new(), &model)?
+                }
+                SolidField::Cylinder => {
+                    editor.form.set_thread_face(None, &model)?;
+                    editor.pick_target = Some(*field);
                 }
                 SolidField::Faces => editor.form.set_faces(None, Vec::new(), &model)?,
                 SolidField::Edges => editor.form.set_edges(None, Vec::new(), &model)?,
