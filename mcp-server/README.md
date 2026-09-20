@@ -24,7 +24,7 @@ available for source builds.
 `body_appearances` / `set_body_appearance`, `solid_export_preflight`, and
 `demo_export_pip_3mf`.
 
-**Engineering knowledge:** standard `resources/list` discovers the existing
+**Local help:** MCP tool `cad_help` (`search` → `get` / `topics`) is the first retrieval surface over the bundled corpus (locked caps in `docs/machine-design-help-search.md`). **Engineering knowledge:** standard `resources/list` discovers the existing
 Markdown knowledge bundle; `resources/read` returns a listed URI such as
 `nbcad://knowledge/concepts/gears.md`. Start with `nbcad://knowledge/index.md`
 for design and workholding guidance. The corpus is compiled into the server,

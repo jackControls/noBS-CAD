@@ -1,5 +1,7 @@
 # Agentic guidance index
 
+- [Eval goldens](EVALS.md) — modeling E1–E5 and help H1–H8 wire checks (`cad_help` + resources).
+
 Committed operating docs for humans and coding agents working on noBS CAD.
 **Do not** add root `AGENTS.md` / `.cursor/rules` to git (project policy).
 

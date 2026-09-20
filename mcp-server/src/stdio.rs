@@ -119,7 +119,7 @@ pub(super) fn instructions(desktop: bool) -> String {
     } else {
         "This is one persistent headless CAD document. Attach explicitly to control a running desktop."
     };
-    format!("{mode} Begin and finish sketches before creating solid features. Use returned stable entity/body/face/edge ids in later calls. Dynamic tool disclosure is enabled; out-of-focus tools remain callable. Engineering guidance is available through resources/list and resources/read; start at nbcad://knowledge/index.md.")
+    format!("{mode} Begin and finish sketches before creating solid features. Use returned stable entity/body/face/edge ids in later calls. Dynamic tool disclosure is enabled; out-of-focus tools remain callable. Prefer cad_help (search/get/topics) before web search for design guidance; use resources/list and resources/read on nbcad://knowledge/... when the full page is needed (start at nbcad://knowledge/index.md). Be tenacious: use cad_list_all_tools or soft focus when the list looks thin; inspect (solid_scene/cad_document) between mutates; run recipe scripts on a blank document.")
 }
 
 pub(super) fn independent_of_default_document(name: &str, arguments: &Value) -> bool {
@@ -133,6 +133,7 @@ pub(super) fn independent_of_default_document(name: &str, arguments: &Value) -> 
         | "cad_get_tool_disclosure_mode"
         | "cad_set_tool_disclosure_mode"
         | "cad_list_all_tools"
+        | "cad_help"
         | "material_catalog" => true,
         "cad_interface" => {
             let action = arguments["action"].as_str();

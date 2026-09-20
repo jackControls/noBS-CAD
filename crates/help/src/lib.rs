@@ -1,0 +1,853 @@
+//! Shared help catalog + in-process BM25 search for MCP `cad_help` and desktop Help.
+//!
+//! Corpus is embedded markdown under `knowledge/**`. The same embeds are also
+//! exposed as MCP resources (`nbcad://knowledge/...`) via [`knowledge_files`].
+//! Ranking lives behind [`SearchIndex`] so a later Tantivy impl can swap without
+//! tool schema churn.
+
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+/// Default search hit count.
+pub const SEARCH_DEFAULT_LIMIT: usize = 5;
+/// Hard max search hits.
+pub const SEARCH_MAX_LIMIT: usize = 10;
+/// Snippet character budget (title/topics accompany the snippet in MCP).
+pub const SNIPPET_CHARS: usize = 280;
+/// Max UTF-8 bytes returned by [`HelpStore::get`].
+pub const GET_MAX_BYTES: usize = 12 * 1024;
+/// Topics listing page size.
+pub const TOPICS_PAGE_SIZE: usize = 50;
+
+/// One authored help page (frontmatter + body).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Page {
+    pub id: String,
+    pub title: String,
+    pub topics: Vec<String>,
+    pub keywords: Vec<String>,
+    pub description: String,
+    pub body: String,
+    pub related_recipes: Vec<String>,
+    pub status: String,
+}
+
+/// Search hit with a short snippet (never the full body).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SearchHit {
+    pub id: String,
+    pub title: String,
+    pub topics: Vec<String>,
+    pub snippet: String,
+    pub score: f64,
+    pub related_recipes: Vec<String>,
+    pub status: String,
+}
+
+/// Result of [`HelpStore::get`] with optional truncation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetResult {
+    pub id: String,
+    pub title: String,
+    pub topics: Vec<String>,
+    pub keywords: Vec<String>,
+    pub description: String,
+    pub body: String,
+    pub related_recipes: Vec<String>,
+    pub status: String,
+    pub truncated: bool,
+}
+
+/// Pluggable full-text backend. v1 = BM25; scale path = Tantivy behind same trait.
+pub trait SearchIndex: Send + Sync {
+    fn search(&self, catalog: &Catalog, query: &str, limit: usize) -> Vec<SearchHit>;
+}
+
+/// Id → page catalog loaded from embedded markdown.
+#[derive(Debug, Clone, Default)]
+pub struct Catalog {
+    pages: BTreeMap<String, Page>,
+    topic_index: BTreeMap<String, Vec<String>>,
+}
+
+impl Catalog {
+    pub fn from_pages(pages: impl IntoIterator<Item = Page>) -> Self {
+        let mut pages_map = BTreeMap::new();
+        let mut topic_index: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for page in pages {
+            for topic in &page.topics {
+                topic_index
+                    .entry(topic.to_ascii_lowercase())
+                    .or_default()
+                    .push(page.id.clone());
+            }
+            pages_map.insert(page.id.clone(), page);
+        }
+        for ids in topic_index.values_mut() {
+            ids.sort();
+            ids.dedup();
+        }
+        Self {
+            pages: pages_map,
+            topic_index,
+        }
+    }
+
+    pub fn get(&self, id: &str) -> Option<&Page> {
+        self.pages.get(id)
+    }
+
+    pub fn len(&self) -> usize {
+        self.pages.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pages.is_empty()
+    }
+
+    pub fn ids(&self) -> impl Iterator<Item = &str> {
+        self.pages.keys().map(String::as_str)
+    }
+
+    pub fn pages(&self) -> impl Iterator<Item = &Page> {
+        self.pages.values()
+    }
+
+    pub fn topics_page(&self, offset: usize, limit: usize) -> (Vec<(String, usize)>, usize) {
+        let total = self.topic_index.len();
+        let page: Vec<(String, usize)> = self
+            .topic_index
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .map(|(topic, ids)| (topic.clone(), ids.len()))
+            .collect();
+        (page, total)
+    }
+
+    pub fn ids_for_topic(&self, topic: &str) -> Option<&[String]> {
+        self.topic_index
+            .get(&topic.to_ascii_lowercase())
+            .map(Vec::as_slice)
+    }
+}
+
+/// Fielded BM25 over an in-memory catalog (title > keywords/topics > description > body).
+#[derive(Debug, Default)]
+pub struct Bm25Index {
+    /// Precomputed avg field lengths for BM25 length normalization.
+    avg_title: f64,
+    avg_keywords: f64,
+    avg_topics: f64,
+    avg_description: f64,
+    avg_body: f64,
+    n_docs: usize,
+    /// term → document frequency
+    df: HashMap<String, usize>,
+}
+
+impl Bm25Index {
+    const K1: f64 = 1.2;
+    const B: f64 = 0.75;
+
+    pub fn build(catalog: &Catalog) -> Self {
+        let mut df: HashMap<String, usize> = HashMap::new();
+        let mut sum_title = 0.0;
+        let mut sum_keywords = 0.0;
+        let mut sum_topics = 0.0;
+        let mut sum_description = 0.0;
+        let mut sum_body = 0.0;
+        let n = catalog.len().max(1);
+
+        for page in catalog.pages() {
+            let title_toks = tokenize(&page.title);
+            let kw_toks = tokenize(&page.keywords.join(" "));
+            let topic_toks = tokenize(&page.topics.join(" "));
+            let desc_toks = tokenize(&page.description);
+            let body_toks = tokenize(&page.body);
+            sum_title += title_toks.len() as f64;
+            sum_keywords += kw_toks.len() as f64;
+            sum_topics += topic_toks.len() as f64;
+            sum_description += desc_toks.len() as f64;
+            sum_body += body_toks.len() as f64;
+
+            let mut uniq = HashSet::new();
+            for t in title_toks
+                .into_iter()
+                .chain(kw_toks)
+                .chain(topic_toks)
+                .chain(desc_toks)
+                .chain(body_toks)
+            {
+                uniq.insert(t);
+            }
+            for t in uniq {
+                *df.entry(t).or_default() += 1;
+            }
+        }
+
+        let n_f = n as f64;
+        Self {
+            avg_title: sum_title / n_f,
+            avg_keywords: sum_keywords / n_f,
+            avg_topics: sum_topics / n_f,
+            avg_description: sum_description / n_f,
+            avg_body: sum_body / n_f,
+            n_docs: n,
+            df,
+        }
+    }
+
+    fn idf(&self, term: &str) -> f64 {
+        let df = *self.df.get(term).unwrap_or(&0) as f64;
+        let n = self.n_docs as f64;
+        ((n - df + 0.5) / (df + 0.5) + 1.0).ln()
+    }
+
+    fn field_score(&self, tf: f64, avgdl: f64, dl: f64, idf: f64) -> f64 {
+        if tf <= 0.0 || idf <= 0.0 {
+            return 0.0;
+        }
+        let avg = avgdl.max(1.0);
+        let denom = tf + Self::K1 * (1.0 - Self::B + Self::B * (dl / avg));
+        idf * (tf * (Self::K1 + 1.0)) / denom
+    }
+}
+
+impl SearchIndex for Bm25Index {
+    fn search(&self, catalog: &Catalog, query: &str, limit: usize) -> Vec<SearchHit> {
+        let q_terms = tokenize(query);
+        if q_terms.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+
+        let mut scored: Vec<(f64, &Page)> = Vec::new();
+        for page in catalog.pages() {
+            let title = tokenize(&page.title);
+            let keywords = tokenize(&page.keywords.join(" "));
+            let topics = tokenize(&page.topics.join(" "));
+            let description = tokenize(&page.description);
+            let body = tokenize(&page.body);
+
+            let mut score = 0.0;
+            for term in &q_terms {
+                let idf = self.idf(term);
+                score += 4.0
+                    * self.field_score(
+                        term_tf(term, &title),
+                        self.avg_title,
+                        title.len() as f64,
+                        idf,
+                    );
+                score += 3.0
+                    * self.field_score(
+                        term_tf(term, &keywords),
+                        self.avg_keywords,
+                        keywords.len() as f64,
+                        idf,
+                    );
+                score += 3.0
+                    * self.field_score(
+                        term_tf(term, &topics),
+                        self.avg_topics,
+                        topics.len() as f64,
+                        idf,
+                    );
+                score += 2.0
+                    * self.field_score(
+                        term_tf(term, &description),
+                        self.avg_description,
+                        description.len() as f64,
+                        idf,
+                    );
+                score += 1.0
+                    * self.field_score(
+                        term_tf(term, &body),
+                        self.avg_body,
+                        body.len() as f64,
+                        idf,
+                    );
+            }
+            if score > 0.0 {
+                scored.push((score, page));
+            }
+        }
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+        scored
+            .into_iter()
+            .map(|(score, page)| SearchHit {
+                id: page.id.clone(),
+                title: page.title.clone(),
+                topics: page.topics.clone(),
+                snippet: make_snippet(&page.body, &q_terms, SNIPPET_CHARS),
+                score,
+                related_recipes: page.related_recipes.clone(),
+                status: page.status.clone(),
+            })
+            .collect()
+    }
+}
+
+/// Help store: catalog + search index.
+pub struct HelpStore {
+    catalog: Catalog,
+    index: Box<dyn SearchIndex>,
+}
+
+impl HelpStore {
+    pub fn new(catalog: Catalog, index: Box<dyn SearchIndex>) -> Self {
+        Self { catalog, index }
+    }
+
+    /// Load the embedded knowledge corpus with BM25.
+    pub fn bundled() -> Self {
+        let catalog = Catalog::from_pages(embedded_pages());
+        let index = Box::new(Bm25Index::build(&catalog));
+        Self { catalog, index }
+    }
+
+    pub fn catalog(&self) -> &Catalog {
+        &self.catalog
+    }
+
+    pub fn search(&self, query: &str, limit: Option<usize>) -> Vec<SearchHit> {
+        let limit = limit.unwrap_or(SEARCH_DEFAULT_LIMIT).clamp(1, SEARCH_MAX_LIMIT);
+        self.index.search(&self.catalog, query, limit)
+    }
+
+    /// Id-only lookup. Paths and traversal attempts fail closed.
+    pub fn get(&self, id: &str) -> Result<GetResult, String> {
+        if !is_safe_id(id) {
+            return Err(format!("invalid help id '{id}': id-only allowlist (no paths)"));
+        }
+        let page = self
+            .catalog
+            .get(id)
+            .ok_or_else(|| format!("unknown help id '{id}'"))?;
+        let (body, truncated) = truncate_utf8(&page.body, GET_MAX_BYTES);
+        Ok(GetResult {
+            id: page.id.clone(),
+            title: page.title.clone(),
+            topics: page.topics.clone(),
+            keywords: page.keywords.clone(),
+            description: page.description.clone(),
+            body,
+            related_recipes: page.related_recipes.clone(),
+            status: page.status.clone(),
+            truncated,
+        })
+    }
+
+    pub fn topics(&self, offset: Option<usize>) -> serde_json::Value {
+        let offset = offset.unwrap_or(0);
+        let (page, total) = self.catalog.topics_page(offset, TOPICS_PAGE_SIZE);
+        serde_json::json!({
+            "topics": page.iter().map(|(name, count)| serde_json::json!({
+                "topic": name,
+                "page_count": count,
+            })).collect::<Vec<_>>(),
+            "offset": offset,
+            "limit": TOPICS_PAGE_SIZE,
+            "total": total,
+            "next_offset": if offset + TOPICS_PAGE_SIZE < total {
+                Some(offset + TOPICS_PAGE_SIZE)
+            } else {
+                None
+            },
+        })
+    }
+}
+
+fn is_safe_id(id: &str) -> bool {
+    if id.is_empty() || id.len() > 200 {
+        return false;
+    }
+    if id.contains('/') || id.contains('\\') || id.contains("..") {
+        return false;
+    }
+    if id.starts_with('.') || id.contains('\0') {
+        return false;
+    }
+    // Allow dotted ids like machine-design.concepts.fits-clearances
+    id.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+}
+
+fn tokenize(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for c in text.chars() {
+        if c.is_ascii_alphanumeric() {
+            cur.push(c.to_ascii_lowercase());
+        } else if !cur.is_empty() {
+            if cur.len() > 1 || cur.chars().all(|ch| ch.is_ascii_digit()) {
+                out.push(std::mem::take(&mut cur));
+            } else {
+                cur.clear();
+            }
+        }
+    }
+    if !cur.is_empty() && (cur.len() > 1 || cur.chars().all(|ch| ch.is_ascii_digit())) {
+        out.push(cur);
+    }
+    out
+}
+
+fn term_tf(term: &str, tokens: &[String]) -> f64 {
+    tokens.iter().filter(|t| t.as_str() == term).count() as f64
+}
+
+fn make_snippet(body: &str, query_terms: &[String], limit: usize) -> String {
+    let plain = body
+        .lines()
+        .filter(|line| {
+            let t = line.trim();
+            !t.starts_with('#') && !t.starts_with('>') && !t.is_empty()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let plain = strip_md_noise(&plain);
+    let lower = plain.to_ascii_lowercase();
+    let mut start = 0usize;
+    for term in query_terms {
+        if let Some(pos) = lower.find(term) {
+            start = pos.saturating_sub(40);
+            break;
+        }
+    }
+    let slice = plain.get(start..).unwrap_or(plain.as_str());
+    let mut snippet = String::new();
+    for ch in slice.chars() {
+        if snippet.chars().count() >= limit {
+            snippet.push('…');
+            break;
+        }
+        snippet.push(ch);
+    }
+    snippet.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn strip_md_noise(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '[' {
+            // [text](url) → text
+            if let Some(close) = chars[i..].iter().position(|&c| c == ']') {
+                let text: String = chars[i + 1..i + close].iter().collect();
+                let after = i + close + 1;
+                if after < chars.len() && chars[after] == '(' {
+                    if let Some(paren) = chars[after..].iter().position(|&c| c == ')') {
+                        out.push_str(&text);
+                        i = after + paren + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        let c = chars[i];
+        if c != '*' && c != '_' && c != '`' {
+            out.push(c);
+        }
+        i += 1;
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_utf8(s: &str, max_bytes: usize) -> (String, bool) {
+    if s.len() <= max_bytes {
+        return (s.to_owned(), false);
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    (s[..end].to_owned(), true)
+}
+
+/// Parse YAML-ish frontmatter used by knowledge pages (flat key: value lines).
+pub fn parse_markdown(rel_path: &str, raw: &str) -> Option<Page> {
+    let raw = raw.replace("\r\n", "\n");
+    let (fields, body) = split_frontmatter(&raw);
+    if fields.get("searchable").map(String::as_str) == Some("false") {
+        return None;
+    }
+    // Prefer Concept articles; skip bare indexes without type when under concepts/.
+    let page_type = fields.get("type").map(String::as_str).unwrap_or("");
+    if !page_type.is_empty() && page_type != "Concept" {
+        return None;
+    }
+    // Skip taxonomy/SOURCES style even if someone forgot searchable:false
+    let file_name = rel_path.rsplit('/').next().unwrap_or(rel_path);
+    if file_name.eq_ignore_ascii_case("SOURCES.md")
+        || file_name.eq_ignore_ascii_case("taxonomy.md")
+        || file_name.eq_ignore_ascii_case("index.md")
+        || file_name.eq_ignore_ascii_case("log.md")
+    {
+        return None;
+    }
+
+    let id = fields
+        .get("id")
+        .cloned()
+        .unwrap_or_else(|| path_to_id(rel_path));
+    if !is_safe_id(&id) {
+        return None;
+    }
+
+    let title = fields
+        .get("title")
+        .cloned()
+        .or_else(|| {
+            body.lines()
+                .find_map(|line| line.strip_prefix("# ").map(str::to_owned))
+        })
+        .unwrap_or_else(|| file_name.trim_end_matches(".md").to_owned());
+
+    Some(Page {
+        id,
+        title,
+        topics: csv_list(fields.get("topics").map(String::as_str).unwrap_or("")),
+        keywords: csv_list(fields.get("keywords").map(String::as_str).unwrap_or("")),
+        description: fields.get("description").cloned().unwrap_or_default(),
+        body: body.trim().to_owned(),
+        related_recipes: csv_list(
+            fields
+                .get("related_recipes")
+                .map(String::as_str)
+                .unwrap_or(""),
+        ),
+        status: fields
+            .get("status")
+            .cloned()
+            .unwrap_or_else(|| "draft".into()),
+    })
+}
+
+fn path_to_id(rel_path: &str) -> String {
+    let without = rel_path
+        .trim_start_matches("./")
+        .trim_start_matches("knowledge/")
+        .trim_end_matches(".md")
+        .trim_end_matches(".MD");
+    without.replace('/', ".")
+}
+
+fn csv_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|s| {
+            s.trim()
+                .trim_matches(|c| c == '`' || c == '"' || c == '\'')
+                .to_owned()
+        })
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn split_frontmatter(content: &str) -> (HashMap<String, String>, String) {
+    if !content.starts_with("---\n") {
+        return (HashMap::new(), content.to_owned());
+    }
+    let Some(end) = content[4..].find("\n---\n") else {
+        return (HashMap::new(), content.to_owned());
+    };
+    let fm = &content[4..4 + end];
+    let body = content[4 + end + 5..].to_owned();
+    let mut fields = HashMap::new();
+    for line in fm.lines() {
+        if line.starts_with(' ') || line.starts_with('\t') {
+            continue;
+        }
+        let Some(sep) = line.find(':') else {
+            continue;
+        };
+        let key = line[..sep].trim().to_owned();
+        let mut val = line[sep + 1..].trim().to_owned();
+        if (val.starts_with('"') && val.ends_with('"'))
+            || (val.starts_with('\'') && val.ends_with('\''))
+        {
+            val = val[1..val.len() - 1].to_owned();
+        }
+        if val.starts_with('[') && val.ends_with(']') {
+            val = val[1..val.len() - 1].to_owned();
+        }
+        fields.insert(key, val);
+    }
+    (fields, body)
+}
+
+/// MCP / file-door URI prefix for bundled knowledge markdown.
+pub const KNOWLEDGE_URI_PREFIX: &str = "nbcad://knowledge/";
+
+/// One embedded knowledge file available as an MCP resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KnowledgeFile {
+    /// Path relative to the `knowledge/` directory (POSIX separators).
+    pub path: &'static str,
+    /// Raw markdown bytes embedded at compile time.
+    pub text: &'static str,
+}
+
+impl KnowledgeFile {
+    /// Canonical MCP resource URI (`nbcad://knowledge/...`).
+    pub fn uri(&self) -> String {
+        format!("{KNOWLEDGE_URI_PREFIX}{}", self.path)
+    }
+
+    /// Short display name (final path segment).
+    pub fn name(&self) -> &'static str {
+        self.path.rsplit('/').next().unwrap_or(self.path)
+    }
+}
+
+/// All embedded knowledge markdown exposed as MCP `resources/*`.
+///
+/// Includes the OKF index and provenance pages that are intentionally excluded
+/// from BM25/`cad_help` search. Searchable Concept pages are the same embeds
+/// filtered through [`parse_markdown`].
+pub fn knowledge_files() -> &'static [KnowledgeFile] {
+    KNOWLEDGE_FILES
+}
+
+/// Look up an embedded knowledge file by MCP URI.
+pub fn knowledge_file_by_uri(uri: &str) -> Option<&'static KnowledgeFile> {
+    let path = uri.strip_prefix(KNOWLEDGE_URI_PREFIX)?;
+    if path.is_empty() || path.contains("..") || path.starts_with('/') {
+        return None;
+    }
+    knowledge_files().iter().find(|file| file.path == path)
+}
+
+/// Embedded knowledge sources: path relative to `knowledge/` → raw markdown.
+const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
+    KnowledgeFile {
+        path: "index.md",
+        text: include_str!("../../../knowledge/index.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/architecture.md",
+        text: include_str!("../../../knowledge/concepts/architecture.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/export-print.md",
+        text: include_str!("../../../knowledge/concepts/export-print.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/mcp-harness.md",
+        text: include_str!("../../../knowledge/concepts/mcp-harness.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/process.md",
+        text: include_str!("../../../knowledge/concepts/process.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/product-stance.md",
+        text: include_str!("../../../knowledge/concepts/product-stance.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/agent-mcp-workflow.md",
+        text: include_str!("../../../knowledge/concepts/agent-mcp-workflow.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/gears.md",
+        text: include_str!("../../../knowledge/concepts/gears.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/additive-workholding.md",
+        text: include_str!("../../../knowledge/concepts/additive-workholding.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/small-wind-generators.md",
+        text: include_str!("../../../knowledge/concepts/small-wind-generators.md"),
+    },
+    KnowledgeFile {
+        path: "concepts/bearing-stacks.md",
+        text: include_str!("../../../knowledge/concepts/bearing-stacks.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/dfm-overview.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/dfm-overview.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/dfm-process-guidelines.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/dfm-process-guidelines.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/fasteners-joints.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/fasteners-joints.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/fits-clearances.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/fits-clearances.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/gdt-intro.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/gdt-intro.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/concepts/materials-vocabulary.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/materials-vocabulary.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/taxonomy.md",
+        text: include_str!("../../../knowledge/machine-design/taxonomy.md"),
+    },
+    KnowledgeFile {
+        path: "machine-design/SOURCES.md",
+        text: include_str!("../../../knowledge/machine-design/SOURCES.md"),
+    },
+];
+
+fn embedded_pages() -> Vec<Page> {
+    knowledge_files()
+        .iter()
+        .filter_map(|file| parse_markdown(file.path, file.text))
+        .collect()
+}
+
+/// Validate the bundled corpus (CI / `nbcad-help check`).
+pub fn check_corpus() -> Result<usize, Vec<String>> {
+    let pages = embedded_pages();
+    let mut errors = Vec::new();
+    if pages.is_empty() {
+        errors.push("no searchable help pages embedded".into());
+    }
+    let mut ids = HashSet::new();
+    for page in &pages {
+        if !is_safe_id(&page.id) {
+            errors.push(format!("unsafe id '{}'", page.id));
+        }
+        if !ids.insert(page.id.clone()) {
+            errors.push(format!("duplicate id '{}'", page.id));
+        }
+        if page.title.is_empty() {
+            errors.push(format!("{}: empty title", page.id));
+        }
+    }
+    if errors.is_empty() {
+        Ok(pages.len())
+    } else {
+        Err(errors)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clearance_fit_hits_fits_page() {
+        let store = HelpStore::bundled();
+        let hits = store.search("clearance fit", Some(5));
+        assert!(
+            !hits.is_empty(),
+            "expected hits for 'clearance fit'"
+        );
+        let top_ids: Vec<_> = hits.iter().map(|h| h.id.as_str()).collect();
+        assert!(
+            top_ids
+                .iter()
+                .any(|id| id.contains("fits-clearances") || id.contains("fits")),
+            "expected fits-clearances in hits, got {top_ids:?}"
+        );
+        assert!(hits[0].snippet.chars().count() <= SNIPPET_CHARS + 1);
+    }
+
+    #[test]
+    fn draft_angle_hits_dfm_guidelines() {
+        let store = HelpStore::bundled();
+        let hits = store.search("draft angle", Some(5));
+        assert!(!hits.is_empty(), "expected hits for 'draft angle'");
+        let top_ids: Vec<_> = hits.iter().map(|h| h.id.as_str()).collect();
+        assert!(
+            top_ids.iter().any(|id| id.contains("dfm-process")
+                || id.contains("dfm-overview")
+                || hits.iter().any(|h| h.snippet.to_ascii_lowercase().contains("draft"))),
+            "expected DFM/draft hit, got {top_ids:?} snippets {:?}",
+            hits.iter().map(|h| &h.snippet).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn get_by_id_works_and_path_fails() {
+        let store = HelpStore::bundled();
+        let id = store
+            .catalog()
+            .ids()
+            .find(|id| id.contains("fits-clearances"))
+            .expect("fits page")
+            .to_owned();
+        let got = store.get(&id).expect("get by id");
+        assert_eq!(got.id, id);
+        assert!(!got.body.is_empty());
+        assert!(!got.truncated || got.body.len() <= GET_MAX_BYTES);
+
+        for bad in [
+            "../etc/passwd",
+            "knowledge/machine-design/concepts/fits-clearances.md",
+            "machine-design/concepts/fits-clearances",
+            "../../secrets",
+            "/absolute/path",
+            "foo\\bar",
+        ] {
+            assert!(
+                store.get(bad).is_err(),
+                "path/traversal get must fail for {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn search_respects_limit_cap() {
+        let store = HelpStore::bundled();
+        let hits = store.search("fit", Some(100));
+        assert!(hits.len() <= SEARCH_MAX_LIMIT);
+    }
+
+    #[test]
+    fn topics_lists_known_topics() {
+        let store = HelpStore::bundled();
+        let value = store.topics(Some(0));
+        let total = value["total"].as_u64().unwrap();
+        assert!(total > 0);
+        let topics = value["topics"].as_array().unwrap();
+        assert!(!topics.is_empty());
+    }
+
+    #[test]
+    fn agent_doctrine_page_is_searchable() {
+        let store = HelpStore::bundled();
+        let hits = store.search("cad_help tenacity", Some(5));
+        assert!(
+            hits.iter()
+                .any(|h| h.id.contains("agent-mcp-workflow")
+                    || h.title.to_ascii_lowercase().contains("agent")),
+            "agent doctrine should be searchable, got {:?}",
+            hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn check_corpus_ok() {
+        let n = check_corpus().expect("corpus check");
+        assert!(n >= 6);
+    }
+
+    #[test]
+    fn knowledge_resources_include_index_and_concepts() {
+        let files = knowledge_files();
+        assert!(files.iter().any(|f| f.path == "index.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/fits-clearances.md"));
+        let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
+        assert!(index.text.contains("Open Knowledge Format"));
+        assert!(knowledge_file_by_uri("nbcad://knowledge/../etc/passwd").is_none());
+        assert!(knowledge_file_by_uri("nbcad://other/index.md").is_none());
+        // index stays out of BM25; concept pages remain searchable.
+        let store = HelpStore::bundled();
+        assert!(store.catalog().ids().all(|id| !id.ends_with("index")));
+        assert!(store.catalog().ids().any(|id| id.contains("fits-clearances")));
+    }
+}

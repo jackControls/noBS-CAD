@@ -513,6 +513,7 @@ impl CadServer {
                 json!({ "mode": mode.as_str() })
             }
             "cad_list_all_tools" => full_tool_catalog(),
+            "cad_help" => cad_help_call(&arguments)?,
             "cad_cancel_recompute" => {
                 if let Some(transaction_id) = self.pending_recompute_transaction.take() {
                     self.manager.cancel_solid_recompute(transaction_id);
@@ -1423,6 +1424,7 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "cad_get_tool_disclosure_mode"
             | "cad_set_tool_disclosure_mode"
             | "cad_list_all_tools"
+            | "cad_help"
             | "cad_cancel_recompute"
             | "cad_list_sessions"
             | "cad_interface"
@@ -3775,6 +3777,41 @@ fn tool_specs() -> Vec<ToolSpec> {
             empty_schema(),
         ),
         ToolSpec::control(
+            "cad_help",
+            "Search and read local help",
+            "One help surface over the bundled knowledge corpus (machine-design + agent doctrine). Actions: search (snippet-first, default limit 5 max 10), get (id-only allowlist, 12KiB cap), topics (page size 50). Prefer cad_help before web search. Recipe chips on pages deep-link Scripts/presentation — no Bevy-in-Help.",
+            object_schema(
+                json!({
+                    "action": {
+                        "type": "string",
+                        "enum": ["search", "get", "topics"],
+                        "description": "search | get | topics"
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Required for action=search"
+                    },
+                    "id": {
+                        "type": "string",
+                        "description": "Help page id from search hits; required for action=get. Paths rejected."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "search hit limit (default 5, max 10)"
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "topics listing offset"
+                    }
+                }),
+                &["action"],
+            ),
+        ),
+
+        ToolSpec::control(
             "cad_cancel_recompute",
             "Cancel solid recompute",
             "Abort an in-flight solid replay if one is pending in this MCP process.",
@@ -3972,6 +4009,7 @@ fn records_in_script(name: &str) -> bool {
             | "cad_get_tool_disclosure_mode"
             | "cad_set_tool_disclosure_mode"
             | "cad_list_all_tools"
+            | "cad_help"
             | "cad_cancel_recompute"
             | "cad_list_sessions"
             | "cad_attach"
@@ -4206,6 +4244,72 @@ fn idle_due_messages(server: &mut CadServer) -> Vec<Value> {
         outgoing.push(notification);
     }
     outgoing
+}
+
+fn help_store() -> &'static nbcad_help::HelpStore {
+    use std::sync::OnceLock;
+    static STORE: OnceLock<nbcad_help::HelpStore> = OnceLock::new();
+    STORE.get_or_init(nbcad_help::HelpStore::bundled)
+}
+
+fn cad_help_call(arguments: &Value) -> Result<Value, String> {
+    let action = arguments
+        .get("action")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "missing required argument 'action'".to_string())?;
+    let store = help_store();
+    match action {
+        "search" => {
+            let query = arguments
+                .get("query")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "search requires 'query'".to_string())?;
+            let limit = arguments.get("limit").and_then(Value::as_u64).map(|n| n as usize);
+            let hits = store.search(query, limit);
+            Ok(json!({
+                "action": "search",
+                "query": query,
+                "limit": limit.unwrap_or(nbcad_help::SEARCH_DEFAULT_LIMIT).clamp(1, nbcad_help::SEARCH_MAX_LIMIT),
+                "hits": hits.iter().map(|h| json!({
+                    "id": h.id,
+                    "title": h.title,
+                    "topics": h.topics,
+                    "snippet": h.snippet,
+                    "score": h.score,
+                    "related_recipes": h.related_recipes,
+                    "status": h.status,
+                })).collect::<Vec<_>>(),
+            }))
+        }
+        "get" => {
+            let id = arguments
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "get requires 'id'".to_string())?;
+            let page = store.get(id)?;
+            Ok(json!({
+                "action": "get",
+                "id": page.id,
+                "title": page.title,
+                "topics": page.topics,
+                "keywords": page.keywords,
+                "description": page.description,
+                "body": page.body,
+                "related_recipes": page.related_recipes,
+                "status": page.status,
+                "truncated": page.truncated,
+            }))
+        }
+        "topics" => {
+            let offset = arguments.get("offset").and_then(Value::as_u64).map(|n| n as usize);
+            let mut value = store.topics(offset);
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("action".into(), json!("topics"));
+            }
+            Ok(value)
+        }
+        other => Err(format!("unknown cad_help action '{other}' (expected search|get|topics)")),
+    }
 }
 
 #[cfg(test)]
@@ -5300,6 +5404,35 @@ mod tests {
             assert_eq!(reply[0]["error"]["code"], -32602);
         }
     }
+
+    #[test]
+    fn cad_help_search_and_get_clearance_fit() {
+        let mut server = CadServer::new().expect("server");
+        let search = server
+            .call_tool(
+                "cad_help",
+                json!({"action": "search", "query": "clearance fit", "limit": 5}),
+            )
+            .expect("search");
+        assert_eq!(search["action"], "search");
+        let hits = search["hits"].as_array().expect("hits");
+        assert!(!hits.is_empty());
+        assert!(hits.iter().any(|h| h["id"].as_str().unwrap_or("").contains("fits")));
+        let id = hits[0]["id"].as_str().unwrap();
+        let got = server
+            .call_tool("cad_help", json!({"action": "get", "id": id}))
+            .expect("get");
+        assert_eq!(got["id"], id);
+        assert!(got["body"].as_str().unwrap().len() > 20);
+        let err = server
+            .call_tool(
+                "cad_help",
+                json!({"action": "get", "id": "../etc/passwd"}),
+            )
+            .expect_err("path get must fail");
+        assert!(err.contains("id") || err.contains("invalid") || err.contains("path") || err.contains("allowlist") || err.contains("unknown"), "{err}");
+    }
+
 
     #[test]
     fn dynamic_disclosure_lists_active_and_soft_tools() {

@@ -8,14 +8,16 @@ Portable knowledge bundle for humans and agents. Specification:
 [Open Knowledge Format v0.2](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).
 
 Keep concepts **thin**. Longer material lives in the repository’s
-[goals](../docs/goals.md), [MCP harness notes](../docs/mcp-harness.md), and
-[proposed architecture](../docs/proposed-architecture.md).
+[goals](../docs/goals.md), [MCP harness notes](../docs/mcp-harness.md),
+[proposed architecture](../docs/proposed-architecture.md), and
+[machine-design KB notes](../docs/machine-design-kb.md).
 
 ## Concepts
 
 - [Product stance](concepts/product-stance.md) - Local-first mechanical CAD priorities.
 - [Architecture](concepts/architecture.md) - Kernel, shell, and project-file boundaries.
 - [MCP harness](concepts/mcp-harness.md) - Headless/live routing and engineering resources.
+- [Agent MCP workflow](concepts/agent-mcp-workflow.md) - Tenacity, cad_help-first, soft focus, recipes.
 - [Contribution process](concepts/process.md) - Lightweight contribution and review expectations.
 - [Export & print](concepts/export-print.md) - Interchange, print export and qualification boundaries.
 - [Gear identification and compatible pairs](concepts/gears.md) - Module/DP, OD limits, pressure angle, ratio changes and mounting.
@@ -25,11 +27,13 @@ Keep concepts **thin**. Longer material lives in the repository’s
 
 ## Read through MCP
 
-The native MCP server embeds this Markdown corpus at build time. Use standard
-`resources/list` to discover titles and descriptions, then `resources/read` with
-the returned URI, for example `nbcad://knowledge/concepts/gears.md`. Resources are
-read-only and available without a checkout or network connection. They describe
-the bundled source revision; rebuild to pick up later knowledge changes.
+The native MCP server embeds this Markdown corpus at build time. Prefer **`cad_help`**
+(`search` → `get` / `topics`) for discovery — snippet-first with locked caps (search
+default 5 / max 10, snippet ~280 chars, get 12 KiB, topics page 50). Use standard
+`resources/list` then `resources/read` with a returned URI (for example
+`nbcad://knowledge/index.md`) when the full page is needed. Resources are read-only
+and available without a checkout or network connection. They describe the bundled
+source revision; rebuild to pick up later knowledge changes.
 
 Resolve links between knowledge pages relative to the current resource URI:
 from `nbcad://knowledge/concepts/gears.md`, `additive-workholding.md` means
@@ -38,13 +42,20 @@ or `../../mcp-server/` identify supporting paths in a checkout of the same sourc
 revision; they are not additional MCP resources. External HTTPS sources can be
 opened separately when network access is available.
 
-## Mechanical design guidance
+## Machine design
 
-- [GD&T intro](machine-design/concepts/gdt-intro.md) - Function, datums and inspectable tolerances.
-- [Fits and clearances](machine-design/concepts/fits-clearances.md) - Worst-case limits and measured fit coupons.
-- [Design for manufacturing and assembly](machine-design/concepts/dfm-overview.md) - Process, material, hardware and assembly decisions.
-- [Manufacturing process checks](machine-design/concepts/dfm-process-guidelines.md) - Tool access, mold release, print orientation and qualification.
-- [Sources and attribution](machine-design/SOURCES.md) - References used by these pages.
+Open design-time help (GD&T, elements, mechanisms, materials, DFM).
+Prefer **seeded** pages via `cad_help` before web search; see taxonomy for **planned**
+gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
+
+- [Taxonomy](machine-design/taxonomy.md) - Topic map for the domain KB.
+- [Sources](machine-design/SOURCES.md) - License and provenance table.
+- [GD&T intro](machine-design/concepts/gdt-intro.md) - Datums and feature control frames.
+- [Fits & clearances](machine-design/concepts/fits-clearances.md) - Clearance, locational, interference.
+- [Fasteners & joints](machine-design/concepts/fasteners-joints.md) - Preload and purchased hardware.
+- [Materials vocabulary](machine-design/concepts/materials-vocabulary.md) - Properties for CAD choices.
+- [DFM overview](machine-design/concepts/dfm-overview.md) - Process families and heuristics.
+- [DFM process guidelines](machine-design/concepts/dfm-process-guidelines.md) - Molding, cast, sheet, weld, EDM, CNC.
 
 Use the listed resources for their stated scope, then consult the cited sources
 for more detail. The bundle is guidance for design decisions; it does not supply
@@ -53,4 +64,4 @@ certified material allowables, standards tables or physical qualification.
 ## Hosted page
 
 GitHub Pages builds from this bundle (see `.github/workflows/pages-knowledge.yml`).
-Agents should prefer reading the Markdown files or bundled MCP resources.
+Agents should prefer `cad_help` or bundled MCP resources over scraping the hosted HTML.

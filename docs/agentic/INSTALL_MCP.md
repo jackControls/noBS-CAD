@@ -100,3 +100,18 @@ Implementation lives in `xtask/src/install_mcp.rs`; `xtask/src/main.rs` routes
 the command. New client support should include detection, the correct
 configuration writer and focused tests. Run `cargo test -p xtask` for this
 installer. Native CAD build and test commands remain in [DEVELOPMENT.md](../DEVELOPMENT.md).
+
+## Local help (`cad_help` + knowledge resources)
+
+After the server is installed, agents should prefer:
+
+1. MCP tool **`cad_help`** with actions `search` → `get` / `topics` (snippet-first;
+   caps locked in [`machine-design-help-search.md`](../machine-design-help-search.md)).
+2. MCP **`resources/list`** / **`resources/read`** on `nbcad://knowledge/...` when the
+   full markdown page is needed.
+
+Rebuild/reinstall the MCP binary after knowledge or `crates/help` changes so the
+embedded corpus matches the checkout. On the Design Ops box use
+`cad-design-ops/scripts/install-nbcad-mcp.sh`, then re-Add the Cursor MCP server
+(restart alone is not enough after a binary replace).
+

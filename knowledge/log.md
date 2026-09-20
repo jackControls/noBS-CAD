@@ -1,5 +1,14 @@
 # noBS CAD knowledge update log
 
+## 2026-09-19 — sync docs/machine-design-kb onto main
+
+Replayed help/KB unique work onto `origin/main` tip (full 139-commit rebase abandoned:
+~254 conflicted paths). Added `crates/help` + MCP `cad_help`, expanded machine-design
+pages (taxonomy, fasteners, materials, search-index), agent-mcp-workflow doctrine, and
+kept main's product concepts (gears, workholding, bearings, wind) plus existing
+`resources/*` bundle.
+
+
 ## 2026-09-13
 
 - Added four mechanical-design articles covering datums, fits, manufacturing
