@@ -2,6 +2,8 @@
 //! are scoped to one document incarnation, engine revision and active sketch.
 
 mod annotations;
+mod dynamic;
+pub(crate) use dynamic::SizeField;
 mod modify_preview;
 mod palette;
 pub(crate) use palette::PaletteCommand;
@@ -52,6 +54,7 @@ pub(crate) enum EditorCommand {
     Complete,
     Interaction(InteractionCommand),
     Palette(PaletteCommand),
+    Size { generation: u64, field: SizeField, text: String },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -150,7 +153,8 @@ fn clear_preview(
 
 fn preview(
     world: &mut World,
-    services: &NativeServices,
+    engine: &AppState,
+    bridge: &SessionBridgeState,
     owner: &DocumentContext,
     editor: &mut Editor,
     raw: SketchPoint,
@@ -162,15 +166,11 @@ fn preview(
     let Some(basis) = editor.stamp.as_ref().and_then(|stamp| stamp.basis) else {
         return Ok(());
     };
-    services.bridge.with_native_document_owner(&services.engine, owner, || {
+    bridge.with_native_document_owner(engine, owner, || {
         let mut cursor = raw;
         let mut marker = None;
         if editor.draft.tool == Some(CreateTool::Line) {
-            let value:Value = serde_json::from_str(&services.engine.engine_call("preview_segment", &json!({
-                "from":editor.draft.points.last().copied().unwrap_or(raw), "to_raw":raw,"ctrl_held":ctrl
-            }).to_string())).map_err(|e| e.to_string())?;
-            if value["ok"] != true { return Err(format!("Line preview: {}",value["error"])); }
-            let value:nbcad_sketch::PreviewDto = serde_json::from_value(value["value"].clone()).map_err(|e| e.to_string())?;
+            let value = dynamic::line_preview(engine,&editor.draft,raw,ctrl)?;
             cursor = value.snapped_to;
             use nbcad_sketch::SnapTarget;
             let kind = match value.snap {
@@ -184,10 +184,16 @@ fn preview(
             };
             marker = kind.map(|kind| ViewportSnapMarker { position:basis.to_3d([cursor.x,cursor.y]).map(|v| v as f32), kind });
         }
-        editor.draft.cursor = Some(cursor);
+        editor.draft.cursor = Some(raw);
+        let mut outline = editor.draft.clone();
+        if let Some(points) = dynamic::preview_points(engine,&editor.draft,raw,ctrl)? {
+            outline.points = vec![points[0]];
+            cursor = points[1];
+        }
+        cursor = dynamic::slot_cursor(&editor.draft,cursor)?;
         let color = ViewportPalette::default().preview;
         let color = [color[0],color[1],color[2],1.];
-        let segments = editor.draft.outline(cursor).into_iter().flatten()
+        let segments = outline.outline(cursor).into_iter().flatten()
             .flat_map(|point| basis.to_3d([point.x,point.y]).map(|v| v as f32)).collect();
         let (_,camera,_,size) = native_viewport::interface_view_snapshot(world);
         let distance = Vec3::from_array(camera.position).distance(Vec3::from_array(basis.to_3d([cursor.x,cursor.y]).map(|v| v as f32)));
@@ -332,6 +338,9 @@ pub(crate) fn execute(
             }
             EditorCommand::Palette(command) => {
                 palette::execute(world, engine, bridge, owner, &mut editor, command, validate)
+            }
+            EditorCommand::Size { generation, field, text } => {
+                dynamic::set(world,engine,bridge,owner,&mut editor,generation,field,text,validate)
             }
         }
     })
@@ -530,6 +539,7 @@ pub(crate) fn process_one(
                 let Some(basis) = editor.stamp.as_ref().and_then(|stamp| stamp.basis) else { return Ok(result); };
                 let Some(canvas) = frame.canvases.iter().find(|canvas| canvas.name == "viewport") else { return Ok(result); };
                 let cursor = moved.position;
+                if handle.owns_pointer([f64::from(cursor.x),f64::from(cursor.y)]) {return Ok(result);}
                 if f64::from(cursor.x) < canvas.bounds.x || f64::from(cursor.x) >= canvas.bounds.x+canvas.bounds.width
                     || f64::from(cursor.y) < canvas.bounds.y || f64::from(cursor.y) >= canvas.bounds.y+canvas.bounds.height {
                     clear_preview(world, &services.engine, &services.bridge, &frame.context)?;
@@ -537,7 +547,7 @@ pub(crate) fn process_one(
                 }
                 if let Some(point) = native_viewport::interface_sketch_point(world, &frame.context.document_id,
                     [cursor.x-canvas.bounds.x as f32,cursor.y-canvas.bounds.y as f32],basis)? {
-                    preview(world,services,&frame.context,&mut editor,point,event.modifiers.ctrl)?;
+                    preview(world,&services.engine,&services.bridge,&frame.context,&mut editor,point,event.modifiers.ctrl)?;
                     result = json!({"handled":true,"preview":true,"instruction":editor.draft.instruction()});
                 }
             }
@@ -658,7 +668,7 @@ pub(crate) fn process_one(
                             }
                             Ok(None) => {
                                 editor.error.clear();
-                                preview(world,services,&owner,&mut editor,point,event.modifiers.ctrl)?;
+                                preview(world,&services.engine,&services.bridge,&owner,&mut editor,point,event.modifiers.ctrl)?;
                                 result = json!({"handled":true,"picks":editor.draft.points.len(),"instruction":editor.draft.instruction()});
                             }
                             Err(error) => { editor.error = error.clone(); return Err(error); }
@@ -829,6 +839,7 @@ pub(crate) fn synchronize_controls(
                         },
                         _ => Icon::Select,
                     },
+                    EditorCommand::Size { .. } => Icon::Dimension,
                     EditorCommand::Tool(tool) => match tool {
                         CreateTool::Line => Icon::Line,
                         CreateTool::MidpointLine => Icon::MidpointLine,
@@ -874,6 +885,7 @@ pub(crate) fn synchronize_controls(
             x += width + 2.;
         }
         panel::synchronize(world, camera, &mut editor, area)?;
+        dynamic::synchronize(world,camera,&services.engine,owner,&editor,canvas)?;
         palette::synchronize(world, camera, services, owner, &editor, canvas)?;
         annotations::synchronize(world, camera, services, owner, &editor, canvas)
     })

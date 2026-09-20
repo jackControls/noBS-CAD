@@ -427,6 +427,22 @@ pub(crate) fn reduce_action(
         );
     }
     #[cfg(feature = "dev-bevy-host")]
+    if let NativeCommand::Sketch(crate::native_editor::EditorCommand::Size {generation,field,..}) = &binding.command {
+        use crate::native_editor::EditorCommand;
+        let text=match &action.control.input {
+            ControlInput::SetValue(value)=>value.clone(),
+            ControlInput::DoubleClick=>String::new(),
+            ControlInput::Click=>return bridge.with_native_document_owner(engine,&action.context,|| {
+                handle.validate_action(action)?;Ok(json!({"focused":true}))
+            }),
+            ControlInput::Key(key) if key.key=="Escape"=>return crate::native_editor::execute(
+                world,engine,bridge,&action.context,EditorCommand::Cancel,||handle.validate_action(action)),
+            _=>return Err("Use the drawing size field to enter a value".into()),
+        };
+        return crate::native_editor::execute(world,engine,bridge,&action.context,
+            EditorCommand::Size {generation:*generation,field:*field,text},||handle.validate_action(action));
+    }
+    #[cfg(feature = "dev-bevy-host")]
     if let NativeCommand::Sketch(crate::native_editor::EditorCommand::Interaction(command)) =
         &binding.command
     {

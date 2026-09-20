@@ -69,6 +69,8 @@ pub(crate) struct Draft {
     pub points: Vec<Vec2>,
     pub cursor: Option<Vec2>,
     chain_start: Option<Vec2>,
+    pub generation: u64,
+    pub sizes: super::dynamic::Sizes,
 }
 
 fn encoded<T: Serialize>(operation: &'static str, value: T) -> Result<Prepared, String> {
@@ -80,6 +82,7 @@ fn encoded<T: Serialize>(operation: &'static str, value: T) -> Result<Prepared, 
 
 impl Draft {
     pub fn select(&mut self, tool: Option<CreateTool>) {
+        self.reset_sizes();
         self.tool = tool;
         self.points.clear();
         self.cursor = None;
@@ -89,6 +92,7 @@ impl Draft {
     /// Escape first cancels an unfinished primitive; a second Escape leaves
     /// the tool. Already committed chain segments remain ordinary history.
     pub fn escape(&mut self) {
+        self.reset_sizes();
         if self.points.is_empty() {
             self.tool = None;
         }
@@ -121,6 +125,9 @@ impl Draft {
         }
         let p1 = picks[0];
         let p2 = *picks.get(1).unwrap_or(&p1);
+        if let Some(command) = self.sizes.prepare(tool, &picks, ctrl)? {
+            return Ok(Some(command));
+        }
         let value = match tool {
             CreateTool::Line => encoded(
                 "sketch_add_line",
@@ -215,6 +222,7 @@ impl Draft {
     }
 
     pub fn accepted(&mut self, result: &Value) -> Result<(), String> {
+        self.reset_sizes();
         self.points.clear();
         self.cursor = None;
         if self.tool == Some(CreateTool::Line) {
@@ -258,6 +266,11 @@ impl Draft {
             }
         }
         Ok(())
+    }
+
+    fn reset_sizes(&mut self) {
+        self.generation = self.generation.checked_add(1).expect("Sketch gesture identities exhausted");
+        self.sizes = Default::default();
     }
 
     pub fn instruction(&self) -> &'static str {

@@ -58,6 +58,94 @@ fn dimension(client: &mut Client) -> Result<Value> {
     control(client, labels[0], None)
 }
 
+fn drawing_sizes(client: &mut Client, out: &std::path::Path) -> Result<()> {
+    let initial = sketch(client)?;
+    control(client, "Rectangle", None)?;
+    click(client, [-30., -20.], false)?;
+    control(client, "Drawing width", Some("60 mm"))?;
+    control(client, "Drawing height", Some("40"))?;
+    ui(
+        client,
+        json!({"action":"viewport","gesture":"move","world":[10.,10.,0.]}),
+    )?;
+    let layout = ui(client, json!({"action":"inspect"}))?;
+    let palette_x = controls(&layout)
+        .find(|c| c["label"] == "Sketch Palette")
+        .and_then(|c| c["bounds"]["x"].as_f64())
+        .context("Palette bounds missing")?;
+    for field in controls(&layout).filter(|c| {
+        c["label"]
+            .as_str()
+            .is_some_and(|label| label.starts_with("Drawing "))
+    }) {
+        let bounds = &field["bounds"];
+        ensure!(
+            bounds["x"].as_f64().context("Missing field x")?
+                + bounds["width"].as_f64().context("Missing field width")?
+                <= palette_x,
+            "Drawing field overlaps the Sketch Palette: {field}"
+        );
+    }
+    ui(
+        client,
+        json!({"action":"capture","path":out.join("drawing-size-preview.png")}),
+    )?;
+    ensure!(
+        sketch(client)?["entities"] == initial["entities"],
+        "Size preview mutated the sketch"
+    );
+    click(client, [10., 10.], false)?;
+    let rectangle = sketch(client)?;
+    ensure!(
+        rectangle["dimensions"]
+            .as_array()
+            .is_some_and(|d| d.len() == 2),
+        "Typed rectangle dimensions missing"
+    );
+    for expected in [60., 40.] {
+        ensure!(
+            rectangle["dimensions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["value"]
+                    .as_f64()
+                    .is_some_and(|v| (v - expected).abs() < 1e-6)),
+            "Rectangle size {expected} was not applied"
+        );
+    }
+    control(client, "Select", None)?;
+    control(client, "Undo", None)?;
+    ensure!(
+        sketch(client)?["entities"] == initial["entities"],
+        "Typed rectangle was not a single undo"
+    );
+    control(client, "Circle", None)?;
+    click(client, [0., 0.], false)?;
+    control(client, "Drawing diameter", Some("1 in"))?;
+    click(client, [10., 10.], false)?;
+    let circle = sketch(client)?;
+    ensure!(
+        circle["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "circle"
+                && e["radius"]
+                    .as_f64()
+                    .is_some_and(|r| (r - 12.7).abs() < 1e-6)),
+        "Typed inch diameter did not reach geometry"
+    );
+    control(client, "Select", None)?;
+    control(client, "Undo", None)?;
+    ensure!(
+        sketch(client)?["entities"] == initial["entities"],
+        "Typed circle undo failed"
+    );
+    println!("PASS: native on-canvas sizes, units, driving dimensions and undo");
+    Ok(())
+}
+
 pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     let mut options = HashMap::new();
     while let Some(key) = args.next() {
@@ -140,6 +228,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     );
     control(&mut client, "Sketch Palette", None)?;
     control(&mut client, "Return to Flat View", None)?;
+    drawing_sizes(&mut client, &out)?;
     control(&mut client, "Rectangle", None)?;
     click(&mut client, [-30., -20.], false)?;
     click(&mut client, [30., 20.], false)?;
@@ -402,7 +491,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     fs::write(
         &report,
         serde_json::to_vec_pretty(&json!({"status":"passed","server":server,"session":session,
-        "checks":["nine_modify_forms_and_undo","dimension_edit_modes","constraint_delete_undo","escape_cancel","sketch_palette","render_capture","save"],
+        "checks":["nine_modify_forms_and_undo","dimension_edit_modes","constraint_delete_undo","escape_cancel","sketch_palette","drawing_sizes","render_capture","save"],
         "sketch":final_sketch,"project":project,"capture":capture}))?,
     )?;
     println!("PASS: native sketch saved; report {}", report.display());

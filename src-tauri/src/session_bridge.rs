@@ -679,7 +679,7 @@ fn generation_conflict(session_id: &str, base: u64, current: Option<u64>) -> Str
     .unwrap_or_else(|_| "generation_conflict".to_string())
 }
 
-fn parse_engine_envelope(raw: String) -> Result<Value, String> {
+pub(crate) fn parse_engine_envelope(raw: String) -> Result<Value, String> {
     let envelope: Value =
         serde_json::from_str(&raw).map_err(|error| format!("invalid engine response: {error}"))?;
     if envelope.get("ok").and_then(Value::as_bool) == Some(true) {

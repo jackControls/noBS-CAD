@@ -428,6 +428,12 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         "add_rectangle_locked" => with_payload(payload, |r: LockedRectangleRequest| {
             manager.add_rectangle_locked(r)
         }),
+        "preview_rectangle_locked" => with_payload(payload, |r: LockedRectangleRequest| {
+            manager.preview_rectangle_locked(r)
+        }),
+        "preview_circle_locked" => with_payload(payload, |r: LockedCircleRequest| {
+            manager.preview_circle_locked(r)
+        }),
         "add_circle" => with_payload(payload, |r: CircleRequest| manager.add_circle(r)),
         "add_circle_locked" => with_payload(payload, |r: LockedCircleRequest| {
             manager.add_circle_locked(r)

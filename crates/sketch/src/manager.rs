@@ -4437,6 +4437,26 @@ impl SketchManager {
         self.active_mut()?.add_rectangle_locked(&request)
     }
 
+    pub fn preview_rectangle_locked(
+        &self,
+        request: LockedRectangleRequest,
+    ) -> Result<[crate::Vec2; 2], SessionError> {
+        self.active
+            .as_ref()
+            .ok_or(SessionError::NoActiveSketch)?
+            .preview_rectangle_locked(&request)
+    }
+
+    pub fn preview_circle_locked(
+        &self,
+        request: LockedCircleRequest,
+    ) -> Result<[crate::Vec2; 2], SessionError> {
+        self.active
+            .as_ref()
+            .ok_or(SessionError::NoActiveSketch)?
+            .preview_circle_locked(&request)
+    }
+
     pub fn add_circle(&mut self, request: CircleRequest) -> Result<ToolResult, SessionError> {
         self.active_mut()?.add_circle_selective(
             request.mode,

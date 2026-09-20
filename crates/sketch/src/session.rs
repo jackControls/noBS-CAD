@@ -2275,6 +2275,50 @@ impl SketchSession {
         request: &LockedRectangleRequest,
     ) -> Result<ToolResult, SessionError> {
         let mode = request.mode;
+        let (anchor, corner, anchor_target, hint_target) =
+            self.resolve_rectangle_locked(request)?;
+        let before = self.sketch.snapshot();
+        let entities = self.create_rectangle(mode, anchor, corner)?;
+        for (position, target) in [(anchor, anchor_target), (corner, hint_target)] {
+            if target != SnapTarget::Origin {
+                continue;
+            }
+            if let Some((point, _)) = self.sketch.nearest_point(position, MERGE_EPS) {
+                self.attach_origin_if_acquired(point, target);
+            }
+        }
+        let (bl, br, tl) = (entities[0], entities[1], entities[3]);
+        let w_text = request
+            .width_text
+            .clone()
+            .or_else(|| request.width_mm.map(format_number));
+        let h_text = request
+            .height_text
+            .clone()
+            .or_else(|| request.height_mm.map(format_number));
+        self.auto_dim_rect(bl, br, tl, w_text.as_deref(), h_text.as_deref());
+        self.recompute();
+        self.push_command(before);
+        Ok(ToolResult {
+            entities,
+            sketch: self.dto(),
+        })
+    }
+
+    /// The renderer and commit share snapping and locked-axis resolution.
+    pub fn preview_rectangle_locked(
+        &self,
+        request: &LockedRectangleRequest,
+    ) -> Result<[Vec2; 2], SessionError> {
+        let (anchor, corner, _, _) = self.resolve_rectangle_locked(request)?;
+        Ok([anchor, corner])
+    }
+
+    fn resolve_rectangle_locked(
+        &self,
+        request: &LockedRectangleRequest,
+    ) -> Result<(Vec2, Vec2, SnapTarget, SnapTarget), SessionError> {
+        let mode = request.mode;
         let width_mm = match &request.width_text {
             Some(t) => Some(self.eval_text(t)?),
             None => request.width_mm,
@@ -2304,34 +2348,7 @@ impl SketchSession {
             height_mm.is_some(),
         );
 
-        let before = self.sketch.snapshot();
-        let entities = self.create_rectangle(mode, anchor, corner)?;
-        for (position, target) in [(anchor, anchor_target), (corner, hint_target)] {
-            if target != SnapTarget::Origin {
-                continue;
-            }
-            if let Some((point, _)) = self.sketch.nearest_point(position, MERGE_EPS) {
-                self.attach_origin_if_acquired(point, target);
-            }
-        }
-        // Corner points drive the rectangle: dims span corner-to-corner so
-        // later corner ops keep their reference (2026-07-19 PM, D9).
-        let (bl, br, tl) = (entities[0], entities[1], entities[3]);
-        let w_text = request
-            .width_text
-            .clone()
-            .or_else(|| width_mm.map(format_number));
-        let h_text = request
-            .height_text
-            .clone()
-            .or_else(|| height_mm.map(format_number));
-        self.auto_dim_rect(bl, br, tl, w_text.as_deref(), h_text.as_deref());
-        self.recompute();
-        self.push_command(before);
-        Ok(ToolResult {
-            entities,
-            sketch: self.dto(),
-        })
+        Ok((anchor, corner, anchor_target, hint_target))
     }
 
     fn build_rectangle(
@@ -2459,6 +2476,40 @@ impl SketchSession {
         request: &LockedCircleRequest,
     ) -> Result<ToolResult, SessionError> {
         let mode = request.mode;
+        let (anchor, second, anchor_target) = self.resolve_circle_locked(request)?;
+        let before = self.sketch.snapshot();
+        let id = self.create_circle(mode, anchor, second)?;
+        if mode == CircleMode::CenterDiameter {
+            self.attach_curve_center_if_acquired(id, anchor_target);
+        }
+        let d_text = request
+            .diameter_text
+            .clone()
+            .or_else(|| request.diameter_mm.map(format_number));
+        if let Some(text) = d_text.as_deref() {
+            self.auto_dim_circle(id, text);
+        }
+        self.recompute();
+        self.push_command(before);
+        Ok(ToolResult {
+            entities: vec![id],
+            sketch: self.dto(),
+        })
+    }
+
+    pub fn preview_circle_locked(
+        &self,
+        request: &LockedCircleRequest,
+    ) -> Result<[Vec2; 2], SessionError> {
+        let (anchor, second, _) = self.resolve_circle_locked(request)?;
+        Ok([anchor, second])
+    }
+
+    fn resolve_circle_locked(
+        &self,
+        request: &LockedCircleRequest,
+    ) -> Result<(Vec2, Vec2, SnapTarget), SessionError> {
+        let mode = request.mode;
         let diameter_mm = match &request.diameter_text {
             Some(t) => Some(self.eval_text(t)?),
             None => request.diameter_mm,
@@ -2495,24 +2546,7 @@ impl SketchSession {
             (_, None) => hint,
         };
 
-        let before = self.sketch.snapshot();
-        let id = self.create_circle(mode, anchor, second)?;
-        if mode == CircleMode::CenterDiameter {
-            self.attach_curve_center_if_acquired(id, anchor_target);
-        }
-        let d_text = request
-            .diameter_text
-            .clone()
-            .or_else(|| diameter_mm.map(format_number));
-        if let Some(text) = d_text.as_deref() {
-            self.auto_dim_circle(id, text);
-        }
-        self.recompute();
-        self.push_command(before);
-        Ok(ToolResult {
-            entities: vec![id],
-            sketch: self.dto(),
-        })
+        Ok((anchor, second, anchor_target))
     }
 
     fn build_circle(
