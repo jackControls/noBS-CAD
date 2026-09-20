@@ -76,5 +76,6 @@ circlip dimension charts here.
 Related: [bearing stacks](../../concepts/bearing-stacks.md),
 [fits & clearances](fits-clearances.md),
 [power screws / lead screws](power-screws-lead-screws.md),
+[springs and couplings](springs-couplings.md),
 [locating schemes](locating-scheme-dof.md),
 [taxonomy](../taxonomy.md).

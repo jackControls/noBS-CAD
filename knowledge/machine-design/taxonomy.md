@@ -42,7 +42,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Hardware pocket / actuator / bolt circle research | **seeded** | `machine-design.concepts.am-hardware-pocket-research` — [am-hardware-pocket-research](concepts/am-hardware-pocket-research.md) |
 | Shafts, keys, retaining rings | **seeded** | `machine-design.concepts.shafts-keys-retaining-rings` — [shafts-keys-retaining-rings](concepts/shafts-keys-retaining-rings.md) |
 | Bearings / hubs / seats | **seeded (partial)** | `concepts.bearing-stacks` — [bearing-stacks](../concepts/bearing-stacks.md) |
-| Springs, seals, couplings | **planned** (lid/labyrinth seeded) | enclosure seal: [am-enclosure-lid-gasket-labyrinth](concepts/am-enclosure-lid-gasket-labyrinth.md); springs/couplings still planned |
+| Springs, seals, couplings | **seeded** (springs/couplings + lid seal) | `machine-design.concepts.springs-couplings` — [springs-couplings](concepts/springs-couplings.md); enclosure seal: [am-enclosure-lid-gasket-labyrinth](concepts/am-enclosure-lid-gasket-labyrinth.md) |
 | Power screws / lead screws | **seeded** | `machine-design.concepts.power-screws-lead-screws` — [power-screws-lead-screws](concepts/power-screws-lead-screws.md) |
 
 ## C. Mechanisms
@@ -112,7 +112,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Drawing vs MBD / PMI walkthrough | still **planned** |
 | Inspection / metrology bridge | still **planned** |
 | Deep key stress / groove charts | shafts page seeded (roles only); numeric charts **TODO** |
-| Springs / couplings (beyond lid seal) | still **planned** |
+| Deep spring-rate / coupling misalignment charts | springs-couplings seeded (roles only); numeric charts **TODO** (datasheets) |
 | Linkages / gears / cams / belts mobility | gears product page exists; mechanisms **planned** |
 | Materials allowables tables | **planned** (no MatWeb); vocabulary seeded |
 | Full NASA fastener preload distill | overview + hole/insert pages seeded; deep sizing **TODO** |
@@ -124,7 +124,7 @@ Frontmatter `topics:` on Concept pages feed `cad_help` **topics**. Expect labels
 such as: `dfam`, `am`, `fdm`, `fasteners`, `joints`, `hardware`, `enclosures`,
 `cables`, `seals`, `threads`, `fits`, `gdt`, `locators`, `print`, `snap-fit`,
 `recipes`, `manufacturing`, `research`, `validation`, `assembly`, `mcp`, `bearings`,
-`mechanisms`, `dfa`, `datums`, `sketch`, `holes`, `history`, `export`, `units`,
+`mechanisms`, `springs`, `couplings`, `dfa`, `datums`, `sketch`, `holes`, `history`, `export`, `units`,
 `modeling`, `workflow`, `disclosure`, `focus`, `sessions`, `parametric`, `selection`, `topology`. Use `topics` then `search` with those words; `get` with an id
 from the tables above.
 

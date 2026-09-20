@@ -65,6 +65,7 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Datum / sketch plane (MCP) | `machine-design.concepts.datum-sketch-plane-choice` | Datum / sketch plane choice |
 | Hole feature vs modeled | `machine-design.concepts.hole-wizard-vs-modeled` | Hole wizard vs modeled hole |
 | Shafts / keys / retaining rings | `machine-design.concepts.shafts-keys-retaining-rings` | Shafts, keys, and retaining rings |
+| Springs / couplings | `machine-design.concepts.springs-couplings` | Springs and couplings |
 
 Full seeded/planned table: **[taxonomy](machine-design/taxonomy.md)**.
 
@@ -141,6 +142,7 @@ gaps. Provenance: [SOURCES](machine-design/SOURCES.md).
 - [Datum / sketch plane (MCP)](machine-design/concepts/datum-sketch-plane-choice.md) - Origin, CS, and sketch plane choice for MCP edits.
 - [Hole feature vs modeled](machine-design/concepts/hole-wizard-vs-modeled.md) - Hole feature vs sketched/patterned holes.
 - [Shafts / keys / retaining rings](machine-design/concepts/shafts-keys-retaining-rings.md) - Stepped shafts, keyseats, circlip grooves (CAD-time).
+- [Springs / couplings](machine-design/concepts/springs-couplings.md) - Spring seats and shaft couplings (CAD-time; datasheet rates).
 - [Fit coupons & recipes map](machine-design/concepts/fit-coupons-recipes-map.md) - Concept → `related_recipes` hub.
 
 Use the listed resources for their stated scope, then consult the cited sources

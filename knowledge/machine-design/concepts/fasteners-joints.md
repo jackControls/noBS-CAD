@@ -94,4 +94,5 @@ vendor + NASA RP-1228 for sizing; this page stays checklist-only.
 
 Related: [Materials vocabulary](materials-vocabulary.md),
 [AM assembly join choice](am-assembly-join-choice.md),
+[springs and couplings](springs-couplings.md),
 [taxonomy](../taxonomy.md).

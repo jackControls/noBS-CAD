@@ -1,3 +1,12 @@
+## 2026-09-20 — Springs/couplings concept
+
+- Seeded `machine-design.concepts.springs-couplings` (CAD-time seats, coupling
+  misalignment class, VERIFY → datasheets; no rate/angle charts). Taxonomy B +
+  Still-thin updated; lid/labyrinth remains the seal page.
+- Index table + Machine-design bullet; cross-links from shafts, fasteners,
+  bearings. Rebuilt `machine-design/search-index.json`; Rust embed + BM25/unit
+  tests + wire golden H48.
+
 # noBS CAD knowledge update log
 
 ## 2026-09-20 — Shafts/keys/rings + browse decruft

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "generated": "2026-09-20",
-  "count": 32,
+  "count": 33,
   "entries": [
     {
       "id": "machine-design.concepts.alignment-nubs-pins",
@@ -1040,6 +1040,55 @@
         "doe-3d"
       ],
       "snippet": "Rotating machinery almost always needs a named shaft envelope, a torque path (key, spline, press, set screw), and axial retention (shoulder, collar, retaining ring). CAD models the geometry; catalogs and coupons decide …"
+    },
+    {
+      "id": "machine-design.concepts.springs-couplings",
+      "path": "knowledge/machine-design/concepts/springs-couplings.md",
+      "title": "Springs and couplings (CAD-time)",
+      "description": "Compression/extension/torsion spring seats and shaft couplings — roles, selection packs, VERIFY gates; rate and misalignment charts stay on datasheets.",
+      "status": "draft",
+      "topics": [
+        "machine-elements",
+        "springs",
+        "couplings",
+        "shafts",
+        "fasteners",
+        "fits",
+        "bearings",
+        "mechanisms"
+      ],
+      "keywords": [
+        "spring",
+        "compression spring",
+        "extension spring",
+        "torsion spring",
+        "wave spring",
+        "free length",
+        "solid height",
+        "spring seat",
+        "coupling",
+        "jaw coupling",
+        "Oldham",
+        "bellows",
+        "disc coupling",
+        "rigid coupling",
+        "flexible coupling",
+        "misalignment",
+        "hub bore",
+        "set screw",
+        "spider"
+      ],
+      "related_recipes": [
+        "revolved-spacer",
+        "turbine-fit-coupons",
+        "vertical-axis-turbine",
+        "d-screw-vise-fit"
+      ],
+      "sources": [
+        "doe-3d",
+        "nasa-bearing"
+      ],
+      "snippet": "Springs store energy or apply a known force/torque path; couplings join two shafts (or shaft-to-hub) while naming how much misalignment and torque the joint may take. CAD owns seats, envelopes, and access; catalogs own …"
     },
     {
       "id": "machine-design.concepts.technic-envelope",

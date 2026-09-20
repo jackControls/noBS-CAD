@@ -812,6 +812,10 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/machine-design/concepts/shafts-keys-retaining-rings.md"),
     },
     KnowledgeFile {
+        path: "machine-design/concepts/springs-couplings.md",
+        text: include_str!("../../../knowledge/machine-design/concepts/springs-couplings.md"),
+    },
+    KnowledgeFile {
         path: "machine-design/taxonomy.md",
         text: include_str!("../../../knowledge/machine-design/taxonomy.md"),
     },
@@ -1496,6 +1500,23 @@ mod tests {
     }
 
     #[test]
+    fn springs_couplings_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "springs couplings free length solid height",
+            "jaw coupling Oldham misalignment hub bore",
+            "compression spring seat OD clearance",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("springs-couplings")),
+                "expected springs-couplings for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn agent_mcp_workflow_ops_searchable() {
         let store = HelpStore::bundled();
         for query in [
@@ -1569,6 +1590,7 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/hole-wizard-vs-modeled.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/power-screws-lead-screws.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/shafts-keys-retaining-rings.md"));
+        assert!(files.iter().any(|f| f.path == "machine-design/concepts/springs-couplings.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));
         assert!(knowledge_file_by_uri("nbcad://knowledge/../etc/passwd").is_none());

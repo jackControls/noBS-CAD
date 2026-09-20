@@ -101,3 +101,4 @@ Related: [locating schemes](../machine-design/concepts/locating-scheme-dof.md),
 [tolerance stack-up intro](../machine-design/concepts/tolerance-stackup-intro.md).
 
 Shaft steps, keys, and retaining-ring grooves: [shafts, keys, and retaining rings](../machine-design/concepts/shafts-keys-retaining-rings.md).
+Spring seats and shaft couplings: [springs and couplings](../machine-design/concepts/springs-couplings.md).
