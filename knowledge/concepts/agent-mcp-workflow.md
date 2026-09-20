@@ -5,7 +5,7 @@ description: Preferred cad_help loop, soft focus, inspect between writes, topolo
 status: draft
 updated: 2026-09-20
 topics: mcp, workflow, modeling, sessions
-keywords: cad_help, solid_scene, cad_list_all_tools, solid_edit, topology id, headless, cad_attach, mm
+keywords: cad_help, solid_scene, cad_list_all_tools, solid_edit, topology id, headless, cad_attach, mm, geometry naming, body name
 related_recipes: fillet-basics, mounting-plate, angle-bracket
 ---
 
@@ -133,7 +133,9 @@ Design package scripts: keep one authoritative `VERSION` /
 `DESIGN_VERSION` string; for working designs prefer `design_vM_N.nbcad.jsonc`
 (version in filename **and** inside JSONC metadata), prune prior
 `design_v*.nbcad.jsonc` (and leftover `gen_v*.py`) when cutting — see
-[design VERSION / JSONC scripts](design-version-scripts.md).
+[design VERSION / JSONC scripts](design-version-scripts.md). Name bodies /
+features / critical faces with role nouns and verify via `solid_scene` — see
+[geometry naming](geometry-naming.md).
 
 ## Export format (AM)
 
@@ -150,4 +152,5 @@ Role-based clearances and fit coupons beat a single global XY offset — see
 Related: [MCP harness](mcp-harness.md), [research before commit](research-before-commit.md),
 [validate before show](validate-before-show.md),
 [design VERSION / JSONC scripts](design-version-scripts.md),
+[geometry naming](geometry-naming.md),
 [STEERABLE_MCP](../../docs/agentic/STEERABLE_MCP.md).

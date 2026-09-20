@@ -84,4 +84,5 @@ See [goals](../../docs/goals.md) for the accepted direction and
 [proposed architecture](../../docs/proposed-architecture.md) for ideas that
 have not shipped. Related: [AM supports / overhangs](../machine-design/concepts/am-supports-overhangs.md),
 [validate before show](validate-before-show.md),
-[MCP workflow](agent-mcp-workflow.md).
+[MCP workflow](agent-mcp-workflow.md),
+[geometry naming](geometry-naming.md).

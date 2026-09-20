@@ -50,4 +50,5 @@ packaged Bevy differ.
 - [AM snap-fits](../machine-design/concepts/am-snap-fit.md) section shot when clips/seats matter
 - [Assembly interference check](assembly-interference.md) for multi-body poses
 
-Related: [export and print](export-print.md), [MCP harness](mcp-harness.md).
+Related: [export and print](export-print.md), [MCP harness](mcp-harness.md),
+[geometry naming](geometry-naming.md).

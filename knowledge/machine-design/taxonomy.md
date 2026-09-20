@@ -113,6 +113,7 @@ Provenance: [SOURCES](SOURCES.md). Browse note:
 | Hole feature vs modeled / patterns | **seeded** | `machine-design.concepts.hole-wizard-vs-modeled` — [hole-wizard-vs-modeled](concepts/hole-wizard-vs-modeled.md) |
 | Export / print / 3MF vs STL | **seeded** | `concepts.export-print` — [export-print](../concepts/export-print.md) (pair with [adversarial-mesh-audit](../concepts/adversarial-mesh-audit.md)) |
 | Design VERSION / JSONC script naming | **seeded** | `concepts.design-version-scripts` — [design-version-scripts](../concepts/design-version-scripts.md) |
+| Geometry naming (bodies / faces / scripts / STEP) | **seeded** | `concepts.geometry-naming` — [geometry-naming](../concepts/geometry-naming.md) |
 
 ## Still thin / planned (honest)
 

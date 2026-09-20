@@ -124,5 +124,6 @@ If the product only supports a **single** script file today:
    same commit.
 
 Related: [MCP workflow](agent-mcp-workflow.md) (blank-document scripts),
+[geometry naming](geometry-naming.md) (body/feature/face names in JSONC),
 [export and print](export-print.md), Design Ops skill
 `mcp-vs-script-replay` (one-step MCP vs blank-doc script replay).

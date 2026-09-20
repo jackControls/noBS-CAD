@@ -1,3 +1,13 @@
+## 2026-09-20 — Geometry naming (bodies / faces / scripts / STEP)
+
+- Seeded `concepts.geometry-naming`: role-noun bodies, feature/history names
+  aligned with script steps, name mating/datum/export-critical faces/edges;
+  JSONC args/comments/set_name + VERSION/section headers/chunks; prefer
+  name-preserving STEP/export; one vocabulary script ↔ browser ↔ STEP.
+- VERIFY: solid_scene / cad_document shows intended names before next write.
+- Soft pointers: agent-mcp-workflow, design-version-scripts; index + taxonomy H;
+  Design Ops guidance; goldens H79+ + Rust BM25 queries.
+
 ## 2026-09-20 — Design VERSION / JSONC script golden path (correction)
 
 - Rewrote `concepts.design-version-scripts`: authoritative artifact is

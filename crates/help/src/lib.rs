@@ -656,6 +656,10 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
         text: include_str!("../../../knowledge/concepts/design-version-scripts.md"),
     },
     KnowledgeFile {
+        path: "concepts/geometry-naming.md",
+        text: include_str!("../../../knowledge/concepts/geometry-naming.md"),
+    },
+    KnowledgeFile {
         path: "concepts/gears.md",
         text: include_str!("../../../knowledge/concepts/gears.md"),
     },
@@ -1868,6 +1872,23 @@ mod tests {
     }
 
     #[test]
+    fn geometry_naming_searchable() {
+        let store = HelpStore::bundled();
+        for query in [
+            "name bodies faces script",
+            "geometry naming STEP",
+            "JSONC body names",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("geometry-naming")),
+                "expected geometry-naming for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn check_corpus_ok() {
         let n = check_corpus().expect("corpus check");
         assert!(n >= 50);
@@ -1884,6 +1905,7 @@ mod tests {
         assert!(files.iter().any(|f| f.path == "concepts/validate-before-show.md"));
         assert!(files.iter().any(|f| f.path == "concepts/adversarial-mesh-audit.md"));
         assert!(files.iter().any(|f| f.path == "concepts/design-version-scripts.md"));
+        assert!(files.iter().any(|f| f.path == "concepts/geometry-naming.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/alignment-nubs-pins.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-clamshell-retainer.md"));
         assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-heat-set-inserts.md"));
