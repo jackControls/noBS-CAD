@@ -4,7 +4,7 @@
 //! aiming the two endpoint picks.
 use nbcad_core::EdgeId;
 use nbcad_sketch::{
-    Constraint, EditDimensionRequest, EntityDto, OriginPlane, PlaneRef, ProjectedEdgeDto,
+    Constraint, EditDimensionRequest, EntityDto, EntityId, OriginPlane, PlaneRef, ProjectedEdgeDto,
     SketchSession, SnapTarget, Vec2,
 };
 
@@ -285,6 +285,92 @@ fn the_drag_direction_decides_which_half_the_arc_covers() {
 }
 
 #[test]
+fn deleting_an_arc_takes_its_own_endpoints_with_it() {
+    let mut session = face_session();
+    let result = session
+        .add_arc_center_locked(
+            v(0.0, 0.0),
+            v(5.0, 0.0),
+            v(0.0, 5.0),
+            false,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let arc_id = result.entities[0];
+    let endpoints: Vec<EntityId> = session
+        .dto()
+        .entities
+        .iter()
+        .filter(|entity| matches!(entity, EntityDto::Point { .. }))
+        .map(|entity| entity.id())
+        .collect();
+    assert_eq!(endpoints.len(), 2, "the arc owns two endpoint points");
+
+    let removed = session.delete_entities(&[arc_id]).unwrap();
+    for endpoint in endpoints {
+        assert!(
+            removed.removed.contains(&endpoint),
+            "the arc's endpoint {endpoint:?} must go with it, removed {removed:?}"
+        );
+        assert!(
+            session
+                .dto()
+                .entities
+                .iter()
+                .all(|entity| entity.id() != endpoint),
+            "deleting the arc leaves no loose point behind"
+        );
+    }
+
+    // A point the user related to something else is not the arc's to delete.
+    let mut shared = face_session();
+    let arc = shared
+        .add_arc_center_locked(
+            v(0.0, 0.0),
+            v(5.0, 0.0),
+            v(0.0, 5.0),
+            false,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let arc_id = arc.entities[0];
+    let endpoint = arc
+        .entities
+        .iter()
+        .copied()
+        .find(|id| {
+            shared
+                .dto()
+                .entities
+                .iter()
+                .any(|entity| entity.id() == *id && matches!(entity, EntityDto::Point { .. }))
+        })
+        .or_else(|| {
+            shared
+                .dto()
+                .entities
+                .iter()
+                .find(|entity| matches!(entity, EntityDto::Point { .. }))
+                .map(|entity| entity.id())
+        })
+        .expect("an arc endpoint point");
+    shared
+        .add_constraint(Constraint::Fix { entity: endpoint })
+        .unwrap();
+    let removed = shared.delete_entities(&[arc_id]).unwrap();
+    assert!(
+        !removed.removed.contains(&endpoint),
+        "a pinned endpoint belongs to the user's relation, not the arc"
+    );
+}
+
+#[test]
 fn a_typed_sweep_angle_becomes_a_driving_dimension() {
     let mut session = face_session();
     let result = session
@@ -318,6 +404,34 @@ fn a_typed_sweep_angle_becomes_a_driving_dimension() {
     assert_eq!(dimensions[0].kind, "angle");
     assert_eq!(dimensions[0].entities, vec![arc_id]);
     assert_eq!(dimensions[0].text, "90.00°");
+    // A typed negative angle picks the direction, not the printed value: the
+    // stored arc always sweeps counter-clockwise, so the dimension stays
+    // positive and the solve must not flip the arc onto the other side.
+    let mut cw = face_session();
+    let cw_result = cw
+        .add_arc_center_locked(
+            v(0.0, 0.0),
+            v(9.0, 0.0),
+            v(0.0, 9.0),
+            false,
+            None,
+            None,
+            Some("-90"),
+            Some(-std::f64::consts::FRAC_PI_2),
+        )
+        .unwrap();
+    let cw_id = cw_result.entities[0];
+    let (_, _, cw_start, cw_end) = arc_of(&cw, cw_id);
+    assert!(
+        (cw_end - cw_start - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+        "a typed -90 keeps a clockwise quarter: {cw_start} .. {cw_end}"
+    );
+    let mid = (cw_start + cw_end) / 2.0;
+    assert!(
+        mid < 0.0,
+        "the arc covers the clockwise side, got mid ray {mid}"
+    );
+    assert_eq!(cw.dto().dimensions[0].text, "90.00°");
     // ISO/ANSI puts an angular dimension inside the arc it measures.
     let reach = dimensions[0].text_pos.distance(center);
     assert!(

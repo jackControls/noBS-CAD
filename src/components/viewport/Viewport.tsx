@@ -7356,10 +7356,12 @@ export function Viewport() {
      * the same ray and the pointer never went anywhere. */
     const MIN_ARC_TRAVEL_RAD = 1e-6;
 
-    /** The sweep the run would commit. A typed angle locks the magnitude the
-     * way a typed radius locks the distance, and the pointer still chooses the
-     * direction; a positive typed angle with no travel of its own goes
-     * counter-clockwise. */
+    /** The sweep the run would commit. A typed angle is the sweep itself, sign
+     * included: the field shows a signed angle, so the arc has to be the one it
+     * names - typing -135 after dragging clockwise must not flip the arc to the
+     * other side because the pointer drifted past the start ray afterwards. The
+     * live preview shows the flip while typing, so the two can never disagree
+     * silently. Only the pointer's own travel is used when nothing is typed. */
     const resolvedArcSweep = (travel: number, lockedAngleDeg: number | undefined): number => {
       if (
         lockedAngleDeg === undefined
@@ -7368,11 +7370,7 @@ export function Viewport() {
       ) {
         return travel;
       }
-      const radians = Math.abs(lockedAngleDeg) * (Math.PI / 180);
-      const direction = Math.abs(travel) > MIN_ARC_TRAVEL_RAD
-        ? Math.sign(travel)
-        : Math.sign(lockedAngleDeg);
-      return direction * radians;
+      return lockedAngleDeg * (Math.PI / 180);
     };
 
     /** Accumulate the pointer's signed angular travel for the center arc, so

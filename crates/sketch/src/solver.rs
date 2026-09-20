@@ -1307,9 +1307,13 @@ fn build_equations(
             }
             Constraint::ArcAngle { entity, value } => {
                 // The arc stores its own start and end angles sweeping
-                // counter-clockwise, so the included angle is their difference.
+                // counter-clockwise, so the included angle is their difference
+                // and it is unsigned: a typed negative angle said which way the
+                // user wanted the arc, not that the stored span should go
+                // backwards. Taking the magnitude keeps the solver from flipping
+                // the arc onto the other side of its start ray.
                 if let Some(&(_, _, start_angle, end_angle)) = map.arcs.get(&entity) {
-                    let target = sketch.dim_value(&cid, value).to_radians();
+                    let target = sketch.dim_value(&cid, value).to_radians().abs();
                     push_lin(
                         &mut eqs,
                         cid,

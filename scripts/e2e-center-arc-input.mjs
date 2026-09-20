@@ -545,26 +545,62 @@ try {
   assert.equal(angleField.locked, true, 'typing locks the angle');
   assert.equal(angleField.value, '45');
   assert.equal((await dynField('radius')).locked, false, 'the radius stays live');
-  // A typed angle fixes the size; the pointer still picks which way round.
-  const beforeAngle = (await sketch()).entities.filter((entity) => entity.kind === 'arc').length;
-  await moveSketch(frame.center.x, frame.center.y - 4);
-  await clickSketch(frame.center.x, frame.center.y - 4);
-  await page.waitForFunction(
-    (count) =>
-      window.__appStore.getState().activeSketch.entities.filter(
-        (entity) => entity.kind === 'arc',
-      ).length === count + 1,
-    beforeAngle,
-  );
-  await cancel();
-  const lockedSweep = (await sketch()).entities.filter((entity) => entity.kind === 'arc').pop();
+  // The typed angle IS the sweep, sign included: the pointer was travelling
+  // clockwise while "45" was typed, and the arc must still be the
+  // counter-clockwise quarter the field named.
+  const commitCurrentAngle = async (waypoint) => {
+    const before = (await sketch()).entities.filter((entity) => entity.kind === 'arc').length;
+    await moveSketch(frame.center.x + waypoint.x, frame.center.y + waypoint.y);
+    await clickSketch(frame.center.x + waypoint.x, frame.center.y + waypoint.y);
+    await page.waitForFunction(
+      (count) =>
+        window.__appStore.getState().activeSketch.entities.filter(
+          (entity) => entity.kind === 'arc',
+        ).length === count + 1,
+      before,
+    );
+    await cancel();
+    return (await sketch()).entities.filter((entity) => entity.kind === 'arc').pop();
+  };
+  const lockedSweep = await commitCurrentAngle({ x: 0, y: -4 });
   assert.ok(
     Math.abs(lockedSweep.end_angle - lockedSweep.start_angle - Math.PI / 4) < 1e-6,
     `the typed angle sizes the sweep: ${lockedSweep.start_angle} .. ${lockedSweep.end_angle}`,
   );
   assert.ok(
-    (lockedSweep.start_angle + lockedSweep.end_angle) / 2 < 0,
-    'the drag direction still chooses the side the arc covers',
+    (lockedSweep.start_angle + lockedSweep.end_angle) / 2 > 0,
+    'a typed +45 stays counter-clockwise whatever the pointer did',
+  );
+  // The reported case: the pointer dragged clockwise, -45 typed, and then the
+  // pointer drifted back across the start ray before the click. The arc must
+  // follow the number, not that drift.
+  await arm('arcCenter');
+  await clickSketch(frame.center.x, frame.center.y);
+  await clickSketch(frame.center.x + 6, frame.center.y);
+  await moveSketch(frame.center.x, frame.center.y - 5);
+  const driftedAngle = await dynField('angle');
+  assert.ok(
+    Number(driftedAngle.value) < 0,
+    `the drag reads clockwise before typing, got ${driftedAngle.value}`,
+  );
+  await page.keyboard.press('Tab');
+  await page.waitForTimeout(120);
+  await page.keyboard.press('Tab');
+  await page.waitForTimeout(120);
+  assert.equal(await focusedField(), 'angle', 'Tab reaches the angle for the second arc');
+  await page.keyboard.type('-45', { delay: 40 });
+  await page.waitForTimeout(250);
+  angleField = await dynField('angle');
+  assert.equal(angleField.locked, true, 'the negative angle locks');
+  assert.equal(angleField.value, '-45');
+  const clockwiseSweep = await commitCurrentAngle({ x: 0, y: 6 });
+  assert.ok(
+    Math.abs(clockwiseSweep.end_angle - clockwiseSweep.start_angle - Math.PI / 4) < 1e-6,
+    `the typed -45 keeps its size: ${clockwiseSweep.start_angle} .. ${clockwiseSweep.end_angle}`,
+  );
+  assert.ok(
+    (clockwiseSweep.start_angle + clockwiseSweep.end_angle) / 2 < 0,
+    'a typed -45 stays clockwise',
   );
   // A typed angle is dimensioned like a typed radius: the annotation must
   // survive the commit so the sweep stays readable and editable.

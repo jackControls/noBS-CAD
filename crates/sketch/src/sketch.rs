@@ -162,9 +162,49 @@ impl Sketch {
                 break;
             }
         }
+        // An arc's endpoints are point entities of their own, glued to it by an
+        // internal ArcEndpointCoincident relation. Removing the arc would leave
+        // them behind as loose points, so drop the ones nothing else uses - a
+        // point shared with another arc, line, or user relation stays.
+        let survivors: Vec<Constraint> = self
+            .constraints
+            .iter()
+            .map(|(_, constraint)| *constraint)
+            .filter(|constraint| {
+                !constraint
+                    .referenced_entities()
+                    .iter()
+                    .any(|r| removed.contains(r))
+            })
+            .collect();
+        let orphaned: Vec<EntityId> = self
+            .constraints
+            .iter()
+            .filter_map(|(_, constraint)| match *constraint {
+                Constraint::ArcEndpointCoincident { point, arc, .. }
+                    if removed.contains(&arc) && !removed.contains(&point) =>
+                {
+                    Some(point)
+                }
+                _ => None,
+            })
+            .filter(|point| self.entity(*point).is_some())
+            .filter(|point| {
+                let held_by_entity = self.entities.iter().any(|(eid, entity)| {
+                    !removed.contains(eid) && entity.referenced_entities().contains(point)
+                });
+                let held_by_relation = survivors
+                    .iter()
+                    .any(|constraint| constraint.referenced_entities().contains(point));
+                !held_by_entity && !held_by_relation
+            })
+            .collect();
         self.entities.retain(|(eid, _)| !removed.contains(eid));
         self.constraints
             .retain(|(_, c)| !c.referenced_entities().iter().any(|r| removed.contains(r)));
+        for point in orphaned {
+            removed.extend(self.remove_entity(point));
+        }
         self.fix_targets
             .retain(|cid, _| self.constraints.iter().any(|(id, _)| id == cid));
         self.dim_params
@@ -619,6 +659,20 @@ impl Sketch {
                 Some(Entity::Circle { radius, .. } | Entity::Arc { radius, .. }) => {
                     Some(*radius * 2.0)
                 }
+                _ => None,
+            },
+            Constraint::ArcAngle { entity, .. } => match self.entity(entity) {
+                // The stored arc sweeps counter-clockwise, so its included
+                // angle is the positive remainder of start to end.
+                Some(Entity::Arc {
+                    start_angle,
+                    end_angle,
+                    ..
+                }) => Some(
+                    (end_angle - start_angle)
+                        .rem_euclid(std::f64::consts::TAU)
+                        .to_degrees(),
+                ),
                 _ => None,
             },
             Constraint::Angle { a, b, .. } => {

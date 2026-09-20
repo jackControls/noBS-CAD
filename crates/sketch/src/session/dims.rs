@@ -842,6 +842,26 @@ impl SketchSession {
                     return None;
                 }
                 let mode = self.sketch.dim_mode(&cid);
+                // A sweep dimension always reports the arc's real included
+                // angle: the stored arc is counter-clockwise, so a typed
+                // negative value fixes the direction, never the printed number.
+                if let Constraint::ArcAngle { .. } = c {
+                    if let Some(measured) = self.sketch.measure_dimension_constraint(*c) {
+                        let text = format!("{measured:.2}°");
+                        return Some(DimensionDto {
+                            constraint_id: cid,
+                            mode,
+                            kind: kind.to_string(),
+                            entities: c.referenced_entities(),
+                            param_id: None,
+                            param_name: None,
+                            param_expression: None,
+                            value: measured,
+                            text,
+                            text_pos: self.sketch.dim_placement(&cid).unwrap_or(Vec2::ZERO),
+                        });
+                    }
+                }
                 let (pid, param_name, param_expression, value) = match mode {
                     DimensionMode::Driving => {
                         let pid = self.sketch.dim_param(&cid)?;
