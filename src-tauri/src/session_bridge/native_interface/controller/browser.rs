@@ -223,8 +223,8 @@ pub(crate) fn reduce(
             } else {
                 NativeCommand::ClearSelection
             };
-            bridge.with_native_document_owner(engine, &action.context, || {
-                view::apply(engine, world, &action.context, command)
+            bridge.with_native_document_receipt(engine, &action.context, |revision| {
+                view::apply(engine, world, &action.context, revision, command)
             })
         }
         BrowserCommand::Expand(_) => {

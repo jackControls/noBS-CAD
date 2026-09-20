@@ -6523,6 +6523,20 @@ pub(crate) fn interface_view_snapshot(
     )
 }
 
+/// Camera motion samples never clone selection or assembly-pose vectors.
+pub(crate) fn interface_camera_snapshot(world: &World) -> (String, ViewportCamera) {
+    (world.resource::<ModelResource>().session_id.clone(), world.resource::<CameraResource>().camera)
+}
+
+pub(crate) fn interface_model_revision(world: &World) -> u64 {
+    world.resource::<ModelResource>().revision
+}
+
+pub(crate) fn interface_geometry(world: &World) -> super::ViewportGeometry<'_> {
+    let model = world.resource::<ModelResource>();
+    super::ViewportGeometry { scene:&model.scene, active_sketch:model.active_sketch.as_ref(), finished_sketches:&model.finished_sketches, instance_body_poses:&model.instance_body_poses }
+}
+
 pub(crate) fn interface_body_transform(
     world: &World,
     body_id: u64,

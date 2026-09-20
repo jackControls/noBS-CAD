@@ -9,6 +9,10 @@ use crate::{
     native_viewport::{self, ViewportCamera, ViewportModel, ViewportPresentation},
     state::AppState,
 };
+#[cfg(feature = "dev-bevy-host")]
+mod motion;
+#[cfg(feature = "dev-bevy-host")]
+pub(super) use motion::{advance, cancel, pending, poll, request};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ViewDirection {
@@ -41,7 +45,7 @@ impl ViewDirection {
             Self::Left => (Vec3::NEG_X, Vec3::Z),
             Self::Right => (Vec3::X, Vec3::Z),
             Self::Top => (Vec3::Z, Vec3::Y),
-            Self::Bottom => (Vec3::NEG_Z, Vec3::Y),
+            Self::Bottom => (Vec3::NEG_Z, Vec3::NEG_Y),
             Self::Isometric => (Vec3::new(1., -1., 1.).normalize(), Vec3::Z),
         }
     }
@@ -77,10 +81,14 @@ pub(super) fn apply(
     engine: &AppState,
     world: &mut World,
     owner: &DocumentContext,
+    revision: u64,
     command: NativeCommand,
 ) -> Result<Value, String> {
-    let (session, mut camera, mut presentation, size) =
-        native_viewport::interface_view_snapshot(world);
+    let (session, camera, mut presentation, size) = native_viewport::interface_view_snapshot(world);
+    #[cfg(not(feature = "dev-bevy-host"))]
+    let mut camera = camera;
+    #[cfg(feature = "dev-bevy-host")]
+    let _ = size;
     if session != owner.document_id {
         return Err("The rendered document is not current".into());
     }
@@ -108,18 +116,35 @@ pub(super) fn apply(
             presentation.selected_occurrence_id = occurrence_id;
         }
         NativeCommand::Fit | NativeCommand::Orient(_) => {
-            let direction = match command {
-                NativeCommand::Orient(direction) => Some(direction),
-                _ => None,
-            };
-            camera = fit_camera(
-                world,
-                &model_snapshot(engine),
-                &presentation,
-                camera,
-                size,
-                direction,
-            )?;
+            #[cfg(feature = "dev-bevy-host")]
+            {
+                let view = match command {
+                    NativeCommand::Orient(direction) => format!("{direction:?}").to_lowercase(),
+                    _ => "current".into(),
+                };
+                return request(
+                    world,
+                    owner,
+                    revision,
+                    &json!({"view":view,"fit":true,"duration_ms":300,"expires_ms":crate::session_bridge::now_ms()+5000}),
+                );
+            }
+            #[cfg(not(feature = "dev-bevy-host"))]
+            {
+                let _ = revision;
+                let direction = match command {
+                    NativeCommand::Orient(direction) => Some(direction),
+                    _ => None,
+                };
+                camera = fit_camera(
+                    world,
+                    &model_snapshot(engine),
+                    &presentation,
+                    camera,
+                    size,
+                    direction,
+                )?;
+            }
         }
         _ => return Err("The requested command is not a view operation".into()),
     }
@@ -155,13 +180,42 @@ fn visible_bounds(
     model: &ViewportModel,
     presentation: &ViewportPresentation,
 ) -> Option<Bounds> {
+    target_bounds(world, model.into(), presentation, Target::All)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Target {
+    All,
+    Body(u64),
+    Component(u64),
+    ActiveSketch,
+}
+fn target_bounds(
+    world: &World,
+    model: native_viewport::ViewportGeometry<'_>,
+    presentation: &ViewportPresentation,
+    target: Target,
+) -> Option<Bounds> {
     let mut bounds = None;
     for body in &model.scene.bodies {
+        if target == Target::ActiveSketch || matches!(target, Target::Body(id) if body.id.0 != id) {
+            continue;
+        }
         if presentation.hidden_body_ids.contains(&body.id.0) {
             continue;
         }
         let occurrences = native_viewport::interface_visible_occurrences(world, body.id.0);
         for occurrence in occurrences {
+            if let Target::Component(id) = target {
+                if !model.instance_body_poses.iter().any(|p| {
+                    p.component_id.0 == id
+                        && p.body_id == body.id
+                        && Some(p.occurrence_id.0) == occurrence
+                        && p.visible
+                }) {
+                    continue;
+                }
+            }
             let transform = native_viewport::interface_body_transform(world, body.id.0, occurrence);
             for point in body.mesh.positions.chunks_exact(3) {
                 Bounds::add(
@@ -173,7 +227,14 @@ fn visible_bounds(
     }
     // Active sketch coordinates have their real support basis. Circle/arc
     // boxes are conservative; spline bounds use the engine's tessellation.
-    if let Some(sketch) = &model.active_sketch {
+    let sketches = model
+        .active_sketch
+        .into_iter()
+        .chain(model.finished_sketches.iter().filter(|s| {
+            target == Target::All && !presentation.hidden_sketch_names.contains(&s.name)
+        }))
+        .filter(|_| matches!(target, Target::All | Target::ActiveSketch));
+    for sketch in sketches {
         use nbcad_sketch::EntityDto;
         let mut add = |x: f64, y: f64| {
             Bounds::add(

@@ -185,3 +185,13 @@ before allocating IDs, including both grid counts and all selected source bodies
 `cargo xtask test-mcp native-pattern` checks these rendered controls, exact placements,
 invalid inputs, scrolling, editing, Cancel, Undo/Redo, capture and Save. Kernel tests
 also verify volumes, reference ownership and exact document restoration.
+
+Native camera controls and MCP view requests share timed Bevy transitions. Fit,
+orientation, full/partial orbit and body/component/active-sketch framing use the
+rendered geometry and solved occurrence poses. Framing borrows meshes; animation
+samples only the camera. Requests retain their document/revision and wait for the
+final frame. Manual camera changes, replaced commands, model/input changes and
+window close cancel the old motion without overwriting newer input. Full turns
+sample the complete path even though their endpoints coincide. The `native-view`
+MCP fixture checks all six orthographic directions, ISO fit, timed orbit receipts,
+background/foreground, posed components and active-sketch focus, capture and Save.

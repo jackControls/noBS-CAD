@@ -547,9 +547,9 @@ pub(crate) fn reduce_action(
             Ok(finish_mutation(engine, bridge, world, &operation, result))
         }
         command => {
-            bridge.with_native_document_owner(engine, &action.context, || {
+            bridge.with_native_document_receipt(engine, &action.context, |revision| {
                 handle.validate_action(action)?;
-                view::apply(engine, world, &action.context, command)
+                view::apply(engine, world, &action.context, revision, command)
             })
         }
     }

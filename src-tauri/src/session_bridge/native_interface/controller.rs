@@ -579,6 +579,17 @@ fn update_inner(
     if worker::busy(world) {
         return maintain_busy_window(world, handle, state);
     }
+    if state.close_pending || state.exit_after_receipt {
+        view::cancel(world, "Camera transition interrupted by the window close request");
+    }
+    if view::pending(world) {
+        let owner = bridge.native_document_context(&state.window_id, engine)?;
+        bridge.with_native_document_receipt(engine, &owner, |revision| {
+            view::advance(world, &workspace::DocumentReceipt { owner: owner.clone(), revision });
+            Ok(())
+        })?;
+        if view::pending(world) { handle.request_redraw(); }
+    }
     synchronize(world, handle, services, state)
 }
 
@@ -903,30 +914,9 @@ fn apply_control(
         return Err("Native control request expired".into());
     }
     let Some(ui) = request.get("ui") else {
-        // Do not silently ignore presentation targets/orbits that have not
-        // yet migrated: a receipt must describe the operation actually run.
-        if request.get("target").is_some()
-            || request.get("body_id").is_some()
-            || request.get("component_id").is_some()
-            || request.get("orbit_degrees").is_some()
-        {
-            return Err("This view target or orbit is not yet migrated to the native host".into());
-        }
-        let view = request["view"].as_str().ok_or("Missing view direction")?;
-        return services
-            .bridge
-            .with_native_document_owner(&services.engine, owner, || {
-                if view == "current" && request["fit"] == false {
-                    let (_, camera, _, _) = native_viewport::interface_view_snapshot(world);
-                    return Ok(json!({"camera":camera}));
-                }
-                let command = if view == "current" {
-                    NativeCommand::Fit
-                } else {
-                    NativeCommand::Orient(ViewDirection::parse(view)?)
-                };
-                view::apply(&services.engine, world, owner, command)
-            });
+        return services.bridge.with_native_document_receipt(&services.engine, owner, |revision| {
+            view::request(world, owner, revision, request)
+        });
     };
     match ui["action"].as_str().unwrap_or("") {
         "inspect" => Ok(Value::Null),
@@ -1623,6 +1613,13 @@ fn complete_control(world: &mut World) {
     let handle = world.resource::<NativeInterfaceHandle>().clone();
     world.resource_scope(|world, mut state: Mut<Controller>| {
         if let Some(mut pending) = state.pending.take() {
+            if let Some(id) = pending.response["value"]["camera_pending"].as_u64() {
+                match view::poll(world, id) {
+                    None => { state.pending = Some(pending); handle.request_redraw(); return; }
+                    Some(Ok(value)) => { pending.response["value"] = value; pending.presentation_deadline = now_ms().saturating_add(2_000); }
+                    Some(Err(error)) => { pending.response["status"] = json!("failed"); pending.response["error"] = json!(error); pending.response["value"] = Value::Null; }
+                }
+            }
             if pending.response["value"]["capture_pending"] == true {
                 match capture::poll(world) {
                     None => {

@@ -26,6 +26,9 @@ pub mod ui;
 pub(crate) use platform::interface_scene_fixture;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub(crate) use platform::{
+    interface_camera_snapshot,
+    interface_geometry,
+    interface_model_revision,
     apply_interface_model, apply_interface_edit_model, apply_interface_preview, apply_interface_view, interface_body_transform,
     interface_pick, interface_preview_revision, interface_preview_snapshot, interface_sketch_point,
     interface_view_snapshot, interface_visible_occurrences, interface_world_point,
@@ -662,6 +665,20 @@ pub(crate) struct ViewportModel {
     pub body_appearances: Vec<BodyAppearance>,
     pub body_poses: Vec<BodyPoseDto>,
     pub instance_body_poses: Vec<InstanceBodyPoseDto>,
+}
+
+/// Borrowed rendered geometry for framing; this also includes isolated feature
+/// edit inputs, and never copies the meshes to move a camera.
+pub(crate) struct ViewportGeometry<'a> {
+    pub scene: &'a SolidSceneDto,
+    pub active_sketch: Option<&'a SketchDto>,
+    pub finished_sketches: &'a [SketchDto],
+    pub instance_body_poses: &'a [InstanceBodyPoseDto],
+}
+impl<'a> From<&'a ViewportModel> for ViewportGeometry<'a> {
+    fn from(model: &'a ViewportModel) -> Self {
+        Self { scene:&model.scene, active_sketch:model.active_sketch.as_ref(), finished_sketches:&model.finished_sketches, instance_body_poses:&model.instance_body_poses }
+    }
 }
 
 /// Remaining-stock surface already transformed into model/world coordinates.
