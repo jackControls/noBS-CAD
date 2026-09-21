@@ -12,18 +12,18 @@ sources: kittycad-materials, doe-3d, nwtc-guns-dfm, materials-project
 
 # Materials vocabulary
 
-Defines **words** for CAD-time decisions — not certified allowables. Prefer a
-named **process + grade/condition** over viewport metal color or filament
-appearance. Materials Project is crystalline DFT data, not shop steel charts.
-KittyCAD JSON is a *schema pattern* only (`kittycad-materials`). Filament
-appearance in a manufacturing catalog is not an engineering allowables table.
+CAD-time **E / Sy / Sut / hardness / CTE / anisotropy** vocabulary — **roles
+only**, not certified allowables. Do **not** invent Sy/Sut/E charts or scrape
+MatWeb / MakeItFrom into Help — selection/allowables tables stay **planned**.
+Prefer a named **process + grade/condition** over viewport metal color or
+filament appearance.
 
 **Attribution:** process-first / buy-before-invent habits from DOE Module 3D
 (`doe-3d`, public domain) and NWTC Guns DFM distill (`nwtc-guns-dfm`,
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). Open datasets
 (`kittycad-materials`, `materials-project`) are **patterns or computed props**,
-not drawing allowables. Do **not** invent Sy/Sut/E charts or scrape MatWeb /
-MakeItFrom into Help — leave selection/allowables tables **planned**.
+not drawing allowables. Materials Project is crystalline DFT data, not shop
+steel charts; KittyCAD JSON is a *schema pattern* only.
 
 ## Vocabulary (roles for discovery)
 
@@ -94,11 +94,15 @@ reopen VERIFY; do not patch Sy from hardness or blog charts.
 | Stiffness / deflection | Talk **E** and geometry; do not say “stronger plastic” |
 | Permanent set / proof | Named **Sy** from grade sheet or coupon |
 | Wear / machinability feel | **Hardness** as proxy — still VERIFY Sy when load-critical |
-| FDM bracket / strap | Anisotropic plan: bed face + shells; coupon load path |
+| FDM bracket / strap | Anisotropic plan: bed face + shells; coupon load path; note anisotropy when load-critical |
+| Filament / resin pick | Name process notes (nozzle, temp, orientation) before locking ABS vs PETG |
+| Alloy / grade callout | Stock or datasheet text — viewport metal color is display only |
 | Mixed metal + plastic stack | Name **CTE** and clamp/locate so stacks can move |
 | Mystery “strong filament” | Buy the machine element; print the mount |
 | Untitled MPa on a drawing | Stop — cite datasheet or mark educational and remove from title block |
 | Allowables / selection chart | Leave planned — do not invent or scrape MatWeb into Help |
+| Open dataset / KittyCAD JSON | Use as a **pattern** only — not certified allowables |
+| Teaching / notebook number | Mark **educational**; keep drawing allowables on a cited datasheet |
 
 ## Classes you will specify (coupled to process)
 
@@ -112,36 +116,17 @@ When the class is plastic/AM, open [AM thin walls](am-thin-walls.md),
 [DFM process guidelines](dfm-process-guidelines.md) for the cut/form family
 before inventing exotic alloys.
 
-## Preferred material callouts
+## Allowables honesty (before quoting a number)
 
-- Name filament/resin with process notes (nozzle, temp, orientation) before locking ABS vs PETG
-- Keep help-page teaching ranges in the notebook; put drawing allowables only from a cited datasheet
-- Specify alloy/grade/temper from stock or datasheet text — viewport metal color is display only
-- Mark print parts as anisotropic in notes when load-critical; point at orientation + coupon
+Materials **vocabulary** is not an allowables table:
 
-## Open data rules
-
-- Prefer cited, licensed datasets (for example KittyCAD `material-properties`,
-  Apache-2.0) as a **pattern**, not as certified allowables.
-- Prefer link-out datasheets; keep MatWeb / MakeItFrom outside the repo.
-- Educational ranges are not design allowables. Say so on the page and in
-  answers that quote numbers.
-- Materials Project / OQMD / COD are crystalline or DFT complements — not shop
-  steel charts (`materials-project` in [SOURCES](../SOURCES.md)).
-
-## Allowables honesty checklist
-
-Materials **vocabulary** is not an allowables table. Before quoting a number:
-
-1. **Name the dataset** (vendor datasheet, ASTM/ISO grade sheet, KittyCAD JSON pattern) — prefer a cited source over “someone said 70 MPa.”
+1. **Name the dataset** — vendor datasheet, ASTM/ISO grade sheet, or KittyCAD JSON *pattern* (not “someone said 70 MPa”).
 2. **Say the condition** — heat treat, print orientation, moisture, temperature, strain rate.
 3. **Separate E / Sy / Sut / fatigue** — prefer tensile data over hardness-as-Sy.
-4. **Prefer cited datasheets / licensed datasets** over MatWeb/MakeItFrom scrapes in the repo or drawing title block.
-5. **Mark educational ranges** as educational; shipping allowables come from the responsible engineer’s approved source.
+4. **Keep MatWeb / MakeItFrom out** of the repo and title block; link-out datasheets only ([SOURCES](../SOURCES.md)).
+5. **Mark educational ranges**; shipping allowables come from an approved source.
 6. **Couple material ↔ process** — FDM PETG ≠ injection PET; 6061-T6 bar ≠ cast “aluminum.”
-7. **CTE / galvanic / chemical** called out when mixed stacks exist.
-8. **Mass/density** only after envelope is real; density does not fix a bad load path.
-9. **Isotropic assumption stated** — or anisotropic load-vs-layer plan named for AM / composites.
+7. **CTE / galvanic / chemical** when mixed stacks exist; isotropic vs anisotropic assumption stated for AM / composites.
 
 ## Freeze gate
 

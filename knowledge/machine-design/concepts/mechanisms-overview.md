@@ -12,19 +12,17 @@ sources: mit-272, doe-3d
 
 # Mechanisms overview (CAD-time)
 
+**No AGMA / tooth / cam / belt / chain-pitch / Geneva-slot charts in Help** —
+VERIFY datasheets; this hub invents none ([taxonomy](../taxonomy.md) lists charts
+as planned/datasheet; cite [SOURCES](../SOURCES.md)). **Roles only** on this hub
+and its children.
+
 A **mechanism** turns named motion into named motion with constraints you can
 sketch, seat, and VERIFY. CAD owns envelopes, centers, joint axes, and
 interference at poses; catalogs and coupons own tooth forms, cam laws, belt
 profiles, and duty ratings. Prefer purchased machine elements when load, wear,
-or timing accuracy matters.
-
-**Roles only** on this hub and its children. **AGMA / tooth / cam / belt charts**
-stay on the datasheet — VERIFY; Help invents none ([taxonomy](../taxonomy.md)
-lists charts as planned/datasheet).
-
-This page is the **discoverability hub**. Detail lives on the linked Concepts.
-Do **not** invent tooth, cam, belt, chain-pitch, or Geneva-slot charts in Help —
-cite datasheets and [SOURCES](../SOURCES.md).
+or timing accuracy matters. This page is the **discoverability hub** — detail
+lives on the linked Concepts.
 
 **Attribution:** motion-class and element-family framing aligned with MIT OCW
 [2.72 Elements of Mechanical Design](https://ocw.mit.edu/courses/2-72-elements-of-mechanical-design-spring-2009/)

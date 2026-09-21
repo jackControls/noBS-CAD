@@ -12,9 +12,9 @@ sources: nwtc-guns-dfm, doe-3d, mit-272
 
 # Printed gears — FDM DFAM
 
+**No AGMA / tooth-thickness / module-strength charts in Help** — VERIFY the
+datasheet; this page invents none. Browse map: [taxonomy](../taxonomy.md).
 **Roles only** for printed teeth (orientation, min feature, backlash coupon).
-**AGMA / tooth-thickness / module-strength charts** stay on the datasheet —
-VERIFY; Help invents none. Browse map: [taxonomy](../taxonomy.md).
 
 Printing a **spur (or similar) gear** does not change gear **compatibility**
 rules — same module/DP and pressure angle still apply — but FDM adds

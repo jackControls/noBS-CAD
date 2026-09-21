@@ -12,16 +12,17 @@ sources: nwtc-guns-dfm, doe-3d, palni-dfma
 
 # AM snap-fits and living hinges
 
-Numeric clearance is necessary but not sufficient. A clip can pass a gap check
-and still print as a shard, or a deep seat can consume the cavity wall so the
-beam cannot flex.
+**Cantilever / latch / living-hinge roles** for FDM — name the class, beam
+thickness vs seat depth, and print orientation **before** inventing sizing
+numbers. Numeric clearance alone is not enough: a clip can pass a gap check and
+still print as a shard, or a deep seat can consume the cavity wall so the beam
+cannot flex. Heuristics only — confirm with material, nozzle, and a **coupon**.
 
 **Attribution:** DFAM habits adapted from Guns / NWTC LibreTexts DFM
 ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)), DOE Module 3D
 checklists (US government / public domain), and PALNI DFMA principles
-([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). Heuristics only —
-confirm with material, nozzle, and a **coupon**. Prefer link-out over pasting closed vendor
-design tables.
+([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). Prefer link-out
+over pasting closed vendor design tables.
 
 ## Name the mechanism class
 

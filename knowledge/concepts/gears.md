@@ -10,10 +10,10 @@ keywords: gear, spur gear, module, diametral pitch, pressure angle, tooth count,
 
 # Gear identification and compatible pairs
 
-**Roles only** for pair identity and mounting. **AGMA / tooth-thickness /
-strength charts** stay on the manufacturer datasheet or cited standard —
-VERIFY out-of-band; Help does not invent numeric tooth tables. Taxonomy notes
-charts as planned/datasheet: [machine-design taxonomy](../machine-design/taxonomy.md).
+**No AGMA / tooth-thickness / strength charts in Help** — VERIFY the manufacturer
+datasheet or cited standard; this page invents none. Taxonomy lists charts as
+planned/datasheet: [machine-design taxonomy](../machine-design/taxonomy.md).
+**Roles only** for pair identity and mounting.
 
 Use this when replacing an unknown gear, changing a ratio, or designing a printed
 gear pair through MCP. Record measurements separately from assumed specifications.

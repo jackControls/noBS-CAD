@@ -380,7 +380,7 @@
         "doe-3d",
         "mit-272"
       ],
-      "snippet": "Roles only for printed teeth (orientation, min feature, backlash coupon). AGMA / tooth-thickness / module-strength charts stay on the datasheet — VERIFY; Help invents none. Browse map: taxonomy. Printing a spur (or simi…"
+      "snippet": "No AGMA / tooth-thickness / module-strength charts in Help — VERIFY the datasheet; this page invents none. Browse map: taxonomy. Roles only for printed teeth (orientation, min feature, backlash coupon). Printing a spur …"
     },
     {
       "id": "machine-design.concepts.am-ribs-gussets-draft",
@@ -449,7 +449,7 @@
         "doe-3d",
         "palni-dfma"
       ],
-      "snippet": "Numeric clearance is necessary but not sufficient. A clip can pass a gap check and still print as a shard, or a deep seat can consume the cavity wall so the beam cannot flex. Attribution: DFAM habits adapted from Guns /…"
+      "snippet": "Cantilever / latch / living-hinge roles for FDM — name the class, beam thickness vs seat depth, and print orientation before inventing sizing numbers. Numeric clearance alone is not enough: a clip can pass a gap check a…"
     },
     {
       "id": "machine-design.concepts.am-supports-overhangs",
@@ -1309,7 +1309,7 @@
         "nwtc-guns-dfm",
         "materials-project"
       ],
-      "snippet": "Defines words for CAD-time decisions — not certified allowables. Prefer a named process + grade/condition over viewport metal color or filament appearance. Materials Project is crystalline DFT data, not shop steel chart…"
+      "snippet": "CAD-time E / Sy / Sut / hardness / CTE / anisotropy vocabulary — roles only, not certified allowables. Do not invent Sy/Sut/E charts or scrape MatWeb / MakeItFrom into Help — selection/allowables tables stay planned. Pr…"
     },
     {
       "id": "machine-design.concepts.mechanisms-belts-pulleys",
@@ -1562,7 +1562,7 @@
         "mit-272",
         "doe-3d"
       ],
-      "snippet": "A mechanism turns named motion into named motion with constraints you can sketch, seat, and VERIFY. CAD owns envelopes, centers, joint axes, and interference at poses; catalogs and coupons own tooth forms, cam laws, bel…"
+      "snippet": "No AGMA / tooth / cam / belt / chain-pitch / Geneva-slot charts in Help — VERIFY datasheets; this hub invents none (taxonomy lists charts as planned/datasheet; cite SOURCES). Roles only on this hub and its children. A m…"
     },
     {
       "id": "machine-design.concepts.power-screws-lead-screws",

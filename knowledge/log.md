@@ -1,3 +1,12 @@
+## 2026-09-20 — quality pass (snippet honesty + Prefer cruft)
+
+- AGMA/chart queries: openings on `gears`, `am-printed-gears-dfam`, and
+  `mechanisms-overview` now lead with **no chart in Help / VERIFY datasheet**.
+- `materials-vocabulary`: opening leads with E/Sy/Sut + MatWeb honesty; merged
+  duplicate Prefer / Preferred callouts / Open data into one Prefer table +
+  shorter allowables honesty.
+- `am-snap-fit`: opening leads with class / thickness / orientation before sizing.
+
 ## 2026-09-20 — dogfood weak areas (bearing seat ranking + chart honesty)
 
 - **Bearing seat ranking:** retitled/keywords `bearings-hubs-seats` for singular
