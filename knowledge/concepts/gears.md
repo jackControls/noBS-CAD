@@ -1,12 +1,19 @@
 ---
 type: Concept
 title: Gear identification and compatible pairs
-description: Spur gear module, diametral pitch, outside diameter, pressure angle, tooth count, backlash and shaft mounting.
+description: Gear pair identity roles — module/DP, PA, tooth count, backlash, mounting. AGMA / tooth-thickness / strength charts stay on the datasheet (VERIFY; Help invents none).
 status: stable
-updated: 2026-09-11
+updated: 2026-09-20
+topics: mechanisms, gears, machine-elements
+keywords: gear, spur gear, module, diametral pitch, pressure angle, tooth count, backlash, centre distance, AGMA, tooth thickness, tooth chart, datasheet VERIFY, compatible pairs
 ---
 
 # Gear identification and compatible pairs
+
+**Roles only** for pair identity and mounting. **AGMA / tooth-thickness /
+strength charts** stay on the manufacturer datasheet or cited standard —
+VERIFY out-of-band; Help does not invent numeric tooth tables. Taxonomy notes
+charts as planned/datasheet: [machine-design taxonomy](../machine-design/taxonomy.md).
 
 Use this when replacing an unknown gear, changing a ratio, or designing a printed
 gear pair through MCP. Record measurements separately from assumed specifications.

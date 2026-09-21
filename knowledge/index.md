@@ -17,7 +17,8 @@ Keep concepts **thin**. Longer material lives in the repository’s
 1. **This index** — product doctrine + machine-design door list (below).
 2. **[Machine-design taxonomy](machine-design/taxonomy.md)** — seeded vs planned
    topic map with **page ids** and titles (best map for “what exists?”).
-3. **Search** — MCP tool `cad_help` → `topics` (labels) → `search` → `get` by id;
+3. **Search** — MCP tool `cad_help` → `search` → `get` by id; `topics` is an
+   alpha label door (not a curated browse map — use taxonomy/index for that);
    or full-text in your editor over `knowledge/**`.
 4. **Full page** — open the Markdown file, or MCP `resources/read` on
    `nbcad://knowledge/...` (same text).
@@ -68,7 +69,7 @@ Ids are path-derived (`knowledge/` stripped, `/` → `.`). Use these with
 | Fit coupons / recipes hub | `machine-design.concepts.fit-coupons-recipes-map` | Fit coupons and recipes map |
 | Datum / sketch plane (MCP) | `machine-design.concepts.datum-sketch-plane-choice` | Datum / sketch plane choice |
 | Hole feature vs modeled | `machine-design.concepts.hole-wizard-vs-modeled` | Hole wizard vs modeled hole |
-| Bearings / hubs / seats | `machine-design.concepts.bearings-hubs-seats` | Bearings, hubs, and seats |
+| Bearings / hubs / seats | `machine-design.concepts.bearings-hubs-seats` | Bearing seat geometry — hubs / seats |
 | Shafts / keys / retaining rings | `machine-design.concepts.shafts-keys-retaining-rings` | Shafts, keys, and retaining rings |
 | Springs / couplings | `machine-design.concepts.springs-couplings` | Springs and couplings |
 | Drawing vs MBD / PMI | `machine-design.concepts.drawing-vs-mbd-pmi` | Drawing vs MBD / PMI |

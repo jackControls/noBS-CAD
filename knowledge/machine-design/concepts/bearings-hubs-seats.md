@@ -1,20 +1,21 @@
 ---
 type: Concept
-title: Bearings, hubs, and seats (CAD-time)
-description: Shaft/housing seats, fit roles, preload/spacer stacks, and load/speed/life as VERIFY to catalog — no invented L10 tables.
+title: Bearing seat geometry — hub seat, shaft seat, housing bore (CAD-time)
+description: CAD-time bearing seat, hub seat, shaft seat, and housing bore — fit roles, lead-in, abutment, preload/spacer stacks; L10/load/speed VERIFY to catalog (no invented tables).
 status: draft
 updated: 2026-09-20
 topics: machine-elements, bearings, shafts, fits, mechanisms, am, dfm
-keywords: bearing seat, housing bore, shaft seat, inner ring, outer ring, press fit hub, lead-in, shoulder, abutment, spacer stack, preload, float, L10 life, radial load, axial load, C0 C dynamic
+keywords: bearing seat, bearing bore, hub seat, housing seat, shaft seat, housing bore, journal seat, inner ring, outer ring, press fit hub, lead-in, shoulder, abutment, spacer stack, preload, float, L10 life, radial load, axial load, C0 C dynamic
 related_recipes: turbine-fit-coupons, vertical-axis-turbine, d-screw-vise-fit, revolved-spacer
 sources: nasa-bearing, mit-272, nist-gdt-2, doe-3d
 ---
 
-# Bearings, hubs, and seats (CAD-time)
+# Bearing seat geometry — hub seat, shaft seat, housing bore (CAD-time)
 
-CAD owns **seat geometry**, **fit roles**, and **axial stacks**. Catalogs own
-load ratings, speed limits, and life (L10) curves. Prefer a named purchased
-bearing with its drawing over inventing capacity tables in Help.
+**Bearing seat**, **hub seat**, **shaft seat**, and **housing bore** geometry
+belong here. CAD owns **seat geometry**, **fit roles**, and **axial stacks**.
+Catalogs own load ratings, speed limits, and life (L10) curves. Prefer a named
+purchased bearing with its drawing over inventing capacity tables in Help.
 
 **Attribution:** rotating-machinery role language aligned with public-domain
 NASA bearing notes (`nasa-bearing`); mechanisms context from MIT OCW 2.72
@@ -22,7 +23,7 @@ NASA bearing notes (`nasa-bearing`); mechanisms context from MIT OCW 2.72
 charts here — VERIFY against the bearing maker.
 
 Purchased SKU detail, shield/seal tradeoffs, and collar envelopes:
-[bearing supports / hubs / axial retention](../../concepts/bearing-stacks.md).
+[purchased bearing SKU stacks](../../concepts/bearing-stacks.md).
 
 ## Vocabulary
 
@@ -44,7 +45,7 @@ Purchased SKU detail, shield/seal tradeoffs, and collar envelopes:
    cutting seats.
 2. **Pick hardware** — record bearing designation, bore, OD, width, seal/shield,
    and supplier drawing. Collar/hub SKUs are separate envelopes
-   ([bearing-stacks](../../concepts/bearing-stacks.md)).
+   ([purchased bearing SKU stacks](../../concepts/bearing-stacks.md)).
 3. **Load / speed / life = VERIFY** — dynamic capacity, static capacity, limiting
    speed, and L10 (or equivalent) stay on the **catalog or a cited method**.
    Do not invent life tables in CAD or Help. Prefer a bearing that meets duty
@@ -100,7 +101,7 @@ Purchased SKU detail, shield/seal tradeoffs, and collar envelopes:
 
 - NASA rolling-element bearing notes (`nasa-bearing` in [SOURCES](../SOURCES.md))
 - MIT OCW 2.72 — mechanisms, gears, bearings (`mit-272`)
-- Product / SKU depth: [bearing-stacks](../../concepts/bearing-stacks.md)
+- Product / SKU depth: [purchased bearing SKU stacks](../../concepts/bearing-stacks.md)
 
 Related: [mechanisms overview](mechanisms-overview.md),
 [shafts, keys, and retaining rings](shafts-keys-retaining-rings.md),

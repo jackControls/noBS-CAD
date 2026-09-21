@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated": "2026-09-20",
+  "generated": "2026-09-21",
   "count": 47,
   "entries": [
     {
@@ -346,7 +346,7 @@
       "id": "machine-design.concepts.am-printed-gears-dfam",
       "path": "knowledge/machine-design/concepts/am-printed-gears-dfam.md",
       "title": "Printed gears — FDM DFAM",
-      "description": "FDM/printed gear DFAM — orientation vs tooth load, min tooth thickness vs nozzle, backlash as coupon; no invented module strength tables.",
+      "description": "Printed FDM gear DFAM roles — orientation, min tooth vs nozzle, backlash coupon. AGMA / tooth-thickness / module-strength charts: VERIFY datasheet (Help invents none).",
       "status": "draft",
       "topics": [
         "dfam",
@@ -365,7 +365,11 @@
         "nozzle width tooth",
         "backlash coupon",
         "module",
-        "spur print"
+        "spur print",
+        "AGMA",
+        "tooth chart",
+        "tooth thickness chart",
+        "datasheet VERIFY"
       ],
       "related_recipes": [
         "turbine-fit-coupons",
@@ -376,7 +380,7 @@
         "doe-3d",
         "mit-272"
       ],
-      "snippet": "Printing a spur (or similar) gear does not change gear compatibility rules — same module/DP and pressure angle still apply — but FDM adds orientation, min feature vs nozzle, and backlash-as-coupon decisions you must loc…"
+      "snippet": "Roles only for printed teeth (orientation, min feature, backlash coupon). AGMA / tooth-thickness / module-strength charts stay on the datasheet — VERIFY; Help invents none. Browse map: taxonomy. Printing a spur (or simi…"
     },
     {
       "id": "machine-design.concepts.am-ribs-gussets-draft",
@@ -578,8 +582,8 @@
     {
       "id": "machine-design.concepts.bearings-hubs-seats",
       "path": "knowledge/machine-design/concepts/bearings-hubs-seats.md",
-      "title": "Bearings, hubs, and seats (CAD-time)",
-      "description": "Shaft/housing seats, fit roles, preload/spacer stacks, and load/speed/life as VERIFY to catalog — no invented L10 tables.",
+      "title": "Bearing seat geometry — hub seat, shaft seat, housing bore (CAD-time)",
+      "description": "CAD-time bearing seat, hub seat, shaft seat, and housing bore — fit roles, lead-in, abutment, preload/spacer stacks; L10/load/speed VERIFY to catalog (no invented tables).",
       "status": "draft",
       "topics": [
         "machine-elements",
@@ -592,8 +596,12 @@
       ],
       "keywords": [
         "bearing seat",
-        "housing bore",
+        "bearing bore",
+        "hub seat",
+        "housing seat",
         "shaft seat",
+        "housing bore",
+        "journal seat",
         "inner ring",
         "outer ring",
         "press fit hub",
@@ -620,7 +628,7 @@
         "nist-gdt-2",
         "doe-3d"
       ],
-      "snippet": "CAD owns seat geometry, fit roles, and axial stacks. Catalogs own load ratings, speed limits, and life (L10) curves. Prefer a named purchased bearing with its drawing over inventing capacity tables in Help. Attribution:…"
+      "snippet": "Bearing seat, hub seat, shaft seat, and housing bore geometry belong here. CAD owns seat geometry, fit roles, and axial stacks. Catalogs own load ratings, speed limits, and life (L10) curves. Prefer a named purchased be…"
     },
     {
       "id": "machine-design.concepts.captive-nut-hex-trap",
@@ -1537,7 +1545,11 @@
         "CAD owns",
         "catalog owns",
         "navigate mechanisms",
-        "purchased profile"
+        "purchased profile",
+        "AGMA",
+        "tooth chart",
+        "cam chart",
+        "datasheet VERIFY"
       ],
       "related_recipes": [
         "vertical-axis-turbine",

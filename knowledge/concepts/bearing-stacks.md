@@ -1,23 +1,24 @@
 ---
 type: Concept
-title: Bearing supports, hubs, and axial retention
-description: Purchased bearing seats, press-fit hubs, shaft lead-in, shoulders, spacer stacks, and low-drag assembly for printed housings.
+title: Purchased bearing SKU stacks, collars, and axial retention
+description: Purchased bearing designation, shield/seal tradeoffs, collar envelopes, and axial retention stacks for printed housings — SKU depth (not CAD-time seat geometry).
 status: stable
 updated: 2026-09-20
 topics: bearings, machine-elements, fits, am, dfm
-keywords: bearing seat, press fit hub, lead-in, shaft shoulder, spacer stack, interference seat
+keywords: purchased bearing, bearing designation, bearing SKU, shield seal, collar envelope, axial retention, spacer stack, press fit hub, lead-in, shaft shoulder
 related_recipes: turbine-fit-coupons, vertical-axis-turbine, d-screw-vise-fit, revolved-spacer
 sources: nasa-bearing, nist-gdt-2, mit-272
 ---
 
-# Bearing supports, hubs, and axial retention
+# Purchased bearing SKU stacks, collars, and axial retention
 
-Use this when a printed housing supports a rotating shaft or when a collar,
-washer or spacer retains a bearing. Trace the radial and axial load paths and
-identify which surfaces rotate before setting clearances.
+Use this for **purchased bearing SKUs**, collar envelopes, shield/seal choices,
+and axial retention stacks. For **bearing seat** / **housing bore** / **hub seat**
+geometry and fit roles, prefer the CAD-time page:
+[bearing seat geometry — hubs / seats](../machine-design/concepts/bearings-hubs-seats.md).
 
-CAD-time golden path (load/speed/life VERIFY, shaft/housing seats, fit roles,
-preload/spacer stacks): [bearings, hubs, and seats (CAD-time)](../machine-design/concepts/bearings-hubs-seats.md).
+Trace the radial and axial load paths and identify which surfaces rotate before
+setting clearances when installing a purchased bearing in a printed housing.
 
 ## Choose real hardware
 
@@ -39,7 +40,7 @@ not interchangeable clearance envelopes.
 [Set-screw catalog](https://www.ruland.com/shaft-collars/set-screw-shaft-collar/msc-metric.html?p=4),
 [clamp collar](https://www.ruland.com/msp-8-f.html).
 
-## Press-fit hub and bearing seat (roles)
+## Press-fit hub and race fit roles (SKU)
 
 Name **which ring** is stationary and which rotates, then assign fit **roles**
 (not tribal “H7 everywhere”):
@@ -100,7 +101,7 @@ An ideal revolute joint proves a kinematic relationship, not bearing friction,
 alignment, retention or durability. See [additive workholding](additive-workholding.md)
 and [small generators](small-wind-generators.md) for related checks.
 
-Related: [bearings, hubs, and seats (CAD-time)](../machine-design/concepts/bearings-hubs-seats.md),
+Related: [bearing seat geometry (CAD-time)](../machine-design/concepts/bearings-hubs-seats.md),
 [mechanisms overview](../machine-design/concepts/mechanisms-overview.md),
 [fits & clearances](../machine-design/concepts/fits-clearances.md),
 [locating schemes](../machine-design/concepts/locating-scheme-dof.md),

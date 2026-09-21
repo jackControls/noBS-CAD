@@ -1235,12 +1235,35 @@ mod tests {
     }
 
     #[test]
-    fn press_fit_hub_bearing_seat_searchable() {
+    fn bearing_seat_geometry_ranks_hubs_seats() {
         let store = HelpStore::bundled();
         for query in [
+            "bearing seat",
+            "bearing bore",
+            "hub seat",
             "press fit hub bearing seat",
-            "hub lead-in shaft shoulder",
             "bearing bore journal shoulder",
+        ] {
+            let hits = store.search(query, Some(5));
+            assert!(
+                hits.iter().any(|h| h.id.contains("bearings-hubs-seats")),
+                "expected bearings-hubs-seats for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+            assert!(
+                hits[0].id.contains("bearings-hubs-seats"),
+                "expected bearings-hubs-seats top for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn purchased_bearing_sku_ranks_stacks() {
+        let store = HelpStore::bundled();
+        for query in [
+            "purchased bearing designation SKU shield seal",
+            "bearing SKU collar envelope axial retention",
         ] {
             let hits = store.search(query, Some(5));
             assert!(
@@ -1249,6 +1272,26 @@ mod tests {
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
         }
+    }
+
+    #[test]
+    fn press_fit_hub_bearing_seat_searchable() {
+        // Legacy alias: seat geometry prefers hubs-seats; SKU phrasing still hits stacks.
+        let store = HelpStore::bundled();
+        let seat_hits = store.search("press fit hub bearing seat", Some(5));
+        assert!(
+            seat_hits.iter().any(|h| h.id.contains("bearings-hubs-seats")),
+            "expected bearings-hubs-seats, got {:?}",
+            seat_hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+        );
+        let sku_hits = store.search("hub lead-in shaft shoulder collar", Some(5));
+        assert!(
+            sku_hits
+                .iter()
+                .any(|h| h.id.contains("bearing-stacks") || h.id.contains("bearings-hubs-seats")),
+            "expected bearing page for hub lead-in, got {:?}",
+            sku_hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1799,6 +1842,8 @@ mod tests {
             "bearing shaft housing seat preload",
             "L10 life load speed VERIFY catalog",
             "inner ring outer ring spacer stack fit roles",
+            "bearing seat",
+            "hub seat housing bore",
         ] {
             let hits = store.search(query, Some(5));
             assert!(

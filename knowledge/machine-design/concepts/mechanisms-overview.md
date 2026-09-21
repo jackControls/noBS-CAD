@@ -5,7 +5,7 @@ description: CAD-time mechanisms hub — name motion class, pick element family,
 status: draft
 updated: 2026-09-20
 topics: mechanisms, machine-elements, joints, assembly
-keywords: mechanism, motion class, element family, rotary to rotary, rotary to linear, intermittent, path generation, soft sync, linkage, gear, cam, belt, pulley, chain, sprocket, Geneva, indexer, mobility, DOF, center distance, envelope, CAD owns, catalog owns, navigate mechanisms, purchased profile
+keywords: mechanism, motion class, element family, rotary to rotary, rotary to linear, intermittent, path generation, soft sync, linkage, gear, cam, belt, pulley, chain, sprocket, Geneva, indexer, mobility, DOF, center distance, envelope, CAD owns, catalog owns, navigate mechanisms, purchased profile, AGMA, tooth chart, cam chart, datasheet VERIFY
 related_recipes: vertical-axis-turbine, d-screw-vise, d-screw-vise-fit, revolved-spacer, turbine-fit-coupons
 sources: mit-272, doe-3d
 ---
@@ -17,6 +17,10 @@ sketch, seat, and VERIFY. CAD owns envelopes, centers, joint axes, and
 interference at poses; catalogs and coupons own tooth forms, cam laws, belt
 profiles, and duty ratings. Prefer purchased machine elements when load, wear,
 or timing accuracy matters.
+
+**Roles only** on this hub and its children. **AGMA / tooth / cam / belt charts**
+stay on the datasheet — VERIFY; Help invents none ([taxonomy](../taxonomy.md)
+lists charts as planned/datasheet).
 
 This page is the **discoverability hub**. Detail lives on the linked Concepts.
 Do **not** invent tooth, cam, belt, chain-pitch, or Geneva-slot charts in Help —

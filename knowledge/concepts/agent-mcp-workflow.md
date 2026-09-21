@@ -22,10 +22,12 @@ tool stays callable.
 | Discover | `cad_help` `search` (default 5 / max 10 hits, ~280-char snippets) |
 | Open | `cad_help` `get` with a returned **id** |
 | Full page | `resources/read` on the selected `nbcad://knowledge/...` URI |
-| Browse labels | `cad_help` `topics` (page size 50) |
+| Browse labels | `cad_help` `topics` (page size 50; alpha labels, not a curated map) |
+| Curated browse map | [index](../index.md) + [machine-design taxonomy](../machine-design/taxonomy.md) (seeded vs planned ids) |
 
 Caps locked 2026-09-19. Sharper queries beat dumping pages. Preferred order:
-`search` → `get` → optional `resources/read` → datasheets → web. Standards
+`search` → `get` → optional `resources/read` → datasheets → web. For “what
+exists?”, prefer **taxonomy** / **index** over paging `topics`. Standards
 URLs in pages are citations.
 
 ## Soft focus

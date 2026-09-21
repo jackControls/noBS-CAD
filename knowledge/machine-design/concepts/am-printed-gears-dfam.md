@@ -1,16 +1,20 @@
 ---
 type: Concept
 title: Printed gears — FDM DFAM
-description: FDM/printed gear DFAM — orientation vs tooth load, min tooth thickness vs nozzle, backlash as coupon; no invented module strength tables.
+description: Printed FDM gear DFAM roles — orientation, min tooth vs nozzle, backlash coupon. AGMA / tooth-thickness / module-strength charts: VERIFY datasheet (Help invents none).
 status: draft
 updated: 2026-09-20
 topics: dfam, am, fdm, mechanisms, print
-keywords: printed gear, FDM gear, DFAM gear, tooth orientation, layer anisotropy gear, min tooth thickness, nozzle width tooth, backlash coupon, module, spur print
+keywords: printed gear, FDM gear, DFAM gear, tooth orientation, layer anisotropy gear, min tooth thickness, nozzle width tooth, backlash coupon, module, spur print, AGMA, tooth chart, tooth thickness chart, datasheet VERIFY
 related_recipes: turbine-fit-coupons, revolved-spacer
 sources: nwtc-guns-dfm, doe-3d, mit-272
 ---
 
 # Printed gears — FDM DFAM
+
+**Roles only** for printed teeth (orientation, min feature, backlash coupon).
+**AGMA / tooth-thickness / module-strength charts** stay on the datasheet —
+VERIFY; Help invents none. Browse map: [taxonomy](../taxonomy.md).
 
 Printing a **spur (or similar) gear** does not change gear **compatibility**
 rules — same module/DP and pressure angle still apply — but FDM adds

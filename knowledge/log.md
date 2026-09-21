@@ -1,3 +1,14 @@
+## 2026-09-20 — dogfood weak areas (bearing seat ranking + chart honesty)
+
+- **Bearing seat ranking:** retitled/keywords `bearings-hubs-seats` for singular
+  bearing seat / bore / hub seat; shifted `bearing-stacks` to purchased SKU /
+  collar / shield language so seat geometry queries top hubs-seats.
+- **AGMA / tooth-chart phrasing:** gears + printed-gears + mechanisms-overview
+  openings lead with roles-only / datasheet VERIFY (no invented charts).
+- **topics browse:** index + agent-mcp-workflow point agents to taxonomy/index
+  for curated browse (topics stays alpha labels).
+- Goldens H100–H104; Rust BM25 queries; rebuild search-index; MCP reinstall.
+
 ## 2026-09-20 — dogfood slop purge (prefer tone leftovers)
 
 - Folded leftover `## Anti-patterns` on mechanisms-overview + design-hygiene into
