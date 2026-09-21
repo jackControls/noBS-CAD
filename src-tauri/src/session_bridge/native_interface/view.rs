@@ -12,7 +12,11 @@ use crate::{
 #[cfg(feature = "dev-bevy-host")]
 mod motion;
 #[cfg(feature = "dev-bevy-host")]
+mod navigation;
+#[cfg(feature = "dev-bevy-host")]
 pub(super) use motion::{advance, cancel, pending, poll, request};
+#[cfg(feature = "dev-bevy-host")]
+pub(super) use navigation::navigate;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ViewDirection {

@@ -5,6 +5,9 @@ use std::{path::Path, process::Command};
 /// examples use the shared Rust interpreter and commented script files.
 pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     let suite = args.next().unwrap_or_else(|| "contracts".into());
+    if suite == "native-lifecycle" {
+        return crate::native_lifecycle_test::run(args);
+    }
     if suite == "native-sketch" {
         return crate::native_sketch_test::run(args);
     }
