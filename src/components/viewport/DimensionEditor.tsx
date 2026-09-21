@@ -3,7 +3,7 @@
  * Accepts plain values or formulas (`=50/2`, `=d1*2`) — Enter commits via
  * the engine (geometry re-solves live), Esc cancels.
  */
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { EngineError, getEngine } from '../../engine';
 import type { DimensionDto } from '../../engine/types';
 import { useTranslation } from '../../i18n';
@@ -35,7 +35,21 @@ function DimensionEditorSession({
   const { t } = useTranslation();
   const setDimEditor = useAppStore((s) => s.setDimEditor);
   const setConstraintDialog = useAppStore((s) => s.setConstraintDialog);
-  const [value, setValue] = useState(editor.initial);
+  const [draft, setDraft] = useState({ editor, value: editor.initial });
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Each opening supplies a new editor snapshot, even for the same dimension.
+  // Reset before committing the DOM so selection sees the new value. Ordinary
+  // sketch updates keep the snapshot and must not overwrite in-progress typing.
+  if (draft.editor !== editor) {
+    setDraft({ editor, value: editor.initial });
+  }
+
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    input?.focus({ preventScroll: true });
+    input?.select();
+  }, [editor]);
 
   const reportError = (err: unknown, fallback: string) => {
     const report = err instanceof EngineError
@@ -59,7 +73,7 @@ function DimensionEditorSession({
     try {
       const result = await engine.editDimension({
         constraint_id: editor.dimId,
-        text: value,
+        text: draft.value,
       });
       useAppStore.getState().setActiveSketch(result.sketch);
       setDimEditor(null);
@@ -93,10 +107,10 @@ function DimensionEditorSession({
     >
       {dimension.mode === 'driving' ? (
         <DimensionInput
+          ref={inputRef}
           allowExpressions
-          autoSelectKey={editor.dimId}
-          value={value}
-          onValueChange={setValue}
+          value={draft.value}
+          onValueChange={(value) => setDraft({ editor, value })}
           placeholder={t('dimEditor.placeholder')}
           title={t('dimEditor.title')}
           className="h-7 w-32 rounded border border-accent bg-header px-2 font-mono text-xs text-ink shadow-lg shadow-black/50 outline-none"
@@ -131,4 +145,3 @@ function DimensionEditorSession({
     </div>
   );
 }
-

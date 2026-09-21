@@ -1,7 +1,7 @@
 import {
   forwardRef,
+  useEffect,
   useImperativeHandle,
-  useLayoutEffect,
   useRef,
   type FocusEvent,
   type InputHTMLAttributes,
@@ -57,16 +57,21 @@ export const DimensionInput = forwardRef<HTMLInputElement, DimensionInputProps>(
     const pointerFocusRef = useRef(false);
     useImperativeHandle(ref, () => inputRef.current!, []);
 
-    useLayoutEffect(() => {
+    useEffect(() => {
       if (
         autoSelectKey === undefined
         || autoSelectKey === null
         || autoSelectKey === false
       ) return;
-      const input = inputRef.current;
-      if (!input || input.disabled) return;
-      input.focus({ preventScroll: true });
-      input.select();
+      // Callers can seed a geometry-derived value in their own effect after
+      // this key changes. Select only after that value has reached the DOM.
+      const frame = requestAnimationFrame(() => {
+        const input = inputRef.current;
+        if (!input || input.disabled) return;
+        input.focus({ preventScroll: true });
+        input.select();
+      });
+      return () => cancelAnimationFrame(frame);
     }, [autoSelectKey]);
 
     const selectOnFocus = (event: FocusEvent<HTMLInputElement>) => {
