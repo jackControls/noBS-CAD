@@ -145,18 +145,14 @@ import {
 import {
   angleOf,
   ccwSweep,
-  circleSpec,
-  circumcircle,
-  rectCorner,
-  rectCorners,
-  signedSweep,
-  slotCapsulePreview,
+  creationPreviewPositions,
   tessellateArc,
-  tessellateArcSweep,
   tessellateCircle,
   tessellateSpline,
   type ToolLocks,
 } from './toolPreview';
+import { advanceArcTravel, beginArcAngleText, beginArcTravel, resolvedArcSweep, type ArcTravel } from './arcSweep';
+import { ToolOperationGate } from './toolOperation';
 import { DynamicInputOverlay } from './DynamicInputOverlay';
 import { DimensionEditor } from './DimensionEditor';
 import { ContextMenu, type ContextMenuEntry } from '../ContextMenu';
@@ -4675,7 +4671,10 @@ export function Viewport() {
       return { entityId: null, constraintId };
     };
 
+    let sketchOperationContext = 0;
+    const toolOperations = new ToolOperationGate();
     const setupSketchScene = (sketch: SketchDto) => {
+      sketchOperationContext += 1;
       const { basis } = sketch;
       const u = new CAD.Vector3(...basis.u);
       const v = new CAD.Vector3(...basis.v);
@@ -4691,6 +4690,8 @@ export function Viewport() {
     };
 
     const teardownSketchScene = () => {
+      sketchOperationContext += 1;
+      previewSeq += 1;
       sketchGroup.visible = false;
       toolRun = null;
       dragging = null;
@@ -5484,6 +5485,7 @@ export function Viewport() {
       y: number;
     } | null = null;
     let previewSeq = 0;
+    let modStartSeq = 0;
     /** Last cursor position in sketch coords (commit/drag-end fallback). */
     let lastSketchPoint: Vec2 | null = null;
     /** Whether the pointer is currently over the viewport surface. A cursor
@@ -5562,7 +5564,15 @@ export function Viewport() {
     };
 
     /** Modify-tool pick state (fillet/chamfer picks; offset/trim/etc.). */
-    let modTool: { picks: number[]; rejected?: boolean } | null = null;
+    let modTool: { picks: number[]; rejected?: boolean; offsetCursor?: Vec2 } | null = null;
+    const offsetIntentCursor = (cursor: Vec2): Vec2 => {
+      if (!modTool) return cursor;
+      // Lock the chosen side when numeric/formula entry starts. Pointer drift
+      // must not reverse a typed offset; changing its sign is explicit intent.
+      if (dynTexts().distance !== undefined) modTool.offsetCursor ??= cursor;
+      else modTool.offsetCursor = undefined;
+      return modTool.offsetCursor ?? cursor;
+    };
     /** Picked entities render highlighted so modify tools feel alive (M1d). */
     const picksGroup = new CAD.Group();
     previewGroup.add(picksGroup);
@@ -5687,6 +5697,8 @@ export function Viewport() {
     };
 
     const endModTool = () => {
+      previewSeq += 1;
+      modStartSeq += 1;
       modTool = null;
       modCornerTarget = null;
       trimHover = null;
@@ -5708,7 +5720,7 @@ export function Viewport() {
       window.clearTimeout(livePreviewTimer);
       store.getState().setDynPending(true);
       livePreviewTimer = window.setTimeout(() => {
-        store.getState().setDynPending(false);
+        store.getState().setDynPending(toolOperations.pending);
         if (!lastSketchPoint) return;
         const state = store.getState();
         const synth = {
@@ -5774,30 +5786,25 @@ export function Viewport() {
       }
 
       if (state.activeTool === 'chamfer' && picks.length === 2) {
-        // Client-side presentation preview: cut points + connector line.
-        const sketch = state.activeSketch;
-        if (!sketch) return;
-        const byId = new Map(sketch.entities.map((e) => [e.id, e]));
-        const l1 = byId.get(picks[0]);
-        const l2 = byId.get(picks[1]);
-        if (l1?.kind !== 'line' || l2?.kind !== 'line') return;
-        const d = locks.distance ?? (parseFloat(texts.distance ?? '10') || 10);
-        const v = lineIntersection2d(l1, l2);
-        if (!v) {
-          setPreviewPositions(null);
-          return;
-        }
-        const cut1 = chamferPoint(v, l1, d);
-        const cut2 = chamferPoint(v, l2, d);
-        setPreviewPositions([cut1.x, cut1.y, 0.12, cut2.x, cut2.y, 0.12]);
-        showSnapMarker(operationPoint, 'point');
+        const text = texts.distance ?? (locks.distance !== undefined ? String(locks.distance) : '10');
+        void engine.previewCreation({ tool: 'chamfer', l1: picks[0], l2: picks[1], distance_text: text })
+          .then((preview) => {
+            if (seq !== previewSeq) return;
+            setPreviewPositions(creationPreviewPositions(preview.curves));
+            showSnapMarker(operationPoint, 'point');
+          })
+          .catch(() => {
+            if (seq !== previewSeq) return;
+            setPreviewPositions(null);
+            hideSnapMarker();
+          });
         return;
       }
 
       if (state.activeTool === 'offset' && picks.length === 1) {
         const text = texts.distance ?? (locks.distance !== undefined ? String(locks.distance) : '10');
         void engine
-          .offsetPreview({ entity: picks[0], distance_text: text, cursor })
+          .offsetPreview({ entity: picks[0], distance_text: text, cursor: offsetIntentCursor(cursor) })
           .then((p) => {
             if (seq !== previewSeq) return;
             renderPreviewCurve(p.curve);
@@ -6048,7 +6055,7 @@ export function Viewport() {
       /** Center arc only: the pointer's own angular travel since the start
        * pick. It is what disambiguates the two halves a pair of picks cannot
        * tell apart and what makes the preview match the stored arc. */
-      arc?: { lastAngle: number; travel: number };
+      arc?: ArcTravel;
     }
     let toolRun: ToolRun | null = null;
 
@@ -6210,20 +6217,6 @@ export function Viewport() {
       return [];
     };
 
-    /** Chamfer cut point: from the vertex toward the FARTHER endpoint (gen
-     * convention), at distance d. */
-    const chamferPoint = (
-      v: Vec2,
-      l: { start: Vec2; end: Vec2 },
-      d: number,
-    ): Vec2 => {
-      const da = Math.hypot(l.start.x - v.x, l.start.y - v.y);
-      const db = Math.hypot(l.end.x - v.x, l.end.y - v.y);
-      const far = db >= da ? l.end : l.start;
-      const ux = (far.x - v.x) / (Math.max(da, db) || 1);
-      const uy = (far.y - v.y) / (Math.max(da, db) || 1);
-      return { x: v.x + ux * d, y: v.y + uy * d };
-    };
 
     /** Dynamic-input field sets per tool (generic mechanism, M1c-ready). */
     const TOOL_FIELDS: Partial<Record<ToolId, string[]>> = {
@@ -6398,6 +6391,7 @@ export function Viewport() {
       allowMidpoint = false,
       excludePosition: Vec2 | null = null,
       suppressRelations = false,
+      allowProjected = allowMidpoint,
     ): { point: Vec2; target: SnapTarget } => {
       const state = store.getState();
       if (!state.palette.snap) return { point: p, target: { kind: 'none' } };
@@ -6556,6 +6550,8 @@ export function Viewport() {
             target: { kind: 'reference_midpoint', edge: bestReference.edge },
           };
         }
+      }
+      if (allowProjected) {
         // The projected support-face boundary is a snap locus, not just its
         // midpoint: any point along the face edge the sketch was created from
         // is a legitimate landing place for new geometry.
@@ -6956,8 +6952,8 @@ export function Viewport() {
     } => {
       // The Point tool resolves curve interiors/extensions itself; midpoint
       // references would override that choice (see SNAP_MIDPOINTS_BY_TOOL).
-      const acquired = acquireCreateSnap(p, false, null, suppressCarrier);
-      if (acquired.target.kind === 'point' || acquired.target.kind === 'origin') {
+      const acquired = acquireCreateSnap(p, false, null, suppressCarrier, true);
+      if (acquired.target.kind === 'point' || acquired.target.kind === 'origin' || acquired.target.kind === 'projected_edge') {
         return { position: acquired.point, coincidentWith: null, extension: null };
       }
       const state = store.getState();
@@ -7178,6 +7174,9 @@ export function Viewport() {
     };
 
     const endToolRun = () => {
+      startSeq += 1;
+      startSnapPending = false;
+      queuedCommit = null;
       toolRun = null;
       // A preview already in flight (its snap resolves a tick later) must not
       // paint the rubber band back after the run ended; bump the sequence so
@@ -7198,6 +7197,38 @@ export function Viewport() {
         titleKey: 'constraints.invalidTitle',
         message: error instanceof Error ? error.message : fallback,
       });
+    };
+
+    const submitToolOperation = <T extends { sketch: SketchDto },>(
+      owner: object,
+      currentOwner: () => object | null,
+      operation: () => Promise<T>,
+      after: (result: T) => void,
+      fail: (error: unknown) => void = reportToolError,
+    ) => {
+      const ticket = toolOperations.begin(owner, sketchOperationContext);
+      if (!ticket) return;
+      store.getState().setDynPending(true);
+      void (async () => {
+        let result: T;
+        try {
+          result = await operation();
+        } catch (error) {
+          const status = toolOperations.settle(ticket, sketchOperationContext, currentOwner());
+          if (status !== 'stale') store.getState().setDynPending(false);
+          if (status === 'current') {
+            fail(error);
+          }
+          return;
+        }
+        const status = toolOperations.settle(ticket, sketchOperationContext, currentOwner());
+        if (status === 'stale') return;
+        store.getState().setActiveSketch(result.sketch);
+        store.getState().setDynPending(false);
+        if (status === 'current') {
+          after(result);
+        }
+      })();
     };
 
     /**
@@ -7294,14 +7325,10 @@ export function Viewport() {
         endToolRun();
         return;
       }
-      const points = [...toolRun.points];
-      void engine
-        .addSpline({ points })
-        .then((r) => {
-          store.getState().setActiveSketch(r.sketch);
-          endToolRun();
-        })
-        .catch((error) => reportToolError(error, t('view.errorCannotCreateSpline')));
+      const run = toolRun;
+      const points = [...run.points];
+      submitToolOperation(run, () => toolRun, () => engine!.addSpline({ points }), endToolRun,
+        (error) => reportToolError(error, t('view.errorCannotCreateSpline')));
     };
 
     const applyPreview = (
@@ -7356,35 +7383,69 @@ export function Viewport() {
      * the same ray and the pointer never went anywhere. */
     const MIN_ARC_TRAVEL_RAD = 1e-6;
 
-    /** The sweep the run would commit. A typed angle is the sweep itself, sign
-     * included: the field shows a signed angle, so the arc has to be the one it
-     * names - typing -135 after dragging clockwise must not flip the arc to the
-     * other side because the pointer drifted past the start ray afterwards. The
-     * live preview shows the flip while typing, so the two can never disagree
-     * silently. Only the pointer's own travel is used when nothing is typed. */
-    const resolvedArcSweep = (travel: number, lockedAngleDeg: number | undefined): number => {
-      if (
-        lockedAngleDeg === undefined
-        || !Number.isFinite(lockedAngleDeg)
-        || Math.abs(lockedAngleDeg) < 1e-9
-      ) {
-        return travel;
-      }
-      return lockedAngleDeg * (Math.PI / 180);
+    /** Shared preview/commit state remembers the first deliberate direction. */
+    const accumulateArcTravel = (run: ToolRun, cursorAngle: number): number => {
+      return run.arc ? advanceArcTravel(run.arc, cursorAngle) : 0;
     };
 
-    /** Accumulate the pointer's signed angular travel for the center arc, so
-     * preview and commit agree on which half a drag describes. A drag longer
-     * than a full turn stays a full circle. */
-    const accumulateArcTravel = (run: ToolRun, cursorAngle: number): number => {
-      if (!run.arc) return 0;
-      const step = signedSweep(run.arc.lastAngle, cursorAngle);
-      run.arc.lastAngle = cursorAngle;
-      run.arc.travel = Math.max(
-        -Math.PI * 2,
-        Math.min(Math.PI * 2, run.arc.travel + step),
-      );
-      return run.arc.travel;
+    /** The identical request supplies both the preview and final mutation. */
+    type CreationIntent = { request: import('../../engine/types').CreationPreviewRequest; acquisition: { point: Vec2; target: SnapTarget } };
+    const resolvedCreationRequest = (run: ToolRun, point: Vec2, ctrl: boolean): CreationIntent | null => {
+      const locks = dynLocks();
+      const texts = dynTexts();
+      const acquisition = acquireToolSnap(run.tool, point, { suppressRelations: ctrl });
+      const hint = acquisition.point;
+      const intent = (request: import('../../engine/types').CreationPreviewRequest): CreationIntent => ({ request, acquisition });
+      const anchor = run.points[0];
+      switch (run.tool) {
+        case 'rect2pt': case 'rectCenter': return intent({
+          tool: 'rectangle', mode: run.tool === 'rect2pt' ? 'two_point' : 'center', anchor, corner_hint: hint,
+          width_mm: locks.width, height_mm: locks.height, width_text: texts.width, height_text: texts.height, ctrl_held: ctrl,
+        });
+        case 'circleCenter': case 'circle2pt': return intent({
+          tool: 'circle', mode: run.tool === 'circleCenter' ? 'center_diameter' : 'two_point', anchor, edge_hint: hint,
+          diameter_mm: locks.diameter, diameter_text: texts.diameter, ctrl_held: ctrl,
+        });
+        case 'arc3pt': return run.points.length < 2 ? null : intent({
+          tool: 'arc3_point', p1: anchor, p2: run.points[1], p3: hint, ctrl_held: ctrl,
+        });
+        case 'arcCenter': return run.points.length < 2 ? null : intent({
+          tool: 'arc_center', center: anchor, start: run.points[1], sweep: hint, ctrl_held: ctrl,
+          radius_mm: locks.radius, radius_text: texts.radius, angle_text: texts.angle,
+          sweep_rad: resolvedArcSweep(accumulateArcTravel(run, angleOf(anchor, hint)), locks.angle),
+        });
+        case 'slot': return intent({
+          tool: 'slot', mode: ({ centerToCenter: 'center_to_center', overall: 'overall', centerPoint: 'center_point' } as const)[store.getState().slotMode],
+          p1: anchor, p2: run.points[1], cursor: hint, width_mm: locks.width, width_text: texts.width, ctrl_held: ctrl,
+        });
+        default: return null;
+      }
+    };
+
+    const previewResolvedCreation = (intent: CreationIntent, seq: number, pos: { x: number; y: number }) => {
+      void engine?.previewCreation(intent.request).then((preview) => {
+        if (seq !== previewSeq) return;
+        setPreviewPositions(creationPreviewPositions(preview.curves));
+        // Screen-space acquisition can resolve a projected edge more narrowly
+        // than the engine's modeling tolerance. Keep its marker only when the
+        // resolved shape really passes through that same point.
+        const samePick = Math.hypot(preview.snapped_to.x - intent.acquisition.point.x, preview.snapped_to.y - intent.acquisition.point.y) < 1e-6;
+        const snap = preview.snap.kind === 'none' && samePick ? intent.acquisition.target : preview.snap;
+        showSnapMarker(preview.snapped_to, nativeSnapKind(snap.kind));
+        if ((intent.request.tool === 'arc_center' || intent.request.tool === 'arc3_point') && lastPointerClient) {
+          const arc = preview.curves.find(curve => curve.kind === 'arc');
+          const tangent = !intent.request.ctrl_held && arc?.kind === 'arc' && [arc.start_angle, arc.end_angle].some(angle =>
+            arcEndpointHasConnectedTangent(arc.center, { x: arc.center.x + arc.radius * Math.cos(angle), y: arc.center.y + arc.radius * Math.sin(angle) }));
+          const rect = surface.domElement.getBoundingClientRect();
+          showChips(tangent ? ['tangent'] : [], lastPointerClient.x - rect.left, lastPointerClient.y - rect.top);
+        }
+        store.getState().updateDynInput(Object.fromEntries(Object.entries(preview.values).map(([key, value]) => [key, value.toFixed(2)])), {}, pos.x, pos.y);
+      }).catch(() => {
+        if (seq !== previewSeq) return;
+        setPreviewPositions(null);
+        hideSnapMarker();
+        hideChips();
+      });
     };
 
     /** Live preview for the active tool run (per pointer move). */
@@ -7473,220 +7534,60 @@ export function Viewport() {
           break;
         }
         case 'rect2pt':
-        case 'rectCenter': {
-          const mode = run.tool === 'rect2pt' ? 'two_point' : 'center';
-          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
-            if (seq !== previewSeq) return;
-            const corner = rectCorner(mode, anchor, snap.snapped_to, locks);
-            const corners = rectCorners(mode, anchor, corner);
-            if (corners) {
-              const pos2: number[] = [];
-              for (const c of [...corners, corners[0]]) pos2.push(c.x, c.y, 0.12);
-              setPreviewPositions(pos2);
-              const preservesAcquisition =
-                Math.hypot(
-                  corner.x - snap.snapped_to.x,
-                  corner.y - snap.snapped_to.y,
-                ) < 1e-6;
-              showSnapMarker(
-                corner,
-                preservesAcquisition ? nativeSnapKind(snap.snap.kind) : 'grid',
-              );
-            } else {
-              setPreviewPositions(null);
-              hideSnapMarker();
-            }
-            store.getState().updateDynInput(
-              {
-                width: Math.abs(corner.x - anchor.x).toFixed(2),
-                height: Math.abs(corner.y - anchor.y).toFixed(2),
-              },
-              {},
-              pos.x,
-              pos.y,
-            );
-          });
-          break;
-        }
+        case 'rectCenter':
         case 'circleCenter':
         case 'circle2pt': {
-          const mode = run.tool === 'circleCenter' ? 'center_diameter' : 'two_point';
-          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
-            if (seq !== previewSeq) return;
-            const spec = circleSpec(mode, anchor, snap.snapped_to, locks);
-            if (spec) {
-              setPreviewPositions(tessellateCircle(spec.center, spec.radius, 0.12));
-              showSnapMarker(snap.snapped_to, nativeSnapKind(snap.snap.kind));
-            } else {
-              setPreviewPositions(null);
-              hideSnapMarker();
-            }
-            store.getState().updateDynInput(
-              { diameter: spec ? (spec.radius * 2).toFixed(2) : '0.00' },
-              {},
-              pos.x,
-              pos.y,
-            );
-          });
+          const request = resolvedCreationRequest(run, p, inferenceOverride);
+          if (request) previewResolvedCreation(request, seq, pos);
           break;
         }
-        case 'arc3pt': {
-          void snapCursorInfo(p, toolAcquiresMidpoints(run.tool), inferenceOverride).then((snap) => {
-            if (seq !== previewSeq) return;
-            const snapped = snap.snapped_to;
-            let tangentInference = false;
-            if (run.points.length === 1) {
-              setPreviewPositions([
-                anchor.x,
-                anchor.y,
-                0.12,
-                snapped.x,
-                snapped.y,
-                0.12,
-              ]);
-            } else {
-              const circle = circumcircle(run.points[0], run.points[1], snapped);
-              if (circle) {
-                const a0 = angleOf(circle.center, run.points[0]);
-                const a1 = angleOf(circle.center, snapped);
-                const am = angleOf(circle.center, run.points[1]);
-                const sweepFwd = ccwSweep(a0, a1);
-                const [s, e2] = ccwSweep(a0, am) <= sweepFwd ? [a0, a1] : [a1, a0];
-                setPreviewPositions(
-                  tessellateArc(circle.center, circle.radius, s, e2, 0.12),
-                );
-                tangentInference = !inferenceOverride
-                  && (
-                    arcEndpointHasConnectedTangent(circle.center, run.points[0])
-                    || arcEndpointHasConnectedTangent(circle.center, snapped)
-                  );
-              } else {
-                setPreviewPositions([
-                  anchor.x,
-                  anchor.y,
-                  0.12,
-                  snapped.x,
-                  snapped.y,
-                  0.12,
-                ]);
-              }
-            }
-            showSnapMarker(snapped, nativeSnapKind(snap.snap.kind));
-            const rect = surface.domElement.getBoundingClientRect();
-            showChips(
-              tangentInference ? ['tangent'] : [],
-              e.clientX - rect.left,
-              e.clientY - rect.top,
-            );
-          });
-          break;
-        }
+        case 'arc3pt':
         case 'arcCenter': {
-          // Midpoint/midpoint-locus acquisition matches the line tool: the
-          // support-face edge midpoint (triangle marker) and the projected
-          // face boundary are valid pick targets, not only points.
-          void snapCursorInfo(p, toolAcquiresMidpoints(run.tool), inferenceOverride).then((snap) => {
+          if (run.points.length >= 2) {
+            const intent = resolvedCreationRequest(run, p, inferenceOverride);
+            if (intent) previewResolvedCreation(intent, seq, pos);
+            break;
+          }
+          const acquired = acquireToolSnap(run.tool, p, { suppressRelations: inferenceOverride });
+          if (run.tool === 'arc3pt') {
+            setPreviewPositions([anchor.x, anchor.y, 0.12, acquired.point.x, acquired.point.y, 0.12]);
+            showSnapMarker(acquired.point, nativeSnapKind(acquired.target.kind));
+            break;
+          }
+          // The radius affordance is a circle, resolved by the same engine
+          // radius-lock policy as the eventual arc. Expressions are evaluated
+          // here too; incomplete/invalid input never falls back to a free pick.
+          const text = dynTexts().radius;
+          const diameterText = text === undefined ? undefined : `=2*(${text.replace(/^=/, '')})`;
+          void engine.previewCreation({
+            tool: 'circle', mode: 'center_diameter', anchor, edge_hint: acquired.point,
+            diameter_mm: locks.radius === undefined ? undefined : 2 * locks.radius,
+            diameter_text: diameterText, ctrl_held: inferenceOverride,
+          }).then((preview) => {
             if (seq !== previewSeq) return;
-            const snapped = snap.snapped_to;
-            const lockedRadius = locks.radius;
-            const radiusLocked = lockedRadius !== undefined && lockedRadius > 0;
-            let tangentInference = false;
-            if (run.points.length === 1) {
-              // Second pick: the radius follows the cursor until a value is
-              // typed. A locked radius keeps the cursor's direction only.
-              const r = radiusLocked
-                ? lockedRadius
-                : Math.hypot(snapped.x - anchor.x, snapped.y - anchor.y);
-              const aim = radiusLocked ? pointOnRadius(anchor, lockedRadius, snapped) : snapped;
-              if (r > 1e-6) setPreviewPositions(tessellateCircle(anchor, r, 0.12));
-              tangentInference = !inferenceOverride
-                && arcEndpointHasConnectedTangent(anchor, aim);
-              store.getState().updateDynInput(
-                { radius: r.toFixed(2) },
-                // The included angle only means something once the first
-                // endpoint has fixed the start ray.
-                { angle: false },
-                pos.x,
-                pos.y,
-              );
-            } else {
-              // Third pick: sweep direction. The sweep always keeps the
-              // authored/locked radius, so the cursor only chooses the angle.
-              const start = radiusLocked
-                ? pointOnRadius(anchor, lockedRadius, run.points[1])
-                : run.points[1];
-              const r = Math.hypot(start.x - anchor.x, start.y - anchor.y);
-              const sweep = radiusLocked ? pointOnRadius(anchor, r, snapped) : snapped;
-              const a0 = angleOf(anchor, start);
-              const a1 = angleOf(anchor, sweep);
-              // Follow the pointer's own travel. A pair of picks 180 degrees
-              // apart is the same rays either way round, so the path the
-              // cursor took is the only thing that says which half to draw.
-              const travel = accumulateArcTravel(run, a1);
-              const sweepRad = resolvedArcSweep(travel, locks.angle);
-              setPreviewPositions(tessellateArcSweep(anchor, r, a0, sweepRad, 0.12));
-              tangentInference = !inferenceOverride
-                && (
-                  arcEndpointHasConnectedTangent(anchor, start)
-                  || arcEndpointHasConnectedTangent(anchor, sweep)
-                );
-              store.getState().updateDynInput(
-                {
-                  radius: r.toFixed(2),
-                  angle: (sweepRad * 180 / Math.PI).toFixed(1),
-                },
-                {},
-                pos.x,
-                pos.y,
-              );
-            }
-            showSnapMarker(snapped, nativeSnapKind(snap.snap.kind));
+            setPreviewPositions(creationPreviewPositions(preview.curves));
+            showSnapMarker(preview.snapped_to, nativeSnapKind(preview.snap.kind));
+            const circle = preview.curves.find(curve => curve.kind === 'circle');
+            const tangent = !inferenceOverride && circle?.kind === 'circle' && arcEndpointHasConnectedTangent(circle.center, preview.snapped_to);
             const rect = surface.domElement.getBoundingClientRect();
-            showChips(
-              tangentInference ? ['tangent'] : [],
-              e.clientX - rect.left,
-              e.clientY - rect.top,
-            );
+            showChips(tangent ? ['tangent'] : [], e.clientX - rect.left, e.clientY - rect.top);
+            store.getState().updateDynInput({ radius: (preview.values.diameter / 2).toFixed(2) },
+              { angle: false }, pos.x, pos.y);
+          }).catch(() => {
+            if (seq !== previewSeq) return;
+            setPreviewPositions(null);
+            hideSnapMarker();
           });
           break;
         }
         case 'slot': {
-          const modeMap = { centerToCenter: 'center_to_center', overall: 'overall', centerPoint: 'center_point' } as const;
-          const mode = modeMap[store.getState().slotMode];
-          void snapCursorInfo(p, toolAcquiresMidpoints(run.tool), inferenceOverride).then((snap) => {
-            if (seq !== previewSeq) return;
-            const snapped = snap.snapped_to;
-            if (run.points.length === 1) {
-              setPreviewPositions([
-                anchor.x,
-                anchor.y,
-                0.12,
-                snapped.x,
-                snapped.y,
-                0.12,
-              ]);
-            } else {
-              const cap = slotCapsulePreview(
-                mode,
-                run.points[0],
-                run.points[1],
-                snapped,
-                locks,
-              );
-              if (cap) {
-                setPreviewPositions(cap.positions);
-              } else {
-                setPreviewPositions(null);
-              }
-              store.getState().updateDynInput(
-                { width: cap ? cap.width.toFixed(2) : '0.00' },
-                {},
-                pos.x,
-                pos.y,
-              );
-            }
-            showSnapMarker(snapped, nativeSnapKind(snap.snap.kind));
-          });
+          if (run.points.length === 1) {
+            const next = acquireToolSnap(run.tool, p, { suppressRelations: inferenceOverride }).point;
+            setPreviewPositions([anchor.x, anchor.y, 0.12, next.x, next.y, 0.12]);
+          } else {
+            const request = resolvedCreationRequest(run, p, inferenceOverride);
+            if (request) previewResolvedCreation(request, seq, pos);
+          }
           break;
         }
         case 'splineFit': {
@@ -7713,7 +7614,7 @@ export function Viewport() {
       ctrlHeld: boolean,
       altHeld = false,
     ) => {
-      if (!engine) return;
+      if (!engine || toolOperations.pending) return;
       const suppressInference = ctrlHeld || Boolean(run.suppressInference);
       run.suppressInference = suppressInference;
       const locks = dynLocks();
@@ -7734,8 +7635,7 @@ export function Viewport() {
             suppressInference,
             !suppressInference,
           );
-          void engine
-            .addLineLocked({
+          submitToolOperation(run, () => toolRun, () => engine!.addLineLocked({
               from: anchor,
               to_hint: intent.hint,
               from_crossing: run.startCrossing ?? null,
@@ -7747,9 +7647,7 @@ export function Viewport() {
               ctrl_held: suppressInference,
               tracking: intent.tracking,
               intersection: intent.intersection,
-            })
-            .then((result) => {
-              store.getState().setActiveSketch(result.sketch);
+            }), (result) => {
               // Chain continues from the new end point; locks reset.
               const end = result.sketch.entities.find((en) => en.id === result.end_point_id);
               if (end && end.kind === 'point') {
@@ -7765,8 +7663,7 @@ export function Viewport() {
               } else {
                 endToolRun();
               }
-            })
-            .catch((error) => {
+            }, (error) => {
               run.committing = false;
               store.getState().setDynPending(false);
               reportToolError(error, t('view.errorCannotCreateLine'));
@@ -7775,57 +7672,25 @@ export function Viewport() {
         }
         case 'midpointLine': {
           const end = acquireLineHint(p, !suppressInference, suppressInference);
-          void engine
-            .addLineMidpoint({
+          submitToolOperation(run, () => toolRun, () => engine!.addLineMidpoint({
               mid_raw: anchor,
               end_raw: end,
               ctrl_held: suppressInference,
-            })
-            .then((r) => {
-              store.getState().setActiveSketch(r.sketch);
-              done();
-            })
-            .catch((error) => reportToolError(error, t('view.errorCannotCreateMidpointLine')));
+            }), done, (error) => reportToolError(error, t('view.errorCannotCreateMidpointLine')));
           break;
         }
         case 'rect2pt':
-        case 'rectCenter': {
-          const corner = acquireToolSnap(run.tool, p, { suppressRelations: suppressInference }).point;
-          void engine
-            .addRectangleLocked({
-              mode: run.tool === 'rect2pt' ? 'two_point' : 'center',
-              anchor,
-              width_mm: locks.width ?? null,
-              height_mm: locks.height ?? null,
-              width_text: texts.width ?? null,
-              height_text: texts.height ?? null,
-              corner_hint: corner,
-              ctrl_held: suppressInference,
-            })
-            .then((r) => {
-              store.getState().setActiveSketch(r.sketch);
-              done();
-            })
-            .catch((error) => reportToolError(error, t('view.errorCannotCreateRectangle')));
-          break;
-        }
+        case 'rectCenter':
         case 'circleCenter':
         case 'circle2pt': {
-          const edge = acquireToolSnap(run.tool, p, { suppressRelations: suppressInference }).point;
-          void engine
-            .addCircleLocked({
-              mode: run.tool === 'circleCenter' ? 'center_diameter' : 'two_point',
-              anchor,
-              diameter_mm: locks.diameter ?? null,
-              diameter_text: texts.diameter ?? null,
-              edge_hint: edge,
-              ctrl_held: suppressInference,
-            })
-            .then((r) => {
-              store.getState().setActiveSketch(r.sketch);
-              done();
-            })
-            .catch((error) => reportToolError(error, t('view.errorCannotCreateCircle')));
+          const request = resolvedCreationRequest(run, p, suppressInference)?.request;
+          if (request?.tool === 'rectangle') {
+            submitToolOperation(run, () => toolRun, () => engine!.addRectangleLocked(request), done,
+              (error) => reportToolError(error, t('view.errorCannotCreateRectangle')));
+          } else if (request?.tool === 'circle') {
+            submitToolOperation(run, () => toolRun, () => engine!.addCircleLocked(request), done,
+              (error) => reportToolError(error, t('view.errorCannotCreateCircle')));
+          }
           break;
         }
         case 'arc3pt': {
@@ -7835,13 +7700,8 @@ export function Viewport() {
             break;
           }
           const [p1, p2] = run.points;
-          void engine
-            .addArc3pt({ p1, p2, p3: next, ctrl_held: suppressInference })
-            .then((r) => {
-              store.getState().setActiveSketch(r.sketch);
-              done();
-            })
-            .catch((error) => reportToolError(error, t('view.errorCannotCreateThreePointArc')));
+          submitToolOperation(run, () => toolRun, () => engine!.addArc3pt({ p1, p2, p3: next, ctrl_held: suppressInference }),
+            done, (error) => reportToolError(error, t('view.errorCannotCreateThreePointArc')));
           break;
         }
         case 'arcCenter': {
@@ -7863,7 +7723,7 @@ export function Viewport() {
             run.points.push(next);
             // Seed the angular accumulator at the start pick so the sweep can
             // follow the pointer from here on.
-            run.arc = { lastAngle: angleOf(run.points[0], next), travel: 0 };
+            run.arc = beginArcTravel(angleOf(run.points[0], next));
             // The closed circle on screen was the *radius* affordance, and the
             // radius is fixed by this pick. Retiring it here — and invalidating
             // the preview that is still in flight from the move before the
@@ -7881,38 +7741,11 @@ export function Viewport() {
             );
             break;
           }
-          const [center, start] = run.points;
-          const texts = dynTexts();
-          const directed = radiusLocked
-            ? pointOnRadius(center, lockedRadius, next)
-            : next;
-          // The pointer travel is authoritative. A pick that carries none
-          // describes no sweep at all — two picks on one ray — so it must not
-          // commit: that is how a stray click (or a cursor the snap pulled back
-          // onto the start ray) used to turn into a full circle. Keep the run
-          // armed and wait for the pointer; dragging a deliberate full turn is
-          // still a full circle. A typed angle supplies its own magnitude, so
-          // typing one and clicking is a complete answer.
-          const travel = run.arc
-            ? resolvedArcSweep(accumulateArcTravel(run, angleOf(center, directed)), locks.angle)
-            : null;
-          if (travel !== null && Math.abs(travel) < MIN_ARC_TRAVEL_RAD) break;
-          void engine
-            .addArcCenter({
-              center,
-              start,
-              sweep: directed,
-              ctrl_held: suppressInference,
-              radius_mm: radiusLocked ? lockedRadius : null,
-              radius_text: radiusLocked ? texts.radius ?? null : null,
-              angle_text: texts.angle ?? null,
-              sweep_rad: travel,
-            })
-            .then((r) => {
-              store.getState().setActiveSketch(r.sketch);
-              done();
-            })
-            .catch((error) => reportToolError(error, t('view.errorCannotCreateCenterArc')));
+          const intent = resolvedCreationRequest(run, p, suppressInference);
+          if (intent?.request.tool !== 'arc_center') break;
+          if (Math.abs(intent.request.sweep_rad ?? 0) < MIN_ARC_TRAVEL_RAD && !intent.request.angle_text) break;
+          submitToolOperation(run, () => toolRun, () => engine!.addArcCenter(intent.request as import('../../engine/types').ArcCenterRequest),
+            done, (error) => reportToolError(error, t('view.errorCannotCreateCenterArc')));
           break;
         }
         case 'slot': {
@@ -7926,19 +7759,11 @@ export function Viewport() {
             refreshLockValues();
             break;
           }
-          const modeMap = { centerToCenter: 'center_to_center', overall: 'overall', centerPoint: 'center_point' } as const;
-          void engine
-            .addSlot({
-              mode: modeMap[store.getState().slotMode],
-              p1: run.points[0],
-              p2: run.points[1],
-              cursor: acquireToolSnap(run.tool, p, { suppressRelations: suppressInference }).point,
-              width_mm: locks.width ?? null,
-              width_text: texts.width ?? null,
-            })
-            .then((r) => store.getState().setActiveSketch(r.sketch))
-            .then(() => done())
-            .catch((error) => reportToolError(error, t('view.errorCannotCreateSlot')));
+          const request = resolvedCreationRequest(run, p, suppressInference)?.request;
+          if (request?.tool === 'slot') {
+            submitToolOperation(run, () => toolRun, () => engine!.addSlot(request), done,
+              (error) => reportToolError(error, t('view.errorCannotCreateSlot')));
+          }
           break;
         }
         case 'splineFit': {
@@ -7969,14 +7794,11 @@ export function Viewport() {
         const placement = acquirePointPlacement(p, inferenceOverride);
         clearGroup(acquireGroup);
         hideChips();
-        void engine
-          .addPoint({
+        submitToolOperation(placement, () => store.getState().activeTool === 'point' ? placement : null, () => engine!.addPoint({
             position: placement.position,
             coincident_with: placement.coincidentWith,
             ctrl_held: inferenceOverride,
-          })
-          .then((result) => store.getState().setActiveSketch(result.sketch))
-          .catch((error) => reportToolError(error, t('view.errorCannotCreatePoint')));
+          }), () => {}, (error) => reportToolError(error, t('view.errorCannotCreatePoint')));
         return;
       }
       startSnapPending = true;
@@ -7987,8 +7809,8 @@ export function Viewport() {
         inferenceOverride,
       )
         .then((preview) => {
-          startSnapPending = false;
           if (seq !== startSeq) return;
+          startSnapPending = false;
           const snapped = preview.snapped_to;
           toolRun = {
             tool,
@@ -8023,6 +7845,7 @@ export function Viewport() {
           }
         })
         .catch((error) => {
+          if (seq !== startSeq) return;
           startSnapPending = false;
           reportToolError(error, t('view.errorCannotAcquireSketchPoint'));
         });
@@ -8116,7 +7939,10 @@ export function Viewport() {
         const f = visible[idx];
         if (!f) return true;
         const current = d.fields.find((x) => x.key === f.key);
-        const value = d.selectAll ? e.key : current?.locked ? current.value + e.key : e.key;
+        const initialText = toolRun?.tool === 'arcCenter' && f.key === 'angle' && !current?.locked
+          ? beginArcAngleText(current?.value ?? '', e.key)
+          : e.key;
+        const value = d.selectAll ? initialText : current?.locked ? current.value + e.key : initialText;
         state.setDynField(f.key, value, true); // typing locks the field
         state.setDynFocus(idx, false);
         refreshLockValues();
@@ -8189,28 +8015,23 @@ export function Viewport() {
         case 'fillet': {
           if (modTool.picks.length !== 2) return;
           const text = texts.radius ?? (locks.radius !== undefined ? String(locks.radius) : '10');
-          void engine
-            .filletLines({ l1: modTool.picks[0], l2: modTool.picks[1], radius_text: text })
-            .then(after)
-            .catch(fail);
+          const [l1, l2] = modTool.picks;
+          submitToolOperation(attemptedModTool, () => modTool, () => engine!.filletLines({ l1, l2, radius_text: text }), after, fail);
           break;
         }
         case 'chamfer': {
           if (modTool.picks.length !== 2) return;
           const text = texts.distance ?? (locks.distance !== undefined ? String(locks.distance) : '10');
-          void engine
-            .chamferLines({ l1: modTool.picks[0], l2: modTool.picks[1], distance_text: text })
-            .then(after)
-            .catch(fail);
+          const [l1, l2] = modTool.picks;
+          submitToolOperation(attemptedModTool, () => modTool, () => engine!.chamferLines({ l1, l2, distance_text: text }), after, fail);
           break;
         }
         case 'offset': {
           if (modTool.picks.length !== 1) return;
           const text = texts.distance ?? (locks.distance !== undefined ? String(locks.distance) : '10');
-          void engine
-            .offsetCurve({ entity: modTool.picks[0], distance_text: text, cursor })
-            .then(after)
-            .catch(fail);
+          const entity = modTool.picks[0];
+          const intentCursor = offsetIntentCursor(cursor);
+          submitToolOperation(attemptedModTool, () => modTool, () => engine!.offsetCurve({ entity, distance_text: text, cursor: intentCursor }), after, fail);
           break;
         }
       }
@@ -8224,14 +8045,11 @@ export function Viewport() {
       const text = texts.factor ?? (locks.factor !== undefined ? String(locks.factor) : '2');
       const ids = currentSelection();
       if (ids.length === 0) return;
-      void engine
-        .scaleEntities({ entity_ids: ids, origin: scaleBase, factor_text: text })
-        .then((r) => {
-          store.getState().setActiveSketch(r.sketch);
+      const origin = scaleBase;
+      submitToolOperation(origin, () => scaleBase, () => engine!.scaleEntities({ entity_ids: ids, origin, factor_text: text }), () => {
           if (exitAfter) store.getState().setActiveTool(null);
           else endModTool();
-        })
-        .catch((error) => reportToolError(error, t('view.errorCannotScaleSelection')));
+        }, (error) => reportToolError(error, t('view.errorCannotScaleSelection')));
     };
 
     /** Polygon commit (second click or Enter). */
@@ -8251,8 +8069,8 @@ export function Viewport() {
       const rotation = (Math.atan2(snapped.y - center.y, snapped.x - center.x) * 180) / Math.PI;
       const mode = state.polygonMode;
 
-      void edgesValue
-        .then((value) => {
+      submitToolOperation(polygonRun, () => polygonRun, async () => {
+          const value = await edgesValue;
           if (!Number.isInteger(value) || value < 3 || value > 64) {
             throw new Error(t('view.errorPolygonEdgeCount'));
           }
@@ -8263,13 +8081,10 @@ export function Viewport() {
             rotation_deg: rotation,
             mode,
           });
-        })
-        .then((r) => {
-          store.getState().setActiveSketch(r.sketch);
+        }, () => {
           if (exitAfter) store.getState().setActiveTool(null);
           else endModTool();
-        })
-        .catch((error) => reportToolError(error, t('view.errorCannotCreatePolygon')));
+        }, (error) => reportToolError(error, t('view.errorCannotCreatePolygon')));
     };
 
     /** Modify-tool pointer move (hover previews + dyn live updates). */
@@ -10244,6 +10059,7 @@ export function Viewport() {
     /** Modify-tool pointer down (picks + one-click ops). */
     const downModTool = (p: Vec2, e: PointerEvent): boolean => {
       if (!engine) return false;
+      if (toolOperations.pending) return true;
       const state = store.getState();
       switch (state.activeTool) {
         case 'fillet':
@@ -10333,10 +10149,9 @@ export function Viewport() {
         case 'trim': {
           const target = acquireEntityTarget(p, CURVE_TARGET_KINDS);
           if (target) {
-            void engine!
-              .trimEntity({ entity: target.id, click: target.point })
-              .then((r) => store.getState().setActiveSketch(r.sketch))
-              .catch((error) => reportToolError(error, t('view.errorCannotTrimCurve')));
+            submitToolOperation(target, () => store.getState().activeTool === 'trim' ? target : null,
+              () => engine!.trimEntity({ entity: target.id, click: target.point }), () => {},
+              (error) => reportToolError(error, t('view.errorCannotTrimCurve')));
             trimHover = null;
             clearGroup(dimPreviewGroup);
           }
@@ -10345,20 +10160,18 @@ export function Viewport() {
         case 'extend': {
           const target = acquireEntityTarget(p, LINE_TARGET_KINDS);
           if (target) {
-            void engine!
-              .extendEntity({ entity: target.id, click: target.point })
-              .then((r) => store.getState().setActiveSketch(r.sketch))
-              .catch((error) => reportToolError(error, t('view.errorCannotExtendLine')));
+            submitToolOperation(target, () => store.getState().activeTool === 'extend' ? target : null,
+              () => engine!.extendEntity({ entity: target.id, click: target.point }), () => {},
+              (error) => reportToolError(error, t('view.errorCannotExtendLine')));
           }
           return true;
         }
         case 'break': {
           const target = acquireEntityTarget(p, CURVE_TARGET_KINDS);
           if (target) {
-            void engine!
-              .breakCurve({ entity: target.id, at: target.point })
-              .then((r) => store.getState().setActiveSketch(r.sketch))
-              .catch((error) => reportToolError(error, t('view.errorCannotBreakCurve')));
+            submitToolOperation(target, () => store.getState().activeTool === 'break' ? target : null,
+              () => engine!.breakCurve({ entity: target.id, at: target.point }), () => {},
+              (error) => reportToolError(error, t('view.errorCannotBreakCurve')));
           }
           return true;
         }
@@ -10367,10 +10180,9 @@ export function Viewport() {
           if (target) {
             const ids = currentSelection();
             if (ids.length === 0) return true;
-            void engine!
-              .mirrorEntities({ entity_ids: ids, axis_line: target.id })
-              .then((r) => store.getState().setActiveSketch(r.sketch))
-              .catch((error) => reportToolError(error, t('view.errorCannotMirrorSelection')));
+            submitToolOperation(target, () => store.getState().activeTool === 'mirror' ? target : null,
+              () => engine!.mirrorEntities({ entity_ids: ids, axis_line: target.id }), () => {},
+              (error) => reportToolError(error, t('view.errorCannotMirrorSelection')));
           }
           return true;
         }
@@ -10380,7 +10192,9 @@ export function Viewport() {
         }
         case 'scale': {
           if (!scaleBase) {
+            const seq = ++modStartSeq;
             void snapCursor(p).then((snapped) => {
+              if (seq !== modStartSeq || store.getState().activeTool !== 'scale') return;
               scaleBase = snapped;
               const pos = clusterPos(e.clientX, e.clientY);
               store.getState().showDynInput(TOOL_FIELDS.scale!, pos.x, pos.y);
@@ -10388,23 +10202,14 @@ export function Viewport() {
             });
             return true;
           }
-          const texts = dynTexts();
-          const locks = dynLocks();
-          const text = texts.factor ?? (locks.factor !== undefined ? String(locks.factor) : '2');
-          const ids = currentSelection();
-          if (ids.length === 0) return true;
-          void engine!
-            .scaleEntities({ entity_ids: ids, origin: scaleBase, factor_text: text })
-            .then((r) => {
-              store.getState().setActiveSketch(r.sketch);
-              endModTool();
-            })
-            .catch((error) => reportToolError(error, t('view.errorCannotScaleSelection')));
+          commitScale();
           return true;
         }
         case 'polygon': {
           if (!polygonRun) {
+            const seq = ++modStartSeq;
             void snapCursor(p).then((snapped) => {
+              if (seq !== modStartSeq || store.getState().activeTool !== 'polygon') return;
               polygonRun = { center: snapped };
               const pos = clusterPos(e.clientX, e.clientY);
               store.getState().showDynInput(TOOL_FIELDS.polygon!, pos.x, pos.y);
@@ -11980,10 +11785,10 @@ export function Viewport() {
           const dy = p.y - moveDrag.base.y;
           const ids = currentSelection();
           if (ids.length > 0 && (Math.abs(dx) > 1e-9 || Math.abs(dy) > 1e-9)) {
-            void engine
-              .moveCopyEntities({ entity_ids: ids, dx, dy, copy: e.altKey })
-              .then((r) => store.getState().setActiveSketch(r.sketch))
-              .catch((error) => reportToolError(error, t('view.errorCannotMoveOrCopySelection')));
+            const drag = moveDrag;
+            submitToolOperation(drag, () => store.getState().activeTool === 'moveCopy' ? drag : null,
+              () => engine!.moveCopyEntities({ entity_ids: ids, dx, dy, copy: e.altKey }), () => {},
+              (error) => reportToolError(error, t('view.errorCannotMoveOrCopySelection')));
           }
         }
         moveDrag = null;

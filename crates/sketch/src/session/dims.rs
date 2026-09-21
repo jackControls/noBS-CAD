@@ -58,7 +58,7 @@ impl SketchSession {
     }
 
     /// Direction of the arc's own midpoint, which is where its radius leader
-    /// touches it. `None` for a full circle, whose leader may point anywhere.
+    /// touches it. A full turn uses the opposite ray from its stored start.
     fn arc_mid_angle(&self, id: EntityId) -> Option<f64> {
         match self.sketch.entity(id) {
             Some(Entity::Arc {
@@ -68,7 +68,7 @@ impl SketchSession {
             }) => {
                 // Stored arcs always sweep counter-clockwise, so the span is
                 // the positive remainder of the two angles.
-                let span = (end_angle - start_angle).rem_euclid(std::f64::consts::TAU);
+                let span = crate::geometry::arc_span(*start_angle, *end_angle);
                 Some(start_angle + span / 2.0)
             }
             _ => None,
@@ -138,10 +138,21 @@ impl SketchSession {
     /// the whole mutation (including the new parameter) is rolled back.
     pub(crate) fn add_constraint_bound(
         &mut self,
+        constraint: Constraint,
+        param: ParamId,
+        text_pos: Vec2,
+        record_undo: bool,
+    ) -> Result<ConstraintId, SessionError> {
+        self.add_constraint_bound_offset(constraint, param, text_pos, record_undo, None)
+    }
+
+    pub(super) fn add_constraint_bound_offset(
+        &mut self,
         mut constraint: Constraint,
         param: ParamId,
         text_pos: Vec2,
         record_undo: bool,
+        offset_side: Option<f64>,
     ) -> Result<ConstraintId, SessionError> {
         if let Err(error) = self.reject_duplicate_relation(&constraint) {
             self.sketch.params_mut().remove(param);
@@ -158,6 +169,9 @@ impl SketchSession {
         let before = self.sketch.snapshot();
         let cid = self.sketch.add_constraint(constraint);
         self.sketch.bind_dimension(cid, param, text_pos);
+        if let Some(side) = offset_side {
+            self.sketch.set_offset_side(cid, side);
+        }
 
         let analysis = self.solve_constraint_operation_with_recovery(&[constraint]);
         let new_residual = crate::solver::constraint_residual(&self.sketch, cid);
@@ -530,13 +544,16 @@ impl SketchSession {
                 }
                 let measured = self
                     .sketch
-                    .measure_dimension_constraint(constraint)
+                    .measure_dimension(cid, constraint)
                     .ok_or_else(|| {
                         SessionError::InvalidConstraint(
                             "Cannot measure this reference dimension".to_string(),
                         )
                     })?;
-                let kind = if matches!(constraint, Constraint::Angle { .. }) {
+                let kind = if matches!(
+                    constraint,
+                    Constraint::Angle { .. } | Constraint::ArcAngle { .. }
+                ) {
                     ParamKind::Angle
                 } else {
                     ParamKind::Length
@@ -815,7 +832,7 @@ impl SketchSession {
                     start_angle,
                     end_angle,
                     ..
-                } => Some((end_angle - start_angle).rem_euclid(std::f64::consts::TAU)),
+                } => Some(crate::geometry::arc_span(*start_angle, *end_angle)),
                 _ => None,
             })
             .unwrap_or(0.0);
@@ -842,26 +859,6 @@ impl SketchSession {
                     return None;
                 }
                 let mode = self.sketch.dim_mode(&cid);
-                // A sweep dimension always reports the arc's real included
-                // angle: the stored arc is counter-clockwise, so a typed
-                // negative value fixes the direction, never the printed number.
-                if let Constraint::ArcAngle { .. } = c {
-                    if let Some(measured) = self.sketch.measure_dimension_constraint(*c) {
-                        let text = format!("{measured:.2}°");
-                        return Some(DimensionDto {
-                            constraint_id: cid,
-                            mode,
-                            kind: kind.to_string(),
-                            entities: c.referenced_entities(),
-                            param_id: None,
-                            param_name: None,
-                            param_expression: None,
-                            value: measured,
-                            text,
-                            text_pos: self.sketch.dim_placement(&cid).unwrap_or(Vec2::ZERO),
-                        });
-                    }
-                }
                 let (pid, param_name, param_expression, value) = match mode {
                     DimensionMode::Driving => {
                         let pid = self.sketch.dim_param(&cid)?;
@@ -873,18 +870,22 @@ impl SketchSession {
                             param.value,
                         )
                     }
-                    DimensionMode::Reference => (
-                        None,
-                        None,
-                        None,
-                        self.sketch.measure_dimension_constraint(*c)?,
-                    ),
+                    DimensionMode::Reference => {
+                        (None, None, None, self.sketch.measure_dimension(cid, *c)?)
+                    }
+                };
+                // Display the included magnitude without stripping the signed
+                // formula/parameter binding that the dimension editor needs.
+                let display_value = if matches!(c, Constraint::ArcAngle { .. }) {
+                    value.abs()
+                } else {
+                    value
                 };
                 let value_text = match kind {
-                    "diameter" => format!("Ø{value:.2}"),
-                    "radius" => format!("R{value:.2}"),
-                    "angle" => format!("{value:.2}°"),
-                    _ => format!("{value:.2}"),
+                    "diameter" => format!("Ø{display_value:.2}"),
+                    "radius" => format!("R{display_value:.2}"),
+                    "angle" => format!("{display_value:.2}°"),
+                    _ => format!("{display_value:.2}"),
                 };
                 let text = if mode == DimensionMode::Reference {
                     format!("({value_text})")

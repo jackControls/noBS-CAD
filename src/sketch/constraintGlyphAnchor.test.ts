@@ -87,6 +87,7 @@ console.log('constraint glyph anchors');
     'fix',
     'midpoint',
     'reference_midpoint',
+    'reference_on_edge',
     'span_midpoint',
     'concentric',
     'collinear',

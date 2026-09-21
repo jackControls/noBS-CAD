@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 
-const BASE = 'http://localhost:7199';
+const BASE = process.env.NBCAD_E2E_BASE_URL ?? 'http://localhost:7199';
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 const pageErrors = [];
@@ -503,24 +503,25 @@ try {
     ),
     'the chained vertical turn should retain perpendicular design intent',
   );
-  await page.waitForFunction(
-    () => window.__nativeViewportTransient().annotations.some(
-      (annotation) =>
-        annotation.kind === 'constraint' && annotation.icon === 'perpendicular',
-    ),
-  );
-  const perpendicularAnnotations = await page.evaluate(
-    () => window.__nativeViewportTransient().annotations.filter(
-      (annotation) =>
-        annotation.kind === 'constraint' && annotation.icon === 'perpendicular',
-    ),
-  );
-  assert.ok(
-    perpendicularAnnotations.length > 0,
-    `perpendicular relation must emit a standard visible glyph; annotations=${JSON.stringify(
-      perpendicularAnnotations,
-    )}`,
-  );
+  // Shared-endpoint perpendiculars now draw an oriented right-angle square,
+  // not an annotation icon. Verify its two real segments and use their common
+  // corner for the same secondary-click removal check below.
+  const perpendicularAnnotation = await page.evaluate(vertex => {
+    const ends = [];
+    for (const layer of window.__nativeViewportTransient().lines) {
+      for (let i = 0; i + 5 < layer.segments.length; i += 6) {
+        const a = layer.segments.slice(i, i + 3);
+        const b = layer.segments.slice(i + 3, i + 6);
+        if ([a, b].every(p => Math.abs(p[2] - 0.21) < 1e-5 && Math.hypot(p[0] - vertex.x, p[1] - vertex.y) < 0.5)) ends.push(a, b);
+      }
+    }
+    const inner = ends.find((a, i) => ends.some((b, j) => i !== j && Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6));
+    if (!inner || ends.length < 4) return null;
+    const screen = window.__sketchToScreen(inner[0], inner[1]);
+    const rect = document.querySelector('canvas').getBoundingClientRect();
+    return { screen: [screen.x - rect.left, screen.y - rect.top] };
+  }, short.end);
+  assert.ok(perpendicularAnnotation, 'perpendicular relation must render its oriented right-angle mark');
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => window.__appStore.getState().activeTool === null);
@@ -584,18 +585,15 @@ try {
         || (constraint.a === upright.id && constraint.b === short.id)),
   );
   assert.ok(perpendicularConstraint);
-  const perpendicularAnnotation = await page.evaluate(
-    () => window.__nativeViewportTransient().annotations.find(
-      (annotation) =>
-        annotation.kind === 'constraint' && annotation.icon === 'perpendicular',
-    ),
-  );
-  assert.ok(perpendicularAnnotation);
+  // The tiny driving-length label overlaps the square at this zoom. Check
+  // the geometric mark's context menu without the dimension taking priority.
+  await page.click('li:has-text("Dimensions")');
   await removeAtAnnotation(
     perpendicularAnnotation,
     perpendicularConstraint.id,
     'constraint',
   );
+  await page.click('li:has-text("Dimensions")');
 
   const dimensionAnnotation = await page.evaluate(
     (text) => window.__nativeViewportTransient().annotations.find(

@@ -170,18 +170,10 @@ const VIEWPORT_LINE_SCALE_MAX: f32 = 1.6;
 /// than the outline information they can convey. Bevy still renders the
 /// retained shaded mesh and selected/hovered geometry always bypasses LOD.
 const OCCURRENCE_EDGE_LOD_MIN_RADIUS_PX: f32 = 3.0;
-/// Body edges are gizmos drawn on the exact B-rep geometry, so an edge that is
-/// coincident with a face (a pocket floor arc, a cut boundary) ties with it in
-/// depth. Bevy's line pipeline compares `Greater`, so an exact tie loses and
-/// the stroke silently disappears while silhouette edges stay visible. Bevy's
-/// documented remedy for a wireframe fighting the model is a small negative
-/// bias: 1e-5 of the depth range is a few depth-buffer steps at any zoom (the
-/// step size grows with the square of the view distance, and so does the bias
-/// it buys) yet far below the depth of geometry that must stay hidden.
-const MODEL_EDGE_DEPTH_BIAS: f32 = -1.0e-5;
-/// How far a model edge is nudged towards the camera so it beats the faces it
-/// lies on. One pixel is enough to win the tie and cannot be seen as a shift.
-const MODEL_EDGE_LIFT_PIXELS: f32 = 1.0;
+/// A screen-sized or depth-range-relative lift can exceed a thin wall at wide
+/// zooms and reveal hidden edges. Cap the tie-break in model units (0.1
+/// micrometre), below modeling tolerances, regardless of zoom/display density.
+const MODEL_EDGE_MAX_LIFT_MM: f32 = 1.0e-4;
 const SKETCH_DEPTH_BIAS: f32 = -0.90;
 const SKETCH_POINT_OUTLINE_WIDTH: f32 = 2.0;
 const SKETCH_POINT_OUTLINE_DEPTH_BIAS: f32 = -0.89;
@@ -2505,10 +2497,9 @@ fn setup_scene(
         .config_mut::<CamCompletedPathGizmos>()
         .0
         .depth_bias = -0.995;
-    // Body edges and the ground/sketch grid share the default group; the grid
-    // is lifted by the same sub-pixel amount, which is invisible.
-    let (model_edge_config, _) = gizmo_config.config_mut::<DefaultGizmoConfigGroup>();
-    model_edge_config.depth_bias = MODEL_EDGE_DEPTH_BIAS;
+    // Keep the default model/grid group depth-correct. Model-edge ties use a
+    // bounded world-space epsilon below; a global reverse-Z bias leaks hidden
+    // edges through thin walls as view distance increases.
     let (sketch_config, _) = gizmo_config.config_mut::<CadSketchGizmos>();
     // Visible sketches are reference graphics, not occluded model edges.
     // Match the browser renderer's depthTest:false contract so a sketch on a
@@ -5309,8 +5300,8 @@ fn draw_edge_segments<Config: GizmoConfigGroup>(
     // depth slope across one pixel is larger than the bias, so the stroke keeps
     // losing the comparison and breaks up into dashes - which is what happened
     // to a pocket floor arc while the top rim stayed solid. Nudging the stroke
-    // one pixel towards the camera wins the tie at any zoom, because moving
-    // along the view direction changes exactly the depth the comparison reads.
+    // towards the camera resolves the exact tie. The lift must be bounded in
+    // model units: a whole pixel can exceed a wall's thickness at wide zooms.
     let lift = lift.map(|(camera, viewport)| {
         let position = Vec3::from_array(camera.position);
         let forward = (Vec3::from_array(camera.target) - position).normalize_or_zero();
@@ -5329,7 +5320,7 @@ fn draw_edge_segments<Config: GizmoConfigGroup>(
         ));
         if let Some((forward, camera, viewport)) = lift {
             let pixel = world_per_pixel_at(camera, viewport, (start + end) * 0.5);
-            let offset = forward * pixel * MODEL_EDGE_LIFT_PIXELS;
+            let offset = forward * pixel.min(MODEL_EDGE_MAX_LIFT_MM);
             start -= offset;
             end -= offset;
         }
@@ -5481,41 +5472,16 @@ fn draw_sketch<Config, ColorFor>(
 ///
 /// This is reference geometry the user cannot pick, hover, grip or constrain,
 /// so it gets its own color and sits just under the authored sketch strokes
-/// (`FINISHED_SKETCH_OFFSET`). The circular carrier is used when the body edge
-/// carried one, keeping a projected arc analytic instead of faceted by its
-/// tessellation.
+/// (`FINISHED_SKETCH_OFFSET`). Use the same directed tessellation as browser
+/// drawing and snapping. Endpoint angles alone cannot distinguish a clockwise
+/// partial edge from its complementary arc on a reversed face basis. The exact
+/// circular carrier remains available to profile extraction and the kernel.
 fn draw_projected_edges<Config: GizmoConfigGroup>(
     gizmos: &mut Gizmos<Config>,
     sketch: &SketchDto,
     color: Color,
 ) {
     for edge in &sketch.projected_edges {
-        if let Some(circle) = edge.circle {
-            let start = edge.points.first().copied();
-            let end = edge.points.last().copied();
-            if let (Some(start), Some(end)) = (start, end) {
-                let start_angle = (start.y - circle.center.y).atan2(start.x - circle.center.x);
-                let mut sweep = (end.y - circle.center.y).atan2(end.x - circle.center.x)
-                    - start_angle;
-                while sweep <= 0.0 {
-                    sweep += std::f64::consts::TAU;
-                }
-                if circle.closed {
-                    sweep = std::f64::consts::TAU;
-                }
-                let segments = ((sweep.abs() * 20.0).ceil() as usize).clamp(12, 128);
-                draw_parametric_curve(gizmos, segments, color, |ratio| {
-                    let angle = start_angle + sweep * ratio;
-                    sketch_world(
-                        &sketch.basis,
-                        circle.center.x + circle.radius * angle.cos(),
-                        circle.center.y + circle.radius * angle.sin(),
-                        FINISHED_SKETCH_OFFSET,
-                    )
-                });
-                continue;
-            }
-        }
         for pair in edge.points.windows(2) {
             gizmos.line(
                 sketch_world(&sketch.basis, pair[0].x, pair[0].y, FINISHED_SKETCH_OFFSET),

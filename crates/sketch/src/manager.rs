@@ -70,7 +70,7 @@ use crate::dto::{
 };
 use crate::entity::EntityId;
 use crate::project::{
-    decode_project, ProjectCountersV2, ProjectDocumentV2, ProjectModelV7, ProjectPreferencesV2,
+    decode_project, ProjectCountersV2, ProjectDocumentV2, ProjectModelV9, ProjectPreferencesV2,
     PROJECT_FORMAT, PROJECT_SCHEMA_VERSION,
 };
 use crate::session::{
@@ -238,7 +238,7 @@ impl SketchManager {
                 "finish the active sketch before saving the project".to_string(),
             ));
         }
-        let model = ProjectModelV7 {
+        let model = ProjectModelV9 {
             format: PROJECT_FORMAT.to_string(),
             schema_version: PROJECT_SCHEMA_VERSION,
             document: ProjectDocumentV2 {
@@ -545,7 +545,8 @@ impl SketchManager {
     /// its full session (entities, constraints, dimensions, undo stack) so
     /// it can render in 3D and be re-entered via `edit_sketch` (M1d).
     pub fn end_sketch(&mut self) -> Result<EndSketchResult, SessionError> {
-        let session = self.active.take().ok_or(SessionError::NoActiveSketch)?;
+        let mut session = self.active.take().ok_or(SessionError::NoActiveSketch)?;
+        session.refresh_profile_identities();
         let feature_id = self.active_feature_id.take().ok_or_else(|| {
             SessionError::Solid("active sketch has no history feature".to_string())
         })?;
@@ -597,7 +598,9 @@ impl SketchManager {
         f.session.set_grid_step(self.grid_step)?;
         let plane = f.session.plane();
         let basis = f.session.basis();
-        self.install_support_references(&mut f.session, plane, basis);
+        if self.scene_matches_history_stage(f.feature_id) {
+            self.install_support_references(&mut f.session, plane, basis);
+        }
         let dto = f.session.dto();
         self.active_feature_id = Some(f.feature_id);
         self.active = Some(f.session);
@@ -626,7 +629,7 @@ impl SketchManager {
         self.finished
             .iter()
             .filter(|finished| active.contains(&finished.feature_id))
-            .map(|finished| profile_catalog_item(&finished.session.dto(), finished.feature_id))
+            .map(|finished| finished.session.profile_catalog(finished.feature_id))
             .collect()
     }
 
@@ -4235,10 +4238,10 @@ impl SketchManager {
         }
     }
 
-    /// Install the runtime external references a face-hosted sketch needs:
+    /// Install the external references a face-hosted sketch needs:
     /// support-edge snap midpoints and the projected support-face boundary.
     ///
-    /// Both are rebuilt from stable ids, so a sketch that leaves the face must
+    /// Both are refreshed from stable ids, so a sketch that leaves the face must
     /// clear them rather than keep stale support geometry. The projected
     /// boundary is what lets geometry drawn against a face edge close a region
     /// (see `profile_catalog_item`).
@@ -4263,8 +4266,8 @@ impl SketchManager {
 
     /// Rebuild the projected support-face boundary of every active face-hosted
     /// sketch after a kernel commit. A recompute is exactly when the stable
-    /// edge ids resolve to new tessellation, and a sketch loaded from a project
-    /// file has no projections until this runs.
+    /// edge ids resolve to new tessellation. Saved projections bootstrap replay
+    /// before the kernel scene exists.
     ///
     /// A sketch whose stage is masked by a later topology writer keeps its
     /// previous projection, matching how datum sketches keep their basis.
@@ -4273,6 +4276,7 @@ impl SketchManager {
         for (index, finished) in self.finished.iter().enumerate() {
             if !active.contains(&finished.feature_id)
                 || !self.scene_matches_history_stage(finished.feature_id)
+                || !finished.session.projects_support_boundary()
             {
                 continue;
             }
@@ -4288,15 +4292,22 @@ impl SketchManager {
             self.finished[index].session.set_projected_edges(projected);
         }
         let active_projection = match &self.active {
-            Some(session) => match session.plane() {
-                PlaneRef::PlanarFace { face_id } => Some(projected_face_boundary_edges(
-                    &self.solids,
-                    face_id,
-                    session.basis(),
-                )),
-                _ => None,
-            },
-            None => None,
+            Some(session)
+                if session.projects_support_boundary()
+                    && self
+                        .active_feature_id
+                        .is_some_and(|id| self.scene_matches_history_stage(id)) =>
+            {
+                match session.plane() {
+                    PlaneRef::PlanarFace { face_id } => Some(projected_face_boundary_edges(
+                        &self.solids,
+                        face_id,
+                        session.basis(),
+                    )),
+                    _ => None,
+                }
+            }
+            _ => None,
         };
         if let (Some(session), Some(projected)) = (&mut self.active, active_projection) {
             session.set_projected_edges(projected);
@@ -4416,6 +4427,16 @@ impl SketchManager {
         Ok(session.preview_segment(request.from, request.to_raw, request.ctrl_held))
     }
 
+    pub fn preview_creation(
+        &self,
+        request: crate::dto::CreationPreviewRequest,
+    ) -> Result<crate::dto::CreationPreviewDto, SessionError> {
+        self.active
+            .as_ref()
+            .ok_or(SessionError::NoActiveSketch)?
+            .preview_creation(&request)
+    }
+
     /// Evaluate an expression against the active sketch's parameters (D9
     /// formula previews in dynamic input).
     pub fn eval_expression(
@@ -4438,10 +4459,8 @@ impl SketchManager {
     ) -> Result<PreviewDto, SessionError> {
         let session = self.active.as_ref().ok_or(SessionError::NoActiveSketch)?;
         // Formula text evaluates against current params (D9 live preview).
-        let length_mm = match &request.length_text {
-            Some(t) => Some(session.eval_text(t)?),
-            None => request.length_mm,
-        };
+        let length_mm =
+            session.positive_input(request.length_text.as_deref(), request.length_mm)?;
         let angle_deg = match &request.angle_text {
             Some(t) => Some(session.eval_text(t)?),
             None => request.angle_deg,
@@ -4800,8 +4819,7 @@ fn support_edge_midpoints(
 /// imported or assembly bodies) fall back to every coplanar edge, which is the
 /// same set the snap references use.
 ///
-/// The result is runtime geometry, rebuilt from stable edge ids on every
-/// open/recompute, never persisted.
+/// Saved with the sketch and refreshed only from its own history-stage scene.
 fn projected_face_boundary_edges(
     solids: &SolidDocument,
     face_id: FaceId,
@@ -4832,8 +4850,9 @@ fn projected_face_boundary_edges(
                 })
         })
         .collect::<Vec<_>>();
-    // Deterministic ids: the reserved-range index follows the stable edge
-    // order, so a recompute keeps the same projection ids.
+    // Deterministic discovery slots, not persistent identities: inserting or
+    // removing an edge can shift these indices. Saved profile identities and
+    // external constraints use the actual body edge id instead.
     candidates.sort_by_key(|edge| edge.id.0);
     candidates
         .into_iter()
@@ -5532,7 +5551,10 @@ const SEGMENT_ID_STRIDE: u64 = 1_000;
 /// and a drawn curve overlap.
 const PROJECTED_EDGE_ID_BASE: u64 = 1 << 40;
 
-fn profile_catalog_item(sketch: &SketchDto, feature_id: FeatureId) -> ProfileCatalogItemDto {
+pub(crate) fn profile_catalog_item(
+    sketch: &SketchDto,
+    feature_id: FeatureId,
+) -> ProfileCatalogItemDto {
     const PROFILE_TOLERANCE: f64 = 1e-5;
     // The constraint solver deliberately collapses a fully consumed fillet
     // carrier to a sub-micron remnant instead of deleting its stable entity.
@@ -5712,13 +5734,26 @@ fn profile_catalog_item(sketch: &SketchDto, feature_id: FeatureId) -> ProfileCat
             < PROJECTED_EDGE_ID_BASE,
         "authored entity ids must stay below the reserved projected id range"
     );
+    let contacts = sketch
+        .entities
+        .iter()
+        .flat_map(|entity| match entity {
+            crate::dto::EntityDto::Point { position, .. } => vec![*position],
+            crate::dto::EntityDto::Line { start, end, .. } => vec![*start, *end],
+            _ => vec![],
+        })
+        .collect::<Vec<_>>();
     for edge in sketch.projected_edges.iter() {
         debug_assert!(
             edge.id >= PROJECTED_EDGE_ID_BASE,
             "projected boundary ids must use the reserved range"
         );
         let projected_id = edge.id;
-        for (piece, pair) in edge.points.windows(2).enumerate() {
+        for (piece, pair) in edge
+            .profile_points(&contacts, PROFILE_TOLERANCE)
+            .windows(2)
+            .enumerate()
+        {
             let a = Point2Dto::new(pair[0].x, pair[0].y);
             let b = Point2Dto::new(pair[1].x, pair[1].y);
             if point2_distance(a, b) <= PROFILE_TOLERANCE {
@@ -7269,7 +7304,7 @@ mod project_tests {
         manager.set_drawing_document(drawings.clone()).unwrap();
         let mut model: serde_json::Value =
             serde_json::from_str(&manager.export_project_model().unwrap()).unwrap();
-        assert_eq!(model["schema_version"], 7);
+        assert_eq!(model["schema_version"], PROJECT_SCHEMA_VERSION);
         // Both previously released main readers and CAM preview readers must
         // migrate without dropping the other workspace's persisted data.
         for version in [3, 4, 5, 6, 7] {

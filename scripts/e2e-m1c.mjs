@@ -11,7 +11,7 @@ import { chromium } from 'playwright';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-const BASE = 'http://localhost:7199';
+const BASE = process.env.NBCAD_E2E_BASE_URL ?? 'http://localhost:7199';
 const SHOTS = fileURLToPath(new URL('../docs/qa/m1c/', import.meta.url));
 await mkdir(SHOTS, { recursive: true });
 
@@ -301,17 +301,22 @@ try {
 
   // --- 7. Lock/snap composition: length locked 50, endpoint still snaps ---
   console.log('7. lock/snap composition');
-  // Reference point exactly 50 mm from the chain base (10,10).
-  await page.getByRole('button', { name: 'DRAW', exact: true }).click();
-  await page
-    .locator('[data-ribbon-menu]')
-    .getByText('Point', { exact: true })
-    .click();
-  await page.waitForTimeout(150);
-  await clickSketch(60, 10);
+  // Isolate the snap fixture from the preceding dimension edits, which can
+  // move underconstrained endpoints. Exact engine points avoid turning screen
+  // quantization into an off-radius test; the line interaction remains real UI.
+  await page.evaluate(async () => {
+    const engine = window.__engine;
+    const store = window.__appStore.getState();
+    await engine.endSketch();
+    const next = await engine.beginSketch({ type: 'origin_plane', plane: 'xy' });
+    store.setActiveSketch(next);
+    await engine.setGridSnap(false);
+    await engine.addPoint({ position: { x: 10, y: 10 }, ctrl_held: true });
+    await engine.addPoint({ position: { x: 60, y: 10 }, ctrl_held: true });
+    store.setActiveSketch(await engine.setGridSnap(true));
+    store.setActiveTool(null);
+  });
   await page.waitForTimeout(300);
-  await page.keyboard.press('Escape'); // exit point tool
-  await page.waitForTimeout(200);
   s = await sketch();
   const targetPoint = s.entities.find(
     (e) => e.kind === 'point' && Math.abs(e.position.x - 60) < 0.01 && Math.abs(e.position.y - 10) < 0.01,
@@ -321,7 +326,8 @@ try {
   await page.waitForTimeout(150);
   await clickSketch(10, 10); // start at the shared base point
   await page.waitForTimeout(300);
-  await moveSketch(62, 14); // near the reference point, slightly off
+  const nearTarget = await sketchToScreen(60, 10);
+  await page.mouse.move(nearTarget.x + 2, nearTarget.y - 2);
   await page.waitForTimeout(300);
   await page.keyboard.type('50');
   await page.waitForTimeout(350);

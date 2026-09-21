@@ -1,7 +1,7 @@
 //! Projected support-face boundary edges.
 //!
 //! A sketch hosted on a planar body face receives that face's boundary edges as
-//! runtime projected geometry. The boundary seals regions the user draws
+//! history-stage projected geometry. The boundary seals regions the user draws
 //! against it, while a face bounded only by projections never becomes a
 //! selectable profile (and never turns drawn geometry nested inside it into a
 //! hole).
@@ -264,17 +264,13 @@ fn projections_survive_a_save_and_reload_through_the_recompute() {
     draw_semicircle_against_boundary(&mut manager);
     manager.end_sketch().unwrap();
     let json = manager.export_project_model().unwrap();
-    // Projected geometry is runtime-only: the project file must not carry it.
-    assert!(!json.contains("projected_edges"));
+    // Replay must have the history-stage boundary before any kernel job runs.
+    assert!(json.contains("support_boundary"));
 
     let body_id = manager.solid_scene().bodies[0].id;
     let mut loaded = SketchManager::new();
     let replay = loaded.prepare_load_project(json).unwrap();
-    // Nothing is projected until the body is available again.
-    assert!(loaded
-        .finished_sketches()
-        .iter()
-        .all(|sketch| sketch.projected_edges.is_empty()));
+    assert!(replay.errors.is_empty());
     loaded
         .commit_solid(CommitKernelRequest {
             transaction_id: replay.transaction_id,
@@ -318,8 +314,8 @@ fn geometry_snaps_exactly_onto_the_projected_boundary() {
     .unwrap();
     let mut session = SketchSession::new(
         "Sketch1",
-        PlaneRef::OriginPlane {
-            plane: OriginPlane::Xy,
+        PlaneRef::PlanarFace {
+            face_id: nbcad_core::FaceId(1),
         },
         basis,
         false,
@@ -357,4 +353,52 @@ fn geometry_snaps_exactly_onto_the_projected_boundary() {
         })
         .expect("the committed line is in the snapshot");
     assert_eq!(end, Vec2::new(8.0, 10.0));
+}
+
+#[test]
+fn invalid_saved_boundaries_and_point_ownership_are_rejected_atomically() {
+    let (mut manager, _) = manager_with_face_sketch();
+    draw_semicircle_against_boundary(&mut manager);
+    manager.end_sketch().unwrap();
+    let original = manager.export_project_model().unwrap();
+    for invalid in [
+        "entity_id",
+        "duplicate",
+        "radius",
+        "origin_plane",
+        "generated_point",
+    ] {
+        let mut model: serde_json::Value = serde_json::from_str(&original).unwrap();
+        let face = model["sketches"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|s| s["name"] == "Sketch2")
+            .unwrap();
+        match invalid {
+            "entity_id" => face["support_boundary"][0]["id"] = 1.into(),
+            "duplicate" => {
+                let first = face["support_boundary"][0].clone();
+                face["support_boundary"].as_array_mut().unwrap().push(first);
+            }
+            "radius" => {
+                face["support_boundary"][0]["circle"] =
+                    serde_json::json!({"center":{"x":0,"y":0},"radius":-1,"closed":false})
+            }
+            "origin_plane" => {
+                face["plane"] = serde_json::json!({"type":"origin_plane","plane":"xy"})
+            }
+            "generated_point" => face["snapshot"]["generated_points"] = serde_json::json!([999999]),
+            _ => unreachable!(),
+        }
+        assert!(
+            manager.prepare_load_project(model.to_string()).is_err(),
+            "{invalid}"
+        );
+        assert_eq!(
+            manager.export_project_model().unwrap(),
+            original,
+            "rejected load must be atomic"
+        );
+    }
 }

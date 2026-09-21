@@ -19,7 +19,7 @@ use nbcad_solid::{
 use serde::{Deserialize, Serialize};
 
 use crate::sketch::SketchSnapshot;
-use crate::{AssemblyDocumentDto, DrawingDocumentDto, ProjectVisibilityDto};
+use crate::{AssemblyDocumentDto, DrawingDocumentDto, ProjectVisibilityDto, ProjectedEdgeDto};
 
 pub const PROJECT_FORMAT: &str = "nbcad-project";
 pub const LEGACY_PROJECT_FORMAT: &str = "tfcad-project";
@@ -30,10 +30,14 @@ pub const LEGACY_PROJECT_FORMAT: &str = "tfcad-project";
 // Schema 7 protects CAM intent, including every chamfer chain, from readers
 // that would silently discard machining data. Earlier CAM preview projects
 // used schema 4; their additive CAM fields remain readable here as well.
-pub const PROJECT_SCHEMA_VERSION: u32 = 7;
+// Schema 8 preserves history-stage support boundaries and generated-point
+// ownership. Older readers would silently discard both on a save.
+// Schema 9 additionally protects stable region identities and associative
+// edge constraints. A reader must never discard these and retarget a feature.
+pub const PROJECT_SCHEMA_VERSION: u32 = 9;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ProjectModelV7 {
+pub(crate) struct ProjectModelV9 {
     pub format: String,
     pub schema_version: u32,
     pub document: ProjectDocumentV2,
@@ -96,6 +100,15 @@ pub(crate) struct ProjectSketchV2 {
     pub dimension_style: DimensionStyle,
     pub grid_snap: bool,
     pub snapshot: SketchSnapshot,
+    /// Frozen at this sketch's history stage, before any consuming feature.
+    /// None is intentionally different from an empty boundary: legacy sketches
+    /// retain authored-only profiles, including their saved numeric indices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub support_boundary: Option<Vec<ProjectedEdgeDto>>,
+    #[serde(default)]
+    pub profile_identities: crate::profile_identity::ProfileIdentities,
+    #[serde(default)]
+    pub entity_id_high_water: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -123,7 +136,7 @@ pub(crate) struct ProjectPreferencesV2 {
     pub grid_snap: bool,
 }
 
-pub(crate) fn decode_project(json: &str) -> Result<ProjectModelV7, String> {
+pub(crate) fn decode_project(json: &str) -> Result<ProjectModelV9, String> {
     let mut header: serde_json::Value = serde_json::from_str(json)
         .map_err(|error| format!("model.json is not valid JSON: {error}"))?;
     let format = header
@@ -146,7 +159,7 @@ pub(crate) fn decode_project(json: &str) -> Result<ProjectModelV7, String> {
             migrate_v2_to_v3(&mut header);
         }
         2 => migrate_v2_to_v3(&mut header),
-        3 | 4 | 5 | 6 => {}
+        3 | 4 | 5 | 6 | 7 | 8 => {}
         version if version == u64::from(PROJECT_SCHEMA_VERSION) => {}
         _ => {
             return Err(format!(
@@ -161,7 +174,7 @@ pub(crate) fn decode_project(json: &str) -> Result<ProjectModelV7, String> {
     // association. Users must explicitly reassociate unverified references.
     // Raising the version prevents old readers from saving away model intent.
     header["schema_version"] = serde_json::Value::from(PROJECT_SCHEMA_VERSION);
-    let mut model: ProjectModelV7 = serde_json::from_value(header)
+    let mut model: ProjectModelV9 = serde_json::from_value(header)
         .map_err(|error| format!("invalid project model: {error}"))?;
     // A project file must always open: CAM content migrates what it can and
     // parks what it cannot as disabled operations with load warnings,
@@ -214,7 +227,7 @@ fn migrate_v2_to_v3(model: &mut serde_json::Value) {
     model["schema_version"] = serde_json::Value::from(3);
 }
 
-pub(crate) fn validate_project(model: &ProjectModelV7) -> Result<(), String> {
+pub(crate) fn validate_project(model: &ProjectModelV9) -> Result<(), String> {
     if model.format != PROJECT_FORMAT || model.schema_version != PROJECT_SCHEMA_VERSION {
         return Err("project header does not match the supported schema".to_string());
     }
@@ -271,6 +284,38 @@ pub(crate) fn validate_project(model: &ProjectModelV7) -> Result<(), String> {
             .snapshot
             .validate()
             .map_err(|error| format!("{}: {error}", sketch.name))?;
+        sketch.profile_identities.validate()?;
+        if sketch.entity_id_high_water >= 1_u64 << 40 {
+            return Err("invalid sketch entity identity counter".into());
+        }
+        if let Some(boundary) = &sketch.support_boundary {
+            if !matches!(sketch.plane, PlaneRef::PlanarFace { .. }) {
+                return Err(format!("{}: support boundary requires a face", sketch.name));
+            }
+            let mut ids = HashSet::new();
+            let mut edges = HashSet::new();
+            for edge in boundary {
+                // Keep synthetic segment ids out of the authored entity range
+                // and exactly representable by the browser (id * 1000 + piece).
+                if !(1_u64 << 40..1_u64 << 41).contains(&edge.id)
+                    || !ids.insert(edge.id)
+                    || !edges.insert(edge.edge_id)
+                    || edge.points.len() < 2
+                    || edge
+                        .points
+                        .iter()
+                        .any(|p| !p.x.is_finite() || !p.y.is_finite())
+                    || edge.circle.is_some_and(|circle| {
+                        !circle.center.x.is_finite()
+                            || !circle.center.y.is_finite()
+                            || !circle.radius.is_finite()
+                            || circle.radius <= 0.0
+                    })
+                {
+                    return Err(format!("{}: invalid saved support boundary", sketch.name));
+                }
+            }
+        }
     }
 
     let mut extrude_ids = HashSet::new();
@@ -580,7 +625,7 @@ pub(crate) fn validate_project(model: &ProjectModelV7) -> Result<(), String> {
 }
 
 fn validate_feature_entry(
-    model: &ProjectModelV7,
+    model: &ProjectModelV9,
     feature_id: FeatureId,
     name: &str,
     kind: FeatureKind,

@@ -870,4 +870,255 @@ mod tests {
             }
         }
     }
+
+    /// Real production GPU path: projected partial arcs on both face normals,
+    /// thin solids, multiple zooms and palettes. Kept opt-in for GPU-less hosts.
+    #[test]
+    #[ignore = "requires a GPU; set NBCAD_PREVIEW_PROOF_DIR to retain visual evidence"]
+    fn native_sketch_boundary_visual_matrix() {
+        use nbcad_core::{OriginPlane, PlaneRef};
+        use nbcad_sketch::{
+            ArcCenterRequest, SegmentRequest, SetGridSnapRequest, SketchManager, Vec2 as P,
+        };
+        use nbcad_solid::{CommitKernelRequest, ExtrudeExtent, ExtrudeOperation, ExtrudeRequest};
+        let mut manager = SketchManager::new();
+        manager
+            .begin_sketch(PlaneRef::OriginPlane {
+                plane: OriginPlane::Xy,
+            })
+            .unwrap();
+        manager
+            .set_grid_snap(SetGridSnapRequest { enabled: false })
+            .unwrap();
+        manager
+            .add_arc_center(ArcCenterRequest {
+                center: P::ZERO,
+                start: P::new(25.0, 0.0),
+                sweep: P::new(0.0, -25.0),
+                sweep_rad: Some(1.5 * std::f64::consts::PI),
+                ctrl_held: true,
+                radius_mm: None,
+                radius_text: None,
+                angle_text: None,
+            })
+            .unwrap();
+        manager
+            .add_line(SegmentRequest {
+                from: P::new(0.0, -25.0),
+                to_raw: P::new(25.0, 0.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        manager.end_sketch().unwrap();
+        let plan = manager
+            .prepare_extrude(ExtrudeRequest {
+                source_face: None,
+                sketch_name: "Sketch1".into(),
+                profile_indices: vec![0],
+                operation: ExtrudeOperation::NewBody,
+                extent: ExtrudeExtent::Distance { distance: 0.15 },
+                taper_angle_deg: 0.0,
+                flip: false,
+                target_body_ids: vec![],
+            })
+            .unwrap();
+        let mut kernel = nbcad_occt::OcctKernel::new().unwrap();
+        let scene = kernel.recompute(&plan).unwrap();
+        manager
+            .commit_solid(CommitKernelRequest {
+                transaction_id: plan.transaction_id,
+                scene,
+            })
+            .unwrap();
+        // A second, smaller solid lies fully behind the thin plate. Its edges
+        // are a deterministic occlusion probe, not just a visual impression.
+        manager
+            .begin_sketch(PlaneRef::OriginPlane {
+                plane: OriginPlane::Xy,
+            })
+            .unwrap();
+        manager
+            .add_rectangle(nbcad_sketch::RectangleRequest {
+                mode: nbcad_sketch::RectangleMode::TwoPoint,
+                p1: P::new(-8.0, 2.0),
+                p2: P::new(-2.0, 8.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        manager.end_sketch().unwrap();
+        let plan = manager
+            .prepare_extrude(ExtrudeRequest {
+                source_face: None,
+                sketch_name: "Sketch2".into(),
+                profile_indices: vec![0],
+                operation: ExtrudeOperation::NewBody,
+                extent: ExtrudeExtent::Distance { distance: 0.01 },
+                taper_angle_deg: 0.0,
+                flip: false,
+                target_body_ids: vec![],
+            })
+            .unwrap();
+        let scene = kernel.recompute(&plan).unwrap();
+        manager
+            .commit_solid(CommitKernelRequest {
+                transaction_id: plan.transaction_id,
+                scene,
+            })
+            .unwrap();
+        let scene = manager.solid_scene();
+        let mut renderer = PreviewRenderer::new().unwrap();
+        let cancelled = AtomicBool::new(false);
+        let output = std::env::var_os("NBCAD_PREVIEW_PROOF_DIR");
+        if let Some(path) = &output {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        for bottom in [false, true] {
+            let face = scene.bodies[0]
+                .faces
+                .iter()
+                .find(|f| {
+                    f.plane.is_some_and(|p| {
+                        if bottom {
+                            p.normal[2] < -0.9
+                        } else {
+                            p.normal[2] > 0.9
+                        }
+                    })
+                })
+                .unwrap();
+            let sketch = manager
+                .begin_sketch(PlaneRef::PlanarFace { face_id: face.id })
+                .unwrap();
+            assert!(sketch
+                .projected_edges
+                .iter()
+                .any(|edge| edge.circle.is_some() && edge.points.len() > 3));
+            let mut document = PreviewDocument::new(vec![Frame {
+                caption: "Thin partial circular plate".into(),
+                scene: scene.clone(),
+            }])
+            .unwrap();
+            let base_radius = document.radius;
+            let mut request = request(format!("boundary-{bottom}"), String::new(), 1);
+            request.width = 800;
+            request.height = 600;
+            request.pitch = if bottom { -1.15 } else { 1.15 };
+            renderer
+                .render(
+                    &document,
+                    &request,
+                    &cancelled,
+                    Instant::now() + Duration::from_secs(60),
+                )
+                .unwrap();
+            {
+                let world = renderer.app.world_mut();
+                let mut model = world.resource_mut::<ModelResource>();
+                model.active_sketch = Some(sketch);
+                model.geometry_revision += 1;
+                model.revision += 1;
+                world.resource_mut::<PresentationResource>().0.mode = ViewportMode::Sketch;
+            }
+            for light in [false, true] {
+                let mut palette = ViewportPalette::default();
+                if light {
+                    palette.background = [0.95, 0.96, 0.98];
+                    palette.grid_fine = [0.82, 0.83, 0.85];
+                    palette.grid_major = [0.70, 0.71, 0.73];
+                    palette.projected = [0.47, 0.19, 0.72];
+                }
+                renderer.app.world_mut().resource_mut::<PaletteResource>().0 = palette;
+                *renderer.app.world_mut().resource_mut::<ClearColor>() =
+                    ClearColor(rgb(palette.background));
+                for (label, zoom, pitch) in [
+                    ("face", 1.0, 1.15),
+                    ("close", 0.7, 1.15),
+                    ("grazing", 1.0, 0.08),
+                ] {
+                    document.radius = base_radius * zoom;
+                    request.pitch = if bottom { -pitch } else { pitch };
+                    let png = renderer
+                        .render(
+                            &document,
+                            &request,
+                            &cancelled,
+                            Instant::now() + Duration::from_secs(60),
+                        )
+                        .unwrap();
+                    assert!(
+                        png.len() > 5_000,
+                        "a scene must be rendered, not an empty target"
+                    );
+                    let name = format!(
+                        "boundary-{}-{}-{label}.png",
+                        if bottom { "bottom" } else { "top" },
+                        if light { "light" } else { "dark" }
+                    );
+                    if let Some(path) = &output {
+                        std::fs::write(std::path::Path::new(path).join(name), png).unwrap();
+                    }
+                }
+            }
+            manager.end_sketch().unwrap();
+        }
+        *renderer
+            .app
+            .world_mut()
+            .resource_mut::<PresentationResource>() = PresentationResource::default();
+        let mut without_hidden_edges = scene.clone();
+        without_hidden_edges.bodies[1].edges.clear();
+        let mut document = PreviewDocument::new(vec![
+            Frame {
+                caption: "Hidden edges present".into(),
+                scene,
+            },
+            Frame {
+                caption: "Hidden edges removed".into(),
+                scene: without_hidden_edges,
+            },
+        ])
+        .unwrap();
+        let radius = document.radius;
+        let mut request = request("occlusion".into(), String::new(), 1);
+        request.width = 800;
+        request.height = 600;
+        request.pitch = 1.3;
+        for zoom in [0.7, 1.0, 2.5] {
+            document.radius = radius * zoom;
+            request.frame_index = 0;
+            let with_edges = renderer
+                .render(
+                    &document,
+                    &request,
+                    &cancelled,
+                    Instant::now() + Duration::from_secs(60),
+                )
+                .unwrap();
+            request.frame_index = 1;
+            let without_edges = renderer
+                .render(
+                    &document,
+                    &request,
+                    &cancelled,
+                    Instant::now() + Duration::from_secs(60),
+                )
+                .unwrap();
+            if let Some(path) = &output {
+                std::fs::write(
+                    std::path::Path::new(path).join(format!("occlusion-{zoom}-with.png")),
+                    &with_edges,
+                )
+                .unwrap();
+                std::fs::write(
+                    std::path::Path::new(path).join(format!("occlusion-{zoom}-without.png")),
+                    &without_edges,
+                )
+                .unwrap();
+            }
+            assert!(
+                with_edges == without_edges,
+                "hidden body edges leaked through the 0.15 mm plate at zoom {zoom}"
+            );
+        }
+    }
 }

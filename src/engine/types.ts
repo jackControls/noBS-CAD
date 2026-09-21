@@ -60,6 +60,7 @@ export type GeometricConstraintType =
   | 'fix'
   | 'midpoint'
   | 'reference_midpoint'
+  | 'reference_on_edge'
   | 'span_midpoint'
   | 'concentric'
   | 'collinear'
@@ -71,7 +72,8 @@ export type DimensionalConstraintType =
   | 'distance'
   | 'radius'
   | 'diameter'
-  | 'angle';
+  | 'angle'
+  | 'arc_angle';
 
 export type SketchConstraintType = GeometricConstraintType | DimensionalConstraintType;
 
@@ -111,8 +113,8 @@ export interface SketchDto {
   reference_midpoints: Array<{ edge_id: number; position: Vec2 }>;
   /**
    * Boundary edges of the support face, projected into sketch coordinates.
-   * Runtime reference geometry: rebuilt from stable edge ids whenever the
-   * face-hosted sketch is opened or the body is recomputed, never persisted.
+   * Reference geometry: refreshed from stable edge ids whenever the
+   * face-hosted sketch's own history stage is available. Saved for replay.
    */
   projected_edges: ProjectedEdgeDto[];
   /** Driving and reference dimensions with presentation data (D9). */
@@ -3344,6 +3346,22 @@ export interface SlotRequest {
   cursor: Vec2;
   width_mm?: number | null;
   width_text?: string | null;
+  ctrl_held?: boolean;
+}
+
+export type CreationPreviewRequest =
+  | ({ tool: 'rectangle' } & LockedRectangleRequest)
+  | ({ tool: 'circle' } & LockedCircleRequest)
+  | ({ tool: 'slot' } & SlotRequest)
+  | ({ tool: 'arc_center' } & ArcCenterRequest)
+  | ({ tool: 'arc3_point' } & Arc3PointRequest)
+  | ({ tool: 'chamfer' } & ChamferRequest);
+
+export interface CreationPreviewDto {
+  curves: PreviewCurve[];
+  snapped_to: Vec2;
+  snap: SnapTarget;
+  values: Record<string, number>;
 }
 
 /** Fit-point spline creation: ordered fit points (≥ 2 after cleanup). */

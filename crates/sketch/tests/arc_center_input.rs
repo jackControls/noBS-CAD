@@ -26,7 +26,14 @@ fn close(a: Vec2, b: Vec2) -> bool {
 /// Session with grid snap off and one support-edge midpoint plus one projected
 /// boundary edge, which is what a sketch on a planar face carries.
 fn face_session() -> SketchSession {
-    let mut session = SketchSession::new("Sketch1", XY, XY.basis().unwrap(), false);
+    let mut session = SketchSession::new(
+        "Sketch1",
+        PlaneRef::PlanarFace {
+            face_id: nbcad_core::FaceId(1),
+        },
+        XY.basis().unwrap(),
+        false,
+    );
     session.set_reference_midpoints(vec![(EdgeId(9), v(10.0, 10.0))]);
     session.set_projected_edges(vec![ProjectedEdgeDto {
         id: RESERVED_ID_FLOOR,

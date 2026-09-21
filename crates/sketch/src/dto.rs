@@ -148,11 +148,10 @@ pub struct SketchDto {
     pub reference_midpoints: Vec<ReferenceMidpointDto>,
     /// Boundary edges of the support face, projected into sketch coordinates.
     ///
-    /// Runtime external references, never persisted: they are rebuilt from
-    /// stable edge ids whenever a face-hosted sketch is opened or the body is
-    /// recomputed. They exist so the face boundary the user selected the
-    /// sketch plane from can close a region drawn against it, and so the
-    /// viewport can draw that boundary.
+    /// History-stage external references, saved so dependent features can
+    /// replay before a kernel scene exists. Refreshed from stable edge ids
+    /// only when that stage's body is available. They close authored regions
+    /// against the selected face and are drawn as non-editable references.
     #[serde(default)]
     pub projected_edges: Vec<ProjectedEdgeDto>,
     /// Driving dimensions with presentation data (D9).
@@ -180,13 +179,115 @@ pub struct ProjectedEdgeDto {
     /// which keeps them above every authored segment id so a piece shared with
     /// authored geometry keeps the authored entity's identity.
     pub id: u64,
-    /// Stable body edge id. A projection is refreshed from this id, never
-    /// carried across a recompute as raw coordinates.
+    /// Stable body edge id, resolved when this sketch's history-stage scene is
+    /// available. Saved coordinates bootstrap replay while that scene is absent.
     pub edge_id: EdgeId,
     /// Projected polyline in sketch coordinates.
     pub points: Vec<Vec2>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub circle: Option<ProjectedCircleDto>,
+}
+
+impl ProjectedEdgeDto {
+    /// Include authored contact points in the discovery tessellation. A true
+    /// point on a circular carrier generally lies between its sampled chords;
+    /// without inserting it, a correctly constrained endpoint can look open.
+    pub(crate) fn profile_points(&self, contacts: &[Vec2], tolerance: f64) -> Vec<Vec2> {
+        let Some(circle) = self.circle else {
+            return self.points.clone();
+        };
+        let Some(first) = self.points.first().copied() else {
+            return vec![];
+        };
+        let mut travel = 0.0_f64;
+        let mut vertices = vec![(0.0, first)];
+        for pair in self.points.windows(2) {
+            let a = pair[0] - circle.center;
+            let b = pair[1] - circle.center;
+            travel += (a.x * b.y - a.y * b.x).atan2(a.dot(b));
+            vertices.push((travel, pair[1]));
+        }
+        let direction = travel.signum();
+        let start = (first.y - circle.center.y).atan2(first.x - circle.center.x);
+        for point in contacts {
+            if (point.distance(circle.center) - circle.radius).abs() > tolerance {
+                continue;
+            }
+            let angle = (point.y - circle.center.y).atan2(point.x - circle.center.x);
+            let offset = ((angle - start) * direction).rem_euclid(std::f64::consts::TAU);
+            if offset <= travel.abs() + 1e-10 {
+                vertices.push((offset * direction, *point));
+            }
+        }
+        vertices.sort_by(|a, b| (a.0 * direction).total_cmp(&(b.0 * direction)));
+        vertices.dedup_by(|a, b| a.1.distance(b.1) <= tolerance);
+        vertices.into_iter().map(|(_, p)| p).collect()
+    }
+
+    /// Exact circular projection when an analytic carrier exists; otherwise
+    /// closest point on the finite sampled boundary (including its endpoints).
+    pub(crate) fn closest_point(&self, point: Vec2) -> Option<Vec2> {
+        let first = *self.points.first()?;
+        let last = *self.points.last()?;
+        if let Some(circle) = self.circle {
+            let delta = point - circle.center;
+            let length = delta.length();
+            if length < 1e-12 {
+                return Some(first);
+            }
+            let on_circle = circle.center + delta * (circle.radius / length);
+            if circle.closed {
+                return Some(on_circle);
+            }
+            let sweep: f64 = self
+                .points
+                .windows(2)
+                .map(|p| {
+                    let a = p[0] - circle.center;
+                    let b = p[1] - circle.center;
+                    (a.x * b.y - a.y * b.x).atan2(a.dot(b))
+                })
+                .sum();
+            let a = first - circle.center;
+            let offset = ((delta.y.atan2(delta.x) - a.y.atan2(a.x)) * sweep.signum())
+                .rem_euclid(std::f64::consts::TAU);
+            if offset <= sweep.abs() + 1e-10 {
+                return Some(on_circle);
+            }
+            return Some(if point.distance(first) <= point.distance(last) {
+                first
+            } else {
+                last
+            });
+        }
+        self.points
+            .windows(2)
+            .filter_map(|pair| {
+                let d = pair[1] - pair[0];
+                let len2 = d.dot(d);
+                (len2 > 1e-24)
+                    .then(|| pair[0] + d * ((point - pair[0]).dot(d) / len2).clamp(0.0, 1.0))
+            })
+            .min_by(|a, b| a.distance(point).total_cmp(&b.distance(point)))
+    }
+
+    /// Arc-length midpoint of the saved tessellation. Restores snap references
+    /// even while downstream features mask the original support face.
+    pub(crate) fn midpoint(&self) -> Option<Vec2> {
+        let total: f64 = self.points.windows(2).map(|p| p[0].distance(p[1])).sum();
+        if total <= 1e-9 {
+            return None;
+        }
+        let mut remaining = total * 0.5;
+        for pair in self.points.windows(2) {
+            let length = pair[0].distance(pair[1]);
+            if length > 0.0 && remaining <= length {
+                return Some(pair[0] + (pair[1] - pair[0]) * (remaining / length));
+            }
+            remaining -= length;
+        }
+        self.points.last().copied()
+    }
 }
 
 /// Exact circular carrier of a projected edge, in sketch coordinates.
@@ -234,6 +335,8 @@ pub struct DimensionDto {
     pub param_id: Option<ParamId>,
     pub param_name: Option<String>,
     pub param_expression: Option<String>,
+    /// Driving parameter value (including its sign), or reference measurement.
+    /// Editors use this fallback for literal inputs; labels use `text`.
     pub value: f64,
     /// Formatted annotation text (mm/deg, 2 decimals; Ø/R prefixes).
     pub text: String,
@@ -270,8 +373,7 @@ pub enum SnapTarget {
     },
     /// Cursor snapped onto the projected boundary of the support face, so
     /// geometry drawn against a face edge lands exactly on it and can close a
-    /// profile with it. The projected boundary is runtime reference geometry,
-    /// so this acquisition records no durable relation.
+    /// profile with it. Commit adds a sliding, finite point-on-edge relation.
     ProjectedEdge {
         edge: EdgeId,
         position: Vec2,
@@ -481,6 +583,29 @@ pub struct SlotRequest {
     pub width_mm: Option<f64>,
     #[serde(default)]
     pub width_text: Option<String>,
+    #[serde(default)]
+    pub ctrl_held: bool,
+}
+
+/// Read-only resolved geometry. Preview and commit use the same resolvers;
+/// invalid/partial input never mutates the sketch or consumes an entity id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "tool", rename_all = "snake_case")]
+pub enum CreationPreviewRequest {
+    Rectangle(LockedRectangleRequest),
+    Circle(LockedCircleRequest),
+    Slot(SlotRequest),
+    ArcCenter(ArcCenterRequest),
+    Arc3Point(Arc3PointRequest),
+    Chamfer(ChamferRequest),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreationPreviewDto {
+    pub curves: Vec<PreviewCurve>,
+    pub snapped_to: Vec2,
+    pub snap: SnapTarget,
+    pub values: std::collections::BTreeMap<String, f64>,
 }
 
 /// Fit-point spline creation (M1 follow-up): ordered fit points.

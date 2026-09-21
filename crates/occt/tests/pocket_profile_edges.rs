@@ -132,7 +132,8 @@ fn a_semicircular_pocket_keeps_its_opening_and_floor_arcs() {
             ctrl_held: true,
             radius_mm: None,
             radius_text: None,
-            clockwise: None,
+            angle_text: None,
+            sweep_rad: None,
         })
         .unwrap();
     manager.end_sketch().unwrap();

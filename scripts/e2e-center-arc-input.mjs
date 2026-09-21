@@ -520,11 +520,12 @@ try {
     Math.abs((await angleDegrees()) - 90) < 0.5,
     `the angle follows the cursor, got ${await angleDegrees()}`,
   );
-  // Counter-clockwise is positive, clockwise negative: the sign is the sweep's.
+  // The first deliberate CCW move latches positive direction. Moving across
+  // the start ray now describes the major CCW arc, not a sign reversal.
   await moveSketch(frame.center.x, frame.center.y - 6);
   assert.ok(
-    Math.abs((await angleDegrees()) + 90) < 0.5,
-    `a clockwise sweep reads negative, got ${await angleDegrees()}`,
+    Math.abs((await angleDegrees()) - 270) < 0.5,
+    `the first direction stays CCW, got ${await angleDegrees()}`,
   );
   // Tab moves between the two fields exactly as it does for the line.
   const focusedField = () =>
@@ -545,9 +546,7 @@ try {
   assert.equal(angleField.locked, true, 'typing locks the angle');
   assert.equal(angleField.value, '45');
   assert.equal((await dynField('radius')).locked, false, 'the radius stays live');
-  // The typed angle IS the sweep, sign included: the pointer was travelling
-  // clockwise while "45" was typed, and the arc must still be the
-  // counter-clockwise quarter the field named.
+  // Typed angle overrides the pointer, sign included.
   const commitCurrentAngle = async (waypoint) => {
     const before = (await sketch()).entities.filter((entity) => entity.kind === 'arc').length;
     await moveSketch(frame.center.x + waypoint.x, frame.center.y + waypoint.y);
@@ -588,7 +587,8 @@ try {
   await page.keyboard.press('Tab');
   await page.waitForTimeout(120);
   assert.equal(await focusedField(), 'angle', 'Tab reaches the angle for the second arc');
-  await page.keyboard.type('-45', { delay: 40 });
+  // Replacing an autofilled negative magnitude preserves its minus sign.
+  await page.keyboard.type('45', { delay: 40 });
   await page.waitForTimeout(250);
   angleField = await dynField('angle');
   assert.equal(angleField.locked, true, 'the negative angle locks');
@@ -602,6 +602,18 @@ try {
     (clockwiseSweep.start_angle + clockwiseSweep.end_angle) / 2 < 0,
     'a typed -45 stays clockwise',
   );
+  // An explicit opposite sign reverses the remembered initial direction.
+  await arm('arcCenter');
+  await clickSketch(frame.center.x, frame.center.y);
+  await clickSketch(frame.center.x + 6, frame.center.y);
+  await moveSketch(frame.center.x, frame.center.y - 5);
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('+45', { delay: 40 });
+  await page.waitForTimeout(250);
+  assert.equal((await dynField('angle')).value, '+45');
+  const reversed = await commitCurrentAngle({ x: 0, y: -6 });
+  assert.ok((reversed.start_angle + reversed.end_angle) / 2 > 0, 'explicit + reverses CW to CCW');
   // A typed angle is dimensioned like a typed radius: the annotation must
   // survive the commit so the sweep stays readable and editable.
   // Earlier steps already own a radius dimension, so find this arc's angle one.

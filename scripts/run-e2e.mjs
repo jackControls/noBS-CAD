@@ -8,7 +8,8 @@ import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-const PORT = 7199;
+const PORT = Number(process.env.NBCAD_E2E_PORT ?? 7199);
+if (!Number.isInteger(PORT) || PORT < 1024 || PORT > 65535) throw new Error('Invalid NBCAD_E2E_PORT');
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
 const suiteFiles = process.argv.slice(2);
@@ -45,7 +46,7 @@ const waitForServer = async () => {
       await new Promise((r) => setTimeout(r, 250));
       if (server.exitCode !== null || server.signalCode !== null) {
         throw new Error(
-          `port ${PORT} is already serving another process; stop it or use NBCAD_E2E_BASE_URL with an isolated port`,
+          `port ${PORT} is already serving another process; choose an isolated port with NBCAD_E2E_PORT`,
         );
       }
       return;
@@ -63,6 +64,7 @@ try {
     const suite = spawn(process.execPath, [path.join(here, suiteFile)], {
       cwd: root,
       stdio: 'inherit',
+      env: { ...process.env, NBCAD_E2E_BASE_URL: `http://localhost:${PORT}` },
     });
     const result = await new Promise((resolve, reject) => {
       suite.on('error', reject);

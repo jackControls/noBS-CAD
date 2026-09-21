@@ -103,6 +103,12 @@ pub enum Constraint {
         edge: EdgeId,
         position: Vec2,
     },
+    /// A sliding relation to a finite support-face edge. The history-stage
+    /// carrier is cached in the sketch snapshot and refreshed by stable id.
+    ReferenceOnEdge {
+        point: EntityId,
+        edge: EdgeId,
+    },
     /// Midpoint of an edge's original corner-to-corner span after a corner
     /// modifier trims one or both finite endpoints. `start` and `end` are
     /// the persistent corner reference points retained by Fillet/Chamfer.
@@ -253,6 +259,13 @@ impl Constraint {
                 },
             ) => point == other_point && edge == other_edge,
             (
+                Constraint::ReferenceOnEdge { point, edge },
+                Constraint::ReferenceOnEdge {
+                    point: other_point,
+                    edge: other_edge,
+                },
+            ) => point == other_point && edge == other_edge,
+            (
                 Constraint::SpanMidpoint { point, start, end },
                 Constraint::SpanMidpoint {
                     point: other_point,
@@ -343,6 +356,7 @@ impl Constraint {
             Constraint::Fix { .. } => "fix",
             Constraint::Midpoint { .. } => "midpoint",
             Constraint::ReferenceMidpoint { .. } => "reference_midpoint",
+            Constraint::ReferenceOnEdge { .. } => "reference_on_edge",
             Constraint::SpanMidpoint { .. } => "span_midpoint",
             Constraint::Concentric { .. } => "concentric",
             Constraint::Collinear { .. } => "collinear",
@@ -380,6 +394,7 @@ impl Constraint {
             | Constraint::Radius { entity, .. }
             | Constraint::Diameter { entity, .. } => vec![entity],
             Constraint::ReferenceMidpoint { point, .. } => vec![point],
+            Constraint::ReferenceOnEdge { point, .. } => vec![point],
             Constraint::CenterCoincident { point, curve } => vec![point, curve],
             Constraint::Coincident { a, b }
             | Constraint::HorizontalPoints { a, b }
