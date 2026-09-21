@@ -1,6 +1,6 @@
 # Bevy 0.20 code reduction experiment
 
-- Branch: `codex/pr124-bevy-020-code-savings`
+- Branch: `feat/bevy-020-code-savings`
 - Baseline: `ad01489d2bade99d41941d7def5495abced66fb4` (the Bevy 0.19.1 upgrade in PR #153)
 - Investigated: 2026-09-21
 
