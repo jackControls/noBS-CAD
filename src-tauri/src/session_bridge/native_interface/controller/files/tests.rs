@@ -2,6 +2,8 @@ use super::*;
 use crate::session_bridge::native_interface::tests::Fixture;
 use std::time::{Duration, Instant};
 
+mod lifecycle;
+
 fn setup(fixture: &Fixture) -> (App, NativeServices, NativeInterfaceHandle) {
     let mut app = native_viewport::interface_scene_fixture();
     let services = NativeServices {
