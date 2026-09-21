@@ -15,6 +15,7 @@ on:
       - 'crates/occt/**'
       - 'crates/export/**'
       - 'crates/assembly/**'
+      - 'crates/cam/**'
       - 'crates/mcp-mutate/**'
       - 'crates/script/**'
       - 'crates/recipes/**'
@@ -25,6 +26,8 @@ on:
       - 'xtask/**'
       - 'vcpkg.json'
       - '.github/workflows/mcp-server.yml'
+      - '.github/actions/setup-windows-occt/**'
+      - 'scripts/ci/**'
   pull_request:
     paths:
       - 'mcp-server/**'
@@ -36,6 +39,7 @@ on:
       - 'crates/occt/**'
       - 'crates/export/**'
       - 'crates/assembly/**'
+      - 'crates/cam/**'
       - 'crates/mcp-mutate/**'
       - 'crates/script/**'
       - 'crates/recipes/**'
@@ -46,6 +50,8 @@ on:
       - 'xtask/**'
       - 'vcpkg.json'
       - '.github/workflows/mcp-server.yml'
+      - '.github/actions/setup-windows-occt/**'
+      - 'scripts/ci/**'
 
 permissions:
   contents: read
@@ -58,33 +64,32 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  mcp-tests:
+  mcp-windows:
+    name: MCP acceptance (Windows / ${{ matrix.shard }})
     runs-on: windows-2025
     timeout-minutes: 180
-    # Cache versions include path strings: match desktop Windows paths exactly.
-    env:
-      VCPKG_COMMIT: 716b42043743cdceabed9c8e2e6cf80ddae1e0c1
-      VCPKG_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
-      VCPKG_INSTALL_ROOT: ${{ github.workspace }}\vcpkg_installed
-      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.cache\vcpkg\archives,readwrite
+    strategy: &acceptance-shards
+      fail-fast: false
+      matrix:
+        include:
+          - shard: core
+            project: garden-bench
+          - shard: turbine
+            project: vertical-axis-turbine
+          - shard: vise
+            project: d-screw-vise
     steps:
       - uses: actions/checkout@v4
-
-      - name: Check out pinned vcpkg
-        uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          repository: microsoft/vcpkg
-          ref: ${{ env.VCPKG_COMMIT }}
-          path: .vcpkg
-          # Shallow clones break versioned port tree objects (opencascade).
-          fetch-depth: 0
-
+          node-version: '24'
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
       - name: Rust formatting
+        if: matrix.shard == 'core'
         shell: pwsh
         run: |
           cargo fmt --all -- --check
@@ -107,72 +112,25 @@ jobs:
           "LIB=$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "LIBPATH=$env:LIBPATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      # Reuse the desktop Windows x64 SDK cache with the same compiler and pin.
-      - name: Restore installed OpenCASCADE tree
-        id: vcpkg-installed-cache
-        uses: actions/cache/restore@v4
+      - name: Set up cached OpenCASCADE SDK
+        id: occt
+        uses: ./.github/actions/setup-windows-occt
         with:
-          path: ${{ env.VCPKG_INSTALL_ROOT }}
-          key: vcpkg-installed-v1-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
-
-      - name: Restore vcpkg binary cache
-        if: steps.vcpkg-installed-cache.outputs.cache-hit != 'true'
-        id: vcpkg-binary-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ env.VCPKG_BINARY_CACHE }}
-          key: vcpkg-binary-v2-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
-
-      - name: Bootstrap vcpkg
-        if: steps.vcpkg-installed-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path $env:VCPKG_BINARY_CACHE -Force | Out-Null
-          & .\.vcpkg\bootstrap-vcpkg.bat -disableMetrics
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed" }
-
-      - name: Install OCCT via vcpkg
-        if: steps.vcpkg-installed-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          & .\.vcpkg\vcpkg.exe install `
-            --triplet x64-windows `
-            --x-manifest-root="$env:GITHUB_WORKSPACE" `
-            --x-install-root="$env:GITHUB_WORKSPACE\vcpkg_installed"
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
-
-      # Save immediately: a cold OCCT build can consume most of the job budget,
-      # so waiting for post-job cleanup risks losing the compiled package cache.
-      - name: Save vcpkg binary cache
-        if: steps.vcpkg-installed-cache.outputs.cache-hit != 'true' && steps.vcpkg-binary-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.VCPKG_BINARY_CACHE }}
-          key: vcpkg-binary-v2-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
-
-      - name: Save installed OpenCASCADE tree
-        if: steps.vcpkg-installed-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.VCPKG_INSTALL_ROOT }}
-          key: vcpkg-installed-v1-windows-2025-x64-windows-msvc-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
+          triplet: x64-windows
+          runner-cache-key: windows-2025-x64-windows-msvc
+          msvc-component: Microsoft.VisualStudio.Component.VC.Tools.x86.x64
 
       - name: MCP server tests
         id: native-tests
         shell: pwsh
         env:
-          OCCT_ROOT: ${{ github.workspace }}\vcpkg_installed\x64-windows
+          OCCT_ROOT: ${{ steps.occt.outputs.root }}
           NBCAD_RECIPE_ARTIFACT_DIR: ${{ github.workspace }}/target/mcp-recipe-evidence
         run: |
           $env:Path = "$env:OCCT_ROOT\bin;$env:Path"
-          # Full native vise/turbine replays compete for CPU and memory when
-          # libtest starts them together. Keep the existing request deadlines
-          # and all assertions, but run acceptance cases one at a time.
-          cargo test --locked --manifest-path mcp-server/Cargo.toml -- --test-threads=1
+          node scripts/ci/run-mcp-tests.mjs ${{ matrix.shard }}
           if ($LASTEXITCODE -ne 0) { throw "mcp-server tests failed" }
 
-      # Keep the last operation and useful completed models on failure only.
-      # Both hosts use this same bounded collector; tests write flat files here.
       - &retain-recipe-failure
         name: Collect bounded native recipe failure evidence
         if: failure() && steps.native-tests.outcome == 'failure'
@@ -204,20 +162,17 @@ jobs:
         if: failure() && steps.native-tests.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
-          name: mcp-recipe-failure-windows
+          name: mcp-recipe-failure-windows-${{ matrix.shard }}
           path: target/mcp-recipe-failure/
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
 
-      - name: Install Node for MCP plans
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
       - name: MCP bench and complete feature workshop
+        if: matrix.shard == 'core'
         shell: pwsh
         env:
-          OCCT_ROOT: ${{ github.workspace }}\vcpkg_installed\x64-windows
+          OCCT_ROOT: ${{ steps.occt.outputs.root }}
         run: |
           $env:Path = "$env:OCCT_ROOT\bin;$env:Path"
           cargo build --locked --manifest-path mcp-server/Cargo.toml
@@ -231,72 +186,46 @@ jobs:
           cargo xtask run-script --recipe fillet-basics --repeat 2 --server ./mcp-server/target/debug/nbcad-mcp.exe --out ./target/mcp-workshop/fillet-basics
           if ($LASTEXITCODE -ne 0) { throw "Parametric fillet lesson failed" }
 
-      # Native acceptance already builds, reloads and checks the vise/turbine.
-      # Retain their successful project ZIPs instead of rerunning those costly
-      # recipes or depending on a desktop. The bench is saved headlessly above.
-      - &stage-demo-projects
-        name: Stage verified editable demo projects
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $source = Join-Path $env:GITHUB_WORKSPACE 'target/mcp-recipe-evidence'
-          $destination = Join-Path $env:GITHUB_WORKSPACE 'target/demo-projects'
-          New-Item -ItemType Directory -Path $destination -Force | Out-Null
-          $projects = @(
-            @{ recipe = 'garden-bench'; asset = 'bench.nbcad' },
-            @{ recipe = 'd-screw-vise'; asset = 'vise.nbcad' },
-            @{ recipe = 'vertical-axis-turbine'; asset = 'turbine.nbcad' }
-          )
-          $assets = @($projects | ForEach-Object {
-            $inputFile = Join-Path $source "$($_.recipe).nbcad"
-            $outputFile = Join-Path $destination $_.asset
-            if (-not (Test-Path -LiteralPath $inputFile -PathType Leaf)) {
-              throw "Native acceptance did not produce $inputFile"
-            }
-            Copy-Item -LiteralPath $inputFile -Destination $outputFile
-            $size = (Get-Item -LiteralPath $outputFile).Length
-            if ($size -eq 0) { throw "Empty project: $outputFile" }
-            @{ name = $_.asset; recipe = $_.recipe; size = $size;
-               sha256 = (Get-FileHash -LiteralPath $outputFile -Algorithm SHA256).Hash.ToLowerInvariant() }
-          })
-          $version = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version
-          @{ schema_version = 1; source_commit = $env:GITHUB_SHA; application_version = $version; assets = $assets } |
-            ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $destination 'demo-projects.json') -Encoding utf8
-
-      - name: Upload verified editable demo projects
-        uses: actions/upload-artifact@v4
-        with:
-          name: noBS-CAD-demo-projects-windows-${{ github.sha }}
-          path: target/demo-projects/
-          if-no-files-found: error
-
-      - name: Upload MCP workshop evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: mcp-workshop-windows
-          path: target/mcp-workshop/
-          if-no-files-found: ignore
-
-      # Keep Windows installer coverage; export tests run in the Linux workspace.
       - name: xtask install-mcp tests
+        if: matrix.shard == 'core'
         shell: pwsh
         run: |
           cargo test --locked -p xtask
           if ($LASTEXITCODE -ne 0) { throw "xtask tests failed" }
 
-  # Linux MCP tests use Ubuntu 26.04 apt OCCT 7.9 (same SDK contract as
-  # desktop-packages / scripts/docker/ubuntu-26.04.Dockerfile). Host-neutral
-  # linux-engine-tests stay on ubuntu-24.04 because they do not link OCCT.
-  mcp-tests-linux:
-    name: MCP tests (Ubuntu)
+      # A successful shard contributes only its one verified project. Keep
+      # names stable across attempts so rerunning failed jobs can reuse the
+      # successful shards from this same run without taking another PR's data.
+      - name: Upload successful demo input
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-demo-windows-${{ matrix.shard }}
+          path: target/mcp-recipe-evidence/${{ matrix.project }}.nbcad
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+      - name: Upload MCP workshop evidence
+        if: always() && matrix.shard == 'core'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-workshop-windows
+          path: target/mcp-workshop/
+          if-no-files-found: ignore
+          overwrite: true
+
+  # Each flagship owns a separate runner, preserving serial execution within
+  # a shard and every existing assertion/deadline without geometry contention.
+  mcp-linux:
+    name: MCP acceptance (Ubuntu / ${{ matrix.shard }})
     runs-on: ubuntu-26.04
-    # Include cold compilation, full vise/turbine acceptance and the workshop.
-    # The turbine gate alone took 46 minutes in the recorded Windows dev build.
     timeout-minutes: 120
+    strategy: *acceptance-shards
     steps:
       - uses: actions/checkout@v4
-
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -328,14 +257,10 @@ jobs:
 
       - name: MCP server tests
         id: native-tests
-        shell: bash
-        # build.rs probes /usr when OCCT_ROOT is unset; set it explicitly.
         env:
           OCCT_ROOT: /usr
           NBCAD_RECIPE_ARTIFACT_DIR: ${{ github.workspace }}/target/mcp-recipe-evidence
-        # Match Windows: each full native acceptance case owns the runner's
-        # geometry resources instead of competing with the other flagship.
-        run: cargo test --locked --manifest-path mcp-server/Cargo.toml -- --test-threads=1
+        run: node scripts/ci/run-mcp-tests.mjs ${{ matrix.shard }}
 
       - *retain-recipe-failure
 
@@ -343,16 +268,14 @@ jobs:
         if: failure() && steps.native-tests.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
-          name: mcp-recipe-failure-linux
+          name: mcp-recipe-failure-linux-${{ matrix.shard }}
           path: target/mcp-recipe-failure/
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
       - name: MCP bench and complete feature workshop
+        if: matrix.shard == 'core'
         env:
           OCCT_ROOT: /usr
         run: |
@@ -362,19 +285,80 @@ jobs:
           cargo xtask run-script --recipe garden-bench --repeat 2 --server ./mcp-server/target/debug/nbcad-mcp --out ./target/mcp-workshop/garden-bench --save ./target/mcp-recipe-evidence/garden-bench.nbcad
           cargo xtask run-script --recipe fillet-basics --repeat 2 --server ./mcp-server/target/debug/nbcad-mcp --out ./target/mcp-workshop/fillet-basics
 
-      - *stage-demo-projects
-
-      - name: Upload verified editable demo projects
+      # A successful shard contributes only its one verified project. Keep
+      # names stable across attempts so rerunning failed jobs can reuse the
+      # successful shards from this same run without taking another PR's data.
+      - name: Upload successful demo input
         uses: actions/upload-artifact@v4
         with:
-          name: noBS-CAD-demo-projects-linux-${{ github.sha }}
-          path: target/demo-projects/
+          name: mcp-demo-linux-${{ matrix.shard }}
+          path: target/mcp-recipe-evidence/${{ matrix.project }}.nbcad
           if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
       - name: Upload MCP workshop evidence
-        if: always()
+        if: always() && matrix.shard == 'core'
         uses: actions/upload-artifact@v4
         with:
           name: mcp-workshop-linux
           path: target/mcp-workshop/
           if-no-files-found: ignore
+          overwrite: true
+
+  # Keep the previous top-level check names. These are fail-closed aggregate
+  # checks, not successful/skipped placeholders if any shard fails or cancels.
+  mcp-tests:
+    needs: mcp-windows
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NATIVE_RESULT: ${{ needs.mcp-windows.result }}
+      MCP_PLATFORM: windows
+    steps: &publish-demo-projects
+      - name: Require every platform acceptance shard
+        run: |
+          if [[ "$NATIVE_RESULT" != success ]]; then
+            echo "Native acceptance did not pass: $MCP_PLATFORM=$NATIVE_RESULT" >&2
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Download verified bench
+        uses: actions/download-artifact@v4
+        with:
+          name: mcp-demo-${{ env.MCP_PLATFORM }}-core
+          path: target/mcp-recipe-evidence
+      - name: Download verified turbine
+        uses: actions/download-artifact@v4
+        with:
+          name: mcp-demo-${{ env.MCP_PLATFORM }}-turbine
+          path: target/mcp-recipe-evidence
+      - name: Download verified vise
+        uses: actions/download-artifact@v4
+        with:
+          name: mcp-demo-${{ env.MCP_PLATFORM }}-vise
+          path: target/mcp-recipe-evidence
+      - name: Stage verified editable demo projects
+        run: node scripts/ci/stage-demo-projects.mjs
+      - name: Upload verified editable demo projects
+        uses: actions/upload-artifact@v4
+        with:
+          name: noBS-CAD-demo-projects-${{ env.MCP_PLATFORM }}-${{ github.sha }}
+          path: target/demo-projects/
+          if-no-files-found: error
+          overwrite: true
+
+  mcp-tests-linux:
+    name: MCP tests (Ubuntu)
+    needs: mcp-linux
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NATIVE_RESULT: ${{ needs.mcp-linux.result }}
+      MCP_PLATFORM: linux
+    steps: *publish-demo-projects

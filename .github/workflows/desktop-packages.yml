@@ -31,6 +31,9 @@ jobs:
   frontend_regressions:
     uses: ./.github/workflows/frontend.yml
 
+  version_preflight:
+    uses: ./.github/workflows/version-guard.yml
+
   classify_changes:
     name: Classify desktop build inputs
     runs-on: ubuntu-latest
@@ -140,7 +143,7 @@ jobs:
 
   build-windows-portable:
     name: Windows ${{ matrix.architecture }} portable ZIP
-    needs: classify_changes
+    needs: [classify_changes, frontend_regressions, version_preflight]
     if: needs.classify_changes.outputs.windows_should_build == 'true'
     strategy:
       fail-fast: false
@@ -164,77 +167,18 @@ jobs:
       # Pull-request/manual packages retain symbols for diagnostics. A v* tag
       # is the production boundary and must ship a stripped Rust executable.
       CARGO_PROFILE_RELEASE_STRIP: ${{ github.ref_type == 'tag' && 'symbols' || 'none' }}
-      VCPKG_COMMIT: 716b42043743cdceabed9c8e2e6cf80ddae1e0c1
-      VCPKG_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
-      VCPKG_INSTALL_ROOT: ${{ github.workspace }}\vcpkg_installed
-      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.cache\vcpkg\archives,readwrite
 
     steps:
       - name: Check out noBS CAD
         uses: actions/checkout@v4
 
-      - name: Check out pinned vcpkg
-        uses: actions/checkout@v4
+      - name: Set up cached OpenCASCADE SDK
+        id: occt
+        uses: ./.github/actions/setup-windows-occt
         with:
-          repository: microsoft/vcpkg
-          ref: ${{ env.VCPKG_COMMIT }}
-          path: .vcpkg
-          fetch-depth: 0
-
-      - name: Detect MSVC toolset
-        id: msvc
-        shell: pwsh
-        run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $requiredComponent = "${{ matrix.msvc_component }}"
-          $installationRoot = & $vswhere `
-            -latest `
-            -products * `
-            -requires $requiredComponent `
-            -property installationPath
-          if ([string]::IsNullOrWhiteSpace($installationRoot)) {
-            throw "Visual Studio C++ Build Tools were not found"
-          }
-          $versionFile = Join-Path `
-            $installationRoot `
-            "VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
-          if (-not (Test-Path $versionFile -PathType Leaf)) {
-            throw "MSVC toolset version file was not found: $versionFile"
-          }
-          $toolset = (Get-Content $versionFile -Raw).Trim()
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "toolset=$toolset"
-          Write-Host "MSVC toolset: $toolset"
-
-      # The completed manifest tree is substantially faster to restore than
-      # asking vcpkg to reconstruct it from individual binary archives. Keep
-      # the archive cache below as the fallback that seeds this cache.
-      - name: Restore installed OpenCASCADE tree
-        id: vcpkg-installed-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ env.VCPKG_INSTALL_ROOT }}
-          key: vcpkg-installed-v1-${{ matrix.runner_cache_key }}-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
-
-      - name: Restore vcpkg binary cache
-        if: steps.vcpkg-installed-cache.outputs.cache-hit != 'true'
-        id: vcpkg-binary-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ env.VCPKG_BINARY_CACHE }}
-          key: vcpkg-binary-v2-${{ matrix.runner_cache_key }}-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
-
-      - name: Report OpenCASCADE cache source
-        shell: pwsh
-        run: |
-          $installedTreeHit = "${{ steps.vcpkg-installed-cache.outputs.cache-hit }}" -eq "true"
-          $source = if ($installedTreeHit) {
-            "complete installed-tree cache"
-          } else {
-            "binary archive fallback; this run will seed the installed-tree cache"
-          }
-          Write-Host "OpenCASCADE dependency source: $source"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows dependency cache"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "OpenCASCADE source: **$source**."
+          triplet: ${{ matrix.vcpkg_triplet }}
+          runner-cache-key: ${{ matrix.runner_cache_key }}
+          msvc-component: ${{ matrix.msvc_component }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -257,50 +201,10 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
-      - name: Bootstrap vcpkg
-        shell: pwsh
-        run: |
-          New-Item `
-            -ItemType Directory `
-            -Path $env:VCPKG_BINARY_CACHE `
-            -Force |
-            Out-Null
-          & .\.vcpkg\bootstrap-vcpkg.bat -disableMetrics
-          if ($LASTEXITCODE -ne 0) {
-            throw "vcpkg bootstrap failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Install pinned OpenCASCADE 7.9.3
-        shell: pwsh
-        run: |
-          & .\.vcpkg\vcpkg.exe install `
-            --triplet ${{ matrix.vcpkg_triplet }} `
-            --x-manifest-root="$env:GITHUB_WORKSPACE" `
-            --x-install-root="$env:VCPKG_INSTALL_ROOT"
-          if ($LASTEXITCODE -ne 0) {
-            throw "vcpkg install failed with exit code $LASTEXITCODE"
-          }
-
-      # Save immediately: a cold OCCT build can consume most of the job budget,
-      # so waiting for post-job cleanup risks losing the compiled package cache.
-      - name: Save vcpkg binary cache
-        if: steps.vcpkg-installed-cache.outputs.cache-hit != 'true' && steps.vcpkg-binary-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.VCPKG_BINARY_CACHE }}
-          key: vcpkg-binary-v2-${{ matrix.runner_cache_key }}-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
-
-      - name: Save installed OpenCASCADE tree
-        if: steps.vcpkg-installed-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.VCPKG_INSTALL_ROOT }}
-          key: vcpkg-installed-v1-${{ matrix.runner_cache_key }}-${{ steps.msvc.outputs.toolset }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}
-
       - name: Build portable ZIP
         shell: pwsh
         env:
-          OCCT_ROOT: ${{ env.VCPKG_INSTALL_ROOT }}\${{ matrix.vcpkg_triplet }}
+          OCCT_ROOT: ${{ steps.occt.outputs.root }}
         run: |
           $bundleArguments = @(
             "run",
@@ -378,7 +282,7 @@ jobs:
 
   build-linux-ubuntu:
     name: Ubuntu 26.04 x64 DEB and AppImage
-    needs: classify_changes
+    needs: [classify_changes, frontend_regressions, version_preflight]
     if: needs.classify_changes.outputs.linux_should_build == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 180
@@ -557,7 +461,7 @@ jobs:
 
   build-macos-apple-silicon:
     name: macOS Apple silicon DMG
-    needs: classify_changes
+    needs: [classify_changes, frontend_regressions, version_preflight]
     if: needs.classify_changes.outputs.macos_should_build == 'true'
     runs-on: macos-15
     timeout-minutes: 120
