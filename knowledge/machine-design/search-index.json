@@ -92,7 +92,8 @@
         "PCB standoff",
         "mounting boss",
         "boss grid",
-        "heat-set boss"
+        "board standoff",
+        "plate boss pattern"
       ],
       "related_recipes": [
         "mounting-plate",
@@ -308,7 +309,7 @@
       "id": "machine-design.concepts.am-heat-set-inserts",
       "path": "knowledge/machine-design/concepts/am-heat-set-inserts.md",
       "title": "AM heat-set inserts, bosses, and crush ribs",
-      "description": "FDM boss geometry for heat-set threaded inserts — OD, pilot, crush ribs, melt path, and when to prefer inserts over tapped plastic.",
+      "description": "FDM boss geometry for heat-set / heat-stake threaded inserts — OD, pilot, crush ribs, melt path, and when to prefer inserts over tapped plastic.",
       "status": "draft",
       "topics": [
         "dfam",
@@ -319,6 +320,11 @@
       ],
       "keywords": [
         "heat-set insert",
+        "heat stake",
+        "heat-stake",
+        "thermal stake",
+        "heat stake boss",
+        "heat-set boss",
         "brass insert",
         "threaded insert",
         "boss",
@@ -340,7 +346,7 @@
         "nwtc-guns-dfm",
         "doe-3d"
       ],
-      "snippet": "For FDM housings that take repeated screw cycles, prefer a purchased heat-set (thermal) insert in a printed boss over cutting threads in plastic. Name the insert (thread, OD, length, knurl style) before modeling the pil…"
+      "snippet": "Heat-stake / heat-set (thermal) insert in a printed boss — for FDM housings with repeated screw cycles, prefer a purchased insert over cutting threads in plastic. Name the insert (thread, OD, length, knurl style) before…"
     },
     {
       "id": "machine-design.concepts.am-printed-gears-dfam",

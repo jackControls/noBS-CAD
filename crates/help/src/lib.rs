@@ -1172,11 +1172,24 @@ mod tests {
             "heat-set insert boss crush ribs",
             "brass threaded insert FDM boss",
             "melt insert pilot hole",
+            "heat stake boss",
+            "heat-set boss",
         ] {
             let hits = store.search(query, Some(5));
             assert!(
                 hits.iter().any(|h| h.id.contains("am-heat-set-inserts")),
                 "expected am-heat-set-inserts for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+        // Paraphrase ranking: stake/boss language should top heat-set, not standoff patterns.
+        for query in ["heat stake boss", "heat-set boss"] {
+            let hits = store.search(query, Some(3));
+            assert!(
+                hits
+                    .first()
+                    .is_some_and(|h| h.id.contains("am-heat-set-inserts")),
+                "expected am-heat-set-inserts top for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
         }

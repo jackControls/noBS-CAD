@@ -1,3 +1,12 @@
+## 2026-09-20 — dogfood round 2 (heat-stake boss ranking)
+
+- Proven WEAK: `heat stake boss` / `heat-set boss` ranked `am-boss-standoff-patterns`
+  ahead of `am-heat-set-inserts` (stake≠set token; boss page keyword `heat-set boss`
+  stole heat+boss queries).
+- Fix: heat-set opening leads heat-stake / heat-set insert-in-boss; keywords add
+  stake synonyms; boss-standoff drops `heat-set boss` keyword (keeps body link).
+- Goldens H105–H106; Rust BM25 top_id asserts; rebuild search-index; MCP reinstall.
+
 ## 2026-09-20 — quality pass (snippet honesty + Prefer cruft)
 
 - AGMA/chart queries: openings on `gears`, `am-printed-gears-dfam`, and

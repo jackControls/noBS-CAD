@@ -5,7 +5,7 @@ description: PCB and plate standoff patterns for FDM — boss pairs, height matc
 status: draft
 updated: 2026-09-20
 topics: dfam, am, fdm, fasteners, hardware, enclosures
-keywords: standoff, PCB standoff, mounting boss, boss grid, heat-set boss
+keywords: standoff, PCB standoff, mounting boss, boss grid, board standoff, plate boss pattern
 related_recipes: mounting-plate, turbine-fit-coupons, garden-bench
 sources: nasa-fastener, nwtc-guns-dfm, doe-3d
 ---

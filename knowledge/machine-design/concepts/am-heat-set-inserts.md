@@ -1,21 +1,23 @@
 ---
 type: Concept
 title: AM heat-set inserts, bosses, and crush ribs
-description: FDM boss geometry for heat-set threaded inserts — OD, pilot, crush ribs, melt path, and when to prefer inserts over tapped plastic.
+description: FDM boss geometry for heat-set / heat-stake threaded inserts — OD, pilot, crush ribs, melt path, and when to prefer inserts over tapped plastic.
 status: draft
 updated: 2026-09-20
 topics: dfam, am, fdm, fasteners, joints
-keywords: heat-set insert, brass insert, threaded insert, boss, crush ribs, melt, soldering iron, ultrasonic, tapped plastic, FDM boss, insert OD, pilot hole
+keywords: heat-set insert, heat stake, heat-stake, thermal stake, heat stake boss, heat-set boss, brass insert, threaded insert, boss, crush ribs, melt, soldering iron, ultrasonic, tapped plastic, FDM boss, insert OD, pilot hole
 related_recipes: turbine-fit-coupons, d-screw-vise
 sources: nasa-fastener, nwtc-guns-dfm, doe-3d
 ---
 
 # AM heat-set inserts, bosses, and crush ribs
 
-For FDM housings that take **repeated screw cycles**, prefer a **purchased
-heat-set (thermal) insert** in a printed **boss** over cutting threads in
-plastic. Name the insert (thread, OD, length, knurl style) before modeling the
-pilot.
+**Heat-stake / heat-set (thermal) insert in a printed boss** — for FDM housings
+with **repeated screw cycles**, prefer a purchased insert over cutting threads
+in plastic. Name the insert (thread, OD, length, knurl style) before modeling
+the pilot. Standoff *patterns* (boss grids, board height) live on
+[boss-to-boss / standoff patterns](am-boss-standoff-patterns.md); this page owns
+the insert + pilot.
 
 **Attribution:** joint thinking from NASA Fastener Design Manual RP-1228
 (public domain) and DFM habits from Guns / NWTC LibreTexts
@@ -26,7 +28,7 @@ charts are **link-out only** — prefer vendor charts outside CAD.
 
 | Choice | Prefer when |
 |--------|-------------|
-| **Heat-set / ultrasonic insert** | Many assemble/disassemble cycles; metal fastener; higher clamp load |
+| **Heat-set / heat-stake / ultrasonic insert** | Many assemble/disassemble cycles; metal fastener; higher clamp load |
 | **Printed thread / self-tap into plastic** | One-shot fixtures, soft plastics, low reuse |
 | **Through-bolt + nut** | Access both sides; avoid melting bosses entirely |
 
