@@ -3,7 +3,6 @@
  *
  * Run: `npm run test:constraint-glyphs`
  */
-import type { EntityDto } from '../engine/types';
 import { buildConcentricPayload } from './applyConstraint';
 
 let failures = 0;
@@ -13,16 +12,10 @@ function check(label: string, condition: boolean, detail = ''): void {
   console.log(`  [${condition ? 'ok' : 'FAIL'}] ${label}${detail ? ` — ${detail}` : ''}`);
 }
 
-function kind(id: number): EntityDto['kind'] {
-  if (id === 1) return 'point';
-  if (id === 2 || id === 3) return 'circle';
-  return 'arc';
-}
-
 console.log('buildConcentricPayload');
 
 {
-  const payloads = buildConcentricPayload([1, 2], [kind(1), kind(2)]);
+  const payloads = buildConcentricPayload([1, 2], ['point', 'circle']);
   check(
     'point + circle → center_coincident',
     payloads.length === 1 &&
@@ -33,13 +26,35 @@ console.log('buildConcentricPayload');
 }
 
 {
-  const payloads = buildConcentricPayload([2, 1], [kind(2), kind(1)]);
+  const payloads = buildConcentricPayload([2, 1], ['circle', 'point']);
   check(
     'circle + point → center_coincident (normalized)',
     payloads.length === 1 &&
       payloads[0].type === 'center_coincident' &&
       payloads[0].point === 1 &&
       payloads[0].curve === 2,
+  );
+}
+
+{
+  const payloads = buildConcentricPayload([1, 5], ['point', 'arc']);
+  check(
+    'point + arc → center_coincident',
+    payloads.length === 1 &&
+      payloads[0].type === 'center_coincident' &&
+      payloads[0].point === 1 &&
+      payloads[0].curve === 5,
+  );
+}
+
+{
+  const payloads = buildConcentricPayload([5, 1], ['arc', 'point']);
+  check(
+    'arc + point → center_coincident (normalized)',
+    payloads.length === 1 &&
+      payloads[0].type === 'center_coincident' &&
+      payloads[0].point === 1 &&
+      payloads[0].curve === 5,
   );
 }
 
@@ -60,8 +75,7 @@ console.log('buildConcentricPayload');
 }
 
 if (failures > 0) {
-  console.error(`\n${failures} failure(s)`);
-  process.exit(1);
+  throw new Error(`${failures} applyConstraint payload check(s) failed`);
 }
 
-console.log('\nAll applyConstraint tests passed.');
+console.log('\nAll applyConstraint payload tests passed.');
