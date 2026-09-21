@@ -154,6 +154,21 @@ editor caches. Captures and a JSON report stay in the supplied evidence director
 partial runs are preserved. This requires a graphical desktop and complements
 the library tests; it is not a cross-platform visual parity check.
 
+The native File lifecycle regressions carry over selected ownership and exit cases from
+`projectSave.browser.test.ts`, `saveOnExit.browser.test.ts`, and
+`applicationExit.browser.test.ts`. They exercise the real ordered worker and
+`.nbcad` archives, including failed Save As, cancelled Save-and-close pickers,
+same-tab replacement during Save, and partial Save-all failure/retry. Run them
+without opening an OS window or file picker:
+
+```sh
+cargo test --locked --manifest-path src-tauri/Cargo.toml --features dev-bevy-host --lib session_bridge::native_interface::controller::files::tests -- --test-threads=1
+```
+
+These controller tests complement live rendered checks; they do not establish
+visual, keyboard, or native-picker parity. Keep the browser cases while the
+ordinary desktop build still uses the existing shell.
+
 The MCP suite includes complete recipe acceptance tests and can take a while.
 Run its native tests sequentially so heavy OCCT operations do not compete for
 memory and request deadlines. The **Desktop packages** workflow also checks the
