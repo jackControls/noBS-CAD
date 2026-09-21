@@ -4,6 +4,7 @@ import {chromium} from 'playwright';
 import {readFile} from 'node:fs/promises';
 import ts from 'typescript';
 import {checkPresentationSurfaces} from './presentation.mjs';
+import {checkDimensionInputs} from './dimension-input.mjs';
 
 const dispatcher=ts.createSourceFile('dispatch.ts',await readFile(new URL('../../src/ribbon/dispatch.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
 const dispatched=new Set();
@@ -210,6 +211,7 @@ try {
  assert(result.commands>0);
  for(const action of result.actions) assert(dispatched.has(action), `Enabled ribbon action has no dispatcher case: ${action}`);
  console.log('PASS MCP UI contracts: '+JSON.stringify(result));
+ console.log('PASS production dimension inputs: '+JSON.stringify(await checkDimensionInputs(browser, server.resolvedUrls.local[0]+'mcp-contract')));
  const exitPage=await browser.newPage();
  await exitPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const exit=await exitPage.evaluate(async()=>{

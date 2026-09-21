@@ -63,6 +63,8 @@ export const DimensionInput = forwardRef<HTMLInputElement, DimensionInputProps>(
         || autoSelectKey === null
         || autoSelectKey === false
       ) return;
+      // Callers can seed a geometry-derived value in their own effect after
+      // this key changes. Select only after that value has reached the DOM.
       const frame = requestAnimationFrame(() => {
         const input = inputRef.current;
         if (!input || input.disabled) return;
