@@ -806,6 +806,72 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn garden_bench_notches_select_geometry_not_profile_order() {
+        let script = Script::parse(include_str!(
+            "../../../examples/scripts/garden-bench.nbcad.jsonc"
+        ))
+        .unwrap();
+        for (part, area, outside_area) in [
+            ("front", 3933.0, 345.0),
+            ("second", 483.0, 69.0),
+            ("rear", 4623.0, 345.0),
+        ] {
+            for side in [2, 3] {
+                let step = script.document["steps"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|step| step["id"] == format!("seat_{part}_extrude_{side}"))
+                    .unwrap();
+                let args = &step["call"]["arguments"];
+                let selection = &args["profile_indices"];
+                let binding = format!("seat_{part}_profiles_{side}");
+                // Projecting a face through a rectangle produces the stock
+                // remainder, the in-stock notch and an out-of-stock strip.
+                // Neither catalog position nor a recorded index identifies
+                // which of those the recipe intends to remove.
+                for selected_id in [17, 91] {
+                    let intended = json!({"index":selected_id,"area":area});
+                    let mut profiles = vec![
+                        json!({"index":0,"area":102000.0 - area}),
+                        intended.clone(),
+                        json!({"index":3,"area":outside_area}),
+                    ];
+                    if selected_id == 91 {
+                        profiles.rotate_left(1);
+                    }
+                    let catalog = |profiles: Vec<Value>| {
+                        json!([
+                            {"sketch_name":"Unrelated sketch","profiles":[intended.clone()]},
+                            {"sketch_name":args["sketch_name"],"profiles":profiles}
+                        ])
+                    };
+                    let mut bindings =
+                        Bindings::from([(binding.clone(), catalog(profiles.clone()))]);
+                    assert_eq!(
+                        resolve(selection, &bindings).unwrap(),
+                        json!([selected_id]),
+                        "{part} notch {side} must select its in-stock area"
+                    );
+
+                    profiles.push(intended.clone());
+                    bindings.insert(binding.clone(), catalog(profiles));
+                    assert!(
+                        resolve(selection, &bindings).is_err(),
+                        "an ambiguous notch must fail before cutting"
+                    );
+                    bindings.insert(binding.clone(), catalog(vec![]));
+                    assert!(
+                        resolve(selection, &bindings).is_err(),
+                        "a missing notch must not fall back to the remainder"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn source_limit_and_chapter_positions_are_shared_by_all_hosts() {
         let source = r#"{"version":1,"name":"Chapters","steps":[{"let":{"size":12}},{"chapter":"Edit","note":"Change the dimension"}]}"#;

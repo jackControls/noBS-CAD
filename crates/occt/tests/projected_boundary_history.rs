@@ -683,6 +683,75 @@ fn holes_and_concave_support_faces_close_regions_on_both_normals_and_reopen() {
 }
 
 #[test]
+fn crossing_rectangle_notch_cuts_only_its_in_stock_region_and_replays() {
+    for bottom in [false, true] {
+        for upper_edge in [false, true] {
+            let (mut m, mut k, body) = face_sketch(bottom);
+            let (min_x, _, max_y) = bounds(&m);
+            let min_y = max_y - 25.0;
+            let (y1, y2) = if upper_edge {
+                (max_y - 7.0, max_y + 1.0)
+            } else {
+                (min_y - 1.0, min_y + 7.0)
+            };
+            m.add_rectangle(RectangleRequest {
+                mode: RectangleMode::TwoPoint,
+                p1: v(min_x + 5.0, y1),
+                p2: v(min_x + 10.0, y2),
+                ctrl_held: true,
+            })
+            .unwrap();
+            m.end_sketch().unwrap();
+            let areas = profile_areas(&m);
+            assert_eq!(areas.len(), 3, "notch, outside strip and stock remainder");
+            for expected in [35.0, 5.0, 590.0] {
+                assert_eq!(
+                    areas
+                        .iter()
+                        .filter(|(_, area)| (area - expected).abs() < 1e-6)
+                        .count(),
+                    1
+                );
+            }
+            // Like the garden-bench recipe, choose the in-stock rectangle by
+            // geometry. Profile zero can be the remainder or the outside strip.
+            let index = areas
+                .iter()
+                .find(|(_, area)| (area - 35.0).abs() < 1e-6)
+                .unwrap()
+                .0;
+            let mut cut = extrusion("Sketch2", index, Some(body), 10.0);
+            cut.extent = ExtrudeExtent::ThroughAll;
+            let plan = m.prepare_extrude(cut).unwrap();
+            apply(&mut m, &mut k, plan);
+            assert!((exact_volume(&k, body) - 5900.0).abs() < 1e-5);
+
+            let mut reopened = SketchManager::new();
+            let mut fresh = OcctKernel::new().unwrap();
+            let plan = reopened
+                .prepare_load_project(m.export_project_model().unwrap())
+                .unwrap();
+            apply(&mut reopened, &mut fresh, plan);
+            assert_eq!(profile_areas(&reopened), areas);
+            assert!((exact_volume(&fresh, body) - 5900.0).abs() < 1e-5);
+            reopened.edit_sketch("Sketch2").unwrap();
+            reopened.end_sketch().unwrap();
+            let plan = reopened.prepare_recompute().unwrap();
+            apply(&mut reopened, &mut fresh, plan);
+            assert_eq!(profile_areas(&reopened), areas);
+            assert!((exact_volume(&fresh, body) - 5900.0).abs() < 1e-5);
+            for (rollback_index, volume) in [(2, 6250.0), (4, 5900.0)] {
+                let plan = reopened
+                    .prepare_set_rollback(SetRollbackRequest { rollback_index })
+                    .unwrap();
+                apply(&mut reopened, &mut fresh, plan);
+                assert!((exact_volume(&fresh, body) - volume).abs() < 1e-5);
+            }
+        }
+    }
+}
+
+#[test]
 fn legacy_corner_rectangle_consumer_keeps_profile_zero_during_edit_and_rollback() {
     let (mut m, mut k, body) = face_sketch(false);
     let (x, _, y) = bounds(&m);
