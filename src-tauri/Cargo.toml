@@ -61,7 +61,7 @@ nbcad-mcp-mutate = { path = "../crates/mcp-mutate" }
 nbcad-mcp = { path = "../mcp-server" }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
-bevy = { version = "0.19.0", default-features = false, features = [
+bevy = { version = "0.19.1", default-features = false, features = [
   "async_executor",
   "bevy_asset",
   "bevy_camera",
@@ -88,9 +88,9 @@ bevy = { version = "0.19.0", default-features = false, features = [
   "tonemapping_luts",
   "zstd_rust",
 ] }
-bevy_ecs = "0.19.0"
-bevy_gizmos = "0.19.0"
-bevy_reflect = "0.19.0"
+bevy_ecs = "0.19.1"
+bevy_gizmos = "0.19.1"
+bevy_reflect = "0.19.1"
 raw-window-handle = "0.6"
 accesskit = { version = "=0.24.1", optional = true }
 rfd = { version = "0.16.0", default-features = false, features = ["gtk3"], optional = true }
