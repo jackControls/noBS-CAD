@@ -376,7 +376,7 @@ fn update_inner(
             continue;
         }
         if worker::busy(world) {
-            retain_busy_intent(state, &event);
+            process_busy_input(world, handle, state, &event)?;
             continue;
         }
         // Lifecycle input can arrive before the first semantic frame. Handle
@@ -402,6 +402,16 @@ fn update_inner(
                 }
                 Ok(None) => {}
             }
+        }
+        // Camera gestures retain their own capture across worker completion;
+        // they never enter the editor or acquire its document locks.
+        match view::navigate(world, handle, &event) {
+            Ok(true) => continue,
+            Err(error) => {
+                state.status = error;
+                continue;
+            }
+            Ok(false) => {}
         }
         if let Err(error) =
             crate::native_viewport::winit_host::prepare_native_input(world, handle, &mut event)
@@ -649,12 +659,19 @@ fn start_control(
     Ok(())
 }
 
-fn retain_busy_intent(state: &mut Controller, event: &NativeHostInput) {
+fn process_busy_input(
+    world: &mut World,
+    handle: &NativeInterfaceHandle,
+    state: &mut Controller,
+    event: &NativeHostInput,
+) -> Result<(), String> {
     if matches!(event.event, WindowEvent::WindowCloseRequested(_)) {
         state.close_after_worker = true;
     }
-    // Pointer, tool and text events refer to the cached pre-mutation scene.
+    view::navigate(world, handle, event)?;
+    // Model picks, tool and text events refer to the cached pre-mutation scene.
     // Replaying them against newly built geometry could pick a different face.
+    Ok(())
 }
 
 fn maintain_busy_window(
@@ -681,14 +698,14 @@ fn maintain_busy_window(
         .cloned()
         .collect::<Vec<_>>();
     for event in events {
-        retain_busy_intent(state, &event);
+        process_busy_input(world, handle, state, &event)?;
     }
     let _ = handle.take_actions()?;
     let _ = handle.take_modal_keys()?;
     let message = if state.close_after_worker {
         "Finishing the current modeling operation before closing…"
     } else {
-        "Building the model… Controls resume when this operation finishes."
+        "Building the model… You can still pan, orbit and zoom."
     };
     state.status = message.into();
     if let Some(entity) = state.decoration.get("status") {
@@ -700,6 +717,7 @@ fn maintain_busy_window(
         }
     }
     if worker::started(world) && state.busy_controls.is_empty() {
+        crate::native_viewport::winit_host::cancel_native_pointer(world, handle);
         let mut query = world.query::<(Entity, &mut InterfaceControl)>();
         for (entity, mut control) in query.iter_mut(world) {
             state.busy_controls.push((entity, control.disabled));

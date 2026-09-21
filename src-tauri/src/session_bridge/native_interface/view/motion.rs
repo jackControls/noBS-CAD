@@ -34,7 +34,7 @@ impl Motions {
     }
 }
 
-fn pose(camera: ViewportCamera) -> Result<(Vec3, f32, Quat), String> {
+pub(super) fn pose(camera: ViewportCamera) -> Result<(Vec3, f32, Quat), String> {
     let eye = Vec3::from_array(camera.position);
     let target = Vec3::from_array(camera.target);
     let up = Vec3::from_array(camera.up);

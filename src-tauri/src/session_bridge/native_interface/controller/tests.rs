@@ -410,7 +410,16 @@ fn close_guard_survives_same_tab_replacement_with_a_reset_revision() {
 fn blocked_kernel_keeps_native_update_and_busy_replies_responsive_without_replaying_input() {
     let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
     let fixture = Fixture::new();
-    let (mut app, handle, entity) = prepare(&fixture);
+    let (mut controls, handle, button) = prepare(&fixture);
+    let mut app = native_viewport::interface_scene_fixture();
+    let entity = app
+        .world_mut()
+        .spawn(controls.world().get::<InterfaceControl>(button).unwrap().clone())
+        .id();
+    app.insert_resource(controls.world_mut().remove_resource::<Controller>().unwrap());
+    app.insert_resource(controls.world_mut().remove_resource::<NativeServices>().unwrap());
+    app.insert_resource(handle.clone());
+    native_viewport::apply_interface_model(app.world_mut(), model_snapshot(&fixture.engine)).unwrap();
     app.init_resource::<Messages<NativeHostInput>>();
     let services = app.world().resource::<NativeServices>().clone();
     worker::install(app.world_mut(), services.clone(), handle.clone()).unwrap();
@@ -429,6 +438,7 @@ fn blocked_kernel_keeps_native_update_and_busy_replies_responsive_without_replay
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let timed_out = Arc::new(AtomicBool::new(false));
     let timeout_flag = timed_out.clone();
+    let input_owner = receipt.owner.clone();
     worker::enqueue_transaction(
         app.world_mut(),
         "cad_set_document_name".into(),
@@ -466,6 +476,38 @@ fn blocked_kernel_keeps_native_update_and_busy_replies_responsive_without_replay
         json!({"id":"20-2","expires_ms":now_ms()+30_000,"ui":{"action":"inspect"}}).to_string(),
     )
     .unwrap();
+    let camera_before = native_viewport::interface_camera_snapshot(app.world()).1;
+    for event in [
+        WindowEvent::MouseButtonInput(bevy::input::mouse::MouseButtonInput {
+            button: MouseButton::Middle,
+            state: bevy::input::ButtonState::Pressed,
+            window: Entity::PLACEHOLDER,
+        }),
+        WindowEvent::CursorMoved(bevy::window::CursorMoved {
+            position: Vec2::new(360., 330.),
+            delta: None,
+            window: Entity::PLACEHOLDER,
+        }),
+        WindowEvent::MouseButtonInput(bevy::input::mouse::MouseButtonInput {
+            button: MouseButton::Middle,
+            state: bevy::input::ButtonState::Released,
+            window: Entity::PLACEHOLDER,
+        }),
+    ] {
+        let cursor = if let WindowEvent::CursorMoved(moved) = &event {
+            moved.position
+        } else {
+            Vec2::new(300., 300.)
+        };
+        app.world_mut().write_message(NativeHostInput {
+            context: Some(input_owner.clone()),
+            cursor: Some(cursor),
+            modifiers: crate::native_viewport::winit_host::Modifiers::default(),
+            event,
+            consumed: false,
+            actions: vec![],
+        });
+    }
     app.world_mut().write_message(NativeHostInput {
         context: handle.frame().map(|frame| frame.context),
         cursor: None,
@@ -483,6 +525,12 @@ fn blocked_kernel_keeps_native_update_and_busy_replies_responsive_without_replay
             assert!(!state.exit_after_receipt);
         });
     complete_control(app.world_mut());
+    let camera_after = native_viewport::interface_camera_snapshot(app.world()).1;
+    assert_ne!(
+        camera_after.position, camera_before.position,
+        "Camera input must be processed before the kernel lock is released"
+    );
+    assert_ne!(camera_after.target, camera_before.target);
     assert!(
         !timed_out.load(Ordering::Acquire),
         "Rendering must not wait for the engine/publisher fence"
@@ -517,6 +565,10 @@ fn blocked_kernel_keeps_native_update_and_busy_replies_responsive_without_replay
     assert_eq!(
         fixture.engine.document_snapshot().name,
         "Built without blocking the window"
+    );
+    assert_eq!(
+        native_viewport::interface_camera_snapshot(app.world()).1, camera_after,
+        "Completion must preserve navigation performed while the model was busy"
     );
 }
 
