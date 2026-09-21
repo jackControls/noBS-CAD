@@ -51,11 +51,23 @@ Each native platform now has three runners:
 | `turbine` | Existing complete turbine construction, edits, restoration, printing, mechanics and independent replay test; verified turbine project |
 | `vise` | Existing complete vise construction, edits, restoration, printing and mechanics test; verified vise project |
 
-No assertions, ignored-test settings, request deadlines or per-host job timeout
-limits were relaxed. `--test-threads=1` remains in every shard: separate runners
+Sharding does not relax correctness assertions, ignored-test settings, production
+request deadlines or per-host job timeout limits. `--test-threads=1` remains in every shard: separate runners
 avoid the CPU/memory contention and shared-process environment races that made
 parallel tests on one runner unreliable. A compiled inventory check rejects a
 missing/renamed flagship instead of allowing libtest's zero-test success.
+
+The first Windows core run exposed an existing timing assumption in the inbox
+sequence-safety stress test: eight writers perform 128 durable publications,
+but the test required every contended lock within five seconds and all reader
+I/O within ten seconds. The stress fixture now shares a 120-second budget
+across all workers and wakes the reader after publication instead of busy
+scanning. It still validates every payload, contiguous unique sequence IDs and
+concurrent archiving; it does not retry failed writes or skip assertions.
+Normal publishing retains its five-second lock timeout. Separate timeout tests
+verify that a blocked publisher fails without writing or consuming a sequence.
+The longer budget is only for this safety stress fixture, not application
+requests or CI job limits.
 
 The stable `mcp-tests` and `MCP tests (Ubuntu)` checks aggregate all three shards
 for their respective platform. They fail if any shard fails, cancels or skips;
