@@ -3,33 +3,39 @@
  * Accepts plain values or formulas (`=50/2`, `=d1*2`) — Enter commits via
  * the engine (geometry re-solves live), Esc cancels.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { EngineError, getEngine } from '../../engine';
+import type { DimensionDto } from '../../engine/types';
 import { useTranslation } from '../../i18n';
 import { useAppStore } from '../../store/appStore';
 import { DimensionInput } from '../DimensionInput';
 
+type DimEditorState = { dimId: number; initial: string; x: number; y: number };
+
 export function DimensionEditor() {
-  const { t } = useTranslation();
   const editor = useAppStore((s) => s.dimEditor);
   const dimension = useAppStore((s) =>
     editor
       ? s.activeSketch?.dimensions.find((candidate) => candidate.constraint_id === editor.dimId)
       : undefined,
   );
-  const setDimEditor = useAppStore((s) => s.setDimEditor);
-  const setConstraintDialog = useAppStore((s) => s.setConstraintDialog);
-  const [value, setValue] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    setValue(editor?.initial ?? '');
-    // Focus after mount.
-    const id = window.setTimeout(() => inputRef.current?.select(), 0);
-    return () => window.clearTimeout(id);
-  }, [editor?.dimId, editor?.initial]);
 
   if (!editor || !dimension) return null;
+
+  return <DimensionEditorSession key={editor.dimId} editor={editor} dimension={dimension} />;
+}
+
+function DimensionEditorSession({
+  editor,
+  dimension,
+}: {
+  editor: DimEditorState;
+  dimension: DimensionDto;
+}) {
+  const { t } = useTranslation();
+  const setDimEditor = useAppStore((s) => s.setDimEditor);
+  const setConstraintDialog = useAppStore((s) => s.setConstraintDialog);
+  const [value, setValue] = useState(editor.initial);
 
   const reportError = (err: unknown, fallback: string) => {
     const report = err instanceof EngineError
@@ -87,8 +93,8 @@ export function DimensionEditor() {
     >
       {dimension.mode === 'driving' ? (
         <DimensionInput
-          ref={inputRef}
           allowExpressions
+          autoSelectKey={editor.dimId}
           value={value}
           onValueChange={setValue}
           placeholder={t('dimEditor.placeholder')}
@@ -125,3 +131,4 @@ export function DimensionEditor() {
     </div>
   );
 }
+

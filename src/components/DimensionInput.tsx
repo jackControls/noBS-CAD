@@ -1,7 +1,7 @@
 import {
   forwardRef,
-  useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   type FocusEvent,
   type InputHTMLAttributes,
@@ -57,19 +57,16 @@ export const DimensionInput = forwardRef<HTMLInputElement, DimensionInputProps>(
     const pointerFocusRef = useRef(false);
     useImperativeHandle(ref, () => inputRef.current!, []);
 
-    useEffect(() => {
+    useLayoutEffect(() => {
       if (
         autoSelectKey === undefined
         || autoSelectKey === null
         || autoSelectKey === false
       ) return;
-      const frame = requestAnimationFrame(() => {
-        const input = inputRef.current;
-        if (!input || input.disabled) return;
-        input.focus({ preventScroll: true });
-        input.select();
-      });
-      return () => cancelAnimationFrame(frame);
+      const input = inputRef.current;
+      if (!input || input.disabled) return;
+      input.focus({ preventScroll: true });
+      input.select();
     }, [autoSelectKey]);
 
     const selectOnFocus = (event: FocusEvent<HTMLInputElement>) => {
