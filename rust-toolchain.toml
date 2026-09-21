@@ -1,0 +1,4 @@
+[toolchain]
+# Bevy 0.20's resolved WESL 0.4.4 dependencies require Rust 1.97.1.
+channel = "1.97.1"
+profile = "minimal"

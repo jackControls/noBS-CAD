@@ -249,3 +249,174 @@ fn unicode_editing_and_ime_commit_precede_enter_without_synthetic_keys() {
     let commit = commit_active(app.world_mut(), &handle).unwrap().unwrap();
     assert_eq!(commit.control.input, ControlInput::SetValue("12日".into()));
 }
+
+#[test]
+fn read_only_fields_keep_selection_but_reject_typing_and_ime() {
+    let (mut app, handle, entity) = editor_fixture();
+    if let Field::Text { read_only, .. } = &mut app
+        .world_mut()
+        .get_mut::<InterfaceControl>(entity)
+        .unwrap()
+        .field
+    {
+        *read_only = true;
+    }
+    let key = WindowEvent::KeyboardInput(KeyboardInput {
+        key_code: bevy::input::keyboard::KeyCode::ArrowLeft,
+        logical_key: Key::ArrowLeft,
+        state: ButtonState::Pressed,
+        text: None,
+        repeat: false,
+        window: Entity::PLACEHOLDER,
+    });
+    // Cmd+Shift+Left exercises HardLineStart on macOS; Shift+Left elsewhere.
+    before_window_input(
+        app.world_mut(),
+        &handle,
+        &key,
+        None,
+        Modifiers {
+            meta: cfg!(target_os = "macos"),
+            shift: true,
+            ..default()
+        },
+    )
+    .unwrap();
+    assert!(!app
+        .world()
+        .get::<EditableText>(entity)
+        .unwrap()
+        .editor
+        .raw_selection()
+        .text_range()
+        .is_empty());
+    for edit in [
+        TextEdit::Insert("changed".into()),
+        TextEdit::Backspace,
+        TextEdit::ImeSetCompose {
+            value: "日本".into(),
+            cursor: None,
+        },
+        TextEdit::ImeCommit {
+            value: "日本".into(),
+        },
+    ] {
+        apply_edit(app.world_mut(), entity, edit).unwrap();
+    }
+    let editor = app.world().get::<EditableText>(entity).unwrap();
+    assert_eq!(editor.value().to_string(), "12");
+    assert!(!editor.is_composing());
+    assert!(app
+        .world()
+        .get::<NativeTextField>(entity)
+        .unwrap()
+        .undo
+        .is_empty());
+}
+
+#[test]
+fn preedit_is_provisional_and_committing_records_one_draft_undo() {
+    let (mut app, handle, entity) = editor_fixture();
+    let window = Entity::PLACEHOLDER;
+    let preedit = WindowEvent::Ime(Ime::Preedit {
+        window,
+        value: "日本".into(),
+        cursor: Some((6, 6)),
+    });
+    before_window_input(
+        app.world_mut(),
+        &handle,
+        &preedit,
+        None,
+        Modifiers::default(),
+    )
+    .unwrap();
+    assert!(app
+        .world()
+        .get::<EditableText>(entity)
+        .unwrap()
+        .is_composing());
+    assert!(app
+        .world()
+        .get::<NativeTextField>(entity)
+        .unwrap()
+        .undo
+        .is_empty());
+    let commit = WindowEvent::Ime(Ime::Commit {
+        window,
+        value: "日本".into(),
+    });
+    before_window_input(
+        app.world_mut(),
+        &handle,
+        &commit,
+        None,
+        Modifiers::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        commit_active(app.world_mut(), &handle)
+            .unwrap()
+            .unwrap()
+            .control
+            .input,
+        ControlInput::SetValue("12日本".into())
+    );
+    history_edit(app.world_mut(), entity, false).unwrap();
+    assert_eq!(
+        app.world()
+            .get::<EditableText>(entity)
+            .unwrap()
+            .value()
+            .to_string(),
+        "12"
+    );
+}
+
+#[test]
+fn bevy_text_viewport_keeps_pointer_selection_and_ime_on_the_visible_text() {
+    let (mut app, handle, entity) = editor_fixture();
+    app.init_resource::<UiScale>();
+    let window = app
+        .world_mut()
+        .spawn((Window::default(), PrimaryWindow))
+        .id();
+    app.world_mut()
+        .run_system_cached(bevy::ui::widget::sync_editable_text_viewports)
+        .unwrap();
+    apply_edit(
+        app.world_mut(),
+        entity,
+        TextEdit::Insert("abcdefghijklmnopqrstuvwxyz".into()),
+    )
+    .unwrap();
+    assert!(
+        app.world()
+            .get::<EditableText>(entity)
+            .unwrap()
+            .viewport
+            .offset
+            .x
+            > 0.
+    );
+    app.world_mut().run_system_cached(update_ime).unwrap();
+    let window_state = app.world().get::<Window>(window).unwrap();
+    assert!(window_state.ime_enabled);
+    assert!((20.0..=100.0).contains(&window_state.ime_position.x));
+    after_pointer_input(
+        app.world_mut(),
+        &handle,
+        &WindowEvent::MouseButtonInput(bevy::input::mouse::MouseButtonInput {
+            button: MouseButton::Left,
+            state: ButtonState::Pressed,
+            window,
+        }),
+        Some(Vec2::new(21., 42.)),
+        Modifiers::default(),
+    )
+    .unwrap();
+    let editor = app.world().get::<EditableText>(entity).unwrap();
+    let selection = editor.editor.raw_selection().text_range();
+    assert!(selection.is_empty());
+    assert!(selection.start > 0 && selection.start < editor.value().to_string().len());
+}

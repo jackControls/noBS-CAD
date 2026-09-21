@@ -8,7 +8,7 @@ use bevy::{
     },
     prelude::*,
     text::{EditableText, FontWeight, PreeditCursor, TextEdit},
-    ui::{widget::TextScroll, ComputedUiRenderTargetInfo, UiGlobalTransform, UiScale, UiSystems},
+    ui::{ComputedUiRenderTargetInfo, UiGlobalTransform, UiScale, UiSystems},
     window::{Ime, PrimaryWindow, WindowEvent},
 };
 use nbcad_interface::{ControlInput, ControlKey, Field};
@@ -24,6 +24,9 @@ use crate::native_viewport::{
 };
 
 #[derive(Component)]
+// TextInputPlugin normally registers these UI requirements. Native fields
+// retain ordered input routing while using the same Bevy text layout systems.
+#[require(EditableText, Node, bevy::ui::TextNodeFlags, bevy::ui::ContentSize)]
 pub(crate) struct NativeTextField {
     baseline: String,
     queued: Option<String>,
@@ -77,11 +80,6 @@ pub(crate) fn spawn_text_field(
             EditableText::new(value),
             TextLayout::no_wrap(),
             InterfaceTextRevision::default(),
-            // `EditableText` does not require this component, but both our
-            // `update_ime` query and Bevy's own `scroll_editable_text` do. A
-            // field without it is invisible to the IME, so `ime_enabled` can
-            // never turn on and the OS never delivers preedit/commit events.
-            TextScroll(Vec2::ZERO),
             control,
             node,
             UiTargetCamera(camera),
@@ -304,20 +302,6 @@ fn submits_on_enter(world: &World, entity: Entity) -> bool {
         })
 }
 
-fn changes_value(edit: &TextEdit) -> bool {
-    matches!(
-        edit,
-        TextEdit::Insert(_)
-            | TextEdit::Backspace
-            | TextEdit::BackspaceWord
-            | TextEdit::Delete
-            | TextEdit::DeleteWord
-            | TextEdit::Cut
-            | TextEdit::Paste
-            | TextEdit::ImeCommit { .. }
-    )
-}
-
 fn trim_history(field: &mut NativeTextField) {
     const MAX_HISTORY_BYTES: usize = 8 * 1024 * 1024;
     while field.undo.len() + field.redo.len() > 128
@@ -345,10 +329,12 @@ fn apply_edit(world: &mut World, entity: Entity, edit: TextEdit) -> Result<(), S
             ..
         })
     );
-    if read_only && changes_value(&edit) {
+    if read_only && edit.is_destructive() {
         return Ok(());
     }
-    let before = changes_value(&edit).then(|| {
+    // Composition is provisional; only its commit gets an undo boundary.
+    let records_history = edit.is_destructive() && !matches!(edit, TextEdit::ImeSetCompose { .. });
+    let before = records_history.then(|| {
         world
             .get::<EditableText>(entity)
             .unwrap()
@@ -521,37 +507,10 @@ pub(crate) fn before_window_input(
         _ => None,
     };
     if let Some(edit) = edit {
-        let read_only = matches!(
-            world
-                .get::<InterfaceControl>(entity)
-                .map(|control| &control.field),
-            Some(Field::Text {
-                read_only: true,
-                ..
-            })
-        );
-        if !read_only
-            || matches!(
-                edit,
-                TextEdit::Copy
-                    | TextEdit::SelectAll
-                    | TextEdit::Left(_)
-                    | TextEdit::Right(_)
-                    | TextEdit::Up(_)
-                    | TextEdit::Down(_)
-                    | TextEdit::LineStart(_)
-                    | TextEdit::LineEnd(_)
-                    | TextEdit::WordLeft(_)
-                    | TextEdit::WordRight(_)
-                    | TextEdit::TextStart(_)
-                    | TextEdit::TextEnd(_)
-            )
-        {
-            apply_edit(world, entity, edit)?;
-            // IME composition state must be current before the next native
-            // event in this same batch, especially Tab/Enter.
-            handle.invalidate_presentation();
-        }
+        apply_edit(world, entity, edit)?;
+        // IME composition state must be current before the next native
+        // event in this same batch, especially Tab/Enter.
+        handle.invalidate_presentation();
         return Ok(true);
     }
     Ok(false)
@@ -622,8 +581,8 @@ pub(crate) fn after_pointer_input(
     };
     let scale = world.resource::<UiScale>().0;
     let scroll = world
-        .get::<TextScroll>(entity)
-        .map_or(Vec2::ZERO, |scroll| scroll.0);
+        .get::<EditableText>(entity)
+        .map_or(Vec2::ZERO, |editor| editor.viewport.offset);
     let point = transform.transform_point2(cursor * target.scale_factor() / scale)
         - node.content_box().min
         + scroll;
@@ -795,7 +754,6 @@ fn update_ime(
             &ComputedNode,
             &UiGlobalTransform,
             &ComputedUiRenderTargetInfo,
-            &TextScroll,
         ),
         With<NativeTextField>,
     >,
@@ -809,9 +767,10 @@ fn update_ime(
         .focused_key()
         .and_then(|key| fields.get(Entity::from_bits(key.0)).ok());
     window.ime_enabled = focused.is_some();
-    if let Some((editor, node, transform, target, scroll)) = focused {
+    if let Some((editor, node, transform, target)) = focused {
         let area = editor.editor.ime_cursor_area();
-        let local = Vec2::new(area.x0 as f32, area.y1 as f32) + node.content_box().min - scroll.0;
+        let local = Vec2::new(area.x0 as f32, area.y1 as f32) + node.content_box().min
+            - editor.viewport.offset;
         window.ime_position =
             transform.affine().transform_point2(local) * scale.0 / target.scale_factor();
     }

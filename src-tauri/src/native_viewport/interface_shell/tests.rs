@@ -511,9 +511,12 @@ fn physical_coordinates_clipping_and_inherited_visibility_match_hit_bounds() {
     assert!(frame
         .physical_to_window([0.0, 0.0], [0.0, 1000.0])
         .is_none());
-    app.world_mut().entity_mut(entity).insert(CalculatedClip {
-        clip: Rect::from_corners(Vec2::new(50.0, 0.0), Vec2::new(100.0, 100.0)),
-    });
+    app.world_mut().entity_mut(entity).insert(
+        CalculatedClip::default().with_rect(
+            Rect::from_corners(Vec2::new(50.0, 0.0), Vec2::new(100.0, 100.0)),
+            &UiGlobalTransform::default(),
+        ),
+    );
     app.update();
     assert!(!handle
         .pointer(PointerPhase::Down, [140.0, 140.0], PointerButton::Primary)

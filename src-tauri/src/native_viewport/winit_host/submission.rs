@@ -7,9 +7,10 @@ use bevy::{
     prelude::*,
     render::{
         renderer::{RenderGraph, RenderGraphSystems},
-        view::window::ExtractedWindows,
+        view::window::ExtractedWindow,
         Extract, ExtractSchedule, RenderApp,
     },
+    window::PrimaryWindow,
 };
 
 #[derive(Resource)]
@@ -36,11 +37,14 @@ fn extract(mut commands: Commands, handle: Extract<Option<Res<NativeInterfaceHan
     }
 }
 
-fn submitted(receipt: Option<Res<ExtractedReceipt>>, windows: Res<ExtractedWindows>) {
+fn submitted(
+    receipt: Option<Res<ExtractedReceipt>>,
+    windows: Query<&ExtractedWindow, With<PrimaryWindow>>,
+) {
     let Some(receipt) = receipt else {
         return;
     };
-    let Some(window) = windows.primary.and_then(|entity| windows.get(&entity)) else {
+    let Ok(window) = windows.single() else {
         return;
     };
     if window.swap_chain_texture.is_some() && window.swap_chain_texture_view.is_some() {

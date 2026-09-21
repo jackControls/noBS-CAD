@@ -23,8 +23,11 @@ use super::ui::{ViewportUiAssets, ViewportUiTheme};
 
 #[cfg(feature = "dev-bevy-host")]
 pub(crate) mod fields;
+mod geometry;
 pub(crate) mod ranges;
 pub(crate) mod ribbon;
+
+use geometry::HitArea;
 
 const MAX_PENDING_ACTIONS: usize = 64;
 
@@ -177,7 +180,7 @@ struct Shared {
     registry: SurfaceRegistry,
     desired_frame: Option<InterfaceFrame>,
     presented_frame: Option<InterfaceFrame>,
-    hit_order: Vec<(Option<ControlKey>, InterfaceRect)>,
+    hit_order: Vec<(Option<ControlKey>, HitArea)>,
     receipt: RenderReceipt,
     submission_waiter: Option<u64>,
     render_dirty: bool,
@@ -502,7 +505,7 @@ impl NativeInterfaceHandle {
             shared
                 .hit_order
                 .iter()
-                .any(|(_, rect)| contains_point(*rect, point))
+                .any(|(_, area)| area.contains(point))
         })
     }
 
@@ -653,7 +656,7 @@ impl NativeInterfaceHandle {
             || shared
                 .hit_order
                 .iter()
-                .any(|(_, rect)| contains_point(*rect, position))
+                .any(|(_, area)| area.contains(position))
             || has_modal(&shared);
         match phase {
             PointerPhase::Move => {
@@ -990,7 +993,7 @@ fn hit(shared: &Shared, point: [f64; 2]) -> Option<ControlKey> {
         .hit_order
         .iter()
         .rev()
-        .find(|(_, rect)| contains_point(*rect, point))
+        .find(|(_, area)| area.contains(point))
         .and_then(|(key, _)| *key)
 }
 
@@ -1530,43 +1533,8 @@ fn publish_layout(
         .iter()
         .map(
             |(entity, control, computed, transform, stack, clip, visibility, editor, _)| {
-                let scale = f64::from(computed.inverse_scale_factor());
-                let half = computed.size() * 0.5;
-                let corners = [
-                    Vec2::new(-half.x, -half.y),
-                    Vec2::new(half.x, -half.y),
-                    Vec2::new(half.x, half.y),
-                    Vec2::new(-half.x, half.y),
-                ]
-                .map(|point| transform.transform_point2(point));
-                let min = corners
-                    .into_iter()
-                    .fold(Vec2::splat(f32::INFINITY), Vec2::min)
-                    .as_dvec2()
-                    * scale;
-                let max = corners
-                    .into_iter()
-                    .fold(Vec2::splat(f32::NEG_INFINITY), Vec2::max)
-                    .as_dvec2()
-                    * scale;
-                let mut bounds = InterfaceRect {
-                    x: frame.surface.x + min.x,
-                    y: frame.surface.y + min.y,
-                    width: max.x - min.x,
-                    height: max.y - min.y,
-                };
-                if let Some(clip) = clip {
-                    bounds = intersection(
-                        bounds,
-                        InterfaceRect {
-                            x: frame.surface.x + f64::from(clip.clip.min.x) * scale,
-                            y: frame.surface.y + f64::from(clip.clip.min.y) * scale,
-                            width: f64::from(clip.clip.width()) * scale,
-                            height: f64::from(clip.clip.height()) * scale,
-                        },
-                    );
-                }
-                bounds = intersection(bounds, frame.surface);
+                let area = HitArea::new(&computed, &transform, clip.as_deref(), frame.surface);
+                let bounds = area.bounds;
                 (
                     stack.0,
                     Control {
@@ -1611,61 +1579,24 @@ fn publish_layout(
                         text_editing: control.text_editing,
                         owned_keys: control.owned_keys.clone(),
                     },
+                    area,
                 )
             },
         )
         .collect();
-    stacked.sort_by_key(|(stack, _)| *stack);
+    stacked.sort_by_key(|(stack, _, _)| *stack);
     let mut hits: Vec<_> = stacked
         .iter()
-        .filter(|(_, control)| control.visible)
-        .map(|(stack, control)| (*stack, Some(control.key), control.bounds))
+        .filter(|(_, control, _)| control.visible)
+        .map(|(stack, control, area)| (*stack, Some(control.key), area.clone()))
         .collect();
     for (node, transform, stack, clip, visibility) in &occluders {
         if !visibility.get() {
             continue;
         }
-        let half = node.size() * 0.5;
-        let corners = [
-            Vec2::new(-half.x, -half.y),
-            Vec2::new(half.x, -half.y),
-            Vec2::new(half.x, half.y),
-            Vec2::new(-half.x, half.y),
-        ]
-        .map(|point| transform.transform_point2(point));
-        let scale = f64::from(node.inverse_scale_factor());
-        let min = corners
-            .into_iter()
-            .fold(Vec2::splat(f32::INFINITY), Vec2::min)
-            .as_dvec2()
-            * scale;
-        let max = corners
-            .into_iter()
-            .fold(Vec2::splat(f32::NEG_INFINITY), Vec2::max)
-            .as_dvec2()
-            * scale;
-        let mut bounds = intersection(
-            InterfaceRect {
-                x: frame.surface.x + min.x,
-                y: frame.surface.y + min.y,
-                width: max.x - min.x,
-                height: max.y - min.y,
-            },
-            frame.surface,
-        );
-        if let Some(clip) = clip {
-            bounds = intersection(
-                bounds,
-                InterfaceRect {
-                    x: frame.surface.x + f64::from(clip.clip.min.x) * scale,
-                    y: frame.surface.y + f64::from(clip.clip.min.y) * scale,
-                    width: f64::from(clip.clip.width()) * scale,
-                    height: f64::from(clip.clip.height()) * scale,
-                },
-            );
-        }
-        if bounds.width > 0. && bounds.height > 0. {
-            hits.push((stack.0, None, bounds));
+        let area = HitArea::new(&node, &transform, clip.as_deref(), frame.surface);
+        if area.bounds.width > 0. && area.bounds.height > 0. {
+            hits.push((stack.0, None, area));
         }
     }
     hits.sort_by_key(|(stack, _, _)| *stack);
@@ -1673,7 +1604,7 @@ fn publish_layout(
         .into_iter()
         .map(|(_, key, bounds)| (key, bounds))
         .collect();
-    let mut published: Vec<_> = stacked.into_iter().map(|(_, control)| control).collect();
+    let mut published: Vec<_> = stacked.into_iter().map(|(_, control, _)| control).collect();
     // Stable keyboard traversal independent of ECS archetype movement.
     published.sort_by(|a, b| {
         a.bounds
