@@ -133,6 +133,27 @@ native sketch editor and the native Extrude form, so the default run does not
 verify a change to any of them. The **Native desktop host tests** workflow runs
 both configurations in CI.
 
+The native host supports middle-button pan, right-button or Shift+middle-button
+orbit, wheel zoom, trackpad pan, Shift+scroll orbit, and pinch zoom. These use the
+rendered camera and remain available while the modeling worker is busy. Escape
+or loss of window focus ends a camera drag; new navigation interrupts a timed
+view transition. An OCC operation that has already started still runs to completion.
+
+Run the complete native modeling lifecycle against an explicitly chosen blank
+document in a build with `dev-bevy-host`:
+
+```sh
+cargo xtask test-mcp native-lifecycle --server /absolute/path/to/nbcad --session BLANK_DOCUMENT_UUID --out /absolute/path/to/fresh-evidence-directory
+```
+
+The fixture creates its own tab, draws a rectangle through native controls, checks
+Extrude preview/invalid input/edit/Cancel/Apply and Undo/Redo, then saves, closes,
+and reopens the `.nbcad` file through native File actions. A separate headless
+process recomputes the saved archive to check that it does not depend on live
+editor caches. Captures and a JSON report stay in the supplied evidence directory;
+partial runs are preserved. This requires a graphical desktop and complements
+the library tests; it is not a cross-platform visual parity check.
+
 The MCP suite includes complete recipe acceptance tests and can take a while.
 Run its native tests sequentially so heavy OCCT operations do not compete for
 memory and request deadlines. The **Desktop packages** workflow also checks the
