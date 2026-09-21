@@ -3363,6 +3363,7 @@ export type ConstraintPayload =
   | { type: 'horizontal' | 'vertical' | 'fix'; entity: number }
   | { type: 'horizontal_points' | 'vertical_points'; a: number; b: number }
   | { type: 'coincident' | 'tangent' | 'equal' | 'parallel' | 'perpendicular' | 'midpoint' | 'concentric' | 'collinear'; a: number; b: number }
+  | { type: 'center_coincident'; point: number; curve: number }
   | { type: 'symmetry'; a: number; b: number; axis: number };
 
 export interface ConstraintBatchRequest {

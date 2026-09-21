@@ -876,7 +876,7 @@
       "perpendicular": "Perpendicular requiere dos líneas.",
       "fixUnfix": "Fijar/Soltar requiere una o más entidades.",
       "midpoint": "Punto medio requiere un punto y una línea.",
-      "concentric": "Concéntrico requiere dos círculos/arcos.",
+      "concentric": "Concéntrico requiere dos círculos/arcos, o un punto y un círculo/arco.",
       "collinear": "Colineal requiere dos líneas.",
       "symmetry": "Simetría requiere dos entidades y una línea de eje (seleccione el eje al final)."
     }

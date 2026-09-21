@@ -30,7 +30,7 @@
     "test:drawing-instances": "tsx src/drawing/instances.test.ts",
     "test:export-flow": "tsx src/files/exportFlow.test.ts && tsx src/engine/projectLoad.test.ts",
     "test:presentation": "tsx src/operationPlayback.test.ts && tsx src/viewControl.test.ts && tsx src/scripts/sourceNavigation.test.ts",
-    "test:constraint-glyphs": "tsx src/sketch/constraintGlyphAnchor.test.ts",
+    "test:constraint-glyphs": "tsx src/sketch/constraintGlyphAnchor.test.ts && tsx src/sketch/applyConstraint.test.ts",
     "test:revolve-axis": "tsx src/lib/revolveAxis.test.ts",
     "test:modeling-picker": "tsx src/modeling/viewportPicker.test.ts",
     "test:screen-picker": "tsx src/modeling/screenSpaceEntityPicker.test.ts",

@@ -876,7 +876,7 @@
       "perpendicular": "Perpendicular needs two lines.",
       "fixUnfix": "Fix/Unfix needs one or more entities.",
       "midpoint": "Midpoint needs a point and a line.",
-      "concentric": "Concentric needs two circles/arcs.",
+      "concentric": "Concentric needs two circles/arcs, or a point and a circle/arc.",
       "collinear": "Collinear needs two lines.",
       "symmetry": "Symmetry needs two entities and an axis line (select axis last)."
     }
