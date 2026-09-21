@@ -1154,11 +1154,24 @@ mod tests {
             "clamshell retainer slide fit",
             "slide fit then detent clamp face",
             "retainer clip retention bump",
+            "clamshell teeth cutout",
+            "matching cutouts clip",
         ] {
             let hits = store.search(query, Some(5));
             assert!(
                 hits.iter().any(|h| h.id.contains("am-clamshell-retainer")),
                 "expected am-clamshell-retainer for {query}, got {:?}",
+                hits.iter().map(|h| &h.id).collect::<Vec<_>>()
+            );
+        }
+        // Tooth/cutout paraphrases should top clamshell, not gears/mesh-audit.
+        for query in ["clamshell teeth cutout", "matching cutouts clip"] {
+            let hits = store.search(query, Some(3));
+            assert!(
+                hits
+                    .first()
+                    .is_some_and(|h| h.id.contains("am-clamshell-retainer")),
+                "expected am-clamshell-retainer top for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
         }
@@ -1174,6 +1187,7 @@ mod tests {
             "melt insert pilot hole",
             "heat stake boss",
             "heat-set boss",
+            "heat stake insert",
         ] {
             let hits = store.search(query, Some(5));
             assert!(
@@ -1183,7 +1197,7 @@ mod tests {
             );
         }
         // Paraphrase ranking: stake/boss language should top heat-set, not standoff patterns.
-        for query in ["heat stake boss", "heat-set boss"] {
+        for query in ["heat stake boss", "heat-set boss", "heat stake insert"] {
             let hits = store.search(query, Some(3));
             assert!(
                 hits

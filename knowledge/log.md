@@ -1,3 +1,10 @@
+## 2026-09-21 — critical: clamshell teeth↔cutouts + heat stake insert
+
+- Deepened `am-clamshell-retainer` mating-half CAD roles (tooth↔receptacle, tooth
+  count, envelope span); keywords lock `clamshell teeth cutout` / `matching cutouts clip`.
+- Heat-set: keyword + opening phrase `heat stake insert` (counterbore stays #2, not top).
+- Goldens H107–H109; Rust BM25 top_id; rebuild search-index; MCP reinstall.
+
 ## 2026-09-20 — dogfood round 2 (heat-stake boss ranking)
 
 - Proven WEAK: `heat stake boss` / `heat-set boss` ranked `am-boss-standoff-patterns`

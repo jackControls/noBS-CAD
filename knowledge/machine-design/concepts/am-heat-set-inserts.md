@@ -3,16 +3,16 @@ type: Concept
 title: AM heat-set inserts, bosses, and crush ribs
 description: FDM boss geometry for heat-set / heat-stake threaded inserts — OD, pilot, crush ribs, melt path, and when to prefer inserts over tapped plastic.
 status: draft
-updated: 2026-09-20
+updated: 2026-09-21
 topics: dfam, am, fdm, fasteners, joints
-keywords: heat-set insert, heat stake, heat-stake, thermal stake, heat stake boss, heat-set boss, brass insert, threaded insert, boss, crush ribs, melt, soldering iron, ultrasonic, tapped plastic, FDM boss, insert OD, pilot hole
+keywords: heat-set insert, heat stake insert, heat stake, heat-stake, thermal stake, heat stake boss, heat-set boss, brass insert, threaded insert, boss, crush ribs, melt, soldering iron, ultrasonic, tapped plastic, FDM boss, insert OD, pilot hole
 related_recipes: turbine-fit-coupons, d-screw-vise
 sources: nasa-fastener, nwtc-guns-dfm, doe-3d
 ---
 
 # AM heat-set inserts, bosses, and crush ribs
 
-**Heat-stake / heat-set (thermal) insert in a printed boss** — for FDM housings
+**Heat stake insert / heat-set (thermal) insert in a printed boss** — for FDM housings
 with **repeated screw cycles**, prefer a purchased insert over cutting threads
 in plastic. Name the insert (thread, OD, length, knurl style) before modeling
 the pilot. Standoff *patterns* (boss grids, board height) live on

@@ -3,9 +3,9 @@ type: Concept
 title: AM clamshell retainer
 description: Slide-fit first, then optional detents — clamp faces carry strength; detents only retain the clip.
 status: draft
-updated: 2026-09-20
+updated: 2026-09-21
 topics: dfam, am, snap-fit, joints, fdm
-keywords: clamshell retainer, slide fit, detent, clamp face, retainer clip, C-clip, frame retainer, removable slide, retention bump
+keywords: clamshell retainer, slide fit, detent, clamp face, retainer clip, C-clip, frame retainer, removable slide, retention bump, clamshell teeth cutout, matching cutouts clip, clip tooth receptacle, tooth count match
 related_recipes: turbine-fit-coupons
 sources: nwtc-guns-dfm, doe-3d
 ---
@@ -35,6 +35,21 @@ The surface that carries strength is not the surface that provides snap retentio
 Friction detents without a distinct hook still belong in the retention role —
 see [AM snap-fits](am-snap-fit.md) mechanism classes.
 
+## Mating halves (clip teeth ↔ matching cutouts)
+
+Prefer a **tooth ↔ receptacle** pair on every mating half before locking tooth
+count or clip length.
+
+1. **Matching cutouts** — every clip tooth / retention bump needs a matching
+   receptacle or cutout in the mating half (same pitch and depth intent).
+2. **Tooth count** — middle and end tooth count on the clip must match the
+   cutout pattern on the halves.
+3. **Envelope span** — when the retainer spans both halves, lengthen and center
+   the clip on the **larger body envelope** so teeth land in their cutouts.
+
+Prefer this page for retainer + matching cutout roles; cantilever barbs and deep
+seats stay on [AM snap-fits](am-snap-fit.md).
+
 ## Order of work
 
 1. Model a perfect removable **sliding** shape against the real pockets (dims,
@@ -53,6 +68,7 @@ see [AM snap-fits](am-snap-fit.md) mechanism classes.
 - [ ] Lifetime: abrasion and plastic set on **detents**, not on the clamp faces
 - [ ] Kid-removable when required: soft detent force; clamp still structural
 - [ ] Locators separate from retainer — [alignment nubs vs pins](alignment-nubs-pins.md)
+- [ ] Every clip tooth has a matching cutout / receptacle; tooth count matches
 - [ ] Shot pack includes section through clamp + detent
       ([validate before show](../../concepts/validate-before-show.md))
 

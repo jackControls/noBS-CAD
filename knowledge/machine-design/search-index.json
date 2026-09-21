@@ -160,7 +160,11 @@
         "C-clip",
         "frame retainer",
         "removable slide",
-        "retention bump"
+        "retention bump",
+        "clamshell teeth cutout",
+        "matching cutouts clip",
+        "clip tooth receptacle",
+        "tooth count match"
       ],
       "related_recipes": [
         "turbine-fit-coupons"
@@ -320,6 +324,7 @@
       ],
       "keywords": [
         "heat-set insert",
+        "heat stake insert",
         "heat stake",
         "heat-stake",
         "thermal stake",
@@ -346,7 +351,7 @@
         "nwtc-guns-dfm",
         "doe-3d"
       ],
-      "snippet": "Heat-stake / heat-set (thermal) insert in a printed boss — for FDM housings with repeated screw cycles, prefer a purchased insert over cutting threads in plastic. Name the insert (thread, OD, length, knurl style) before…"
+      "snippet": "Heat stake insert / heat-set (thermal) insert in a printed boss — for FDM housings with repeated screw cycles, prefer a purchased insert over cutting threads in plastic. Name the insert (thread, OD, length, knurl style)…"
     },
     {
       "id": "machine-design.concepts.am-printed-gears-dfam",
