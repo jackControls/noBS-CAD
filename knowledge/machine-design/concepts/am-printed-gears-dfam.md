@@ -67,13 +67,14 @@ anecdotes; lock duty on orientation-matched coupons or prefer purchased gears.
 | High duty / wear / precision ratio | **Purchased** metal or molded gear; printed for prototypes or light duty only |
 | Tiny teeth vs nozzle | Increase module, reduce nozzle, or buy the pinion |
 
-## What not to do
+## Prefer instead
 
-- Invent “module → torque” or “% infill → gear strength” charts in CAD notes.
-- Freeze centre distance from a pretty render without a mesh coupon.
-- Orient teeth so layers peel under bending “because it supports less.”
-- Assume a catalog plastic gear rating applies to a home FDM print of the same
-  module.
+| Temptation | Prefer |
+|------------|--------|
+| Module → torque or %infill → strength charts in CAD notes | Coupon mesh at product orientation; cite datasheet for purchased gears |
+| Freeze centre distance from a pretty render | Lock centres after a mesh coupon (or purchased gear drawing) |
+| Orient teeth so layers peel “to support less” | Bed face so tooth bending is **in-layer** when mesh duty matters |
+| Catalog plastic gear rating on a home FDM print | Treat FDM as prototype/light duty unless coupon proves otherwise |
 
 ## CAD-time checklist
 

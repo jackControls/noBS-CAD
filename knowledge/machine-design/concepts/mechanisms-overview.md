@@ -119,16 +119,10 @@ do not patch tooth or lobe numbers from memory.
 | Wear / timing / high-cycle element | Buy the element; print the mounts |
 | Ambiguous family | One family coupon **and** leave the purchased envelope |
 | Late “what pitch was that?” | Stop — reopen VERIFY; do not invent pitch after centers freeze |
-
-## Anti-patterns (hub misuse)
-
-- Sketching ornate links before naming joints and intended mobility
-- Inventing tooth, cam-lobe, belt, or chain-pitch charts from Help memory
-- Freezing centers before the purchased profile / pitch / SKU is named
-- Stacking belt + gear + cam hybrids before one family is proven
-- Skipping extreme-pose interference after locking envelopes
-- Treating Technic / LDraw pitch as OEM Lego or a load-rated drive
-- Using this hub as a substitute for the child Concept checklist
+| Ornate links before kinematics | Name joints + intended mobility first; then sketch |
+| Hybrid belt+gear+cam stack | Prove **one** family coupon before stacking families |
+| Technic / LDraw pitch | Teaching envelope only — not OEM Lego or a load-rated drive |
+| Hub detail questions | Open the child Concept checklist — this page is navigation |
 
 ## Checklist
 

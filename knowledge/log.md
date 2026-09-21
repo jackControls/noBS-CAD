@@ -1,3 +1,11 @@
+## 2026-09-20 — dogfood slop purge (prefer tone leftovers)
+
+- Folded leftover `## Anti-patterns` on mechanisms-overview + design-hygiene into
+  Prefer tables (golden-path; no negative-bias lecture headers).
+- Renamed `## What not to do` on am-printed-gears-dfam + am-fdm-load-layers-infill
+  to Prefer-instead tables.
+- No page deletes; no MatWeb / tooth charts invented.
+
 ## 2026-09-20 — Materials vocabulary deepen (CAD-time props)
 
 - Deepened `machine-design.concepts.materials-vocabulary`: CAD-time roles for

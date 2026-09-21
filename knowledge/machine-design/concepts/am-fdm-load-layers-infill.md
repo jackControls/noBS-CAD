@@ -57,14 +57,14 @@ Hub: [DFAM for FDM overview](dfam-fdm-overview.md).
 If a feature needs predictable strength, put material in **walls, ribs, and
 orientation** first — then pick a modest infill that prints cleanly.
 
-## What not to do
+## Prefer instead
 
-- Orient a tensile strap so layers peel under the primary load “because it
-  supports less.”
-- Quote a blog “% strength vs solid” table as design truth.
-- Rely on dense infill alone to fix a thin shell or wrong bed face.
-- Freeze living hinges or load-critical snaps without a bend-vs-layer plan
-  ([AM snap-fits](am-snap-fit.md)).
+| Temptation | Prefer |
+|------------|--------|
+| Orient a tensile strap so layers peel “to support less” | Align primary tension **in-layer**; state bed face with load rationale |
+| Blog “% strength vs solid” as design truth | Orientation-matched coupons; cite process notes |
+| Dense infill alone to fix thin shell / wrong bed face | Walls, ribs, and bed face first — modest infill second |
+| Freeze living hinges / load snaps without layer plan | Bend-vs-layer plan per [AM snap-fits](am-snap-fit.md) |
 
 ## CAD-time checklist
 

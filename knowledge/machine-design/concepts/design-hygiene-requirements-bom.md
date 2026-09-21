@@ -86,6 +86,10 @@ allows). Purchased fastener lines follow joint hygiene in
 | BOM vs CAD tree fight | One reference designator / role name shared by tree, BOM, balloon |
 | Many unique screws | Standardize length/finish; kit the remainder |
 | Late “we need a part number” | Stop — reopen VERIFY; do not invent a SKU after mates freeze |
+| Clearance holes / pockets early | Name fastener **SKU / length / finish** first, then cut holes |
+| Wear / timing element as print | Prefer purchased gear/bearing/cam; print mounts and cases |
+| Mates before purchased envelope | Measure / freeze envelope + PCD before mating printed parts |
+| Wishlist as requirements | Name **musts** first; defer nice-to-haves until VERIFY is green |
 
 ## VERIFY table (CAD brief)
 
@@ -102,15 +106,6 @@ Capture before freezing pockets and mates (same spirit as
 
 Changing a VERIFY row past process tolerance ⇒ regenerate affected features;
 if make-vs-buy flips, scrap the wrong embodiment rather than patch mates.
-
-## Anti-patterns (freeze too early)
-
-- Modeling clearance holes before the fastener **SKU / length / finish** is named
-- Printing a “bearing” or “gear” that should be purchased for wear/timing
-- CAD tree names that do not match BOM lines or balloons
-- One unique screw length per boss (tool-change and wrong-length traps)
-- Freezing mates, then discovering the purchased envelope does not fit
-- Wishlist features with no must (scope creep disguised as requirements)
 
 ## Checklist before freezing mates
 
