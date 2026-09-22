@@ -11,7 +11,7 @@ use std::{
 
 use bevy::{
     prelude::*,
-    text::FontWeight,
+    text::{FontWeight, LetterSpacing},
     ui::{CalculatedClip, ComputedStackIndex, UiGlobalTransform, UiSystems},
 };
 use nbcad_interface::{
@@ -23,8 +23,6 @@ use super::ui::{ViewportUiAssets, ViewportUiTheme};
 
 #[cfg(feature = "dev-bevy-host")]
 pub(crate) mod fields;
-#[cfg(feature = "dev-bevy-host")]
-pub(crate) mod studio;
 mod geometry;
 pub(crate) mod ranges;
 pub(crate) mod ribbon;
@@ -1073,6 +1071,12 @@ pub(crate) fn caption_size(world: &mut World, entity: Entity, size: f32) {
         if font.font_size != size {
             font.font_size = size;
         }
+    }
+}
+
+pub(crate) fn caption_tracking(world: &mut World, entity: Entity, spacing: f32) {
+    if let Some(label) = world.get::<InterfaceLabel>(entity).map(|label| label.0) {
+        world.entity_mut(label).insert(LetterSpacing::Px(spacing));
     }
 }
 

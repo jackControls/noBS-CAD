@@ -181,9 +181,6 @@ pub(super) fn synchronize(
         ribbon_menu::synchronize(world, camera, controls, width, sketch, services, &mut state)?;
         viewport::synchronize(world, camera, controls, width, height, side, &mut state)?;
         state.widgets.finish(world);
-        // The experimental light editor remains available without crowding
-        // the camera navigation toolbar in the center of the viewport.
-        interface_shell::studio::synchronize(world, camera, owner, width, height)?;
         Ok(())
     })();
     world.insert_resource(state);

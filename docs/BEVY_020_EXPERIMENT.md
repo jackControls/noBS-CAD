@@ -8,9 +8,10 @@
 
 PR #153 now runs on **0.20.0-rc.1**. The native workbench follows the React
 frontend's ribbon, tabs, orientation dial, navigation toolbar and history strip.
-A real Feathers numeric input controls viewport lighting. The initial 0.20
-sketch, extrusion, editing, undo/redo and save/reopen workflow passed on macOS;
-final live validation of the subsequent visual-parity changes remains pending.
+React serves only as the visual reference; these controls are rendered in
+Rust/Bevy. The experimental Light editor has been removed from the native
+workbench. The default release build still retains the old shell until the
+remaining native workflows and release cutover are complete.
 
 The initial compatibility port removed **31 net lines** across its changed
 production Rust files. This subsequent UI experiment adds presentation and
@@ -46,29 +47,30 @@ change the machine's default toolchain. The renderer dependency moves to wgpu 30
 - **History:** a title/count card, transport controls, rounded feature chips,
   rollback marker and selected/error/suppressed states follow React's structure.
   Existing edit, delete and rollback actions remain attached to the same history.
-- **FeathersNumberInput:** the view-only Light control uses the real 0.20 scene
-  component, `f64` values, soft/hard limits, precision, scrubbing and typed entry.
-  Its `ValueChange` observer resolves and enqueues an owned controller action;
-  the reducer validates the current document and binding before accepting a
-  finite value in 0.25–2.00. MCP and accessibility expose the same accepted value.
 - **Viewport lighting:** a camera-relative directional key and softer fill make
-  adjacent model faces distinguishable. The Light control scales the studio rig
-  without changing the camera, CAD model or saved file.
-- **Input coexistence:** Feathers receives its pointer/text events while the
-  CAD router excludes them. Publishing the existing accessibility proxies now
-  preserves a focused Bevy text widget; native IME placement leaves that widget
-  to Bevy. A regression covers this focus conflict found during live testing.
+  adjacent model faces distinguishable. The rig now uses a fixed default level.
+  The temporary Feathers Light editor and its command/input plumbing were
+  removed after comparison with the target workbench.
+- **Spacing and File chrome:** command captions use the reference's 8-pixel
+  type and centered label slot, ribbon headings share their arrows' flex row,
+  and group borders contribute to responsive width calculations. The File
+  button uses the bordered NB badge, and its menu preserves the reference's
+  section order, full export inventory, row height and shortcut alignment.
+  Long tab titles stay clear of their close buttons, and File/history popups
+  have an explicit border and shadow. Rename/Save dialogs show a primary action.
+  Unavailable native commands remain disabled.
+- **Idle accessibility activation:** the candidate's AccessKit handler queues
+  actions without waking the indefinitely sleeping Winit loop. A weakly owned
+  queue watcher wakes it only when an assistive action exists; ordinary idle
+  documents still do not render continuously. The watcher checks every 40 ms
+  and retires with its window. Its regression covers idle, queued input and
+  owner retirement; actual macOS accessibility clicks now open File immediately.
 
-The native host enables BSN, Feathers, UI picking and custom cursors. The explicit
-custom-cursor feature is needed for this release candidate's winit feature
-combination. Only Feathers' core plugin is installed: global tab navigation
-remains with the existing controller. CAD dimensions retain units, formulas and
-ordered draft commits through the existing `EditableText` adapter.
-
-BSN still composes the Feathers lighting editor. The ribbon uses retained
-controls and the shared command catalog; it no longer keeps a separate BSN
-inventory of modeling groups. This is an experiment in capabilities and
-presentation, not evidence that Feathers reduces the application's code size.
+The native UI retains the ordered CAD text adapter, units/formulas and guarded
+controller actions. The 0.20 candidate widget probes remain useful integration
+experiments. The former Light editor demonstrated BSN/Feathers, but is not a
+product feature and is no longer installed in the native application. Standard
+Bevy widget focus preservation remains covered independently.
 
 Visual coverage is not feature parity. Drawing/CAM workspaces, Scripts,
 Open script, Import STEP, Export and Settings remain disabled in the native
@@ -121,12 +123,10 @@ probes in `src-tauri/tests/bevy_020_widgets.rs` confirm these integration limits
    The controller must preserve the original document/control owner and process
    typing, focus changes and model actions in their original order.
 
-The direct `bevy_ui_widgets` dependency supports the probes; the native host now
-also enables those widgets through Feathers for the isolated lighting control.
-The CAD event router continues to use `EditableText`. Existing CAD fields do not
-carry `TextInput`, so Bevy's widget handler does not also edit those fields.
-Passing the probes records the candidate's current behavior; it does not
-establish general input parity.
+The direct `bevy_ui_widgets` dependency supports the probes. The CAD event
+router continues to use `EditableText`; CAD fields do not carry `TextInput`,
+so a standard widget handler does not also edit them. Passing the probes
+records the candidate's current behavior; it does not establish input parity.
 
 ## Validation
 
@@ -140,13 +140,13 @@ On macOS arm64 with OCCT 7.9.3:
 - Native application build passed. The initial port also passed `cargo check`
   for all targets with native-host and UI-lab features.
 - Visual-parity pass: compared React and the actual native macOS window in dark
-  appearance at 1360 × 860 logical pixels. Inspected all nine ribbon groups,
-  Build menu, orientation dial, centered navigation bar, tab strip and empty
-  history lane. Corrected misplaced captions and missing chevron glyphs found
-  in that window. Later tab alignment, icon refresh and preserved command-name
-  fixes have automated coverage/build checks but still need a final live pass:
-  the Mac locked during testing and the UI tool could no longer interact.
-- Initial 0.20 baseline: the 14-step native lifecycle passed: New, rectangle sketch, invalid distance,
+  appearance at 1360 × 860 logical pixels. Also resized the native window to its
+  supported 1200 × 760 minimum and a larger 1710 × 959 window. Inspected all nine
+  ribbon groups, File and Build menus, orientation dial, centered navigation,
+  tab strip and empty/populated history lanes. Direct pointer checks covered
+  tab creation, double-click rename, arrow-key switching, the inactive dirty-tab
+  close guard, history context menu, camera preset/orbit/Pan and Escape.
+- Final build: the 14-step native lifecycle passed: New, rectangle sketch, invalid distance,
   preview, Apply, edit preview, Cancel, edit Apply, Undo, Redo, Save, close, open,
   and independent cold archive recomputation. The final solid was 35 mm high.
 - Initial 0.20 baseline: real pointer-selected text entry committed Light = 1.35. Real mouse scrubbing
@@ -157,18 +157,22 @@ The six added production regressions cover read-only selection, provisional
 IME history, scrolled pointer/IME coordinates, fully clipped controls, nested
 clips at changed DPI, and rotated clipping for controls and panel occlusion.
 Existing ownership, file lifecycle and modeling tests remain in the native run.
-The UI phase adds finite/range validation and native/Feathers focus regressions.
+The earlier UI trial added numeric validation and standard-widget focus
+regressions. The numeric control and its test were removed with the Light editor;
+the independent accessibility focus regression remains.
 The visual-parity phase adds menu/disabled-command and responsive-ribbon
 coverage, model-preserving navigation checks, and an inactive-tab close guard.
 The first lifecycle rerun exposed a renamed Isometric control; the dial now
-reuses the original control and accessible name. The final live rerun, populated
-history inspection and tab interactions remain pending while the Mac is locked.
+reuses the original control and accessible name, and the final live rerun passes.
+Live preset/orbit/Pan checks changed camera values while retaining an identical
+exported model hash. Escape returns the toolbar to Select. The default count is
+still 297 native tests: removing the temporary Light validation test and adding
+the accessibility wake regression leaves that total unchanged.
 
 `npm run audit:icons` and `npm run version:check` pass. The icon audit excludes
 only the retained `LICENSE.lucide` notice from SVG validation, while continuing
-to inspect every vector source. All eight CI checks passed for the earlier
-upgrade/portability commit `e2240a5`; that result does not certify this later
-visual-parity change.
+to inspect every vector source. All eight CI checks passed for the preceding
+visual-parity commit `ad80f5b`; new pushes must receive their own CI results.
 
 Reproduce from this worktree, with `OCCT_ROOT` set for the local installation:
 
@@ -184,22 +188,26 @@ built `nbcad` executable and a private session directory, not browser rendering.
 The lifecycle fixture is `xtask test-mcp native-lifecycle`; its JSON report and
 screenshots are local artifacts, not tracked product assets.
 
-One immediate capture after reopening omitted several group-caption glyphs and
-part of the numeric text. The subsequent live window and a settled native
-capture rendered them correctly. The cause is not established; capture/text
-invalidation through document transitions remains an upgrade gate.
+An earlier capture after reopening omitted several group-caption glyphs and
+part of the experimental numeric text. This was not reproduced in the final
+native lifecycle captures or inspected window. The earlier cause is not
+established; keep document-transition capture consistency in upgrade coverage.
 
 This is not full accessibility, system clipboard, modifier-key or OS IME
-certification for Feathers. These runs make no performance claim. The new UI
-has not been exercised on Windows or Linux, and minimum-size/DPI coverage is
-still pending.
+certification. Automated macOS Cmd+A delivery inserted a literal `a` instead of
+selecting the field; investigate modifier-event delivery before release cutover.
+Plain typing, pointer selection and Escape are independently covered. These runs
+make no performance claim. The new UI
+has not been exercised on Windows or Linux. The minimum logical window size is
+covered; changing monitor DPI is still pending.
 
 ## Next experiments, in order
 
-1. Finish the visual-parity live lifecycle, populated history and tab checks.
-   Resolve the transient glyph/capture discrepancy through document transitions;
-   check the supported minimum window size and changed DPI, then Windows/Linux.
-2. Extend the Feathers numeric trial only after keyboard shortcuts, clipboard,
+1. Expand native validation to changed DPI and Windows/Linux, and retain
+   document-transition capture checks. Finish actual modifier-key, clipboard,
+   assistive-technology and OS IME certification before making this the release
+   UI. Native lifecycle, populated history, tabs and minimum-size checks now pass.
+2. Consider Feathers for a real product field only after keyboard shortcuts, clipboard,
    assistive technology and OS IME work with the existing event ordering. Keep
    CAD unit/formula parsing and owned draft commits intact; measure integration
    cost before converting dimension fields.

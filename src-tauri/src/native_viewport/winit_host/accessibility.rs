@@ -11,9 +11,17 @@ use bevy::{
     input_focus::{FocusCause, InputFocus},
     prelude::*,
     window::PrimaryWindow,
+    winit::{
+        accessibility::{WinitActionRequestHandler, WinitActionRequestHandlers},
+        EventLoopProxyWrapper, WinitUserEvent,
+    },
 };
 use nbcad_interface::{ControlKey, Field, Rect as ControlRect};
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, Weak},
+    time::Duration,
+};
 
 #[derive(Component)]
 struct AccessibleBinding(Option<NativeInterfaceAction>);
@@ -33,9 +41,13 @@ struct AccessibleControl {
 #[derive(Resource, Default)]
 struct AccessibleControls(HashMap<ControlKey, (Entity, AccessibleControl)>);
 
+#[derive(Resource, Default)]
+struct ActionWakers(HashMap<Entity, Weak<Mutex<WinitActionRequestHandler>>>);
+
 pub(super) fn install(app: &mut App) {
     app.init_resource::<InputFocus>()
         .init_resource::<AccessibleControls>()
+        .init_resource::<ActionWakers>()
         .add_systems(
             PostUpdate,
             publish
@@ -44,8 +56,45 @@ pub(super) fn install(app: &mut App) {
         )
         .add_systems(
             PostUpdate,
-            apply_requests.after(AccessibilitySystems::Update),
+            (watch_action_queues, apply_requests).after(AccessibilitySystems::Update),
         );
+}
+
+fn watch_action_queues(
+    handlers: Option<Res<WinitActionRequestHandlers>>,
+    proxy: Option<Res<EventLoopProxyWrapper>>,
+    mut watched: ResMut<ActionWakers>,
+) {
+    let (Some(handlers), Some(proxy)) = (handlers, proxy) else { return; };
+    watched.0.retain(|window, _| handlers.contains_key(window));
+    for (window, requests) in handlers.iter() {
+        let weak = Arc::downgrade(requests);
+        if watched.0.get(window).is_some_and(|previous| previous.ptr_eq(&weak)) {
+            continue;
+        }
+        let wake = (**proxy).clone();
+        match start_action_waker(requests, move || wake.send_event(WinitUserEvent::WakeUp).is_ok()) {
+            Ok(_) => { watched.0.insert(*window, weak); }
+            Err(error) => eprintln!("Native accessibility wake watcher failed: {error}"),
+        }
+    }
+}
+
+fn start_action_waker(
+    requests: &Arc<Mutex<WinitActionRequestHandler>>,
+    wake: impl Fn() -> bool + Send + 'static,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
+    let requests = Arc::downgrade(requests);
+    // Bevy 0.20-rc.1's direct AccessKit handler only queues requests. With an
+    // indefinitely sleeping Winit loop, no system runs to collect that queue.
+    // Check it off-thread; wake/render only for actual assistive input. Weak
+    // ownership lets this watcher stop when its window or application closes.
+    std::thread::Builder::new().name("native-a11y-wake".into()).spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(40));
+        let Some(requests) = requests.upgrade() else { break; };
+        let Ok(pending) = requests.lock().map(|queue| !queue.is_empty()) else { break; };
+        if pending && !wake() { break; }
+    })
 }
 
 fn publish(world: &mut World) {
@@ -188,8 +237,9 @@ fn publish(world: &mut World) {
         world.despawn(entity);
     }
     world.resource_mut::<AccessibleControls>().0 = current;
-    if next_focus.is_none() && super::super::interface_shell::studio::owns_text_focus(world) {
-        // Feathers owns its real text entity and publishes its own AccessKit
+    if next_focus.is_none() && world.resource::<InputFocus>().get()
+        .is_some_and(|entity| world.get::<bevy::ui_widgets::TextInput>(entity).is_some()) {
+        // A standard Bevy widget owns its text entity and publishes its own AccessKit
         // node. Clearing this focus would make its input blur every frame.
         return;
     }
@@ -248,7 +298,7 @@ fn apply_requests(
 }
 
 #[cfg(test)]
-mod feathers_focus_tests {
+mod widget_focus_tests {
     use super::*;
 
     #[test]
@@ -267,6 +317,26 @@ mod feathers_focus_tests {
 mod tests {
     use super::*;
     use crate::native_viewport::interface_shell::{tests::fixture, InterfaceControl};
+
+    #[test]
+    fn assistive_input_wakes_an_idle_host_without_consuming_or_polling_frames() {
+        let requests = Arc::new(Mutex::new(WinitActionRequestHandler::default()));
+        let (send, receive) = std::sync::mpsc::channel();
+        let watcher = start_action_waker(&requests, move || send.send(()).is_ok()).unwrap();
+        assert!(matches!(receive.recv_timeout(Duration::from_millis(120)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)));
+        let request = accesskit::ActionRequest {
+            action: Action::Click,
+            target_tree: accesskit::TreeId::ROOT,
+            target_node: accesskit::NodeId(17),
+            data: None,
+        };
+        requests.lock().unwrap().push_back(request);
+        receive.recv_timeout(Duration::from_secs(2)).expect("Idle assistive input must wake Winit");
+        assert_eq!(requests.lock().unwrap().pop_front().unwrap().target_node, accesskit::NodeId(17));
+        drop(requests);
+        watcher.join().unwrap();
+    }
 
     #[test]
     fn native_field_states_are_exposed_to_assistive_technology() {

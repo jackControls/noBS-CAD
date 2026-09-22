@@ -79,10 +79,22 @@ fn navigate_inner(
     if escape || lost {
         world.insert_resource(workbench::NavigationRectangle(None));
         let dragging = state.drag.take().is_some();
+        let navigation_cancelled = escape
+            && !input.consumed
+            && handle.read_surface(|owner, frame| {
+                input.context.as_ref() == Some(owner) && frame.modal_stack.is_empty()
+            })?
+            && workbench::navigation(world) != NavigationTool::Select;
+        if navigation_cancelled {
+            workbench::execute(
+                world,
+                &workbench::Command::Navigation(NavigationTool::Select),
+            )?;
+        }
         if dragging {
             cancel_native_pointer(world, handle);
         }
-        return Ok(escape && dragging);
+        return Ok((escape && dragging) || navigation_cancelled);
     }
     if !matches!(
         input.event,

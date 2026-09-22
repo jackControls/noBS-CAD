@@ -326,8 +326,6 @@ pub(crate) enum NativeCommand {
         arguments: Value,
     },
     ClearSelection,
-    #[cfg(feature = "dev-bevy-host")]
-    StudioLight,
     SelectBody {
         body_id: u64,
         occurrence_id: Option<u64>,
@@ -515,12 +513,6 @@ pub(crate) fn reduce_action(
     if let NativeCommand::History(command) = &binding.command {
         return controller::history::reduce(world, handle, engine, bridge, action, command);
     }
-    #[cfg(feature = "dev-bevy-host")]
-    if let NativeCommand::StudioLight = &binding.command {
-        bridge.with_native_document_owner(engine, &action.context, || handle.validate_action(action))?;
-        let value = crate::native_viewport::interface_shell::studio::set_value(world, &action.control.input)?;
-        return Ok(json!({"studio_light":value}));
-    }
     if !is_activation(&action.control.input) {
         return Err("This native button does not handle the requested input".into());
     }
@@ -543,8 +535,6 @@ pub(crate) fn reduce_action(
         #[cfg(feature="dev-bevy-host")]
         NativeCommand::History(_)=>unreachable!("History input is reduced before button activation"),
         NativeCommand::Feature(_)=>unreachable!("Extrude fields are reduced before button activation"),
-        #[cfg(feature="dev-bevy-host")]
-        NativeCommand::StudioLight=>unreachable!("Studio light is reduced before button activation"),
         NativeCommand::CancelClose | NativeCommand::DiscardAndClose => {
             bridge.with_native_document_owner(engine, &action.context, || {
                 handle.validate_action(action)?;

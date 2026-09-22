@@ -409,11 +409,24 @@ fn toolbar_modes_capture_left_drag_and_window_zoom_without_editing_geometry() {
         before,
         fixture.engine.engine_call("project_export_model", "")
     );
-    workbench::execute(
+    assert!(navigate(
         app.world_mut(),
-        &workbench::Command::Navigation(NavigationTool::Select),
+        &handle,
+        &input(
+            &handle,
+            [300., 300.],
+            WindowEvent::KeyboardInput(KeyboardInput {
+                key_code: KeyCode::Escape,
+                logical_key: Key::Escape,
+                state: ButtonState::Pressed,
+                text: None,
+                repeat: false,
+                window: Entity::PLACEHOLDER,
+            })
+        )
     )
-    .unwrap();
+    .unwrap());
+    assert_eq!(workbench::navigation(app.world()), NavigationTool::Select);
     assert!(!navigate(
         app.world_mut(),
         &handle,

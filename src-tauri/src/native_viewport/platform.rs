@@ -2897,8 +2897,6 @@ fn apply_camera(
     presentation: Res<PresentationResource>,
     mut ambient: ResMut<GlobalAmbientLight>,
     mut revisions: ResMut<RenderedRevisions>,
-    #[cfg(feature = "dev-bevy-host")]
-    studio: Option<Res<super::interface_shell::studio::StudioLight>>,
     mut query: Query<(&mut Transform, &mut Projection), With<NativeViewportCamera>>,
     mut key_lights: Query<
         (&mut Transform, &mut DirectionalLight),
@@ -2918,11 +2916,7 @@ fn apply_camera(
     >,
 ) {
     let cam_lighting = presentation.0.cam_stock_visible;
-    #[cfg(feature = "dev-bevy-host")]
-    let studio_level = studio.as_ref().map_or(1., |s| s.0 as f32);
-    #[cfg(not(feature = "dev-bevy-host"))]
-    let studio_level = 1.;
-    let ambient_brightness = if cam_lighting { 500.0 } else { 350.0 * studio_level };
+    let ambient_brightness = if cam_lighting { 500.0 } else { 350.0 };
     if revisions.camera == camera.revision && ambient.brightness == ambient_brightness {
         return;
     }
@@ -2952,11 +2946,11 @@ fn apply_camera(
     };
     for (mut transform, mut light) in &mut key_lights {
         *transform = key_transform;
-        light.illuminance = if cam_lighting { 2_600.0 } else { 3_200.0 * studio_level };
+        light.illuminance = if cam_lighting { 2_600.0 } else { 3_200.0 };
     }
     for (mut transform, mut light) in &mut fill_lights {
         *transform = fill_transform;
-        light.illuminance = if cam_lighting { 750.0 } else { 650.0 * studio_level };
+        light.illuminance = if cam_lighting { 750.0 } else { 650.0 };
     }
 }
 

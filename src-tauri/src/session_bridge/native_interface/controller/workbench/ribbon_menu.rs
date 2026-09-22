@@ -92,7 +92,7 @@ fn visible_counts(panels: &[Value], available: f32) -> Vec<usize> {
     let total = |counts: &[usize]| {
         counts
             .iter()
-            .map(|n| 8. + (*n as f32 * 50. - 2.).max(48.))
+            .map(|n| 9. + (*n as f32 * 50. - 2.).max(48.))
             .sum::<f32>()
     };
     let max = counts.iter().copied().max().unwrap_or(0);
@@ -251,12 +251,12 @@ pub(super) fn synchronize(
             }
         }
     }
-    let mut x = workspace_width + 1.;
+    let mut x = workspace_width;
     let mut open_entries = vec![];
     for (panel, count) in panels.iter().zip(counts) {
         let id = panel["id"].as_str().unwrap();
         let buttons = panel["buttons"].as_array().unwrap();
-        let group_width = 8. + (count as f32 * 50. - 2.).max(48.);
+        let group_width = 9. + (count as f32 * 50. - 2.).max(48.);
         let group_label = label(panel);
         let mut entries = panel["menu"].as_array().cloned().unwrap_or_else(|| {
             buttons
@@ -283,7 +283,7 @@ pub(super) fn synchronize(
                 world.get_mut::<InterfaceControl>(entity).unwrap().visible = visible;
                 if visible {
                     world.entity_mut(entity).insert(ribbon::node(
-                        x + (group_width - count as f32 * 50.) / 2. + i as f32 * 50.,
+                        x + 4. + i as f32 * 50.,
                         34.,
                         48.,
                     ));
@@ -306,11 +306,7 @@ pub(super) fn synchronize(
                     &label(button),
                     &label(button),
                     command,
-                    ribbon::node(
-                        x + (group_width - count as f32 * 50.) / 2. + i as f32 * 50.,
-                        34.,
-                        48.,
-                    ),
+                    ribbon::node(x + 4. + i as f32 * 50., 34., 48.),
                     None,
                     disabled,
                     30,
@@ -328,7 +324,7 @@ pub(super) fn synchronize(
             &format!("{group_label} tools"),
             &caption,
             NativeCommand::Workbench(Command::Menu(id.into())),
-            rect(x + 2., 94., group_width - 4., 20.),
+            rect(x + 4., 90., group_width - 9., 20.),
             Some(selected),
             !has_menu,
             42,
@@ -337,22 +333,26 @@ pub(super) fn synchronize(
             c.expanded = has_menu.then_some(selected);
             c.modal_scope = state.menu.as_ref().map(|_| "workbench-menu".into());
         }
-        interface_shell::caption_size(world, entity, 9.);
+        interface_shell::caption_size(world, entity, 10.);
+        interface_shell::caption_tracking(world, entity, 0.5);
         if has_menu {
+            let chevron_key = format!("chevron-{id}");
             state.widgets.glyph(
                 world,
                 camera,
-                &format!("chevron-{id}"),
-                rect(
-                    x + group_width / 2. + group_label.len() as f32 * 2.8 + 2.,
-                    100.,
-                    8.,
-                    8.,
-                ),
+                &chevron_key,
+                Node {
+                    width: px(10.),
+                    height: px(10.),
+                    margin: UiRect::left(px(2.)),
+                    flex_shrink: 0.,
+                    ..default()
+                },
                 Icon::ChevronDown,
                 theme.mute,
-                43,
+                1,
             );
+            state.widgets.parent(world, &chevron_key, entity);
         }
         state.widgets.panel(
             world,

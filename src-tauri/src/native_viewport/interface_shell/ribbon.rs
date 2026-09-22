@@ -42,13 +42,12 @@ impl RibbonButton {
         }
     }
     pub(super) fn ink(&self, theme: ViewportUiTheme, disabled: bool) -> Color {
-        // Captions remain readable at the supported minimum window size.
         if self.finish {
             Color::WHITE
         } else if disabled {
-            theme.mute
+            css_mix(theme.mute, theme.header, 0.4)
         } else {
-            theme.ink
+            theme.mute
         }
     }
     pub(super) fn label(&self) -> &str {
@@ -502,10 +501,10 @@ pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
         "Fit-point spline" => "Spline",
         "Center-to-center slot" => "Slot",
         "Create Sketch" => "Create\nSketch",
-        "Rectangular Pattern" => "Rect. pattern",
-        "Circular Pattern" => "Circ. pattern",
-        "External Thread" => "Thread",
-        "Offset Plane" => "Offset plane",
+        "Rectangular Pattern" => "Rectangular\nPattern",
+        "Circular Pattern" => "Circular\nPattern",
+        "External Thread" => "External\nThread",
+        "Offset Plane" => "Offset\nPlane",
         "Plane at Angle" => "Angled plane",
         "Finish sketch" => "FINISH SKETCH",
         "Finish spline" => "FINISH SPLINE",
@@ -522,7 +521,7 @@ pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
         Text::new(&display_label),
         theme.text(
             &assets,
-            if finish { 11. } else { 10. },
+            if finish { 11. } else { 8. },
             if finish {
                 FontWeight::SEMIBOLD
             } else {
@@ -531,7 +530,7 @@ pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
         ),
         TextLayout::justify(Justify::Center),
         FontHinting::Enabled,
-        LineHeight::Px(if finish { 16.5 } else { 11. }),
+        LineHeight::Px(if finish { 16.5 } else { 8. }),
         LetterSpacing::Px(if finish { 0.275 } else { 0. }),
         Node {
             position_type: if finish {
@@ -542,7 +541,7 @@ pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
             top: if finish {
                 Val::Auto
             } else {
-                px(38. - lines * 4.)
+                px(40. - lines * 4.)
             },
             left: if finish { Val::Auto } else { px(0.) },
             width: if finish { Val::Auto } else { percent(100.) },

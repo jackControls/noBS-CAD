@@ -1,6 +1,7 @@
 //! Retained File menu, project tabs and owned confirmation/name dialogs.
 use super::*;
 use crate::native_viewport::interface_shell::{fields, InterfaceCaption, InterfaceOccluder};
+use bevy::text::{LetterSpacing, LineHeight};
 use nbcad_interface::Field;
 use std::collections::HashSet;
 
@@ -46,6 +47,10 @@ fn button(
     if key.starts_with("tab-") || key.starts_with("file-item-") {
         bounds.justify_content = JustifyContent::Start;
     }
+    if key.starts_with("tab-") {
+        // Long document names must stay inside their slot, clear of Close.
+        bounds.overflow = Overflow::clip();
+    }
     let surface = scope.unwrap_or("document/session");
     let entity = if let Some((entity, _)) = state.controls.get(&key) {
         *entity
@@ -81,6 +86,7 @@ fn button(
     control.modal_scope = scope.map(str::to_owned);
     control.selected = selected;
     control.disabled = disabled;
+    control.expanded = (key == "file").then_some(scope.is_some());
     control.role = if key.starts_with("tab-") {
         "tab"
     } else if key.starts_with("file-item-") {
@@ -111,17 +117,33 @@ fn button(
         }
     }
     if key.starts_with("tab-") {
-        interface_shell::compact_label(world, entity, 30.);
-        interface_shell::control_colors(world, entity, theme.ink, theme.panel);
+        interface_shell::compact_label(world, entity, 34.);
+        interface_shell::control_colors(
+            world,
+            entity,
+            if selected == Some(true) {
+                theme.ink
+            } else {
+                theme.mute
+            },
+            if selected == Some(true) {
+                theme.panel
+            } else {
+                theme.header
+            },
+        );
     } else if key.starts_with("file-item-") {
-        interface_shell::compact_label(world, entity, 28.);
+        interface_shell::compact_label(world, entity, 34.);
         interface_shell::caption_size(world, entity, 11.);
     } else {
-        world
-            .entity_mut(entity)
-            .insert(interface_shell::InterfaceFlat);
+        if scope != Some("file-dialog") {
+            world.entity_mut(entity).insert(interface_shell::InterfaceFlat);
+        }
         interface_shell::center_caption(world, entity);
-        interface_shell::caption_size(world, entity, 11.);
+        interface_shell::caption_size(world, entity, if key == "new" { 14. } else { 11. });
+        if matches!(key.as_str(), "rename-apply" | "save-continue") {
+            interface_shell::primary_button(world, entity);
+        }
     }
     Ok(())
 }
@@ -206,11 +228,45 @@ pub(crate) fn synchronize(
             world,
             camera,
             "file-chevron",
-            node(31., 11., 7., 7.),
+            node(27.5, 10.5, 7., 7.),
             interface_shell::ribbon::Icon::ChevronDown,
             theme.mute,
             66,
         );
+        // The product mark is decorative; the complete 40px File button
+        // remains the single keyboard, pointer and accessibility target.
+        let mut badge = node(5.5, 6., 20., 16.);
+        badge.border = UiRect::all(px(1.));
+        state.chrome.panel(
+            world,
+            camera,
+            "product-mark",
+            badge,
+            theme.accent.with_alpha(0.1),
+            66,
+        );
+        world
+            .entity_mut(state.chrome.entity("product-mark").unwrap())
+            .remove::<InterfaceOccluder>()
+            .insert(BorderColor::all(theme.accent.with_alpha(0.4)));
+        state.chrome.text(
+            world,
+            camera,
+            "product-mark-text",
+            node(5.5, 10., 20., 8.),
+            "NB",
+            7.,
+            67,
+        );
+        world
+            .entity_mut(state.chrome.entity("product-mark-text").unwrap())
+            .insert((
+                theme.text(&assets, 7., FontWeight::BLACK),
+                TextColor(theme.accent),
+                TextLayout::justify(Justify::Center),
+                LineHeight::Px(8.),
+                LetterSpacing::Px(-0.56),
+            ));
         let layout = format!("{width}:{height}:{menu}:{:?}", dialog);
         if state.layout.as_ref() != Some(&layout) {
             for entity in state.decoration.drain(..) {
@@ -225,14 +281,22 @@ pub(crate) fn synchronize(
                 40,
             );
             if menu {
+                let mut menu_bounds = node(6., 28., 256., 532.);
+                menu_bounds.border = UiRect::all(px(1.));
                 rectangle(
                     world,
                     &mut state,
                     camera,
-                    node(4., 29., 256., 336.),
-                    theme.header.with_alpha(1.),
+                    menu_bounds,
+                    theme.panel.with_alpha(1.),
                     60,
                 );
+                world.entity_mut(*state.decoration.last().unwrap()).insert((
+                    BorderColor::all(theme.edge),
+                    bevy::ui::BoxShadow::new(
+                        Color::BLACK.with_alpha(0.5), px(0.), px(10.), px(-5.), px(25.),
+                    ),
+                ));
             }
             if let Some(dialog) = &dialog {
                 let w = 460_f32.min(width - 24.).max(120.);
@@ -325,9 +389,9 @@ pub(crate) fn synchronize(
             &assets,
             "file".into(),
             "File".into(),
-            Some("NB"),
+            Some(""),
             FileCommand::Menu,
-            node(0., 0., 44., 28.),
+            node(0., 0., 40., 28.),
             menu.then_some("file-menu"),
             65,
             None,
@@ -344,7 +408,7 @@ pub(crate) fn synchronize(
             "New document".into(),
             Some("+"),
             FileCommand::New,
-            node(44., 0., 24., 28.),
+            node(40., 0., 28., 28.),
             None,
             42,
             None,
@@ -390,12 +454,12 @@ pub(crate) fn synchronize(
                 world,
                 camera,
                 &format!("tab-stage-{}", tab.owner.document_id),
-                node(x + 12., 9., 11., 11.),
+                node(x + 12., 10., 10., 10.),
                 interface_shell::ribbon::Icon::Box,
                 if tab.active { theme.accent } else { theme.mute },
                 44,
             );
-            let mut dot = node(x + 29., 11., 6., 6.);
+            let mut dot = node(x + 28., 12., 6., 6.);
             dot.border_radius = BorderRadius::MAX;
             state.chrome.panel(
                 world,
@@ -506,29 +570,26 @@ pub(crate) fn synchronize(
             } else {
                 "Ctrl+"
             };
-            for (i, (label, command, icon, shortcut, disabled)) in [
+            let mut y = 33.;
+            for (i, (label, caption, command, icon, shortcut, disabled)) in [
                 (
                     "Open…",
+                    "Open Project…",
                     FileCommand::Open,
                     Icon::FolderOpen,
                     format!("{primary}O"),
                     false,
                 ),
                 (
-                    "Open script…",
+                    "Open Script…",
+                    "Open Script…",
                     FileCommand::DismissMenu,
                     Icon::Book,
                     String::new(),
                     true,
                 ),
                 (
-                    "New document",
-                    FileCommand::New,
-                    Icon::Box,
-                    format!("{primary}N"),
-                    false,
-                ),
-                (
+                    "Save",
                     "Save",
                     FileCommand::Save,
                     Icon::Save,
@@ -537,55 +598,93 @@ pub(crate) fn synchronize(
                 ),
                 (
                     "Save as…",
+                    "Save As…",
                     FileCommand::SaveAs,
-                    Icon::Save,
+                    Icon::Export,
                     format!(
-                        "{}{}S",
+                        "{}{primary}S",
                         if cfg!(target_os = "macos") {
                             "⇧"
                         } else {
                             "Shift+"
-                        },
-                        primary
+                        }
                     ),
                     false,
                 ),
                 (
                     "Rename…",
+                    "Rename Project…",
                     FileCommand::Rename,
                     Icon::Pencil,
                     String::new(),
                     false,
                 ),
                 (
-                    "Import STEP…",
+                    "Import STEP/STP…",
+                    "Import STEP/STP…",
                     FileCommand::DismissMenu,
                     Icon::Import,
                     String::new(),
                     true,
                 ),
                 (
-                    "Export…",
+                    "Export All Bodies as STEP…",
+                    "Export All Bodies as STEP…",
+                    FileCommand::DismissMenu,
+                    Icon::Box,
+                    String::new(),
+                    true,
+                ),
+                (
+                    "Export Selected Body as STEP…",
+                    "Export Selected Body as STEP…",
+                    FileCommand::DismissMenu,
+                    Icon::Box,
+                    String::new(),
+                    true,
+                ),
+                (
+                    "Export All Bodies as 3MF…",
+                    "Export All Bodies as 3MF…",
                     FileCommand::DismissMenu,
                     Icon::Export,
                     String::new(),
                     true,
                 ),
                 (
-                    "Settings…",
+                    "Export Selected Body as 3MF…",
+                    "Export Selected Body as 3MF…",
+                    FileCommand::DismissMenu,
+                    Icon::Export,
+                    String::new(),
+                    true,
+                ),
+                (
+                    "Export All Bodies as STL…",
+                    "Export All Bodies as STL…",
+                    FileCommand::DismissMenu,
+                    Icon::Export,
+                    String::new(),
+                    true,
+                ),
+                (
+                    "Export Selected Body as STL…",
+                    "Export Selected Body as STL…",
+                    FileCommand::DismissMenu,
+                    Icon::Export,
+                    String::new(),
+                    true,
+                ),
+                (
+                    "Settings",
+                    "Settings",
                     FileCommand::DismissMenu,
                     Icon::Settings,
                     String::new(),
                     true,
                 ),
                 (
-                    "Close document",
-                    FileCommand::Close,
-                    Icon::Cancel,
-                    format!("{primary}W"),
-                    false,
-                ),
-                (
+                    "Exit",
                     "Exit",
                     FileCommand::Exit,
                     Icon::Cancel,
@@ -596,7 +695,17 @@ pub(crate) fn synchronize(
             .into_iter()
             .enumerate()
             {
-                let y = 33. + i as f32 * 29.;
+                if matches!(i, 5 | 6 | 12) {
+                    state.chrome.panel(
+                        world,
+                        camera,
+                        &format!("file-separator-{i}"),
+                        node(7., y + 4., 254., 1.),
+                        theme.edge,
+                        61,
+                    );
+                    y += 9.;
+                }
                 button(
                     world,
                     &mut state,
@@ -606,9 +715,9 @@ pub(crate) fn synchronize(
                     &assets,
                     format!("file-item-{i}"),
                     label.into(),
-                    None,
+                    Some(caption),
                     command,
-                    node(8., y, 248., 28.),
+                    node(7., y, 254., 32.),
                     Some("file-menu"),
                     61,
                     None,
@@ -618,21 +727,47 @@ pub(crate) fn synchronize(
                     world,
                     camera,
                     &format!("file-icon-{i}"),
-                    node(16., y + 7., 14., 14.),
+                    node(19., y + 9., 14., 14.),
                     icon,
                     if disabled { theme.edge } else { theme.mute },
                     62,
                 );
-                state.chrome.text(
-                    world,
-                    camera,
-                    &format!("file-shortcut-{i}"),
-                    node(188., y + 7., 58., 14.),
-                    &shortcut,
-                    10.,
-                    62,
-                );
+                if !shortcut.is_empty() {
+                    state.chrome.text(
+                        world,
+                        camera,
+                        &format!("file-shortcut-{i}"),
+                        node(191., y + 9., 58., 14.),
+                        &shortcut,
+                        10.,
+                        62,
+                    );
+                    world
+                        .entity_mut(state.chrome.entity(&format!("file-shortcut-{i}")).unwrap())
+                        .insert((TextLayout::justify(Justify::Right), TextColor(theme.mute)));
+                }
+                y += 32.;
             }
+            state.chrome.panel(
+                world,
+                camera,
+                "file-footer-edge",
+                node(7., y + 4., 254., 1.),
+                theme.edge,
+                61,
+            );
+            state.chrome.text(
+                world,
+                camera,
+                "file-footer",
+                node(19., y + 13., 230., 32.),
+                ".nbcad is a versioned ZIP archive containing manifest.json and model.json.",
+                9.,
+                62,
+            );
+            world
+                .entity_mut(state.chrome.entity("file-footer").unwrap())
+                .insert(TextColor(theme.mute));
             // A real transparent backdrop dismisses the menu, including through MCP.
             let key = "file-backdrop".to_owned();
             live.insert(key.clone());

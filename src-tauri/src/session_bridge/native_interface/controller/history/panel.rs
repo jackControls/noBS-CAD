@@ -320,14 +320,22 @@ pub(crate) fn synchronize(
                     rect(0., 0., width, height),
                     59,
                 )?;
+                let mut menu_bounds = rect(x, y, 240., 154.);
+                menu_bounds.border = UiRect::all(px(1.));
                 state.widgets.panel(
                     world,
                     camera,
                     "history-menu-bg",
-                    rect(x, y, 240., 154.),
-                    theme.header.with_alpha(1.),
+                    menu_bounds,
+                    theme.panel.with_alpha(1.),
                     60,
                 );
+                world.entity_mut(state.widgets.entity("history-menu-bg").unwrap()).insert((
+                    BorderColor::all(theme.edge),
+                    bevy::ui::BoxShadow::new(
+                        Color::BLACK.with_alpha(0.5), px(0.), px(10.), px(-5.), px(25.),
+                    ),
+                ));
                 for (i, (label, command, disabled)) in [
                     (
                         if feature.kind == FeatureKind::Sketch {

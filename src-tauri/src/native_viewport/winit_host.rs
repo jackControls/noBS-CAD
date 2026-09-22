@@ -151,8 +151,6 @@ pub(crate) fn build(configure: impl FnOnce(&mut App, NativeInterfaceHandle)) -> 
     #[cfg(target_os = "linux")]
     let plugins = plugins.disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>();
     app.add_plugins(plugins);
-    app.add_plugins(bevy::feathers::FeathersCorePlugin)
-        .insert_resource(bevy::feathers::theme::UiTheme(bevy::feathers::dark_theme::create_dark_theme()));
     let wake = (**app.world().resource::<EventLoopProxyWrapper>()).clone();
     let handle = NativeInterfaceHandle::new(move || {
         let _ = wake.send_event(WinitUserEvent::WakeUp);
@@ -320,9 +318,6 @@ pub(crate) fn prepare_native_input(
             input.cursor,
             input.modifiers,
         )?;
-        if !input.consumed {
-            input.consumed = super::interface_shell::studio::route_input(world, handle, &input.event, input.cursor);
-        }
         if !input.consumed {
             input.consumed = route_one(handle, &mut state, &input.event)?;
         }
