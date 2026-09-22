@@ -6914,27 +6914,29 @@ fn render_frames(app: &mut bevy::app::App, count: usize, metrics: &Arc<Mutex<Met
                 eprintln!("Native interface submission failed: {error}");
             }
         }
-        #[cfg(target_os = "linux")]
+        // Compile the Linux probe in other platforms' tests too, so renderer
+        // API migrations cannot leave this diagnostic path behind.
+        #[cfg(any(target_os = "linux", test))]
         if std::env::var_os("NBCAD_VIEWPORT_PROBE_FILE").is_some() {
-            if let Some(render_app) = app.get_sub_app(bevy::render::RenderApp) {
-                let world = render_app.world();
-                let windows = world.get_resource::<bevy::render::view::window::ExtractedWindows>();
-                let cameras = world.get_resource::<bevy::render::camera::SortedCameras>();
-                if let Some(windows) = windows {
-                    for window in windows.windows.values() {
-                        eprintln!(
-                            "native Bevy extracted window: {}x{}, format={:?}, texture={}, initial_present={}",
-                            window.physical_width,
-                            window.physical_height,
-                            window.swap_chain_texture_format,
-                            window.swap_chain_texture.is_some(),
-                            window.needs_initial_present,
-                        );
-                    }
+            if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
+                let world = render_app.world_mut();
+                let mut windows = world.query::<&bevy::render::view::window::ExtractedWindow>();
+                let mut window_count = 0;
+                for window in windows.iter(world) {
+                    window_count += 1;
+                    eprintln!(
+                        "native Bevy extracted window: {}x{}, format={:?}, texture={}, initial_present={}",
+                        window.physical_width,
+                        window.physical_height,
+                        window.swap_chain_texture_format,
+                        window.swap_chain_texture.is_some(),
+                        window.needs_initial_present,
+                    );
                 }
+                let cameras = world.get_resource::<bevy::render::camera::SortedCameras>();
                 eprintln!(
                     "native Bevy render world: windows={}, cameras={}",
-                    windows.map_or(0, |windows| windows.windows.len()),
+                    window_count,
                     cameras.map_or(0, |cameras| cameras.0.len()),
                 );
             }

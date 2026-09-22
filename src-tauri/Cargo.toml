@@ -124,6 +124,8 @@ hidapi = { version = "2.6", default-features = false, features = ["windows-nativ
 # Keep gpu-allocator and wgpu-hal on the same Direct3D COM types. Version 0.62.0
 # is the exact intersection of gpu-allocator's `<=0.62` cap and wgpu-hal's
 # `^0.62` requirement; allowing a newer patch release makes Cargo split them.
+# The lockfile must also resolve gpu-allocator to this version: the pin alone
+# does not stop Cargo reusing WebView2's incompatible 0.61 bindings for it.
 windows = { version = "=0.62.0", default-features = false }
 webview2-com = "0.38.2"
 windows-core-webview2 = { package = "windows-core", version = "0.61" }
