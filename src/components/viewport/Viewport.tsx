@@ -145,16 +145,14 @@ import {
 import {
   angleOf,
   ccwSweep,
-  circleSpec,
-  circumcircle,
-  rectCorner,
-  rectCorners,
-  slotCapsulePreview,
+  creationPreviewPositions,
   tessellateArc,
   tessellateCircle,
   tessellateSpline,
   type ToolLocks,
 } from './toolPreview';
+import { advanceArcTravel, beginArcAngleText, beginArcTravel, resolvedArcSweep, type ArcTravel } from './arcSweep';
+import { ToolOperationGate } from './toolOperation';
 import { DynamicInputOverlay } from './DynamicInputOverlay';
 import { DimensionEditor } from './DimensionEditor';
 import { ContextMenu, type ContextMenuEntry } from '../ContextMenu';
@@ -547,6 +545,9 @@ export function Viewport() {
     const COLOR_PICK_NORMAL = interactionThemeColor('--cad-pick-normal', '#86a9c7');
     const COLOR_PICK_HALO = interactionThemeColor('--cad-pick-halo', '#ffffff');
     const COLOR_SKETCH = interactionThemeColor('--sketchline', '#86a9c7');
+    /** Support-face boundary projected into the active sketch. Read-only
+     * reference geometry: never hoverable, selectable or constrained. */
+    const COLOR_PROJECTED = interactionThemeColor('--cad-projected', '#c08cf5');
     const COLOR_DEFINED = interactionThemeColor('--cad-defined', '#e8e9ec');
     const COLOR_HOVER = interactionThemeColor('--cad-pick-hover', '#00f5ff');
     const COLOR_ACCENT = interactionThemeColor('--accent', '#7463d8');
@@ -1365,7 +1366,20 @@ export function Viewport() {
 
     let snapMarkerKind: NativeViewportSnapKind = 'grid';
     const nativeSnapKind = (kind: SnapTarget['kind']): NativeViewportSnapKind =>
-      kind === 'none' ? 'grid' : kind === 'intersection' ? 'point' : kind;
+      kind === 'none'
+        ? 'grid'
+        : kind === 'intersection'
+          ? 'point'
+          : kind === 'projected_edge'
+            ? 'curve'
+            : kind;
+    /** The native viewport renders on demand and only receives transient
+     * geometry (cursor badge, snap marker, rubber band) when a frame runs, so
+     * every cursor-HUD change has to ask for one. Without this the HUD keeps
+     * whatever it had at the last pointer move: a pick does not stamp its
+     * marker, and a cursor that leaves the viewport stays drawn where it was. */
+    const wakeCursorHud = () => wakeControllerFrame();
+
     const showSnapMarker = (
       point: Vec2,
       kind: NativeViewportSnapKind = 'grid',
@@ -1379,10 +1393,12 @@ export function Viewport() {
             : snapTexture;
       snapMarkerKind = kind;
       snapMarker.visible = true;
+      wakeCursorHud();
     };
     const hideSnapMarker = () => {
       snapMarker.visible = false;
       snapMarkerKind = 'grid';
+      wakeCursorHud();
     };
 
     // Rubber-band preview line (constant screen width).
@@ -3716,9 +3732,33 @@ export function Viewport() {
       }
     };
 
+    /// Draw the support-face boundary projected into this sketch.
+    ///
+    /// Read-only reference geometry: never registered for picking, hovering,
+    /// grips or constraints. It is submitted before the authored curves at the
+    /// same render order and slightly lower depth, so a drawn curve that lies
+    /// on the face edge stays visible on top of it.
+    const rebuildProjectedEdges = (sketch: SketchDto) => {
+      if (!store.getState().palette.projectedGeometries) return;
+      for (const edge of sketch.projected_edges) {
+        if (edge.points.length < 2) continue;
+        const positions = edge.points.flatMap((point) => [point.x, point.y, 0.03]);
+        addViewportRelativePolyline(
+          entityGroup,
+          positions,
+          COLOR_PROJECTED,
+          VIEWPORT_INTERACTION_STROKE_PX.hover,
+          0,
+          false,
+          0.75,
+        );
+      }
+    };
+
     const rebuildEntities = (sketch: SketchDto) => {
       clearGroup(entityGroup);
       clearGroup(glyphGroup);
+      rebuildProjectedEdges(sketch);
       constraintSprites.length = 0;
       rightAngleMarks.length = 0;
       constraintGlyphGripObstacles = [];
@@ -4452,7 +4492,15 @@ export function Viewport() {
           const { center, radius, midAngle, textPos } = geom;
           const m = { x: center.x + radius * Math.cos(midAngle), y: center.y + radius * Math.sin(midAngle) };
           const uAng = midAngle;
-          addScreenPolyline(group, [center.x, center.y, z, m.x, m.y, z], green, 1.25);
+          // ISO/ANSI: the leader runs from the centre through the arc with its
+          // arrowhead on the arc, and carries on to the text, so the value reads
+          // as attached to the arrow it belongs to. A text placed beyond the arc
+          // therefore still gets one continuous leader.
+          const reach = Math.hypot(textPos.x - center.x, textPos.y - center.y);
+          const leaderEnd = reach > radius
+            ? { x: center.x + Math.cos(uAng) * reach, y: center.y + Math.sin(uAng) * reach }
+            : m;
+          addScreenPolyline(group, [center.x, center.y, z, leaderEnd.x, leaderEnd.y, z], green, 1.25);
           makeArrow(group, uAng, m, z, green);
           addDimText(group, dimLike, textPos, new CAD.Vector3(Math.cos(uAng), Math.sin(uAng), 0), {
             selected: opts.selected,
@@ -4623,7 +4671,10 @@ export function Viewport() {
       return { entityId: null, constraintId };
     };
 
+    let sketchOperationContext = 0;
+    const toolOperations = new ToolOperationGate();
     const setupSketchScene = (sketch: SketchDto) => {
+      sketchOperationContext += 1;
       const { basis } = sketch;
       const u = new CAD.Vector3(...basis.u);
       const v = new CAD.Vector3(...basis.v);
@@ -4639,6 +4690,8 @@ export function Viewport() {
     };
 
     const teardownSketchScene = () => {
+      sketchOperationContext += 1;
+      previewSeq += 1;
       sketchGroup.visible = false;
       toolRun = null;
       dragging = null;
@@ -5432,8 +5485,12 @@ export function Viewport() {
       y: number;
     } | null = null;
     let previewSeq = 0;
+    let modStartSeq = 0;
     /** Last cursor position in sketch coords (commit/drag-end fallback). */
     let lastSketchPoint: Vec2 | null = null;
+    /** Whether the pointer is currently over the viewport surface. A cursor
+     * marker may only be refreshed for a pointer that is really there. */
+    let pointerOverSurface = false;
     /** Active modal nav-tool drag (NavBar Orbit/Pan/Zoom/Zoom Window). */
     let navDrag: {
       tool: 'orbit' | 'pan' | 'zoom' | 'zoomWindow';
@@ -5507,10 +5564,24 @@ export function Viewport() {
     };
 
     /** Modify-tool pick state (fillet/chamfer picks; offset/trim/etc.). */
-    let modTool: { picks: number[]; rejected?: boolean } | null = null;
+    let modTool: { picks: number[]; rejected?: boolean; offsetCursor?: Vec2 } | null = null;
+    const offsetIntentCursor = (cursor: Vec2): Vec2 => {
+      if (!modTool) return cursor;
+      // Lock the chosen side when numeric/formula entry starts. Pointer drift
+      // must not reverse a typed offset; changing its sign is explicit intent.
+      if (dynTexts().distance !== undefined) modTool.offsetCursor ??= cursor;
+      else modTool.offsetCursor = undefined;
+      return modTool.offsetCursor ?? cursor;
+    };
     /** Picked entities render highlighted so modify tools feel alive (M1d). */
     const picksGroup = new CAD.Group();
     previewGroup.add(picksGroup);
+    /** Points the active creation run has already picked. Until it commits they
+     * are not sketch entities, so without this the only thing marking them was
+     * the cursor's own acquisition marker, which moves on with the pointer —
+     * an arc's centre and first endpoint left no trace on screen. */
+    const runPicksGroup = new CAD.Group();
+    previewGroup.add(runPicksGroup);
     /** Valid target under a modify-tool cursor (magnetic acquisition). */
     const acquireGroup = new CAD.Group();
     previewGroup.add(acquireGroup);
@@ -5626,6 +5697,8 @@ export function Viewport() {
     };
 
     const endModTool = () => {
+      previewSeq += 1;
+      modStartSeq += 1;
       modTool = null;
       modCornerTarget = null;
       trimHover = null;
@@ -5647,7 +5720,7 @@ export function Viewport() {
       window.clearTimeout(livePreviewTimer);
       store.getState().setDynPending(true);
       livePreviewTimer = window.setTimeout(() => {
-        store.getState().setDynPending(false);
+        store.getState().setDynPending(toolOperations.pending);
         if (!lastSketchPoint) return;
         const state = store.getState();
         const synth = {
@@ -5713,30 +5786,25 @@ export function Viewport() {
       }
 
       if (state.activeTool === 'chamfer' && picks.length === 2) {
-        // Client-side presentation preview: cut points + connector line.
-        const sketch = state.activeSketch;
-        if (!sketch) return;
-        const byId = new Map(sketch.entities.map((e) => [e.id, e]));
-        const l1 = byId.get(picks[0]);
-        const l2 = byId.get(picks[1]);
-        if (l1?.kind !== 'line' || l2?.kind !== 'line') return;
-        const d = locks.distance ?? (parseFloat(texts.distance ?? '10') || 10);
-        const v = lineIntersection2d(l1, l2);
-        if (!v) {
-          setPreviewPositions(null);
-          return;
-        }
-        const cut1 = chamferPoint(v, l1, d);
-        const cut2 = chamferPoint(v, l2, d);
-        setPreviewPositions([cut1.x, cut1.y, 0.12, cut2.x, cut2.y, 0.12]);
-        showSnapMarker(operationPoint, 'point');
+        const text = texts.distance ?? (locks.distance !== undefined ? String(locks.distance) : '10');
+        void engine.previewCreation({ tool: 'chamfer', l1: picks[0], l2: picks[1], distance_text: text })
+          .then((preview) => {
+            if (seq !== previewSeq) return;
+            setPreviewPositions(creationPreviewPositions(preview.curves));
+            showSnapMarker(operationPoint, 'point');
+          })
+          .catch(() => {
+            if (seq !== previewSeq) return;
+            setPreviewPositions(null);
+            hideSnapMarker();
+          });
         return;
       }
 
       if (state.activeTool === 'offset' && picks.length === 1) {
         const text = texts.distance ?? (locks.distance !== undefined ? String(locks.distance) : '10');
         void engine
-          .offsetPreview({ entity: picks[0], distance_text: text, cursor })
+          .offsetPreview({ entity: picks[0], distance_text: text, cursor: offsetIntentCursor(cursor) })
           .then((p) => {
             if (seq !== previewSeq) return;
             renderPreviewCurve(p.curve);
@@ -5984,6 +6052,10 @@ export function Viewport() {
        * typed input before the next commit. This keeps an extra Enter from
        * immediately backtracking over the segment that just finished. */
       awaitingPointerMove?: boolean;
+      /** Center arc only: the pointer's own angular travel since the start
+       * pick. It is what disambiguates the two halves a pair of picks cannot
+       * tell apart and what makes the preview match the stored arc. */
+      arc?: ArcTravel;
     }
     let toolRun: ToolRun | null = null;
 
@@ -6145,20 +6217,6 @@ export function Viewport() {
       return [];
     };
 
-    /** Chamfer cut point: from the vertex toward the FARTHER endpoint (gen
-     * convention), at distance d. */
-    const chamferPoint = (
-      v: Vec2,
-      l: { start: Vec2; end: Vec2 },
-      d: number,
-    ): Vec2 => {
-      const da = Math.hypot(l.start.x - v.x, l.start.y - v.y);
-      const db = Math.hypot(l.end.x - v.x, l.end.y - v.y);
-      const far = db >= da ? l.end : l.start;
-      const ux = (far.x - v.x) / (Math.max(da, db) || 1);
-      const uy = (far.y - v.y) / (Math.max(da, db) || 1);
-      return { x: v.x + ux * d, y: v.y + uy * d };
-    };
 
     /** Dynamic-input field sets per tool (generic mechanism, M1c-ready). */
     const TOOL_FIELDS: Partial<Record<ToolId, string[]>> = {
@@ -6172,8 +6230,57 @@ export function Viewport() {
       offset: ['distance'],
       scale: ['factor'],
       polygon: ['edges', 'radius'],
+      arcCenter: ['radius', 'angle'],
       slot: ['width'],
     };
+
+    /**
+     * Object-snap policy for the shared creation acquisition.
+     *
+     * Every line/curve/rectangle create tool acquires the same reference set
+     * (line midpoints, support-face edge midpoints and the projected face
+     * boundary); the Point tool opts out because it resolves curve carriers
+     * itself, and the modify tools pick their own targets. Hover, preview and
+     * commit all read this one table, so the cursor marker can never disagree
+     * with what a commit acquires.
+     */
+    const SNAP_MIDPOINTS_BY_TOOL: Readonly<Partial<Record<ToolId, boolean>>> = {
+      line: true,
+      midpointLine: true,
+      rect2pt: true,
+      rectCenter: true,
+      circleCenter: true,
+      circle2pt: true,
+      arc3pt: true,
+      arcCenter: true,
+      slot: true,
+      splineFit: true,
+      polygon: true,
+      point: false,
+      moveCopy: false,
+      scale: false,
+    };
+    const toolAcquiresMidpoints = (tool: ToolId | null): boolean =>
+      tool !== null && SNAP_MIDPOINTS_BY_TOOL[tool] === true;
+
+    /** The single acquisition a create tool uses. Nothing else may pass its
+     * own midpoint flag, which is what let the arc tool hover without a marker
+     * while its commit still snapped. */
+    const acquireToolSnap = (
+      tool: ToolId | null,
+      p: Vec2,
+      options: {
+        exclude?: Vec2 | null;
+        suppressRelations?: boolean;
+        midpoints?: boolean;
+      } = {},
+    ) =>
+      acquireCreateSnap(
+        p,
+        options.midpoints ?? toolAcquiresMidpoints(tool),
+        options.exclude ?? null,
+        options.suppressRelations ?? false,
+      );
 
     /** Raw typed text of locked fields (formulas pass through, D9). */
     const dynTexts = (): Record<string, string | undefined> => {
@@ -6284,6 +6391,7 @@ export function Viewport() {
       allowMidpoint = false,
       excludePosition: Vec2 | null = null,
       suppressRelations = false,
+      allowProjected = allowMidpoint,
     ): { point: Vec2; target: SnapTarget } => {
       const state = store.getState();
       if (!state.palette.snap) return { point: p, target: { kind: 'none' } };
@@ -6440,6 +6548,53 @@ export function Viewport() {
           return {
             point: { ...bestReference.point },
             target: { kind: 'reference_midpoint', edge: bestReference.edge },
+          };
+        }
+      }
+      if (allowProjected) {
+        // The projected support-face boundary is a snap locus, not just its
+        // midpoint: any point along the face edge the sketch was created from
+        // is a legitimate landing place for new geometry.
+        let bestProjected:
+          | { edge: number; position: Vec2; distance: number }
+          | null = null;
+        for (const edge of sketch?.projected_edges ?? []) {
+          for (let index = 0; index + 1 < edge.points.length; index += 1) {
+            const a = edge.points[index];
+            const b = edge.points[index + 1];
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const length2 = dx * dx + dy * dy;
+            if (length2 <= Number.EPSILON) continue;
+            const t = Math.min(
+              1,
+              Math.max(0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length2),
+            );
+            const position = { x: a.x + dx * t, y: a.y + dy * t };
+            if (
+              excludePosition
+              && Math.hypot(position.x - excludePosition.x, position.y - excludePosition.y)
+                <= 1e-7
+            ) {
+              continue;
+            }
+            const distance = Math.hypot(position.x - p.x, position.y - p.y);
+            if (
+              distance <= tolerance
+              && (!bestProjected || distance < bestProjected.distance)
+            ) {
+              bestProjected = { edge: edge.edge_id, position, distance };
+            }
+          }
+        }
+        if (bestProjected) {
+          return {
+            point: { ...bestProjected.position },
+            target: {
+              kind: 'projected_edge',
+              edge: bestProjected.edge,
+              position: { ...bestProjected.position },
+            },
           };
         }
       }
@@ -6795,8 +6950,10 @@ export function Viewport() {
       coincidentWith: number | null;
       extension: { from: Vec2; to: Vec2 } | null;
     } => {
-      const acquired = acquireCreateSnap(p, false, null, suppressCarrier);
-      if (acquired.target.kind === 'point' || acquired.target.kind === 'origin') {
+      // The Point tool resolves curve interiors/extensions itself; midpoint
+      // references would override that choice (see SNAP_MIDPOINTS_BY_TOOL).
+      const acquired = acquireCreateSnap(p, false, null, suppressCarrier, true);
+      if (acquired.target.kind === 'point' || acquired.target.kind === 'origin' || acquired.target.kind === 'projected_edge') {
         return { position: acquired.point, coincidentWith: null, extension: null };
       }
       const state = store.getState();
@@ -6902,6 +7059,7 @@ export function Viewport() {
     const setPreviewPositions = (positions: number[] | null) => {
       if (!positions || positions.length < 6) {
         previewLine.visible = false;
+        wakeCursorHud();
         return;
       }
       const geometry = new PolylineGeometry();
@@ -6909,16 +7067,129 @@ export function Viewport() {
       previewLine.geometry.dispose();
       previewLine.geometry = geometry;
       previewLine.visible = true;
+      wakeCursorHud();
+    };
+
+    /** Armed tool, no run yet: the cursor advertises what its first pick would
+     * acquire. This is the cursor state a tool has before its first point, and
+     * the state a finished run must return to. */
+    const previewArmedHover = (
+      state: ViewportState,
+      p: Vec2,
+      pointer: { clientX: number; clientY: number; ctrlKey: boolean; metaKey: boolean },
+    ) => {
+      const inferenceOverride = pointer.ctrlKey || pointer.metaKey;
+      if (state.activeTool === 'point') {
+        const placement = acquirePointPlacement(p, inferenceOverride);
+        clearGroup(acquireGroup);
+        if (placement.extension) {
+          addAlignmentGuide(
+            acquireGroup,
+            [
+              placement.extension.from.x,
+              placement.extension.from.y,
+              0.13,
+              placement.extension.to.x,
+              placement.extension.to.y,
+              0.13,
+            ],
+          );
+        }
+        const acquired = acquireCreateSnap(p, false, null, inferenceOverride);
+        const placementKind =
+          placement.coincidentWith !== null || placement.extension
+            ? 'curve'
+            : nativeSnapKind(acquired.target.kind);
+        showSnapMarker(placement.position, placementKind);
+        const rect = surface.domElement.getBoundingClientRect();
+        showChips(
+          placement.coincidentWith === null ? [] : ['coincident'],
+          pointer.clientX - rect.left,
+          pointer.clientY - rect.top,
+        );
+        return;
+      }
+      const acquired = acquireToolSnap(state.activeTool, p, {
+        suppressRelations: inferenceOverride,
+      });
+      showSnapMarker(acquired.point, nativeSnapKind(acquired.target.kind));
+    };
+
+    /** Put the cursor back into the armed, first-pick state after a run ends:
+     * without this the marker stays blank at the finished shape's last pick
+     * until the pointer happens to move again, which reads as a cursor the
+     * completed run left behind. */
+    const refreshArmedHover = () => {
+      const state = store.getState();
+      if (!pointerOverSurface) return;
+      if (state.mode !== 'sketch' || state.navTool !== 'select') return;
+      if (state.activeTool === null || !lastSketchPoint) return;
+      previewArmedHover(state, lastSketchPoint, {
+        clientX: lastPointerClient?.x ?? 0,
+        clientY: lastPointerClient?.y ?? 0,
+        ctrlKey: false,
+        metaKey: false,
+      });
+    };
+
+    /** Mark every point the active creation run has picked so far, so a pick
+     * leaves something on screen the moment it lands. */
+    const renderRunPicks = () => {
+      clearGroup(runPicksGroup);
+      if (!toolRun || toolRun.points.length === 0) return;
+      const positions: number[] = [];
+      for (const point of toolRun.points) positions.push(point.x, point.y, 0.14);
+      const geometry = new CAD.BufferGeometry();
+      geometry.setAttribute('position', new CAD.Float32BufferAttribute(positions, 3));
+      const halo = new CAD.Points(
+        geometry,
+        new CAD.PointsMaterial({
+          size: 9,
+          sizeAttenuation: false,
+          color: COLOR_PICK_HALO,
+          transparent: true,
+          opacity: 0.55,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      halo.renderOrder = 12;
+      halo.userData.nativePointHollow = true;
+      runPicksGroup.add(halo);
+      const markers = new CAD.Points(
+        geometry,
+        new CAD.PointsMaterial({
+          size: 5,
+          sizeAttenuation: false,
+          color: COLOR_SELECTED,
+          transparent: true,
+          opacity: 0.98,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      markers.renderOrder = 13;
+      runPicksGroup.add(markers);
+      wakeCursorHud();
     };
 
     const endToolRun = () => {
+      startSeq += 1;
+      startSnapPending = false;
+      queuedCommit = null;
       toolRun = null;
+      // A preview already in flight (its snap resolves a tick later) must not
+      // paint the rubber band back after the run ended; bump the sequence so
+      // it is discarded instead of leaving a stale half-arc on screen.
+      previewSeq += 1;
       setPreviewPositions(null);
       clearGroup(trackingGuideGroup);
       clearGroup(acquireGroup);
+      clearGroup(runPicksGroup);
       hideSnapMarker();
       hideChips();
       store.getState().hideDynInput();
+      refreshArmedHover();
     };
 
     const reportToolError = (error: unknown, fallback = t('view.errorSketchOperationFailed')) => {
@@ -6926,6 +7197,38 @@ export function Viewport() {
         titleKey: 'constraints.invalidTitle',
         message: error instanceof Error ? error.message : fallback,
       });
+    };
+
+    const submitToolOperation = <T extends { sketch: SketchDto },>(
+      owner: object,
+      currentOwner: () => object | null,
+      operation: () => Promise<T>,
+      after: (result: T) => void,
+      fail: (error: unknown) => void = reportToolError,
+    ) => {
+      const ticket = toolOperations.begin(owner, sketchOperationContext);
+      if (!ticket) return;
+      store.getState().setDynPending(true);
+      void (async () => {
+        let result: T;
+        try {
+          result = await operation();
+        } catch (error) {
+          const status = toolOperations.settle(ticket, sketchOperationContext, currentOwner());
+          if (status !== 'stale') store.getState().setDynPending(false);
+          if (status === 'current') {
+            fail(error);
+          }
+          return;
+        }
+        const status = toolOperations.settle(ticket, sketchOperationContext, currentOwner());
+        if (status === 'stale') return;
+        store.getState().setActiveSketch(result.sketch);
+        store.getState().setDynPending(false);
+        if (status === 'current') {
+          after(result);
+        }
+      })();
     };
 
     /**
@@ -7022,14 +7325,10 @@ export function Viewport() {
         endToolRun();
         return;
       }
-      const points = [...toolRun.points];
-      void engine
-        .addSpline({ points })
-        .then((r) => {
-          store.getState().setActiveSketch(r.sketch);
-          endToolRun();
-        })
-        .catch((error) => reportToolError(error, t('view.errorCannotCreateSpline')));
+      const run = toolRun;
+      const points = [...run.points];
+      submitToolOperation(run, () => toolRun, () => engine!.addSpline({ points }), endToolRun,
+        (error) => reportToolError(error, t('view.errorCannotCreateSpline')));
     };
 
     const applyPreview = (
@@ -7062,6 +7361,91 @@ export function Viewport() {
         e.clientX - rect.left,
         e.clientY - rect.top,
       );
+    };
+
+    /** Locked-radius pick: keep the cursor's direction, force the distance.
+     * Typing a radius must not drag the arc's centre or stop the second and
+     * third picks from aiming, so only the length is replaced. */
+    const pointOnRadius = (center: Vec2, radius: number, hint: Vec2): Vec2 => {
+      const dx = hint.x - center.x;
+      const dy = hint.y - center.y;
+      const length = Math.hypot(dx, dy);
+      if (!Number.isFinite(length) || length <= 1e-9) {
+        return { x: center.x + radius, y: center.y };
+      }
+      return {
+        x: center.x + (dx / length) * radius,
+        y: center.y + (dy / length) * radius,
+      };
+    };
+
+    /** Angular travel below this is a click, not a sweep: the two picks sit on
+     * the same ray and the pointer never went anywhere. */
+    const MIN_ARC_TRAVEL_RAD = 1e-6;
+
+    /** Shared preview/commit state remembers the first deliberate direction. */
+    const accumulateArcTravel = (run: ToolRun, cursorAngle: number): number => {
+      return run.arc ? advanceArcTravel(run.arc, cursorAngle) : 0;
+    };
+
+    /** The identical request supplies both the preview and final mutation. */
+    type CreationIntent = { request: import('../../engine/types').CreationPreviewRequest; acquisition: { point: Vec2; target: SnapTarget } };
+    const resolvedCreationRequest = (run: ToolRun, point: Vec2, ctrl: boolean): CreationIntent | null => {
+      const locks = dynLocks();
+      const texts = dynTexts();
+      const acquisition = acquireToolSnap(run.tool, point, { suppressRelations: ctrl });
+      const hint = acquisition.point;
+      const intent = (request: import('../../engine/types').CreationPreviewRequest): CreationIntent => ({ request, acquisition });
+      const anchor = run.points[0];
+      switch (run.tool) {
+        case 'rect2pt': case 'rectCenter': return intent({
+          tool: 'rectangle', mode: run.tool === 'rect2pt' ? 'two_point' : 'center', anchor, corner_hint: hint,
+          width_mm: locks.width, height_mm: locks.height, width_text: texts.width, height_text: texts.height, ctrl_held: ctrl,
+        });
+        case 'circleCenter': case 'circle2pt': return intent({
+          tool: 'circle', mode: run.tool === 'circleCenter' ? 'center_diameter' : 'two_point', anchor, edge_hint: hint,
+          diameter_mm: locks.diameter, diameter_text: texts.diameter, ctrl_held: ctrl,
+        });
+        case 'arc3pt': return run.points.length < 2 ? null : intent({
+          tool: 'arc3_point', p1: anchor, p2: run.points[1], p3: hint, ctrl_held: ctrl,
+        });
+        case 'arcCenter': return run.points.length < 2 ? null : intent({
+          tool: 'arc_center', center: anchor, start: run.points[1], sweep: hint, ctrl_held: ctrl,
+          radius_mm: locks.radius, radius_text: texts.radius, angle_text: texts.angle,
+          sweep_rad: resolvedArcSweep(accumulateArcTravel(run, angleOf(anchor, hint)), locks.angle),
+        });
+        case 'slot': return intent({
+          tool: 'slot', mode: ({ centerToCenter: 'center_to_center', overall: 'overall', centerPoint: 'center_point' } as const)[store.getState().slotMode],
+          p1: anchor, p2: run.points[1], cursor: hint, width_mm: locks.width, width_text: texts.width, ctrl_held: ctrl,
+        });
+        default: return null;
+      }
+    };
+
+    const previewResolvedCreation = (intent: CreationIntent, seq: number, pos: { x: number; y: number }) => {
+      void engine?.previewCreation(intent.request).then((preview) => {
+        if (seq !== previewSeq) return;
+        setPreviewPositions(creationPreviewPositions(preview.curves));
+        // Screen-space acquisition can resolve a projected edge more narrowly
+        // than the engine's modeling tolerance. Keep its marker only when the
+        // resolved shape really passes through that same point.
+        const samePick = Math.hypot(preview.snapped_to.x - intent.acquisition.point.x, preview.snapped_to.y - intent.acquisition.point.y) < 1e-6;
+        const snap = preview.snap.kind === 'none' && samePick ? intent.acquisition.target : preview.snap;
+        showSnapMarker(preview.snapped_to, nativeSnapKind(snap.kind));
+        if ((intent.request.tool === 'arc_center' || intent.request.tool === 'arc3_point') && lastPointerClient) {
+          const arc = preview.curves.find(curve => curve.kind === 'arc');
+          const tangent = !intent.request.ctrl_held && arc?.kind === 'arc' && [arc.start_angle, arc.end_angle].some(angle =>
+            arcEndpointHasConnectedTangent(arc.center, { x: arc.center.x + arc.radius * Math.cos(angle), y: arc.center.y + arc.radius * Math.sin(angle) }));
+          const rect = surface.domElement.getBoundingClientRect();
+          showChips(tangent ? ['tangent'] : [], lastPointerClient.x - rect.left, lastPointerClient.y - rect.top);
+        }
+        store.getState().updateDynInput(Object.fromEntries(Object.entries(preview.values).map(([key, value]) => [key, value.toFixed(2)])), {}, pos.x, pos.y);
+      }).catch(() => {
+        if (seq !== previewSeq) return;
+        setPreviewPositions(null);
+        hideSnapMarker();
+        hideChips();
+      });
     };
 
     /** Live preview for the active tool run (per pointer move). */
@@ -7150,187 +7534,64 @@ export function Viewport() {
           break;
         }
         case 'rect2pt':
-        case 'rectCenter': {
-          const mode = run.tool === 'rect2pt' ? 'two_point' : 'center';
-          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
-            if (seq !== previewSeq) return;
-            const corner = rectCorner(mode, anchor, snap.snapped_to, locks);
-            const corners = rectCorners(mode, anchor, corner);
-            if (corners) {
-              const pos2: number[] = [];
-              for (const c of [...corners, corners[0]]) pos2.push(c.x, c.y, 0.12);
-              setPreviewPositions(pos2);
-              const preservesAcquisition =
-                Math.hypot(
-                  corner.x - snap.snapped_to.x,
-                  corner.y - snap.snapped_to.y,
-                ) < 1e-6;
-              showSnapMarker(
-                corner,
-                preservesAcquisition ? nativeSnapKind(snap.snap.kind) : 'grid',
-              );
-            } else {
-              setPreviewPositions(null);
-              hideSnapMarker();
-            }
-            store.getState().updateDynInput(
-              {
-                width: Math.abs(corner.x - anchor.x).toFixed(2),
-                height: Math.abs(corner.y - anchor.y).toFixed(2),
-              },
-              {},
-              pos.x,
-              pos.y,
-            );
-          });
-          break;
-        }
+        case 'rectCenter':
         case 'circleCenter':
         case 'circle2pt': {
-          const mode = run.tool === 'circleCenter' ? 'center_diameter' : 'two_point';
-          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
-            if (seq !== previewSeq) return;
-            const spec = circleSpec(mode, anchor, snap.snapped_to, locks);
-            if (spec) {
-              setPreviewPositions(tessellateCircle(spec.center, spec.radius, 0.12));
-              showSnapMarker(snap.snapped_to, nativeSnapKind(snap.snap.kind));
-            } else {
-              setPreviewPositions(null);
-              hideSnapMarker();
-            }
-            store.getState().updateDynInput(
-              { diameter: spec ? (spec.radius * 2).toFixed(2) : '0.00' },
-              {},
-              pos.x,
-              pos.y,
-            );
-          });
+          const request = resolvedCreationRequest(run, p, inferenceOverride);
+          if (request) previewResolvedCreation(request, seq, pos);
           break;
         }
-        case 'arc3pt': {
-          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
-            if (seq !== previewSeq) return;
-            const snapped = snap.snapped_to;
-            let tangentInference = false;
-            if (run.points.length === 1) {
-              setPreviewPositions([
-                anchor.x,
-                anchor.y,
-                0.12,
-                snapped.x,
-                snapped.y,
-                0.12,
-              ]);
-            } else {
-              const circle = circumcircle(run.points[0], run.points[1], snapped);
-              if (circle) {
-                const a0 = angleOf(circle.center, run.points[0]);
-                const a1 = angleOf(circle.center, snapped);
-                const am = angleOf(circle.center, run.points[1]);
-                const sweepFwd = ccwSweep(a0, a1);
-                const [s, e2] = ccwSweep(a0, am) <= sweepFwd ? [a0, a1] : [a1, a0];
-                setPreviewPositions(
-                  tessellateArc(circle.center, circle.radius, s, e2, 0.12),
-                );
-                tangentInference = !inferenceOverride
-                  && (
-                    arcEndpointHasConnectedTangent(circle.center, run.points[0])
-                    || arcEndpointHasConnectedTangent(circle.center, snapped)
-                  );
-              } else {
-                setPreviewPositions([
-                  anchor.x,
-                  anchor.y,
-                  0.12,
-                  snapped.x,
-                  snapped.y,
-                  0.12,
-                ]);
-              }
-            }
-            showSnapMarker(snapped, nativeSnapKind(snap.snap.kind));
-            const rect = surface.domElement.getBoundingClientRect();
-            showChips(
-              tangentInference ? ['tangent'] : [],
-              e.clientX - rect.left,
-              e.clientY - rect.top,
-            );
-          });
-          break;
-        }
+        case 'arc3pt':
         case 'arcCenter': {
-          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
+          if (run.points.length >= 2) {
+            const intent = resolvedCreationRequest(run, p, inferenceOverride);
+            if (intent) previewResolvedCreation(intent, seq, pos);
+            break;
+          }
+          const acquired = acquireToolSnap(run.tool, p, { suppressRelations: inferenceOverride });
+          if (run.tool === 'arc3pt') {
+            setPreviewPositions([anchor.x, anchor.y, 0.12, acquired.point.x, acquired.point.y, 0.12]);
+            showSnapMarker(acquired.point, nativeSnapKind(acquired.target.kind));
+            break;
+          }
+          // The radius affordance is a circle, resolved by the same engine
+          // radius-lock policy as the eventual arc. Expressions are evaluated
+          // here too; incomplete/invalid input never falls back to a free pick.
+          const text = dynTexts().radius;
+          const diameterText = text === undefined ? undefined : `=2*(${text.replace(/^=/, '')})`;
+          void engine.previewCreation({
+            tool: 'circle', mode: 'center_diameter', anchor, edge_hint: acquired.point,
+            diameter_mm: locks.radius === undefined ? undefined : 2 * locks.radius,
+            diameter_text: diameterText, ctrl_held: inferenceOverride,
+          }).then((preview) => {
             if (seq !== previewSeq) return;
-            const snapped = snap.snapped_to;
-            let tangentInference = false;
-            if (run.points.length === 1) {
-              const r = Math.hypot(snapped.x - anchor.x, snapped.y - anchor.y);
-              if (r > 1e-6) setPreviewPositions(tessellateCircle(anchor, r, 0.12));
-              tangentInference = !inferenceOverride
-                && arcEndpointHasConnectedTangent(anchor, snapped);
-            } else {
-              const start = run.points[1];
-              const r = Math.hypot(start.x - anchor.x, start.y - anchor.y);
-              const a0 = angleOf(anchor, start);
-              const a1 = angleOf(anchor, snapped);
-              setPreviewPositions(tessellateArc(anchor, r, a0, a1, 0.12));
-              tangentInference = !inferenceOverride
-                && (
-                  arcEndpointHasConnectedTangent(anchor, start)
-                  || arcEndpointHasConnectedTangent(anchor, snapped)
-                );
-            }
-            showSnapMarker(snapped, nativeSnapKind(snap.snap.kind));
+            setPreviewPositions(creationPreviewPositions(preview.curves));
+            showSnapMarker(preview.snapped_to, nativeSnapKind(preview.snap.kind));
+            const circle = preview.curves.find(curve => curve.kind === 'circle');
+            const tangent = !inferenceOverride && circle?.kind === 'circle' && arcEndpointHasConnectedTangent(circle.center, preview.snapped_to);
             const rect = surface.domElement.getBoundingClientRect();
-            showChips(
-              tangentInference ? ['tangent'] : [],
-              e.clientX - rect.left,
-              e.clientY - rect.top,
-            );
+            showChips(tangent ? ['tangent'] : [], e.clientX - rect.left, e.clientY - rect.top);
+            store.getState().updateDynInput({ radius: (preview.values.diameter / 2).toFixed(2) },
+              { angle: false }, pos.x, pos.y);
+          }).catch(() => {
+            if (seq !== previewSeq) return;
+            setPreviewPositions(null);
+            hideSnapMarker();
           });
           break;
         }
         case 'slot': {
-          const modeMap = { centerToCenter: 'center_to_center', overall: 'overall', centerPoint: 'center_point' } as const;
-          const mode = modeMap[store.getState().slotMode];
-          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
-            if (seq !== previewSeq) return;
-            const snapped = snap.snapped_to;
-            if (run.points.length === 1) {
-              setPreviewPositions([
-                anchor.x,
-                anchor.y,
-                0.12,
-                snapped.x,
-                snapped.y,
-                0.12,
-              ]);
-            } else {
-              const cap = slotCapsulePreview(
-                mode,
-                run.points[0],
-                run.points[1],
-                snapped,
-                locks,
-              );
-              if (cap) {
-                setPreviewPositions(cap.positions);
-              } else {
-                setPreviewPositions(null);
-              }
-              store.getState().updateDynInput(
-                { width: cap ? cap.width.toFixed(2) : '0.00' },
-                {},
-                pos.x,
-                pos.y,
-              );
-            }
-            showSnapMarker(snapped, nativeSnapKind(snap.snap.kind));
-          });
+          if (run.points.length === 1) {
+            const next = acquireToolSnap(run.tool, p, { suppressRelations: inferenceOverride }).point;
+            setPreviewPositions([anchor.x, anchor.y, 0.12, next.x, next.y, 0.12]);
+          } else {
+            const request = resolvedCreationRequest(run, p, inferenceOverride);
+            if (request) previewResolvedCreation(request, seq, pos);
+          }
           break;
         }
         case 'splineFit': {
-          void snapCursorInfo(p, false, inferenceOverride).then((snap) => {
+          void snapCursorInfo(p, toolAcquiresMidpoints(run.tool), inferenceOverride).then((snap) => {
             if (seq !== previewSeq) return;
             const pts = [...run.points, snap.snapped_to];
             const positions = tessellateSpline(pts, 16, 0.12);
@@ -7347,8 +7608,13 @@ export function Viewport() {
     };
 
     /** Commit the active tool run at cursor `p` (click or Enter). */
-    const commitToolRun = (run: ToolRun, p: Vec2, ctrlHeld: boolean) => {
-      if (!engine) return;
+    const commitToolRun = (
+      run: ToolRun,
+      p: Vec2,
+      ctrlHeld: boolean,
+      altHeld = false,
+    ) => {
+      if (!engine || toolOperations.pending) return;
       const suppressInference = ctrlHeld || Boolean(run.suppressInference);
       run.suppressInference = suppressInference;
       const locks = dynLocks();
@@ -7369,8 +7635,7 @@ export function Viewport() {
             suppressInference,
             !suppressInference,
           );
-          void engine
-            .addLineLocked({
+          submitToolOperation(run, () => toolRun, () => engine!.addLineLocked({
               from: anchor,
               to_hint: intent.hint,
               from_crossing: run.startCrossing ?? null,
@@ -7382,9 +7647,7 @@ export function Viewport() {
               ctrl_held: suppressInference,
               tracking: intent.tracking,
               intersection: intent.intersection,
-            })
-            .then((result) => {
-              store.getState().setActiveSketch(result.sketch);
+            }), (result) => {
               // Chain continues from the new end point; locks reset.
               const end = result.sketch.entities.find((en) => en.id === result.end_point_id);
               if (end && end.kind === 'point') {
@@ -7400,8 +7663,7 @@ export function Viewport() {
               } else {
                 endToolRun();
               }
-            })
-            .catch((error) => {
+            }, (error) => {
               run.committing = false;
               store.getState().setDynPending(false);
               reportToolError(error, t('view.errorCannotCreateLine'));
@@ -7410,124 +7672,110 @@ export function Viewport() {
         }
         case 'midpointLine': {
           const end = acquireLineHint(p, !suppressInference, suppressInference);
-          void engine
-            .addLineMidpoint({
+          submitToolOperation(run, () => toolRun, () => engine!.addLineMidpoint({
               mid_raw: anchor,
               end_raw: end,
               ctrl_held: suppressInference,
-            })
-            .then((r) => {
-              store.getState().setActiveSketch(r.sketch);
-              done();
-            })
-            .catch((error) => reportToolError(error, t('view.errorCannotCreateMidpointLine')));
+            }), done, (error) => reportToolError(error, t('view.errorCannotCreateMidpointLine')));
           break;
         }
         case 'rect2pt':
-        case 'rectCenter': {
-          const corner = acquireCreateSnap(p, false, null, suppressInference).point;
-          void engine
-            .addRectangleLocked({
-              mode: run.tool === 'rect2pt' ? 'two_point' : 'center',
-              anchor,
-              width_mm: locks.width ?? null,
-              height_mm: locks.height ?? null,
-              width_text: texts.width ?? null,
-              height_text: texts.height ?? null,
-              corner_hint: corner,
-              ctrl_held: suppressInference,
-            })
-            .then((r) => {
-              store.getState().setActiveSketch(r.sketch);
-              done();
-            })
-            .catch((error) => reportToolError(error, t('view.errorCannotCreateRectangle')));
-          break;
-        }
+        case 'rectCenter':
         case 'circleCenter':
         case 'circle2pt': {
-          const edge = acquireCreateSnap(p, false, null, suppressInference).point;
-          void engine
-            .addCircleLocked({
-              mode: run.tool === 'circleCenter' ? 'center_diameter' : 'two_point',
-              anchor,
-              diameter_mm: locks.diameter ?? null,
-              diameter_text: texts.diameter ?? null,
-              edge_hint: edge,
-              ctrl_held: suppressInference,
-            })
-            .then((r) => {
-              store.getState().setActiveSketch(r.sketch);
-              done();
-            })
-            .catch((error) => reportToolError(error, t('view.errorCannotCreateCircle')));
+          const request = resolvedCreationRequest(run, p, suppressInference)?.request;
+          if (request?.tool === 'rectangle') {
+            submitToolOperation(run, () => toolRun, () => engine!.addRectangleLocked(request), done,
+              (error) => reportToolError(error, t('view.errorCannotCreateRectangle')));
+          } else if (request?.tool === 'circle') {
+            submitToolOperation(run, () => toolRun, () => engine!.addCircleLocked(request), done,
+              (error) => reportToolError(error, t('view.errorCannotCreateCircle')));
+          }
           break;
         }
         case 'arc3pt': {
-          const next = acquireCreateSnap(p, false, null, suppressInference).point;
+          const next = acquireToolSnap(run.tool, p, { suppressRelations: suppressInference }).point;
           if (run.points.length < 2) {
             run.points.push(next);
             break;
           }
           const [p1, p2] = run.points;
-          void engine
-            .addArc3pt({ p1, p2, p3: next, ctrl_held: suppressInference })
-            .then((r) => {
-              store.getState().setActiveSketch(r.sketch);
-              done();
-            })
-            .catch((error) => reportToolError(error, t('view.errorCannotCreateThreePointArc')));
+          submitToolOperation(run, () => toolRun, () => engine!.addArc3pt({ p1, p2, p3: next, ctrl_held: suppressInference }),
+            done, (error) => reportToolError(error, t('view.errorCannotCreateThreePointArc')));
           break;
         }
         case 'arcCenter': {
-          const next = acquireCreateSnap(p, false, null, suppressInference).point;
-          if (run.points.length < 2) {
-            run.points.push(next);
+          // Same acquisition as the preview, including support-face edge
+          // midpoints and the projected face boundary.
+          const acquired = acquireToolSnap(run.tool, p, { suppressRelations: suppressInference }).point;
+          if (run.points.length === 0) {
+            // The radius field is already armed by `startToolRun`, so a value
+            // typed before or during the sweep survives this pick.
+            run.points.push(acquired);
             break;
           }
-          const [center, start] = run.points;
-          void engine
-            .addArcCenter({ center, start, sweep: next, ctrl_held: suppressInference })
-            .then((r) => {
-              store.getState().setActiveSketch(r.sketch);
-              done();
-            })
-            .catch((error) => reportToolError(error, t('view.errorCannotCreateCenterArc')));
+          const lockedRadius = locks.radius;
+          const radiusLocked = lockedRadius !== undefined && lockedRadius > 0;
+          const next = radiusLocked
+            ? pointOnRadius(run.points[0], lockedRadius, acquired)
+            : acquired;
+          if (run.points.length === 1) {
+            run.points.push(next);
+            // Seed the angular accumulator at the start pick so the sweep can
+            // follow the pointer from here on.
+            run.arc = beginArcTravel(angleOf(run.points[0], next));
+            // The closed circle on screen was the *radius* affordance, and the
+            // radius is fixed by this pick. Retiring it here — and invalidating
+            // the preview that is still in flight from the move before the
+            // click — is what keeps "I just placed the first endpoint" from
+            // looking like "the tool drew the whole circle".
+            previewSeq += 1;
+            setPreviewPositions(null);
+            // The sweep has a start ray now, so the angle field joins the
+            // radius immediately instead of waiting for the next pointer move.
+            store.getState().updateDynInput(
+              { angle: '0.0' },
+              {},
+              lastPointerClient?.x ?? 0,
+              lastPointerClient?.y ?? 0,
+            );
+            break;
+          }
+          const intent = resolvedCreationRequest(run, p, suppressInference);
+          if (intent?.request.tool !== 'arc_center') break;
+          if (Math.abs(intent.request.sweep_rad ?? 0) < MIN_ARC_TRAVEL_RAD && !intent.request.angle_text) break;
+          submitToolOperation(run, () => toolRun, () => engine!.addArcCenter(intent.request as import('../../engine/types').ArcCenterRequest),
+            done, (error) => reportToolError(error, t('view.errorCannotCreateCenterArc')));
           break;
         }
         case 'slot': {
           if (run.points.length < 2) {
             // Second end-cap center picked: arm the width field once the
             // slot axis exists.
-            run.points.push(acquireCreateSnap(p, false, null, suppressInference).point);
+            run.points.push(acquireToolSnap(run.tool, p, { suppressRelations: suppressInference }).point);
             const lp = lastPointerClient ?? { x: 0, y: 0 };
             const pos2 = clusterPos(lp.x, lp.y);
             store.getState().showDynInput(TOOL_FIELDS.slot!, pos2.x, pos2.y);
             refreshLockValues();
             break;
           }
-          const modeMap = { centerToCenter: 'center_to_center', overall: 'overall', centerPoint: 'center_point' } as const;
-          void engine
-            .addSlot({
-              mode: modeMap[store.getState().slotMode],
-              p1: run.points[0],
-              p2: run.points[1],
-              cursor: acquireCreateSnap(p, false, null, suppressInference).point,
-              width_mm: locks.width ?? null,
-              width_text: texts.width ?? null,
-            })
-            .then((r) => store.getState().setActiveSketch(r.sketch))
-            .then(() => done())
-            .catch((error) => reportToolError(error, t('view.errorCannotCreateSlot')));
+          const request = resolvedCreationRequest(run, p, suppressInference)?.request;
+          if (request?.tool === 'slot') {
+            submitToolOperation(run, () => toolRun, () => engine!.addSlot(request), done,
+              (error) => reportToolError(error, t('view.errorCannotCreateSlot')));
+          }
           break;
         }
         case 'splineFit': {
           // Chain: every click appends a fit point; Enter or double-click
           // commits (see commitSpline), Esc cancels via endToolRun.
-          run.points.push(acquireCreateSnap(p, false, null, suppressInference).point);
+          run.points.push(acquireToolSnap(run.tool, p, { suppressRelations: suppressInference }).point);
           break;
         }
       }
+      // Each pick leaves its marker behind at once, including the ones that do
+      // not touch the engine yet (an arc's centre and first endpoint).
+      renderRunPicks();
     };
 
     /** Start (or single-shot commit for Point) a tool run at `p`. Fast
@@ -7538,7 +7786,7 @@ export function Viewport() {
      * move the snap marker). */
     let startSnapPending = false;
     let startSeq = 0;
-    let queuedCommit: { point: Vec2; suppressInference: boolean } | null = null;
+    let queuedCommit: { point: Vec2; suppressInference: boolean; altHeld: boolean } | null = null;
     const startToolRun = (tool: ToolId, p: Vec2, e: PointerEvent) => {
       if (!engine) return;
       const inferenceOverride = e.ctrlKey || e.metaKey;
@@ -7546,26 +7794,23 @@ export function Viewport() {
         const placement = acquirePointPlacement(p, inferenceOverride);
         clearGroup(acquireGroup);
         hideChips();
-        void engine
-          .addPoint({
+        submitToolOperation(placement, () => store.getState().activeTool === 'point' ? placement : null, () => engine!.addPoint({
             position: placement.position,
             coincident_with: placement.coincidentWith,
             ctrl_held: inferenceOverride,
-          })
-          .then((result) => store.getState().setActiveSketch(result.sketch))
-          .catch((error) => reportToolError(error, t('view.errorCannotCreatePoint')));
+          }), () => {}, (error) => reportToolError(error, t('view.errorCannotCreatePoint')));
         return;
       }
       startSnapPending = true;
       const seq = ++startSeq;
       void snapCursorInfo(
         p,
-        !inferenceOverride && (tool === 'line' || tool === 'midpointLine'),
+        !inferenceOverride && toolAcquiresMidpoints(tool),
         inferenceOverride,
       )
         .then((preview) => {
-          startSnapPending = false;
           if (seq !== startSeq) return;
+          startSnapPending = false;
           const snapped = preview.snapped_to;
           toolRun = {
             tool,
@@ -7580,21 +7825,27 @@ export function Viewport() {
                 : null,
           };
           showSnapMarker(snapped, nativeSnapKind(preview.snap.kind));
+          renderRunPicks();
           const fields = TOOL_FIELDS[tool];
           // Slot arms its width field only after the second center is picked —
           // before that the field has no meaning.
           if (fields && tool !== 'slot') {
             const pos = clusterPos(e.clientX, e.clientY);
             store.getState().showDynInput(fields, pos.x, pos.y);
+            if (tool === 'arcCenter') {
+              // Radius only until the first endpoint fixes the start ray.
+              store.getState().updateDynInput({}, { angle: false }, pos.x, pos.y);
+            }
             refreshLockValues();
           }
           if (queuedCommit) {
             const q = queuedCommit;
             queuedCommit = null;
-            commitToolRun(toolRun, q.point, q.suppressInference);
+            commitToolRun(toolRun, q.point, q.suppressInference, q.altHeld);
           }
         })
         .catch((error) => {
+          if (seq !== startSeq) return;
           startSnapPending = false;
           reportToolError(error, t('view.errorCannotAcquireSketchPoint'));
         });
@@ -7670,6 +7921,11 @@ export function Viewport() {
           endModTool(); // cancel the current op
         } else if (toolRun) {
           endToolRun(); // cancel the current segment
+        } else if (state.activeTool !== null) {
+          // Idle creation tool: Esc retires it, mirroring the modify-tool rule
+          // so an armed tool never traps the pointer in a half-finished run.
+          endToolRun();
+          state.setActiveTool(null);
         }
         return true;
       }
@@ -7683,7 +7939,10 @@ export function Viewport() {
         const f = visible[idx];
         if (!f) return true;
         const current = d.fields.find((x) => x.key === f.key);
-        const value = d.selectAll ? e.key : current?.locked ? current.value + e.key : e.key;
+        const initialText = toolRun?.tool === 'arcCenter' && f.key === 'angle' && !current?.locked
+          ? beginArcAngleText(current?.value ?? '', e.key)
+          : e.key;
+        const value = d.selectAll ? initialText : current?.locked ? current.value + e.key : initialText;
         state.setDynField(f.key, value, true); // typing locks the field
         state.setDynFocus(idx, false);
         refreshLockValues();
@@ -7756,28 +8015,23 @@ export function Viewport() {
         case 'fillet': {
           if (modTool.picks.length !== 2) return;
           const text = texts.radius ?? (locks.radius !== undefined ? String(locks.radius) : '10');
-          void engine
-            .filletLines({ l1: modTool.picks[0], l2: modTool.picks[1], radius_text: text })
-            .then(after)
-            .catch(fail);
+          const [l1, l2] = modTool.picks;
+          submitToolOperation(attemptedModTool, () => modTool, () => engine!.filletLines({ l1, l2, radius_text: text }), after, fail);
           break;
         }
         case 'chamfer': {
           if (modTool.picks.length !== 2) return;
           const text = texts.distance ?? (locks.distance !== undefined ? String(locks.distance) : '10');
-          void engine
-            .chamferLines({ l1: modTool.picks[0], l2: modTool.picks[1], distance_text: text })
-            .then(after)
-            .catch(fail);
+          const [l1, l2] = modTool.picks;
+          submitToolOperation(attemptedModTool, () => modTool, () => engine!.chamferLines({ l1, l2, distance_text: text }), after, fail);
           break;
         }
         case 'offset': {
           if (modTool.picks.length !== 1) return;
           const text = texts.distance ?? (locks.distance !== undefined ? String(locks.distance) : '10');
-          void engine
-            .offsetCurve({ entity: modTool.picks[0], distance_text: text, cursor })
-            .then(after)
-            .catch(fail);
+          const entity = modTool.picks[0];
+          const intentCursor = offsetIntentCursor(cursor);
+          submitToolOperation(attemptedModTool, () => modTool, () => engine!.offsetCurve({ entity, distance_text: text, cursor: intentCursor }), after, fail);
           break;
         }
       }
@@ -7791,14 +8045,11 @@ export function Viewport() {
       const text = texts.factor ?? (locks.factor !== undefined ? String(locks.factor) : '2');
       const ids = currentSelection();
       if (ids.length === 0) return;
-      void engine
-        .scaleEntities({ entity_ids: ids, origin: scaleBase, factor_text: text })
-        .then((r) => {
-          store.getState().setActiveSketch(r.sketch);
+      const origin = scaleBase;
+      submitToolOperation(origin, () => scaleBase, () => engine!.scaleEntities({ entity_ids: ids, origin, factor_text: text }), () => {
           if (exitAfter) store.getState().setActiveTool(null);
           else endModTool();
-        })
-        .catch((error) => reportToolError(error, t('view.errorCannotScaleSelection')));
+        }, (error) => reportToolError(error, t('view.errorCannotScaleSelection')));
     };
 
     /** Polygon commit (second click or Enter). */
@@ -7818,8 +8069,8 @@ export function Viewport() {
       const rotation = (Math.atan2(snapped.y - center.y, snapped.x - center.x) * 180) / Math.PI;
       const mode = state.polygonMode;
 
-      void edgesValue
-        .then((value) => {
+      submitToolOperation(polygonRun, () => polygonRun, async () => {
+          const value = await edgesValue;
           if (!Number.isInteger(value) || value < 3 || value > 64) {
             throw new Error(t('view.errorPolygonEdgeCount'));
           }
@@ -7830,13 +8081,10 @@ export function Viewport() {
             rotation_deg: rotation,
             mode,
           });
-        })
-        .then((r) => {
-          store.getState().setActiveSketch(r.sketch);
+        }, () => {
           if (exitAfter) store.getState().setActiveTool(null);
           else endModTool();
-        })
-        .catch((error) => reportToolError(error, t('view.errorCannotCreatePolygon')));
+        }, (error) => reportToolError(error, t('view.errorCannotCreatePolygon')));
     };
 
     /** Modify-tool pointer move (hover previews + dyn live updates). */
@@ -9811,6 +10059,7 @@ export function Viewport() {
     /** Modify-tool pointer down (picks + one-click ops). */
     const downModTool = (p: Vec2, e: PointerEvent): boolean => {
       if (!engine) return false;
+      if (toolOperations.pending) return true;
       const state = store.getState();
       switch (state.activeTool) {
         case 'fillet':
@@ -9900,10 +10149,9 @@ export function Viewport() {
         case 'trim': {
           const target = acquireEntityTarget(p, CURVE_TARGET_KINDS);
           if (target) {
-            void engine!
-              .trimEntity({ entity: target.id, click: target.point })
-              .then((r) => store.getState().setActiveSketch(r.sketch))
-              .catch((error) => reportToolError(error, t('view.errorCannotTrimCurve')));
+            submitToolOperation(target, () => store.getState().activeTool === 'trim' ? target : null,
+              () => engine!.trimEntity({ entity: target.id, click: target.point }), () => {},
+              (error) => reportToolError(error, t('view.errorCannotTrimCurve')));
             trimHover = null;
             clearGroup(dimPreviewGroup);
           }
@@ -9912,20 +10160,18 @@ export function Viewport() {
         case 'extend': {
           const target = acquireEntityTarget(p, LINE_TARGET_KINDS);
           if (target) {
-            void engine!
-              .extendEntity({ entity: target.id, click: target.point })
-              .then((r) => store.getState().setActiveSketch(r.sketch))
-              .catch((error) => reportToolError(error, t('view.errorCannotExtendLine')));
+            submitToolOperation(target, () => store.getState().activeTool === 'extend' ? target : null,
+              () => engine!.extendEntity({ entity: target.id, click: target.point }), () => {},
+              (error) => reportToolError(error, t('view.errorCannotExtendLine')));
           }
           return true;
         }
         case 'break': {
           const target = acquireEntityTarget(p, CURVE_TARGET_KINDS);
           if (target) {
-            void engine!
-              .breakCurve({ entity: target.id, at: target.point })
-              .then((r) => store.getState().setActiveSketch(r.sketch))
-              .catch((error) => reportToolError(error, t('view.errorCannotBreakCurve')));
+            submitToolOperation(target, () => store.getState().activeTool === 'break' ? target : null,
+              () => engine!.breakCurve({ entity: target.id, at: target.point }), () => {},
+              (error) => reportToolError(error, t('view.errorCannotBreakCurve')));
           }
           return true;
         }
@@ -9934,10 +10180,9 @@ export function Viewport() {
           if (target) {
             const ids = currentSelection();
             if (ids.length === 0) return true;
-            void engine!
-              .mirrorEntities({ entity_ids: ids, axis_line: target.id })
-              .then((r) => store.getState().setActiveSketch(r.sketch))
-              .catch((error) => reportToolError(error, t('view.errorCannotMirrorSelection')));
+            submitToolOperation(target, () => store.getState().activeTool === 'mirror' ? target : null,
+              () => engine!.mirrorEntities({ entity_ids: ids, axis_line: target.id }), () => {},
+              (error) => reportToolError(error, t('view.errorCannotMirrorSelection')));
           }
           return true;
         }
@@ -9947,7 +10192,9 @@ export function Viewport() {
         }
         case 'scale': {
           if (!scaleBase) {
+            const seq = ++modStartSeq;
             void snapCursor(p).then((snapped) => {
+              if (seq !== modStartSeq || store.getState().activeTool !== 'scale') return;
               scaleBase = snapped;
               const pos = clusterPos(e.clientX, e.clientY);
               store.getState().showDynInput(TOOL_FIELDS.scale!, pos.x, pos.y);
@@ -9955,23 +10202,14 @@ export function Viewport() {
             });
             return true;
           }
-          const texts = dynTexts();
-          const locks = dynLocks();
-          const text = texts.factor ?? (locks.factor !== undefined ? String(locks.factor) : '2');
-          const ids = currentSelection();
-          if (ids.length === 0) return true;
-          void engine!
-            .scaleEntities({ entity_ids: ids, origin: scaleBase, factor_text: text })
-            .then((r) => {
-              store.getState().setActiveSketch(r.sketch);
-              endModTool();
-            })
-            .catch((error) => reportToolError(error, t('view.errorCannotScaleSelection')));
+          commitScale();
           return true;
         }
         case 'polygon': {
           if (!polygonRun) {
+            const seq = ++modStartSeq;
             void snapCursor(p).then((snapped) => {
+              if (seq !== modStartSeq || store.getState().activeTool !== 'polygon') return;
               polygonRun = { center: snapped };
               const pos = clusterPos(e.clientX, e.clientY);
               store.getState().showDynInput(TOOL_FIELDS.polygon!, pos.x, pos.y);
@@ -10076,6 +10314,7 @@ export function Viewport() {
       activeToolCursorScreen = null;
       const badge = toolCursorRef.current;
       if (badge) badge.style.display = 'none';
+      wakeCursorHud();
     };
     const updateActiveToolCursor = (state: ViewportState, event: PointerEvent) => {
       const hasTool = state.pendingConstraintTool !== null || state.activeTool !== null;
@@ -10095,6 +10334,9 @@ export function Viewport() {
         ? localY + gap
         : localY - gap;
       activeToolCursorScreen = [centerX, centerY];
+      // The badge lives in the native HUD when the native viewport is active,
+      // so the frame request belongs here, before the browser-only branch.
+      wakeCursorHud();
 
       // Browser/WebGL fallback owns the equivalent SVG badge. The native
       // child viewport renders the semantic annotation directly, avoiding a
@@ -10647,6 +10889,7 @@ export function Viewport() {
       const p = pointerToSketch(e);
       if (!p) return;
       lastSketchPoint = p;
+      pointerOverSurface = true;
 
       // Live cursor readout in sketch mm (bottom-right status strip).
       const readout = readoutRef.current;
@@ -10724,44 +10967,7 @@ export function Viewport() {
 
       if (state.activeTool !== null && engine) {
         // No run yet: still show the snap marker for the first point.
-        const inferenceOverride = e.ctrlKey || e.metaKey;
-        if (state.activeTool === 'point') {
-          const placement = acquirePointPlacement(p, inferenceOverride);
-          clearGroup(acquireGroup);
-          if (placement.extension) {
-            addAlignmentGuide(
-              acquireGroup,
-              [
-                placement.extension.from.x,
-                placement.extension.from.y,
-                0.13,
-                placement.extension.to.x,
-                placement.extension.to.y,
-                0.13,
-              ],
-            );
-          }
-          const acquired = acquireCreateSnap(p, false, null, inferenceOverride);
-          const placementKind =
-            placement.coincidentWith !== null || placement.extension
-              ? 'curve'
-              : nativeSnapKind(acquired.target.kind);
-          showSnapMarker(placement.position, placementKind);
-          const rect = surface.domElement.getBoundingClientRect();
-          showChips(
-            placement.coincidentWith === null ? [] : ['coincident'],
-            e.clientX - rect.left,
-            e.clientY - rect.top,
-          );
-          return;
-        }
-        const acquired = acquireCreateSnap(
-          p,
-          !inferenceOverride && (state.activeTool === 'line' || state.activeTool === 'midpointLine'),
-          null,
-          inferenceOverride,
-        );
-        showSnapMarker(acquired.point, nativeSnapKind(acquired.target.kind));
+        previewArmedHover(state, p, e);
         return;
       }
 
@@ -10782,6 +10988,7 @@ export function Viewport() {
     const onPointerLeave = () => {
       jointHoverPickGeneration += 1;
       const state = store.getState();
+      pointerOverSurface = false;
       if (jointMotionDrag || mechanismDrag) {
         surface.domElement.style.cursor = 'grabbing';
         return;
@@ -10802,6 +11009,10 @@ export function Viewport() {
       const tag = planeTagRef.current;
       if (tag) tag.style.display = 'none';
       hideActiveToolCursor();
+      // The pointer is gone, so the acquisition it was advertising is too.
+      // Without this the marker stays drawn at the last inside position.
+      hideSnapMarker();
+      hideChips();
       surface.domElement.style.cursor = '';
     };
 
@@ -11408,13 +11619,17 @@ export function Viewport() {
             queuedCommit = {
               point: p,
               suppressInference: e.ctrlKey || e.metaKey,
+              altHeld: e.altKey,
             };
             return;
           }
           startToolRun(state.activeTool, p, e);
         } else {
-          commitToolRun(toolRun, p, e.ctrlKey || e.metaKey);
+          commitToolRun(toolRun, p, e.ctrlKey || e.metaKey, e.altKey);
         }
+        // A pick is a cursor event like any other: stamp its marker and the
+        // value cluster now instead of waiting for the pointer to move.
+        wakeCursorHud();
         return;
       }
 
@@ -11439,8 +11654,13 @@ export function Viewport() {
       if (modTool) endModTool();
       // A create tool may be armed before it has produced a local toolRun.
       // Dimension editing is a complete mode switch, so retire the store's
-      // active tool as well as any in-progress local transaction.
+      // active tool as well as any in-progress local transaction. The cursor
+      // then carries no command, so the marker and badge go too — ending the
+      // run just refreshed them for the still-armed tool.
       store.getState().setActiveTool(null);
+      hideSnapMarker();
+      hideChips();
+      hideActiveToolCursor();
       const currentState = store.getState();
       const currentDim = currentState.activeSketch?.dimensions.find(
         (candidate) => candidate.constraint_id === dimId,
@@ -11565,10 +11785,10 @@ export function Viewport() {
           const dy = p.y - moveDrag.base.y;
           const ids = currentSelection();
           if (ids.length > 0 && (Math.abs(dx) > 1e-9 || Math.abs(dy) > 1e-9)) {
-            void engine
-              .moveCopyEntities({ entity_ids: ids, dx, dy, copy: e.altKey })
-              .then((r) => store.getState().setActiveSketch(r.sketch))
-              .catch((error) => reportToolError(error, t('view.errorCannotMoveOrCopySelection')));
+            const drag = moveDrag;
+            submitToolOperation(drag, () => store.getState().activeTool === 'moveCopy' ? drag : null,
+              () => engine!.moveCopyEntities({ entity_ids: ids, dx, dy, copy: e.altKey }), () => {},
+              (error) => reportToolError(error, t('view.errorCannotMoveOrCopySelection')));
           }
         }
         moveDrag = null;
@@ -12778,6 +12998,7 @@ export function Viewport() {
       points: store.getState().palette.points,
       dimensions: store.getState().palette.dimensions,
       constraints: store.getState().palette.constraints,
+      projectedGeometries: store.getState().palette.projectedGeometries,
     };
     // Track ground-grid rebuild with fade-aware opacity.
     const updateGridFades = (dt: number) => {
@@ -13030,12 +13251,14 @@ export function Viewport() {
       if (
         s.palette.points !== lastPalette.points ||
         s.palette.dimensions !== lastPalette.dimensions ||
-        s.palette.constraints !== lastPalette.constraints
+        s.palette.constraints !== lastPalette.constraints ||
+        s.palette.projectedGeometries !== lastPalette.projectedGeometries
       ) {
         lastPalette = {
           points: s.palette.points,
           dimensions: s.palette.dimensions,
           constraints: s.palette.constraints,
+          projectedGeometries: s.palette.projectedGeometries,
         };
         if (s.mode === 'sketch' && s.activeSketch) {
           rebuildEntities(s.activeSketch);
@@ -13217,6 +13440,7 @@ export function Viewport() {
       if (raf === 0) raf = requestAnimationFrame(tick);
     };
     wakeControllerFrame();
+
 
     // Open may have arrived while Drawings had the viewport unmounted. Fit the
     // matching model before publishing the camera or drawing its first frame.

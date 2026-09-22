@@ -1,0 +1,44 @@
+name: Native sketch visual regressions
+
+# Explicitly opt-in: this uses a real Metal GPU, not a browser screenshot or
+# the headless geometry test. Failure artifacts are the production render.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-visual-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-visual:
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: native-visual
+      - name: Install native geometry kernel
+        run: brew install opencascade
+      - name: Verify projected boundaries and thin-wall occlusion on the GPU
+        env:
+          NBCAD_PREVIEW_PROOF_DIR: ${{ github.workspace }}/docs/qa/native-boundary
+        run: OCCT_ROOT="$(brew --prefix opencascade)" cargo test --locked --manifest-path src-tauri/Cargo.toml --lib native_sketch_boundary_visual_matrix -- --ignored --nocapture
+      - name: Retain native visual evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-sketch-visuals
+          path: docs/qa/native-boundary/
+          if-no-files-found: warn
+          retention-days: 14

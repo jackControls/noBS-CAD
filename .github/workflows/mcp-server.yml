@@ -131,6 +131,21 @@ jobs:
           node scripts/ci/run-mcp-tests.mjs ${{ matrix.shard }}
           if ($LASTEXITCODE -ne 0) { throw "mcp-server tests failed" }
 
+      # Preserve native geometry coverage once per platform without repeating
+      # it in the independent turbine and vise acceptance shards.
+      - name: Native geometry integration regressions
+        if: matrix.shard == 'core'
+        shell: pwsh
+        env:
+          OCCT_ROOT: ${{ steps.occt.outputs.root }}
+          CARGO_TARGET_DIR: ${{ github.workspace }}/mcp-server/target
+        run: |
+          $env:Path = "$env:OCCT_ROOT\bin;$env:Path"
+          cargo test --locked -p nbcad-occt --features native-occt --tests -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw "native integration tests failed" }
+
+      # Keep the last operation and useful completed models on failure only.
+      # Both hosts use this same bounded collector; tests write flat files here.
       - &retain-recipe-failure
         name: Collect bounded native recipe failure evidence
         if: failure() && steps.native-tests.outcome == 'failure'
@@ -261,6 +276,13 @@ jobs:
           OCCT_ROOT: /usr
           NBCAD_RECIPE_ARTIFACT_DIR: ${{ github.workspace }}/target/mcp-recipe-evidence
         run: node scripts/ci/run-mcp-tests.mjs ${{ matrix.shard }}
+
+      - name: Native geometry integration regressions
+        if: matrix.shard == 'core'
+        env:
+          OCCT_ROOT: /usr
+          CARGO_TARGET_DIR: ${{ github.workspace }}/mcp-server/target
+        run: cargo test --locked -p nbcad-occt --features native-occt --tests -- --test-threads=1
 
       - *retain-recipe-failure
 

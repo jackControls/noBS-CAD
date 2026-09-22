@@ -170,6 +170,10 @@ const VIEWPORT_LINE_SCALE_MAX: f32 = 1.6;
 /// than the outline information they can convey. Bevy still renders the
 /// retained shaded mesh and selected/hovered geometry always bypasses LOD.
 const OCCURRENCE_EDGE_LOD_MIN_RADIUS_PX: f32 = 3.0;
+/// A screen-sized or depth-range-relative lift can exceed a thin wall at wide
+/// zooms and reveal hidden edges. Cap the tie-break in model units (0.1
+/// micrometre), below modeling tolerances, regardless of zoom/display density.
+const MODEL_EDGE_MAX_LIFT_MM: f32 = 1.0e-4;
 const SKETCH_DEPTH_BIAS: f32 = -0.90;
 const SKETCH_POINT_OUTLINE_WIDTH: f32 = 2.0;
 const SKETCH_POINT_OUTLINE_DEPTH_BIAS: f32 = -0.89;
@@ -2493,6 +2497,9 @@ fn setup_scene(
         .config_mut::<CamCompletedPathGizmos>()
         .0
         .depth_bias = -0.995;
+    // Keep the default model/grid group depth-correct. Model-edge ties use a
+    // bounded world-space epsilon below; a global reverse-Z bias leaks hidden
+    // edges through thin walls as view distance increases.
     let (sketch_config, _) = gizmo_config.config_mut::<CadSketchGizmos>();
     // Visible sketches are reference graphics, not occluded model edges.
     // Match the browser renderer's depthTest:false contract so a sketch on a
@@ -4504,8 +4511,9 @@ fn draw_cad_gizmos(
                         edge,
                         rgb(palette.0.pick_halo),
                         &body_transform,
+                        None,
                     );
-                    draw_edge_segments(&mut pick_feedback, edge, color, &body_transform);
+                    draw_edge_segments(&mut pick_feedback, edge, color, &body_transform, None);
                 }
             }
 
@@ -4540,9 +4548,15 @@ fn draw_cad_gizmos(
                 };
                 if ghosted_body && !selected && !hovered && selected_body_index.is_none() {
                     // Through-geometry wireframe for the ghosted part.
-                    draw_edge_segments(&mut highlights, edge, rgb(color), &body_transform);
+                    draw_edge_segments(&mut highlights, edge, rgb(color), &body_transform, None);
                 } else {
-                    draw_edge_segments(&mut gizmos, edge, rgba(color, 0.92), &body_transform);
+                    draw_edge_segments(
+                        &mut gizmos,
+                        edge,
+                        rgba(color, 0.92),
+                        &body_transform,
+                        Some((camera.camera, *viewport)),
+                    );
                 }
                 if selected || hovered {
                     draw_edge_segments(
@@ -4550,6 +4564,7 @@ fn draw_cad_gizmos(
                         edge,
                         rgb(palette.0.pick_halo),
                         &body_transform,
+                        None,
                     );
                     draw_edge_segments(
                         &mut pick_feedback,
@@ -4560,6 +4575,7 @@ fn draw_cad_gizmos(
                             palette.0.edge_hover
                         }),
                         &body_transform,
+                        None,
                     );
                 }
             }
@@ -4906,6 +4922,12 @@ fn draw_cad_gizmos(
     }
 
     if let Some(sketch) = &model.active_sketch {
+        // Reference geometry first: both passes share the sketch gizmo group
+        // and offset, so submission order decides what a coincident authored
+        // curve covers.
+        if !state.hide_projected_geometry {
+            draw_projected_edges(&mut sketch_gizmos, sketch, rgb(palette.0.projected));
+        }
         draw_sketch(
             &mut sketch_gizmos,
             sketch,
@@ -5271,21 +5293,38 @@ fn draw_edge_segments<Config: GizmoConfigGroup>(
     edge: &nbcad_solid::EdgeDto,
     color: Color,
     transform: &Transform,
+    lift: Option<(ViewportCamera, ViewportSizeResource)>,
 ) {
+    // A model edge lies exactly on the faces that meet along it. A fixed depth
+    // bias is not enough to win that tie: on a face seen at a grazing angle the
+    // depth slope across one pixel is larger than the bias, so the stroke keeps
+    // losing the comparison and breaks up into dashes - which is what happened
+    // to a pocket floor arc while the top rim stayed solid. Nudging the stroke
+    // towards the camera resolves the exact tie. The lift must be bounded in
+    // model units: a whole pixel can exceed a wall's thickness at wide zooms.
+    let lift = lift.map(|(camera, viewport)| {
+        let position = Vec3::from_array(camera.position);
+        let forward = (Vec3::from_array(camera.target) - position).normalize_or_zero();
+        (forward, camera, viewport)
+    });
     for pair in edge.points.windows(2) {
-        gizmos.line(
-            transform.transform_point(Vec3::new(
-                pair[0].x as f32,
-                pair[0].y as f32,
-                pair[0].z as f32,
-            )),
-            transform.transform_point(Vec3::new(
-                pair[1].x as f32,
-                pair[1].y as f32,
-                pair[1].z as f32,
-            )),
-            color,
-        );
+        let mut start = transform.transform_point(Vec3::new(
+            pair[0].x as f32,
+            pair[0].y as f32,
+            pair[0].z as f32,
+        ));
+        let mut end = transform.transform_point(Vec3::new(
+            pair[1].x as f32,
+            pair[1].y as f32,
+            pair[1].z as f32,
+        ));
+        if let Some((forward, camera, viewport)) = lift {
+            let pixel = world_per_pixel_at(camera, viewport, (start + end) * 0.5);
+            let offset = forward * pixel.min(MODEL_EDGE_MAX_LIFT_MM);
+            start -= offset;
+            end -= offset;
+        }
+        gizmos.line(start, end, color);
     }
 }
 
@@ -5426,6 +5465,30 @@ fn draw_sketch<Config, ColorFor>(
             color,
             !sketch_entity_style(entity).1,
         );
+    }
+}
+
+/// Draw the support-face boundary projected into the active sketch.
+///
+/// This is reference geometry the user cannot pick, hover, grip or constrain,
+/// so it gets its own color and sits just under the authored sketch strokes
+/// (`FINISHED_SKETCH_OFFSET`). Use the same directed tessellation as browser
+/// drawing and snapping. Endpoint angles alone cannot distinguish a clockwise
+/// partial edge from its complementary arc on a reversed face basis. The exact
+/// circular carrier remains available to profile extraction and the kernel.
+fn draw_projected_edges<Config: GizmoConfigGroup>(
+    gizmos: &mut Gizmos<Config>,
+    sketch: &SketchDto,
+    color: Color,
+) {
+    for edge in &sketch.projected_edges {
+        for pair in edge.points.windows(2) {
+            gizmos.line(
+                sketch_world(&sketch.basis, pair[0].x, pair[0].y, FINISHED_SKETCH_OFFSET),
+                sketch_world(&sketch.basis, pair[1].x, pair[1].y, FINISHED_SKETCH_OFFSET),
+                color,
+            );
+        }
     }
 }
 

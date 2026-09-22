@@ -60,6 +60,7 @@ export type GeometricConstraintType =
   | 'fix'
   | 'midpoint'
   | 'reference_midpoint'
+  | 'reference_on_edge'
   | 'span_midpoint'
   | 'concentric'
   | 'collinear'
@@ -71,7 +72,8 @@ export type DimensionalConstraintType =
   | 'distance'
   | 'radius'
   | 'diameter'
-  | 'angle';
+  | 'angle'
+  | 'arc_angle';
 
 export type SketchConstraintType = GeometricConstraintType | DimensionalConstraintType;
 
@@ -109,12 +111,30 @@ export interface SketchDto {
   entities: EntityDto[];
   constraints: ConstraintDto[];
   reference_midpoints: Array<{ edge_id: number; position: Vec2 }>;
+  /**
+   * Boundary edges of the support face, projected into sketch coordinates.
+   * Reference geometry: refreshed from stable edge ids whenever the
+   * face-hosted sketch's own history stage is available. Saved for replay.
+   */
+  projected_edges: ProjectedEdgeDto[];
   /** Driving and reference dimensions with presentation data (D9). */
   dimensions: DimensionDto[];
   dimension_style: DimensionStyle;
   dof: DofDto;
   can_undo: boolean;
   can_redo: boolean;
+}
+
+/** One support-face boundary edge projected into a face-hosted sketch. */
+export interface ProjectedEdgeDto {
+  /** Reserved id: derived segment ids stay above every authored entity id. */
+  id: number;
+  /** Stable body edge id the projection is rebuilt from. */
+  edge_id: number;
+  /** Projected polyline in sketch coordinates. */
+  points: Vec2[];
+  /** Exact circular carrier when the body edge is circular. */
+  circle?: { center: Vec2; radius: number; closed: boolean };
 }
 
 export type DimensionStyle = 'aligned' | 'iso';
@@ -276,6 +296,9 @@ export type SnapTarget =
   | { kind: 'point'; entity: number }
   | { kind: 'midpoint'; entity: number }
   | { kind: 'reference_midpoint'; edge: number }
+  /** Snapped onto the projected support-face boundary: reference geometry the
+   *  sketch was created from, with no durable relation on commit. */
+  | { kind: 'projected_edge'; edge: number; position: Vec2 }
   | { kind: 'curve'; entity: number }
   | { kind: 'intersection'; first: number; second: number };
 
@@ -3323,6 +3346,22 @@ export interface SlotRequest {
   cursor: Vec2;
   width_mm?: number | null;
   width_text?: string | null;
+  ctrl_held?: boolean;
+}
+
+export type CreationPreviewRequest =
+  | ({ tool: 'rectangle' } & LockedRectangleRequest)
+  | ({ tool: 'circle' } & LockedCircleRequest)
+  | ({ tool: 'slot' } & SlotRequest)
+  | ({ tool: 'arc_center' } & ArcCenterRequest)
+  | ({ tool: 'arc3_point' } & Arc3PointRequest)
+  | ({ tool: 'chamfer' } & ChamferRequest);
+
+export interface CreationPreviewDto {
+  curves: PreviewCurve[];
+  snapped_to: Vec2;
+  snap: SnapTarget;
+  values: Record<string, number>;
 }
 
 /** Fit-point spline creation: ordered fit points (≥ 2 after cleanup). */
@@ -3342,6 +3381,19 @@ export interface ArcCenterRequest {
   start: Vec2;
   sweep: Vec2;
   ctrl_held: boolean;
+  /** Locked radius: the cursor only supplies each pick's direction, and a
+   *  typed value creates a driving Radius dimension (D9). */
+  radius_mm?: number | null;
+  radius_text?: string | null;
+  /** Locked included angle: a typed value creates a driving ArcAngle dimension
+   *  beside the radius one, so the sweep stays visible and editable. */
+  angle_text?: string | null;
+  /** Signed sweep from the start pick to the third pick, in radians, taken
+   *  from the pointer's travel: positive counter-clockwise, negative
+   *  clockwise. It disambiguates two picks 180 degrees apart, so one start
+   *  point can place the arc on either side. Omitted keeps the historical
+   *  counter-clockwise sweep. */
+  sweep_rad?: number | null;
 }
 
 export interface MidpointLineRequest {

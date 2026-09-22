@@ -57,6 +57,24 @@ impl SketchSession {
         }
     }
 
+    /// Direction of the arc's own midpoint, which is where its radius leader
+    /// touches it. A full turn uses the opposite ray from its stored start.
+    fn arc_mid_angle(&self, id: EntityId) -> Option<f64> {
+        match self.sketch.entity(id) {
+            Some(Entity::Arc {
+                start_angle,
+                end_angle,
+                ..
+            }) => {
+                // Stored arcs always sweep counter-clockwise, so the span is
+                // the positive remainder of the two angles.
+                let span = crate::geometry::arc_span(*start_angle, *end_angle);
+                Some(start_angle + span / 2.0)
+            }
+            _ => None,
+        }
+    }
+
     fn kind_of(&self, id: EntityId) -> Option<&'static str> {
         match self.sketch.entity(id) {
             Some(Entity::Point { .. }) => Some("point"),
@@ -120,10 +138,21 @@ impl SketchSession {
     /// the whole mutation (including the new parameter) is rolled back.
     pub(crate) fn add_constraint_bound(
         &mut self,
+        constraint: Constraint,
+        param: ParamId,
+        text_pos: Vec2,
+        record_undo: bool,
+    ) -> Result<ConstraintId, SessionError> {
+        self.add_constraint_bound_offset(constraint, param, text_pos, record_undo, None)
+    }
+
+    pub(super) fn add_constraint_bound_offset(
+        &mut self,
         mut constraint: Constraint,
         param: ParamId,
         text_pos: Vec2,
         record_undo: bool,
+        offset_side: Option<f64>,
     ) -> Result<ConstraintId, SessionError> {
         if let Err(error) = self.reject_duplicate_relation(&constraint) {
             self.sketch.params_mut().remove(param);
@@ -140,6 +169,9 @@ impl SketchSession {
         let before = self.sketch.snapshot();
         let cid = self.sketch.add_constraint(constraint);
         self.sketch.bind_dimension(cid, param, text_pos);
+        if let Some(side) = offset_side {
+            self.sketch.set_offset_side(cid, side);
+        }
 
         let analysis = self.solve_constraint_operation_with_recovery(&[constraint]);
         let new_residual = crate::solver::constraint_residual(&self.sketch, cid);
@@ -512,13 +544,16 @@ impl SketchSession {
                 }
                 let measured = self
                     .sketch
-                    .measure_dimension_constraint(constraint)
+                    .measure_dimension(cid, constraint)
                     .ok_or_else(|| {
                         SessionError::InvalidConstraint(
                             "Cannot measure this reference dimension".to_string(),
                         )
                     })?;
-                let kind = if matches!(constraint, Constraint::Angle { .. }) {
+                let kind = if matches!(
+                    constraint,
+                    Constraint::Angle { .. } | Constraint::ArcAngle { .. }
+                ) {
                     ParamKind::Angle
                 } else {
                     ParamKind::Length
@@ -747,6 +782,72 @@ impl SketchSession {
         );
     }
 
+    /// Typed radius while drawing a center arc → Radius dim. The arc's radius
+    /// is already resolved by the locked pick, so the dimension only records
+    /// the driving value and stays editable like any other radius.
+    pub(crate) fn auto_dim_arc_radius(&mut self, arc: EntityId, text: &str) {
+        let Some((center, r)) = self.circle_spec(arc) else {
+            return;
+        };
+        let Ok(param) = self.param_from_text(ParamKind::Length, Some(text), r) else {
+            return;
+        };
+        // ISO/ANSI radius dimension: the leader runs radially through the arc
+        // with its arrowhead on the arc, and the text sits just outside the arc
+        // along that same leader. Placing it on a fixed diagonal offset instead
+        // pushed it a whole radius away from the arrow it belongs to.
+        let mid = self
+            .arc_mid_angle(arc)
+            .unwrap_or(std::f64::consts::FRAC_PI_4);
+        let gap = default_radial_dimension_gap(r * 2.0);
+        let text_pos = center + Vec2::new(mid.cos(), mid.sin()) * (r + gap);
+        let _ = self.add_constraint_bound(
+            Constraint::Radius {
+                entity: arc,
+                value: r,
+            },
+            param,
+            text_pos,
+            false,
+        );
+    }
+
+    /// A typed sweep angle becomes a driving `ArcAngle` dimension, placed like
+    /// an angular dimension: inside the arc, centred on the span it measures.
+    pub(crate) fn auto_dim_arc_angle(&mut self, arc: EntityId, text: &str) {
+        let Some((center, r)) = self.circle_spec(arc) else {
+            return;
+        };
+        let Some(mid) = self.arc_mid_angle(arc) else {
+            return;
+        };
+        let Ok(param) = self.param_from_text(ParamKind::Angle, Some(text), 0.0) else {
+            return;
+        };
+        let span = self
+            .sketch
+            .entity(arc)
+            .and_then(|entity| match entity {
+                Entity::Arc {
+                    start_angle,
+                    end_angle,
+                    ..
+                } => Some(crate::geometry::arc_span(*start_angle, *end_angle)),
+                _ => None,
+            })
+            .unwrap_or(0.0);
+        let _ = self.add_constraint_bound(
+            Constraint::ArcAngle {
+                entity: arc,
+                value: span.to_degrees(),
+            },
+            param,
+            // Well inside the arc, where an angular dimension reads.
+            center + Vec2::new(mid.cos(), mid.sin()) * (r * 0.55),
+            false,
+        );
+    }
+
     // --- DTO ---
 
     pub(crate) fn dimension_dtos(&self) -> Vec<DimensionDto> {
@@ -769,18 +870,22 @@ impl SketchSession {
                             param.value,
                         )
                     }
-                    DimensionMode::Reference => (
-                        None,
-                        None,
-                        None,
-                        self.sketch.measure_dimension_constraint(*c)?,
-                    ),
+                    DimensionMode::Reference => {
+                        (None, None, None, self.sketch.measure_dimension(cid, *c)?)
+                    }
+                };
+                // Display the included magnitude without stripping the signed
+                // formula/parameter binding that the dimension editor needs.
+                let display_value = if matches!(c, Constraint::ArcAngle { .. }) {
+                    value.abs()
+                } else {
+                    value
                 };
                 let value_text = match kind {
-                    "diameter" => format!("Ø{value:.2}"),
-                    "radius" => format!("R{value:.2}"),
-                    "angle" => format!("{value:.2}°"),
-                    _ => format!("{value:.2}"),
+                    "diameter" => format!("Ø{display_value:.2}"),
+                    "radius" => format!("R{display_value:.2}"),
+                    "angle" => format!("{display_value:.2}°"),
+                    _ => format!("{display_value:.2}"),
                 };
                 let text = if mode == DimensionMode::Reference {
                     format!("({value_text})")

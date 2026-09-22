@@ -77,6 +77,27 @@ test('both native platforms run every shard and all CI inputs trigger native acc
   assert(read('mcp-server/tests/recipes/vise.rs').includes(`fn ${flagshipTests.vise.split('::')[1]}()`));
 });
 
+test('native geometry regressions remain required once per platform in the core shard', () => {
+  for (const name of ['mcp-windows', 'mcp-linux']) {
+    const config = job(mcp, name);
+    const steps = config.match(/      - name: Native geometry integration regressions\n[\s\S]*?(?=\n      -|$)/g);
+    assert.equal(steps?.length, 1, `${name} must retain native geometry coverage`);
+    const step = steps[0];
+    assert.match(step, /^        if: matrix\.shard == 'core'$/m);
+    assert.match(step, /CARGO_TARGET_DIR: \$\{\{ github.workspace \}\}\/mcp-server\/target/);
+    assert.match(step, /cargo test --locked -p nbcad-occt --features native-occt --tests -- --test-threads=1/);
+    assert.doesNotMatch(step, /continue-on-error:/);
+    if (name === 'mcp-windows') {
+      assert.match(step, /OCCT_ROOT: \$\{\{ steps.occt.outputs.root \}\}/);
+      assert.match(step, /if \(\$LASTEXITCODE -ne 0\) \{ throw "native integration tests failed" \}/);
+    } else {
+      assert.match(step, /OCCT_ROOT: \/usr/);
+    }
+    assert(config.indexOf('Native geometry integration regressions') > config.indexOf('name: MCP server tests'));
+    assert(config.indexOf('Native geometry integration regressions') < config.indexOf('name: Upload successful demo input'));
+  }
+});
+
 test('publication keeps existing check/artifact names and requires every platform shard', () => {
   const config = job(mcp, 'mcp-tests');
   assert.match(config, /needs: mcp-windows\n    if: always\(\)/);

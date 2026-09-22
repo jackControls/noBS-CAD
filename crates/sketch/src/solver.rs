@@ -121,6 +121,11 @@ impl Diff {
 
 /// One residual equation F(x) = 0 with an analytical Jacobian row.
 enum Eq {
+    ReferenceEdgeCoordinate {
+        p: Pt,
+        edge: crate::dto::ProjectedEdgeDto,
+        axis: usize,
+    },
     /// Σ aᵢ·xᵢ + c = 0 (H/V/Fix/Midpoint/Concentric/Equal-radius).
     Lin { terms: Vec<(usize, f64)>, c: f64 },
     /// cross(a, b) = a.x·b.y − a.y·b.x = 0 (Parallel, Collinear).
@@ -202,6 +207,27 @@ impl Eq {
     /// Residual plus sparse Jacobian row entries (var index, ∂F/∂xᵢ).
     fn eval(&self, x: &[f64]) -> (f64, Vec<(usize, f64)>) {
         match *self {
+            Eq::ReferenceEdgeCoordinate { p, ref edge, axis } => {
+                let point = Vec2::new(x[p.0], x[p.1]);
+                let residual = |point: Vec2| {
+                    let closest = edge.closest_point(point).unwrap_or(point);
+                    if axis == 0 {
+                        point.x - closest.x
+                    } else {
+                        point.y - closest.y
+                    }
+                };
+                // Piecewise projection has one sliding DOF in the interior
+                // and two positional equations at a finite endpoint.
+                let h = 1e-5;
+                let dx = (residual(point + Vec2::new(h, 0.0))
+                    - residual(point - Vec2::new(h, 0.0)))
+                    / (2.0 * h);
+                let dy = (residual(point + Vec2::new(0.0, h))
+                    - residual(point - Vec2::new(0.0, h)))
+                    / (2.0 * h);
+                (residual(point), vec![(p.0, dx), (p.1, dy)])
+            }
             Eq::Lin { ref terms, c } => {
                 let mut r = c;
                 for &(i, a) in terms {
@@ -914,6 +940,26 @@ fn build_equations(
                     push_lin(&mut eqs, cid, vec![(p.1, 1.0)], -position.y);
                 }
             }
+            Constraint::ReferenceOnEdge { point, edge } => {
+                if let (Some(p), Some(carrier)) =
+                    (map.pt(sketch, point), sketch.reference_edge(edge))
+                {
+                    for axis in 0..2 {
+                        eqs.push((
+                            Some(cid),
+                            Eq::ReferenceEdgeCoordinate {
+                                p,
+                                edge: carrier.clone(),
+                                axis,
+                            },
+                        ));
+                    }
+                } else {
+                    // A deleted support edge is a broken reference, not a
+                    // silently unconstrained point or an obsolete coordinate.
+                    push_lin(&mut eqs, cid, vec![], 1.0);
+                }
+            }
             Constraint::SpanMidpoint { point, start, end } => {
                 if let (Some(p), Some(a), Some(b)) = (
                     map.pt(sketch, point),
@@ -1258,7 +1304,9 @@ fn build_equations(
                             map.line_diff(sketch, from),
                             to.and_then(|t| map.line_diff(sketch, t)),
                         ) {
-                            let target = {
+                            let target = if let Some(side) = sketch.offset_side(cid) {
+                                target * side
+                            } else {
                                 let x = read_values(sketch, map);
                                 let (dx, dy) = da.val(&x);
                                 let len = (dx * dx + dy * dy).sqrt().max(1e-12);
@@ -1303,6 +1351,23 @@ fn build_equations(
                 if let Some(r) = map.radius_var(sketch, entity) {
                     let target = sketch.dim_value(&cid, value);
                     eqs.push((Some(cid), Eq::Radius { r, target }));
+                }
+            }
+            Constraint::ArcAngle { entity, value } => {
+                // The arc stores its own start and end angles sweeping
+                // counter-clockwise, so the included angle is their difference
+                // and it is unsigned: a typed negative angle said which way the
+                // user wanted the arc, not that the stored span should go
+                // backwards. Taking the magnitude keeps the solver from flipping
+                // the arc onto the other side of its start ray.
+                if let Some(&(_, _, start_angle, end_angle)) = map.arcs.get(&entity) {
+                    let target = sketch.dim_value(&cid, value).to_radians().abs();
+                    push_lin(
+                        &mut eqs,
+                        cid,
+                        vec![(end_angle, 1.0), (start_angle, -1.0)],
+                        -target,
+                    );
                 }
             }
             Constraint::Diameter { entity, value } => {

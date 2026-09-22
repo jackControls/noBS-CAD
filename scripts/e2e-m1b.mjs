@@ -11,7 +11,7 @@ import { chromium } from 'playwright';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-const BASE = 'http://localhost:7199';
+const BASE = process.env.NBCAD_E2E_BASE_URL ?? 'http://localhost:7199';
 const SHOTS = fileURLToPath(new URL('../docs/qa/m1b/', import.meta.url));
 await mkdir(SHOTS, { recursive: true });
 
@@ -234,9 +234,11 @@ try {
 
   // --- 4. CONSTRAIN panel: Parallel + conflict dialog ---
   console.log('4. constraints panel + conflict');
-  // Two more horizontal lines for the parallel/perpendicular scenario.
+  // Suppress automatic horizontal relations: otherwise Parallel is correctly
+  // rejected as redundant before this explicit-constraint scenario starts.
   await page.keyboard.press('l');
   await page.waitForTimeout(150);
+  await page.keyboard.down('Control');
   await clickSketch(20, 50);
   await page.waitForTimeout(250);
   await clickSketch(70, 50);
@@ -245,6 +247,7 @@ try {
   await page.waitForTimeout(250);
   await clickSketch(70, 70);
   await page.waitForTimeout(250);
+  await page.keyboard.up('Control');
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
@@ -313,7 +316,8 @@ try {
     const p = await sketchToScreen(x, y);
     await page.mouse.click(p.x, p.y);
     await page.waitForTimeout(250);
-    await page.click('button[title="Fix/UnFix"]');
+    await page.getByRole('button', { name: /^constrain$/i }).click();
+    await page.locator('[data-ribbon-menu] span:text-is("Fix/UnFix")').click();
     await page.waitForTimeout(350);
   };
   await fixPoint(-50, -40);

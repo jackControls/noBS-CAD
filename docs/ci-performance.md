@@ -47,7 +47,7 @@ Each native platform now has three runners:
 
 | Shard | Tests and outputs |
 | --- | --- |
-| `core` | All normal cargo test targets and doctests except the two exact flagship tests; complete feature workshop; drawing, repeated bench/fillet checks; Windows xtask tests; verified bench project |
+| `core` | All normal cargo test targets and doctests except the two exact flagship tests; native OCCT integration regressions; complete feature workshop; drawing, repeated bench/fillet checks; Windows xtask tests; verified bench project |
 | `turbine` | Existing complete turbine construction, edits, restoration, printing, mechanics and independent replay test; verified turbine project |
 | `vise` | Existing complete vise construction, edits, restoration, printing and mechanics test; verified vise project |
 

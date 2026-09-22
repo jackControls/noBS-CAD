@@ -15,6 +15,7 @@ export type ConstraintIconKind =
   | 'fix'
   | 'midpoint'
   | 'concentric'
+  | 'arc_endpoint'
   | 'collinear'
   | 'symmetry';
 
@@ -88,6 +89,12 @@ export const CONSTRAINT_ICON_PRIMITIVES: Readonly<Record<ConstraintIconKind, rea
       { type: 'circle', cx: 12, cy: 12, r: 4 },
       { type: 'circle', cx: 12, cy: 12, r: 1, fill: true },
     ],
+    // A point glued to the implicit start/end of an arc: draw the arc's end
+    // span with its endpoint handle, not the generic contact cross.
+    arc_endpoint: [
+      { type: 'path', d: 'M4 18a10 10 0 0 1 15-8' },
+      { type: 'circle', cx: 19, cy: 10, r: 2.4, fill: true },
+    ],
     collinear: [
       { type: 'path', d: 'M3 18L21 6', dash: [2, 2] },
       { type: 'path', d: 'M4 15l6-4M14 9l6-4' },
@@ -109,7 +116,8 @@ export const CONSTRAINT_TYPE_ICON: Readonly<
     vertical_points: 'vertical_points',
     coincident: 'coincident',
     origin_coincident: 'coincident',
-    center_coincident: 'coincident',
+    // A point on a circle/arc centre reads as concentric, not as contact.
+    center_coincident: 'concentric',
     tangent: 'tangent',
     equal: 'equal',
     parallel: 'parallel',
@@ -117,11 +125,12 @@ export const CONSTRAINT_TYPE_ICON: Readonly<
     fix: 'fix',
     midpoint: 'midpoint',
     reference_midpoint: 'midpoint',
+    reference_on_edge: 'coincident',
     span_midpoint: 'midpoint',
     concentric: 'concentric',
     collinear: 'collinear',
     symmetry: 'symmetry',
-    arc_endpoint_coincident: 'coincident',
+    arc_endpoint_coincident: 'arc_endpoint',
     equal_distance: 'equal',
   });
 
@@ -134,8 +143,8 @@ export const CONSTRAINT_TYPE_LABEL_KEY: Readonly<
   horizontal_points: 'ribbon.sketch.horizontalVertical',
   vertical_points: 'ribbon.sketch.horizontalVertical',
   coincident: 'ribbon.sketch.coincident',
-  origin_coincident: 'ribbon.sketch.coincident',
-  center_coincident: 'ribbon.sketch.coincident',
+  origin_coincident: 'ribbon.sketch.originCoincident',
+  center_coincident: 'ribbon.sketch.centerCoincident',
   tangent: 'ribbon.sketch.tangent',
   equal: 'ribbon.sketch.equal',
   parallel: 'ribbon.sketch.parallel',
@@ -143,11 +152,12 @@ export const CONSTRAINT_TYPE_LABEL_KEY: Readonly<
   fix: 'ribbon.sketch.fixUnfix',
   midpoint: 'ribbon.sketch.midpoint',
   reference_midpoint: 'ribbon.sketch.midpoint',
+  reference_on_edge: 'ribbon.sketch.coincident',
   span_midpoint: 'ribbon.sketch.midpoint',
   concentric: 'ribbon.sketch.concentric',
   collinear: 'ribbon.sketch.collinear',
   symmetry: 'ribbon.sketch.symmetry',
-  arc_endpoint_coincident: 'ribbon.sketch.coincident',
+  arc_endpoint_coincident: 'ribbon.sketch.arcEndpointCoincident',
   equal_distance: 'ribbon.sketch.equal',
 });
 
