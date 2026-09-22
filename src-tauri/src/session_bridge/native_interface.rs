@@ -318,6 +318,8 @@ pub(crate) enum NativeCommand {
     Assembly(controller::assembly::Command),
     #[cfg(feature = "dev-bevy-host")]
     History(controller::history::HistoryCommand),
+    #[cfg(feature = "dev-bevy-host")]
+    Workbench(controller::workbench::Command),
     Feature(feature::FeatureCommand),
     Mutation {
         operation: String,
@@ -521,6 +523,11 @@ pub(crate) fn reduce_action(
     }
     if !is_activation(&action.control.input) {
         return Err("This native button does not handle the requested input".into());
+    }
+    #[cfg(feature = "dev-bevy-host")]
+    if let NativeCommand::Workbench(command) = &binding.command {
+        bridge.with_native_document_owner(engine, &action.context, || handle.validate_action(action))?;
+        return controller::workbench::execute(world, command);
     }
     match binding.command {
         #[cfg(feature="dev-bevy-host")]

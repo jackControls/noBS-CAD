@@ -2,20 +2,21 @@
 
 - Branch: `feat/bevy-020-code-savings`
 - Baseline: `ad01489d2bade99d41941d7def5495abced66fb4` (the Bevy 0.19.1 upgrade in PR #153)
-- Investigated: 2026-09-21
+- Updated: 2026-09-22
 
 ## Result
 
-The application runs on **0.20.0-rc.1** with a working native UI experiment:
-grouped modeling tools, clearer feature forms, compact view controls and a
-scrubbable Feathers numeric input controlling viewport lighting. The native
-sketch, extrusion, editing, undo/redo and save/reopen workflow passes on macOS.
+PR #153 now runs on **0.20.0-rc.1**. The native workbench follows the React
+frontend's ribbon, tabs, orientation dial, navigation toolbar and history strip.
+A real Feathers numeric input controls viewport lighting. The initial 0.20
+sketch, extrusion, editing, undo/redo and save/reopen workflow passed on macOS;
+final live validation of the subsequent visual-parity changes remains pending.
 
 The initial compatibility port removed **31 net lines** across its changed
 production Rust files. This subsequent UI experiment adds presentation and
 integration code; it is not a further code reduction. BSN and Feathers are useful
 building blocks, but upgrading alone does not improve the design or remove the
-CAD input adapter. Keep this experiment separate from the 0.19.1 migration.
+CAD input adapter. This experiment replaces the earlier 0.19.1 proposal in PR #153.
 
 The dependency versions are pinned to the exact release candidate. This is
 still a [prerelease](https://github.com/bevyengine/bevy/releases/tag/v0.20.0-rc.1).
@@ -25,13 +26,26 @@ change the machine's default toolchain. The renderer dependency moves to wgpu 30
 
 ## Native UI experiment
 
-- **BSN scene composition:** retained Create, Modify, Construct, Pattern and
-  Assemble groups distribute existing command entities using flex layout.
-  Their semantic control identities and controller bindings remain intact.
-- **Presentation:** larger toolbar captions, slate surfaces with a blue accent,
-  clearer feature headings and fields, an explicit primary Apply action, and a
-  compact floating navigation bar. These are application design changes, not
-  automatic benefits of the engine upgrade.
+- **Shared ribbon catalog:** Profile, Build, Refine, Repeat, Body, Reference,
+  Check, Assembly and Select use the React catalog and English labels. Secondary
+  buttons move into their group menus as space shrinks. Existing actions retain
+  their controller bindings; unavailable commands are visibly disabled.
+- **Presentation:** the React dark gray/iris palette, centered button captions,
+  shared SVG icons, compact tab cards with an active top edge and dirty marker,
+  and the 48-pixel history footer replace the first experiment's layout. Feature
+  forms retain clearer headings and an explicit primary Apply action.
+- **Viewport controls:** the orientation dial projects the live camera's XYZ
+  axes, provides seven view presets and supports pointer orbiting. The floating
+  toolbar is centered within the canvas and supports latched Orbit, Pan, Zoom
+  and Zoom Window tools, plus Fit and selection. These actions change the camera
+  without changing the CAD model.
+- **Menus and tabs:** File gains icons and shortcut hints; native group menus
+  include the catalog's full command list. Tabs have individual close controls,
+  arrow-key switching and double-click rename. Closing an inactive dirty tab
+  uses the existing document ownership and unsaved-changes confirmation flow.
+- **History:** a title/count card, transport controls, rounded feature chips,
+  rollback marker and selected/error/suppressed states follow React's structure.
+  Existing edit, delete and rollback actions remain attached to the same history.
 - **FeathersNumberInput:** the view-only Light control uses the real 0.20 scene
   component, `f64` values, soft/hard limits, precision, scrubbing and typed entry.
   Its `ValueChange` observer resolves and enqueues an owned controller action;
@@ -51,9 +65,15 @@ combination. Only Feathers' core plugin is installed: global tab navigation
 remains with the existing controller. CAD dimensions retain units, formulas and
 ordered draft commits through the existing `EditableText` adapter.
 
-The two new UI modules contain 427 lines including comments and tests. This is
-an experiment in capabilities and presentation, not evidence that Feathers
-reduces the current application's total code size.
+BSN still composes the Feathers lighting editor. The ribbon uses retained
+controls and the shared command catalog; it no longer keeps a separate BSN
+inventory of modeling groups. This is an experiment in capabilities and
+presentation, not evidence that Feathers reduces the application's code size.
+
+Visual coverage is not feature parity. Drawing/CAM workspaces, Scripts,
+Open script, Import STEP, Export and Settings remain disabled in the native
+chrome. Display/Grid settings are also disabled in the React reference. History
+drag reordering and dragging the rollback marker are not implemented here.
 
 ## Initial port reductions (commit 23fe206)
 
@@ -112,19 +132,24 @@ establish general input parity.
 
 On macOS arm64 with OCCT 7.9.3:
 
-- Native library: 293 passed, 2 existing ignored tests.
+- Native library: 297 passed, 2 existing ignored tests.
 - Native startup: 2 passed.
 - Candidate widget probes: 3 passed.
 - Default desktop library: 177 passed, 2 existing ignored tests.
 - Default desktop startup: 2 passed.
 - Native application build passed. The initial port also passed `cargo check`
   for all targets with native-host and UI-lab features.
-- Native macOS window, dark appearance, 1360 × 860 logical pixels: inspected
-  the feature preview, finished model, grouped toolbar and lighting control.
-- The 14-step native lifecycle passed: New, rectangle sketch, invalid distance,
+- Visual-parity pass: compared React and the actual native macOS window in dark
+  appearance at 1360 × 860 logical pixels. Inspected all nine ribbon groups,
+  Build menu, orientation dial, centered navigation bar, tab strip and empty
+  history lane. Corrected misplaced captions and missing chevron glyphs found
+  in that window. Later tab alignment, icon refresh and preserved command-name
+  fixes have automated coverage/build checks but still need a final live pass:
+  the Mac locked during testing and the UI tool could no longer interact.
+- Initial 0.20 baseline: the 14-step native lifecycle passed: New, rectangle sketch, invalid distance,
   preview, Apply, edit preview, Cancel, edit Apply, Undo, Redo, Save, close, open,
   and independent cold archive recomputation. The final solid was 35 mm high.
-- Real pointer-selected text entry committed Light = 1.35. Real mouse scrubbing
+- Initial 0.20 baseline: real pointer-selected text entry committed Light = 1.35. Real mouse scrubbing
   changed it to 2.00; before/after camera values and the exported model hash were
   identical. MCP restored the default value of 1.00.
 
@@ -133,13 +158,24 @@ IME history, scrolled pointer/IME coordinates, fully clipped controls, nested
 clips at changed DPI, and rotated clipping for controls and panel occlusion.
 Existing ownership, file lifecycle and modeling tests remain in the native run.
 The UI phase adds finite/range validation and native/Feathers focus regressions.
+The visual-parity phase adds menu/disabled-command and responsive-ribbon
+coverage, model-preserving navigation checks, and an inactive-tab close guard.
+The first lifecycle rerun exposed a renamed Isometric control; the dial now
+reuses the original control and accessible name. The final live rerun, populated
+history inspection and tab interactions remain pending while the Mac is locked.
+
+`npm run audit:icons` and `npm run version:check` pass. The icon audit excludes
+only the retained `LICENSE.lucide` notice from SVG validation, while continuing
+to inspect every vector source. All eight CI checks passed for the earlier
+upgrade/portability commit `e2240a5`; that result does not certify this later
+visual-parity change.
 
 Reproduce from this worktree, with `OCCT_ROOT` set for the local installation:
 
 ```sh
 export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0
-cargo test --locked --manifest-path src-tauri/Cargo.toml --features dev-bevy-host --tests --target-dir target/bevy-020
-cargo test --locked --manifest-path src-tauri/Cargo.toml --tests --target-dir target/bevy-020
+cargo test --locked --manifest-path src-tauri/Cargo.toml --features dev-bevy-host --lib --jobs 1 --target-dir target/bevy-020
+cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --jobs 1 --target-dir target/bevy-020
 cargo run --locked --manifest-path src-tauri/Cargo.toml --features dev-bevy-host --bin nbcad --target-dir target/bevy-020
 ```
 
@@ -160,7 +196,8 @@ still pending.
 
 ## Next experiments, in order
 
-1. Resolve the transient glyph/capture discrepancy through document transitions;
+1. Finish the visual-parity live lifecycle, populated history and tab checks.
+   Resolve the transient glyph/capture discrepancy through document transitions;
    check the supported minimum window size and changed DPI, then Windows/Linux.
 2. Extend the Feathers numeric trial only after keyboard shortcuts, clipboard,
    assistive technology and OS IME work with the existing event ordering. Keep

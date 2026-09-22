@@ -71,6 +71,8 @@ const problems = [];
 // actual sources as well as the registry so moving a glyph cannot bypass this audit.
 const sharedDir = resolve(root, 'src/assets/ribbon-icons');
 for (const name of await readdir(sharedDir)) {
+  // The retained third-party notice is metadata, not a vector asset.
+  if (name === 'LICENSE.lucide') continue;
   const svg = await readFile(resolve(sharedDir, name), 'utf8');
   if (!name.endsWith('.svg') || !svg.includes('viewBox="0 0 24 24"')) {
     problems.push(`Invalid shared ribbon vector: ${name}`);

@@ -564,3 +564,25 @@ fn real_bootstrap_first_new_retains_both_models_and_distinct_mcp_sessions() {
         session
     );
 }
+
+#[test]
+fn closing_an_inactive_dirty_tab_prompts_for_that_document_and_keeps_the_others() {
+    let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let (mut app, services, handle) = setup(&fixture);
+    let first = fixture.owner();
+    fixture.rename(&first, "Keep this design").unwrap();
+    execute(app.world_mut(),&handle,&services,&first,FileCommand::New).unwrap();
+    drain(app.world_mut(),&services).unwrap();
+    let second=fixture.owner();
+    fixture.rename(&second,"Other design").unwrap();
+    execute(app.world_mut(),&handle,&services,&second,FileCommand::CloseTab(first.clone())).unwrap();
+    drain(app.world_mut(),&services).unwrap();
+    assert_eq!(fixture.owner(),first);
+    let dialog=app.world().resource::<Files>().dialog.as_ref().unwrap().clone();
+    assert_eq!(dialog.receipt.owner,first);
+    assert_eq!(tabs(app.world(),&services,&first).unwrap().len(),2);
+    execute(app.world_mut(),&handle,&services,&first,FileCommand::Cancel(dialog.token)).unwrap();
+    assert_eq!(fixture.engine.document_snapshot().name,"Keep this design");
+    assert_eq!(tabs(app.world(),&services,&first).unwrap().len(),2);
+}

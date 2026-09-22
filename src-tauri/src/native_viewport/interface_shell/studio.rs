@@ -160,7 +160,7 @@ pub(crate) fn synchronize(
     let (root, input) = (widgets.root, widgets.input);
     let mut node = world.get_mut::<Node>(root).unwrap();
     node.left = px(width - 174.);
-    node.top = px(height - 125.);
+    node.top = px(height - 99.);
     drop(node);
     if let Some(mut control) = world.get_mut::<InterfaceControl>(input) {
         let next = Field::Range {

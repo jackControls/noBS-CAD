@@ -60,19 +60,73 @@ pub(crate) fn synchronize(
         state.widgets.panel(
             world,
             camera,
-            "history-title-bg",
-            rect(12., y + 8., 166., 32.),
-            theme.header,
+            "history-top-edge",
+            rect(0., y, width, 1.),
+            theme.edge,
             23,
+        );
+        super::super::workbench::card(
+            &mut state.widgets,
+            world,
+            camera,
+            "history-title-bg",
+            rect(12., y + 8., 180., 32.),
+            interface_shell::ribbon::css_mix(theme.header, theme.panel, 0.55),
+            8.,
+            23,
+        );
+        state.widgets.glyph(
+            world,
+            camera,
+            "history-icon",
+            rect(23., y + 17., 13., 13.),
+            Icon::History,
+            theme.accent,
+            24,
         );
         state.widgets.text(
             world,
             camera,
             "history-title",
-            rect(23., y + 17., 148., 16.),
-            &format!("DESIGN HISTORY   {rollback}/{count}"),
-            10.,
+            rect(44., y + 17., 105., 16.),
+            "DESIGN HISTORY",
+            9.,
             24,
+        );
+        if let Some(e) = state.widgets.entity("history-title") {
+            world.entity_mut(e).insert(TextColor(theme.mute));
+        }
+        state.widgets.panel(
+            world,
+            camera,
+            "history-count-bg",
+            rect(154., y + 15., 30., 18.),
+            theme.panel,
+            24,
+        );
+        state.widgets.text(
+            world,
+            camera,
+            "history-count",
+            rect(154., y + 17., 30., 14.),
+            &format!("{rollback}/{count}"),
+            9.,
+            25,
+        );
+        if let Some(e) = state.widgets.entity("history-count") {
+            world
+                .entity_mut(e)
+                .insert(TextLayout::justify(Justify::Center));
+        }
+        super::super::workbench::card(
+            &mut state.widgets,
+            world,
+            camera,
+            "history-transport",
+            rect(200., y + 9., 122., 30.),
+            interface_shell::ribbon::css_mix(theme.header, theme.panel, 0.3),
+            8.,
+            23,
         );
         for (i, (label, icon, index)) in [
             ("Roll back to start", Icon::ArrowLeftToLine, 0),
@@ -94,20 +148,35 @@ pub(crate) fn synchronize(
                 control(label, None, locked || index == rollback),
                 Some(""),
                 NativeCommand::History(HistoryCommand::Rollback(index)),
-                rect(188. + i as f32 * 30., y + 12., 28., 24.),
+                rect(203. + i as f32 * 29., y + 12., 28., 24.),
                 Some(icon),
                 24,
             )?;
         }
-        let list_x = 322.;
+        let list_x = 330.;
         let available = (width - list_x - 42.).max(1.);
         state.scroll = state.scroll.min(count.saturating_sub(1));
-        state.widgets.panel(
+        super::super::workbench::card(
+            &mut state.widgets,
             world,
             camera,
             "history-strip",
-            rect(list_x - 2., y + 6., width - list_x - 10., 36.),
-            theme.header,
+            rect(list_x, y + 6., width - list_x - 12., 36.),
+            interface_shell::ribbon::css_mix(theme.header, theme.panel, 0.25),
+            8.,
+            23,
+        );
+        state.widgets.panel(
+            world,
+            camera,
+            "history-track",
+            rect(
+                list_x + 8.,
+                y + 23.,
+                width - list_x - 28.,
+                if count == 0 { 4. } else { 1. },
+            ),
+            theme.edge,
             23,
         );
         let mut x = list_x + 8.;
@@ -122,7 +191,7 @@ pub(crate) fn synchronize(
                     world,
                     camera,
                     "history-cursor",
-                    rect(x - 4., y + 6., 2., 36.),
+                    rect(x - 4., y + 8., 1., 32.),
                     theme.accent,
                     25,
                 );
@@ -140,11 +209,7 @@ pub(crate) fn synchronize(
                     ..default()
                 },
             ];
-            let caption = format!(
-                "{}{}",
-                feature.name,
-                if index >= rollback { " ·" } else { "" }
-            );
+            let caption = feature.name.clone();
             let mut bounds = rect(x, y + 10., w, 28.);
             bounds.border = UiRect::all(px(1.));
             bounds.border_radius = BorderRadius::all(px(6.));
@@ -167,19 +232,48 @@ pub(crate) fn synchronize(
                     .entity_mut(entity)
                     .remove::<interface_shell::InterfaceFlat>();
             }
+            let muted = index >= rollback || feature.suppressed;
+            let ink = if matches!(feature.status, nbcad_core::FeatureStatus::Error { .. }) {
+                Color::srgb_u8(224, 85, 85)
+            } else if state.selected == Some(feature.id.0) {
+                theme.accent
+            } else if muted {
+                interface_shell::ribbon::css_mix(theme.mute, theme.panel, 0.45)
+            } else {
+                theme.ink
+            };
+            interface_shell::control_colors(world, entity, ink, theme.panel);
             interface_shell::caption_size(world, entity, 10.);
             x += w + 6.;
             shown += 1;
         }
-        if rollback == count && state.scroll + shown == count {
+        if count > 0 && rollback == count && state.scroll + shown == count {
             state.widgets.panel(
                 world,
                 camera,
                 "history-cursor",
-                rect(x - 2., y + 6., 2., 36.),
+                rect(x - 2., y + 8., 1., 32.),
                 theme.accent,
                 25,
             );
+        }
+        if let Some(cursor) = state
+            .widgets
+            .entity("history-cursor")
+            .filter(|e| world.get::<Node>(*e).is_some())
+        {
+            if (rollback >= state.scroll && rollback <= state.scroll + shown) && count > 0 {
+                let mut head = world.get::<Node>(cursor).unwrap().clone();
+                if let Val::Px(left) = head.left {
+                    head.left = px(left - 2.5);
+                }
+                head.width = px(6.);
+                head.height = px(6.);
+                head.top = px(y + 6.);
+                state
+                    .widgets
+                    .panel(world, camera, "history-cursor-head", head, theme.accent, 26);
+            }
         }
         if state.scroll > 0 {
             state.widgets.button(
@@ -243,7 +337,9 @@ pub(crate) fn synchronize(
                         },
                         HistoryCommand::Edit(target.id),
                         locked
-                            || (feature.kind != FeatureKind::Sketch && super::feature::SolidFormKind::from_feature_kind(feature.kind).is_none()),
+                            || (feature.kind != FeatureKind::Sketch
+                                && super::feature::SolidFormKind::from_feature_kind(feature.kind)
+                                    .is_none()),
                     ),
                     (
                         "Roll back before",

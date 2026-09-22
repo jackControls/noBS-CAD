@@ -56,7 +56,7 @@ impl RibbonButton {
     }
 }
 
-pub(super) fn css_mix(foreground: Color, background: Color, opacity: f32) -> Color {
+pub(crate) fn css_mix(foreground: Color, background: Color, opacity: f32) -> Color {
     let fg = foreground.to_srgba();
     let bg = background.to_srgba();
     Color::srgb(
@@ -68,6 +68,22 @@ pub(super) fn css_mix(foreground: Color, background: Color, opacity: f32) -> Col
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Icon {
+    Orbit,
+    Pan,
+    Zoom,
+    ZoomWindow,
+    Fit,
+    Monitor,
+    Grid,
+    Undo,
+    Redo,
+    History,
+    Measure,
+    Book,
+    FolderOpen,
+    Import,
+    Export,
+
     Extrude,
     Revolve,
     Sweep,
@@ -148,6 +164,22 @@ impl Icon {
             };
         }
         match self {
+            Self::Orbit => source!("move-3d"),
+            Self::Pan => source!("hand"),
+            Self::Zoom => source!("zoom-in"),
+            Self::ZoomWindow => source!("square-dashed"),
+            Self::Fit => source!("maximize"),
+            Self::Monitor => source!("monitor"),
+            Self::Grid => source!("grid-3x3"),
+            Self::Undo => source!("undo-2"),
+            Self::Redo => source!("redo-2"),
+            Self::History => source!("history"),
+            Self::Measure => source!("ruler"),
+            Self::Book => source!("book-open"),
+            Self::FolderOpen => source!("folder-open"),
+            Self::Import => source!("file-up"),
+            Self::Export => source!("file-down"),
+
             Self::Extrude => source!("extrude"),
             Self::Revolve => source!("revolve"),
             Self::Sweep => source!("sweep"),
@@ -402,6 +434,17 @@ pub(crate) fn compact_glyph(
     glyph(world, owner, icon, x, (24. - size) / 2., size, theme.mute)
 }
 
+pub(crate) fn center_glyph(world: &mut World, owner: Entity) {
+    let entities: Vec<Entity> = world.query::<(Entity, &RibbonGlyph)>().iter(world).filter(|(_, g)| g.owner == owner).map(|(e, _)| e).collect();
+    for entity in entities {
+        if let Some(mut node) = world.get_mut::<Node>(entity) {
+            let size = if let Val::Px(size) = node.width { size } else { 13. };
+            node.left = percent(50.); node.top = percent(50.);
+            node.margin = UiRect { left: px(-size / 2.), top: px(-size / 2.), ..default() };
+        }
+    }
+}
+
 pub(crate) fn replace_compact_glyph(world: &mut World, owner: Entity, icon: Icon) {
     let mut glyphs = world.query::<&mut RibbonGlyph>();
     for mut glyph in glyphs.iter_mut(world).filter(|glyph| glyph.owner == owner) {
@@ -431,6 +474,21 @@ pub(crate) fn decoration(world: &mut World, camera: Entity, icon: Icon, ink: Col
     ));
     entity
 }
+pub(crate) fn refresh_decoration(world: &mut World, entity: Entity, icon: Icon, ink: Color) {
+    if let Some(mut glyph) = world.get_mut::<RibbonGlyph>(entity) {
+        if glyph.icon != icon { glyph.icon = icon; }
+        if glyph.ink != ink { glyph.ink = ink; glyph.disabled_ink = ink; }
+    }
+    if let Some(mut image) = world.get_mut::<ImageNode>(entity) {
+        if image.color != ink { image.color = ink; }
+    }
+}
+pub(crate) fn caption(world: &mut World, entity: Entity, value: &str) {
+    if let Some(mut button) = world.get_mut::<RibbonButton>(entity) {
+        if button.display_label != value { button.display_label = value.into(); }
+    }
+}
+
 pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
     if world.get::<RibbonButton>(entity).is_some() {
         return;
@@ -443,7 +501,7 @@ pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
         "Three-point arc" => "Arc",
         "Fit-point spline" => "Spline",
         "Center-to-center slot" => "Slot",
-        "Create Sketch" => "Sketch",
+        "Create Sketch" => "Create\nSketch",
         "Rectangular Pattern" => "Rect. pattern",
         "Circular Pattern" => "Circ. pattern",
         "External Thread" => "Thread",

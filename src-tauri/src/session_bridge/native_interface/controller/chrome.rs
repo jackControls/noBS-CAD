@@ -140,6 +140,7 @@ impl Widgets {
             .decoration
             .entry(key.into())
             .or_insert_with(|| ribbon::decoration(world, camera, icon, color));
+        ribbon::refresh_decoration(world, entity, icon, color);
         if world.get::<Node>(entity) != Some(&bounds) {
             world.entity_mut(entity).insert(bounds);
         }
@@ -230,6 +231,7 @@ impl Widgets {
             }
             if let Some(icon) = icon {
                 ribbon::compact_glyph(world, entity, icon, 4., 13.);
+                if caption == Some("") { ribbon::center_glyph(world, entity); }
             }
             self.controls
                 .insert(key.into(), (entity, command.clone(), icon));
@@ -264,6 +266,10 @@ impl Widgets {
         }
         if world.get::<ZIndex>(entity) != Some(&ZIndex(z)) {
             world.entity_mut(entity).insert(ZIndex(z));
+        }
+        if world.get::<Node>(entity).is_some_and(|node| node.justify_content == JustifyContent::Center) && icon.is_none() && !text_field && !range
+            && world.get::<ribbon::RibbonButton>(entity).is_none() {
+            interface_shell::center_caption(world, entity);
         }
         Ok(entity)
     }

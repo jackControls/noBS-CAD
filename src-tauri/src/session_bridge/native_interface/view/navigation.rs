@@ -5,6 +5,7 @@ use crate::native_viewport::{
     interface_shell::NativeInterfaceHandle,
     winit_host::{cancel_native_pointer, NativeHostInput},
 };
+use crate::session_bridge::native_interface::controller::workbench::{self, NavigationTool};
 use bevy::{
     input::{mouse::MouseScrollUnit, ButtonState},
     prelude::{MouseButton, Quat, Resource, Vec2},
@@ -16,6 +17,8 @@ use nbcad_interface::Rect;
 enum Mode {
     Pan,
     Orbit,
+    Zoom,
+    ZoomWindow,
 }
 
 struct Drag {
@@ -23,6 +26,7 @@ struct Drag {
     button: MouseButton,
     mode: Mode,
     cursor: Vec2,
+    start: Vec2,
 }
 
 #[derive(Resource, Default)]
@@ -73,6 +77,7 @@ fn navigate_inner(
                 | WindowEvent::WindowBackendScaleFactorChanged(_)
         );
     if escape || lost {
+        world.insert_resource(workbench::NavigationRectangle(None));
         let dragging = state.drag.take().is_some();
         if dragging {
             cancel_native_pointer(world, handle);
@@ -96,7 +101,52 @@ fn navigate_inner(
                 .as_ref()
                 .is_some_and(|d| d.button == button.button);
             if captured {
-                state.drag = None;
+                let drag = state.drag.take().unwrap();
+                world.insert_resource(workbench::NavigationRectangle(None));
+                if matches!(drag.mode, Mode::ZoomWindow)
+                    && input.context.as_ref() == Some(&drag.owner)
+                {
+                    let bounds = handle.read_surface(|owner, frame| {
+                        (owner == &drag.owner && frame.modal_stack.is_empty())
+                            .then(|| {
+                                frame
+                                    .canvases
+                                    .iter()
+                                    .find(|c| c.name == "viewport")
+                                    .map(|c| c.bounds)
+                            })
+                            .flatten()
+                    })?;
+                    if let Some(bounds) = bounds {
+                        let size = (drag.cursor - drag.start).abs();
+                        if size.min_element() >= 8. {
+                            let center = (drag.start + drag.cursor) * 0.5;
+                            let canvas_center = Vec2::new(
+                                (bounds.x + bounds.width * 0.5) as f32,
+                                (bounds.y + bounds.height * 0.5) as f32,
+                            );
+                            move_camera(
+                                world,
+                                input,
+                                bounds,
+                                Mode::Pan,
+                                canvas_center - center,
+                                None,
+                            )?;
+                            let scale = (size.x / bounds.width as f32)
+                                .max(size.y / bounds.height as f32)
+                                .clamp(0.01, 1.);
+                            move_camera(
+                                world,
+                                input,
+                                bounds,
+                                Mode::Pan,
+                                Vec2::ZERO,
+                                Some(scale.ln()),
+                            )?;
+                        }
+                    }
+                }
             }
             return Ok(captured);
         }
@@ -114,6 +164,7 @@ fn navigate_inner(
     })?;
     let Some(bounds) = bounds.filter(|_| !input.consumed && !handle.has_capture()) else {
         state.drag = None;
+        world.insert_resource(workbench::NavigationRectangle(None));
         return Ok(false);
     };
     if state
@@ -122,17 +173,37 @@ fn navigate_inner(
         .is_some_and(|drag| Some(&drag.owner) != input.context.as_ref())
     {
         state.drag = None;
+        world.insert_resource(workbench::NavigationRectangle(None));
     }
     let Some(cursor) = input.cursor.filter(|p| p.is_finite()) else {
         state.drag = None;
+        world.insert_resource(workbench::NavigationRectangle(None));
         return Ok(false);
     };
     // Model drags may cross panel bounds; only their starting point must be on
     // the canvas. Wheel/pinch gestures must always be over unobstructed canvas.
     let on_canvas = inside(bounds, cursor) && !handle.owns_pointer(cursor.as_dvec2().to_array());
+    let on_dial = handle
+        .hit_key(cursor.as_dvec2().to_array())
+        .is_some_and(|key| Some(key) == workbench::dial_key(world))
+        && workbench::dial(world).is_some_and(|dial| {
+            let center = Vec2::new(
+                (dial.x + dial.width / 2.) as f32,
+                (dial.y + dial.height / 2.) as f32,
+            );
+            cursor.distance(center) < dial.width as f32 / 2.
+        });
     match &input.event {
-        WindowEvent::MouseButtonInput(button) if on_canvas && state.drag.is_none() => {
+        WindowEvent::MouseButtonInput(button) if (on_canvas || on_dial) && state.drag.is_none() => {
             let mode = match button.button {
+                MouseButton::Left if on_dial => Mode::Orbit,
+                MouseButton::Left if on_canvas => match workbench::navigation(world) {
+                    NavigationTool::Select => return Ok(false),
+                    NavigationTool::Orbit => Mode::Orbit,
+                    NavigationTool::Pan => Mode::Pan,
+                    NavigationTool::Zoom => Mode::Zoom,
+                    NavigationTool::ZoomWindow => Mode::ZoomWindow,
+                },
                 MouseButton::Middle if !input.modifiers.shift => Mode::Pan,
                 MouseButton::Middle | MouseButton::Right => Mode::Orbit,
                 _ => return Ok(false),
@@ -142,6 +213,7 @@ fn navigate_inner(
                 button: button.button,
                 mode,
                 cursor,
+                start: cursor,
             });
             super::cancel(world, "Camera transition interrupted by pointer navigation");
             Ok(true)
@@ -151,8 +223,36 @@ fn navigate_inner(
                 return Ok(false);
             };
             let delta = cursor - drag.cursor;
-            drag.cursor = cursor;
-            move_camera(world, input, bounds, drag.mode, delta, None)?;
+            drag.cursor = if matches!(drag.mode, Mode::ZoomWindow) {
+                cursor.clamp(
+                    Vec2::new(bounds.x as f32, bounds.y as f32),
+                    Vec2::new(
+                        (bounds.x + bounds.width) as f32,
+                        (bounds.y + bounds.height) as f32,
+                    ),
+                )
+            } else {
+                cursor
+            };
+            if matches!(drag.mode, Mode::ZoomWindow) {
+                let min = drag.start.min(drag.cursor);
+                let size = (drag.cursor - drag.start).abs();
+                world.insert_resource(workbench::NavigationRectangle(Some(Rect {
+                    x: min.x as f64,
+                    y: min.y as f64,
+                    width: size.x as f64,
+                    height: size.y as f64,
+                })));
+            } else {
+                move_camera(
+                    world,
+                    input,
+                    bounds,
+                    drag.mode,
+                    delta,
+                    matches!(drag.mode, Mode::Zoom).then_some(delta.y * 0.01),
+                )?;
+            }
             Ok(true)
         }
         WindowEvent::MouseWheel(wheel) if on_canvas && state.drag.is_none() => {
@@ -243,6 +343,7 @@ fn move_camera(
                 camera.position = (Vec3::from_array(camera.position) + shift).to_array();
                 camera.target = (target + shift).to_array();
             }
+            Mode::Zoom | Mode::ZoomWindow => {}
             Mode::Orbit => {
                 let to_y = Quat::from_rotation_arc(up, Vec3::Y);
                 let local = to_y * (offset / distance);

@@ -371,3 +371,57 @@ fn trackpad_pan_and_orbit_have_the_same_scale_on_retina_displays() {
         assert_eq!(outputs[0], outputs[1]);
     }
 }
+
+#[test]
+fn toolbar_modes_capture_left_drag_and_window_zoom_without_editing_geometry() {
+    let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let (mut app, handle) = setup(&fixture);
+    let before = fixture.engine.engine_call("project_export_model", "");
+    for tool in [
+        NavigationTool::Pan,
+        NavigationTool::Orbit,
+        NavigationTool::Zoom,
+        NavigationTool::ZoomWindow,
+    ] {
+        workbench::execute(app.world_mut(), &workbench::Command::Navigation(tool)).unwrap();
+        let original = camera(app.world());
+        let send =
+            |world: &mut World, p, e| navigate(world, &handle, &input(&handle, p, e)).unwrap();
+        assert!(send(
+            app.world_mut(),
+            [300., 300.],
+            button(MouseButton::Left, ButtonState::Pressed)
+        ));
+        assert!(send(app.world_mut(), [390., 370.], moved([390., 370.])));
+        assert!(send(
+            app.world_mut(),
+            [390., 370.],
+            button(MouseButton::Left, ButtonState::Released)
+        ));
+        assert_ne!(camera(app.world()), original, "{tool:?}");
+        assert!(app
+            .world()
+            .get_resource::<workbench::NavigationRectangle>()
+            .is_none_or(|r| r.0.is_none()));
+    }
+    assert_eq!(
+        before,
+        fixture.engine.engine_call("project_export_model", "")
+    );
+    workbench::execute(
+        app.world_mut(),
+        &workbench::Command::Navigation(NavigationTool::Select),
+    )
+    .unwrap();
+    assert!(!navigate(
+        app.world_mut(),
+        &handle,
+        &input(
+            &handle,
+            [300., 300.],
+            button(MouseButton::Left, ButtonState::Pressed)
+        )
+    )
+    .unwrap());
+}

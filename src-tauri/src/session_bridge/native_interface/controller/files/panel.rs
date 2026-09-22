@@ -9,6 +9,7 @@ struct Widgets {
     controls: HashMap<String, (Entity, FileCommand)>,
     decoration: Vec<Entity>,
     layout: Option<String>,
+    chrome: super::super::chrome::Widgets,
 }
 fn node(x: f32, y: f32, width: f32, height: f32) -> Node {
     Node {
@@ -35,13 +36,16 @@ fn button(
     label: String,
     caption: Option<&str>,
     command: FileCommand,
-    bounds: Node,
+    mut bounds: Node,
     scope: Option<&str>,
     z: i32,
     selected: Option<bool>,
     disabled: bool,
 ) -> Result<(), String> {
     live.insert(key.clone());
+    if key.starts_with("tab-") || key.starts_with("file-item-") {
+        bounds.justify_content = JustifyContent::Start;
+    }
     let surface = scope.unwrap_or("document/session");
     let entity = if let Some((entity, _)) = state.controls.get(&key) {
         *entity
@@ -85,7 +89,11 @@ fn button(
         "button"
     }
     .into();
-    control.owned_keys = if control.role == "menuitem" {
+    control.owned_keys = if control.role == "tab" {
+        ["ArrowLeft", "ArrowRight"]
+            .map(nbcad_interface::KeyChord::plain)
+            .into()
+    } else if control.role == "menuitem" {
         ["ArrowUp", "ArrowDown", "Home", "End"]
             .into_iter()
             .map(nbcad_interface::KeyChord::plain)
@@ -101,6 +109,19 @@ fn button(
         if world.get::<InterfaceCaption>(entity) != Some(&caption) {
             world.entity_mut(entity).insert(caption);
         }
+    }
+    if key.starts_with("tab-") {
+        interface_shell::compact_label(world, entity, 30.);
+        interface_shell::control_colors(world, entity, theme.ink, theme.panel);
+    } else if key.starts_with("file-item-") {
+        interface_shell::compact_label(world, entity, 28.);
+        interface_shell::caption_size(world, entity, 11.);
+    } else {
+        world
+            .entity_mut(entity)
+            .insert(interface_shell::InterfaceFlat);
+        interface_shell::center_caption(world, entity);
+        interface_shell::caption_size(world, entity, 11.);
     }
     Ok(())
 }
@@ -180,6 +201,16 @@ pub(crate) fn synchronize(
     let mut state = world.remove_resource::<Widgets>().unwrap_or_default();
     let result = (|| {
         let mut live = HashSet::new();
+        state.chrome.begin();
+        state.chrome.glyph(
+            world,
+            camera,
+            "file-chevron",
+            node(31., 11., 7., 7.),
+            interface_shell::ribbon::Icon::ChevronDown,
+            theme.mute,
+            66,
+        );
         let layout = format!("{width}:{height}:{menu}:{:?}", dialog);
         if state.layout.as_ref() != Some(&layout) {
             for entity in state.decoration.drain(..) {
@@ -198,7 +229,7 @@ pub(crate) fn synchronize(
                     world,
                     &mut state,
                     camera,
-                    node(4., 29., 252., 216.),
+                    node(4., 29., 256., 336.),
                     theme.header.with_alpha(1.),
                     60,
                 );
@@ -294,9 +325,9 @@ pub(crate) fn synchronize(
             &assets,
             "file".into(),
             "File".into(),
-            None,
+            Some("NB"),
             FileCommand::Menu,
-            node(4., 0., 42., 28.),
+            node(0., 0., 44., 28.),
             menu.then_some("file-menu"),
             65,
             None,
@@ -313,18 +344,71 @@ pub(crate) fn synchronize(
             "New document".into(),
             Some("+"),
             FileCommand::New,
-            node(48., 0., 26., 28.),
+            node(44., 0., 24., 28.),
             None,
             42,
             None,
             picker,
         )?;
-        let available = ((width - 138.) / 190.).floor().max(1.) as usize;
+        let available = ((width - 212.) / 192.).floor().max(1.) as usize;
         let active = tabs.iter().position(|t| t.active).unwrap_or(0);
         let start = active.saturating_sub(available - 1);
         for (offset, tab) in tabs.iter().skip(start).take(available).enumerate() {
-            let x = 78. + offset as f32 * 190.;
-            let label = format!("{}{}", if tab.dirty { "• " } else { "" }, tab.name);
+            let x = 68. + offset as f32 * 192.;
+            let label = tab.name.clone();
+            state.chrome.panel(
+                world,
+                camera,
+                &format!("tab-bg-{}", tab.owner.document_id),
+                node(x, 0., 192., 28.),
+                if tab.active {
+                    theme.panel.with_alpha(1.)
+                } else {
+                    theme.header.with_alpha(1.)
+                },
+                41,
+            );
+            state.chrome.panel(
+                world,
+                camera,
+                &format!("tab-edge-{}", tab.owner.document_id),
+                node(x + 191., 0., 1., 28.),
+                theme.edge,
+                42,
+            );
+            if tab.active {
+                state.chrome.panel(
+                    world,
+                    camera,
+                    "active-tab-line",
+                    node(x, 0., 192., 2.),
+                    theme.accent,
+                    44,
+                );
+            }
+            state.chrome.glyph(
+                world,
+                camera,
+                &format!("tab-stage-{}", tab.owner.document_id),
+                node(x + 12., 9., 11., 11.),
+                interface_shell::ribbon::Icon::Box,
+                if tab.active { theme.accent } else { theme.mute },
+                44,
+            );
+            let mut dot = node(x + 29., 11., 6., 6.);
+            dot.border_radius = BorderRadius::MAX;
+            state.chrome.panel(
+                world,
+                camera,
+                &format!("tab-dirty-{}", tab.owner.document_id),
+                dot,
+                if tab.dirty {
+                    Color::srgb_u8(232, 150, 60)
+                } else {
+                    theme.edge
+                },
+                44,
+            );
             button(
                 world,
                 &mut state,
@@ -336,13 +420,21 @@ pub(crate) fn synchronize(
                 label,
                 None,
                 FileCommand::Activate(tab.owner.clone()),
-                node(x, 0., 160., 28.),
+                node(x + 10., 2., 152., 26.),
                 None,
                 42,
                 Some(tab.active),
                 picker,
             )?;
-            if tab.active {
+            if let Some((entity, _)) = state
+                .controls
+                .get(&format!("tab-{}", tab.owner.document_id))
+            {
+                // Keep selected semantics for tabs while making their selected
+                // fill equal to the containing card.
+                interface_shell::tab_style(world, *entity);
+            }
+            {
                 button(
                     world,
                     &mut state,
@@ -350,11 +442,15 @@ pub(crate) fn synchronize(
                     camera,
                     theme,
                     &assets,
-                    "close-tab".into(),
-                    "Close document".into(),
+                    format!("close-tab-{}", tab.owner.document_id),
+                    if tab.active {
+                        "Close document".into()
+                    } else {
+                        format!("Close document: {}", tab.name)
+                    },
                     Some("×"),
-                    FileCommand::Close,
-                    node(x + 161., 0., 24., 28.),
+                    FileCommand::CloseTab(tab.owner.clone()),
+                    node(x + 166., 5., 20., 20.),
                     None,
                     42,
                     None,
@@ -376,7 +472,7 @@ pub(crate) fn synchronize(
                     "Previous document".into(),
                     Some("‹"),
                     FileCommand::Activate(tabs[active - 1].owner.clone()),
-                    node(width - 56., 0., 26., 28.),
+                    node(width - 142., 0., 26., 28.),
                     None,
                     42,
                     None,
@@ -395,7 +491,7 @@ pub(crate) fn synchronize(
                     "Next document".into(),
                     Some("›"),
                     FileCommand::Activate(tabs[active + 1].owner.clone()),
-                    node(width - 28., 0., 26., 28.),
+                    node(width - 114., 0., 26., 28.),
                     None,
                     42,
                     None,
@@ -404,19 +500,103 @@ pub(crate) fn synchronize(
             }
         }
         if menu {
-            for (i, (caption, command)) in [
-                ("New document  ·  Ctrl+N", FileCommand::New),
-                ("Open…  ·  Ctrl+O", FileCommand::Open),
-                ("Save  ·  Ctrl+S", FileCommand::Save),
-                ("Save as…  ·  Ctrl+Shift+S", FileCommand::SaveAs),
-                ("Rename…", FileCommand::Rename),
-                ("Close document  ·  Ctrl+W", FileCommand::Close),
-                ("Exit", FileCommand::Exit),
+            use interface_shell::ribbon::Icon;
+            let primary = if cfg!(target_os = "macos") {
+                "⌘"
+            } else {
+                "Ctrl+"
+            };
+            for (i, (label, command, icon, shortcut, disabled)) in [
+                (
+                    "Open…",
+                    FileCommand::Open,
+                    Icon::FolderOpen,
+                    format!("{primary}O"),
+                    false,
+                ),
+                (
+                    "Open script…",
+                    FileCommand::DismissMenu,
+                    Icon::Book,
+                    String::new(),
+                    true,
+                ),
+                (
+                    "New document",
+                    FileCommand::New,
+                    Icon::Box,
+                    format!("{primary}N"),
+                    false,
+                ),
+                (
+                    "Save",
+                    FileCommand::Save,
+                    Icon::Save,
+                    format!("{primary}S"),
+                    false,
+                ),
+                (
+                    "Save as…",
+                    FileCommand::SaveAs,
+                    Icon::Save,
+                    format!(
+                        "{}{}S",
+                        if cfg!(target_os = "macos") {
+                            "⇧"
+                        } else {
+                            "Shift+"
+                        },
+                        primary
+                    ),
+                    false,
+                ),
+                (
+                    "Rename…",
+                    FileCommand::Rename,
+                    Icon::Pencil,
+                    String::new(),
+                    false,
+                ),
+                (
+                    "Import STEP…",
+                    FileCommand::DismissMenu,
+                    Icon::Import,
+                    String::new(),
+                    true,
+                ),
+                (
+                    "Export…",
+                    FileCommand::DismissMenu,
+                    Icon::Export,
+                    String::new(),
+                    true,
+                ),
+                (
+                    "Settings…",
+                    FileCommand::DismissMenu,
+                    Icon::Settings,
+                    String::new(),
+                    true,
+                ),
+                (
+                    "Close document",
+                    FileCommand::Close,
+                    Icon::Cancel,
+                    format!("{primary}W"),
+                    false,
+                ),
+                (
+                    "Exit",
+                    FileCommand::Exit,
+                    Icon::Cancel,
+                    String::new(),
+                    false,
+                ),
             ]
             .into_iter()
             .enumerate()
             {
-                let label = caption.split("  ·").next().unwrap();
+                let y = 33. + i as f32 * 29.;
                 button(
                     world,
                     &mut state,
@@ -426,14 +606,32 @@ pub(crate) fn synchronize(
                     &assets,
                     format!("file-item-{i}"),
                     label.into(),
-                    Some(caption),
+                    None,
                     command,
-                    node(8., 33. + i as f32 * 29., 244., 28.),
+                    node(8., y, 248., 28.),
                     Some("file-menu"),
                     61,
                     None,
-                    false,
+                    disabled,
                 )?;
+                state.chrome.glyph(
+                    world,
+                    camera,
+                    &format!("file-icon-{i}"),
+                    node(16., y + 7., 14., 14.),
+                    icon,
+                    if disabled { theme.edge } else { theme.mute },
+                    62,
+                );
+                state.chrome.text(
+                    world,
+                    camera,
+                    &format!("file-shortcut-{i}"),
+                    node(188., y + 7., 58., 14.),
+                    &shortcut,
+                    10.,
+                    62,
+                );
             }
             // A real transparent backdrop dismisses the menu, including through MCP.
             let key = "file-backdrop".to_owned();
@@ -573,6 +771,20 @@ pub(crate) fn synchronize(
                 picker,
             )?;
         }
+        let mut scripts = InterfaceControl::button("document/session", "Scripts");
+        scripts.disabled = true;
+        state.chrome.button(
+            world,
+            camera,
+            "scripts",
+            scripts,
+            Some("Scripts"),
+            NativeCommand::File(FileCommand::DismissMenu),
+            node(width - 86., 0., 86., 28.),
+            Some(interface_shell::ribbon::Icon::Book),
+            42,
+        )?;
+        state.chrome.finish(world);
         state.controls.retain(|key, (entity, _)| {
             if live.contains(key) {
                 true

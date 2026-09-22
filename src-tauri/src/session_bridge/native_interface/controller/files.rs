@@ -19,6 +19,7 @@ pub(crate) enum FileCommand {
     SaveAs,
     Rename,
     Close,
+    CloseTab(DocumentContext),
     Activate(DocumentContext),
     Exit,
     SaveAllAndExit,
@@ -260,6 +261,42 @@ pub(crate) fn reduce(
         world.resource_mut::<Files>().dialog.as_mut().unwrap().kind = DialogKind::Rename(name);
         return Ok(json!({"changed":true}));
     }
+    if let FileCommand::Activate(target) = command {
+        let services = world.resource::<NativeServices>().clone();
+        if matches!(&action.control.input, ControlInput::DoubleClick) && target == &action.context {
+            return execute(
+                world,
+                handle,
+                &services,
+                &action.context,
+                FileCommand::Rename,
+            );
+        }
+        if let ControlInput::Key(key) = &action.control.input {
+            if matches!(key.key.as_str(), "ArrowLeft" | "ArrowRight")
+                && !key.ctrl
+                && !key.meta
+                && !key.alt
+                && !key.shift
+            {
+                let tabs = tabs(world, &services, &action.context)?;
+                if let Some(index) = tabs.iter().position(|tab| &tab.owner == target) {
+                    let next = if key.key == "ArrowLeft" {
+                        index.saturating_sub(1)
+                    } else {
+                        (index + 1).min(tabs.len() - 1)
+                    };
+                    return execute(
+                        world,
+                        handle,
+                        &services,
+                        &action.context,
+                        FileCommand::Activate(tabs[next].owner.clone()),
+                    );
+                }
+            }
+        }
+    }
     if !super::super::is_activation(&action.control.input) {
         return Err("File command requires activation".into());
     }
@@ -312,6 +349,47 @@ fn execute(
         FileCommand::Activate(target) if &target == owner => Ok(json!({"changed":false})),
         FileCommand::Activate(target) => transition(world, receipt, Some(target), None),
         FileCommand::Close => request_intent(world, services, receipt, Intent::Close),
+        FileCommand::CloseTab(target) if &target == owner => {
+            request_intent(world, services, receipt, Intent::Close)
+        }
+        FileCommand::CloseTab(target) => {
+            remember_view(world, owner);
+            let workspace = world.resource::<Files>().workspace.clone();
+            worker::enqueue_transaction(
+                world,
+                "close_tab_activate".into(),
+                move |services, guard| {
+                    let result = workspace
+                        .lock()
+                        .map_err(|_| "Document workspace lock poisoned")?
+                        .activate_guarded(
+                            &services.bridge,
+                            &services.engine,
+                            &receipt,
+                            &target,
+                            || guard.validate(),
+                        )?;
+                    Ok(NativeMutationResult {
+                        context: result.owner,
+                        engine_revision: result.revision,
+                        value: json!({"changed":true}),
+                    })
+                },
+                |world, services, result| {
+                    let result = result?;
+                    let receipt = DocumentReceipt {
+                        owner: result.context.clone(),
+                        revision: result.engine_revision,
+                    };
+                    let presentation =
+                        finish_document_transition(world, services, "close_tab_activate", result);
+                    if presentation["render_error"].is_string() {
+                        return Ok(presentation);
+                    }
+                    request_intent(world, services, receipt, Intent::Close)
+                },
+            )
+        }
         FileCommand::Open => choose_path(world, handle, services, receipt, false, None),
         FileCommand::Save | FileCommand::SaveAs => {
             let path = if matches!(command, FileCommand::Save) {

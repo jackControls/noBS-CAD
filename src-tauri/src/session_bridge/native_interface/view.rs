@@ -97,7 +97,11 @@ pub(super) fn apply(
         return Err("The rendered document is not current".into());
     }
     match command {
-        NativeCommand::ClearSelection => clear_selection(&mut presentation),
+        NativeCommand::ClearSelection => {
+            clear_selection(&mut presentation);
+            #[cfg(feature="dev-bevy-host")]
+            super::controller::workbench::execute(world,&super::controller::workbench::Command::Navigation(super::controller::workbench::NavigationTool::Select))?;
+        },
         NativeCommand::SelectBody {
             body_id,
             occurrence_id,

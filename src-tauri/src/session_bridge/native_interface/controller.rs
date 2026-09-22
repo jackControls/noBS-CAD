@@ -34,7 +34,7 @@ pub(crate) mod chrome;
 pub(crate) mod files;
 pub(crate) mod history;
 pub(crate) mod worker;
-mod workbench;
+pub(crate) mod workbench;
 
 #[derive(Resource, Clone)]
 pub(crate) struct NativeServices {
@@ -760,6 +760,7 @@ fn process_modal_keys(
                 "file-menu" | "file-dialog" => files::escape(world),
                 "history-menu" | "delete-feature" => history::escape(world),
                 "sketch-menu" => crate::native_editor::panel::escape(world),
+                "workbench-menu" => workbench::escape(world),
                 _ => {}
             }
         }
@@ -799,6 +800,7 @@ pub(crate) fn reduce_control_input(
                     "file-menu" | "file-dialog" => files::escape(world),
                     "history-menu" | "delete-feature" => history::escape(world),
                     "sketch-menu" => crate::native_editor::panel::escape(world),
+                    "workbench-menu" => workbench::escape(world),
                     "sketch-origin" => return crate::native_editor::execute(world,engine,bridge,&action.context,crate::native_editor::EditorCommand::Cancel,||handle.validate_action(action)),
                     "close-document" => return Ok(json!({"close_decision":"cancel"})),
                     _ => return Err("This dialog does not handle Escape".into()),
@@ -831,7 +833,10 @@ pub(crate) fn reduce_control_input(
         return Ok(json!({"handled":true,"field_navigation":true}));
     };
     world.insert_resource(worker::ActiveControl(adapted.clone()));
+    let dismiss_menu = world.get::<InterfaceControl>(Entity::from_bits(adapted.control.key.0))
+        .is_some_and(|c| c.modal_scope.as_deref() == Some("workbench-menu") && c.role == "menuitem");
     let result = reduce_action(engine, bridge, world, handle, &adapted);
+    if result.is_ok() && dismiss_menu { workbench::escape(world); }
     world.remove_resource::<worker::ActiveControl>();
     fields::acknowledge_control_input(world, &adapted, result.is_ok());
     // A committed operation must not be reported as failed if subsequent
@@ -1062,7 +1067,7 @@ fn synchronize(
     let visible = window.visible;
     let side = (if assembly::active(world) {286_f32} else {240_f32}).min(width * 0.45);
     let top = 120_f32.min(height * 0.3);
-    let bottom = 74_f32.min(height * 0.1);
+    let bottom = 48_f32.min(height * 0.1);
     let canvas = Rect::from_corners(Vec2::new(side, top), Vec2::new(width, height - bottom));
     native_viewport::apply_interface_viewport(
         world,
@@ -1100,9 +1105,9 @@ fn synchronize(
         services,
         &owner,
         InterfaceRect {
-            x: 16.,
-            y: 42.,
-            width: (width - 28.).max(1.) as f64,
+            x: if width > 1400. { 116. } else { 64. },
+            y: 34.,
+            width: (width - if width > 1400. { 128. } else { 76. }).max(1.) as f64,
             height: 72.,
         },
         InterfaceRect {
@@ -1273,12 +1278,12 @@ fn synchronize(
         &assets,
         theme,
         "status",
-        4.,
-        height - bottom,
-        width - 8.,
-        bottom,
+        side + 12.,
+        height - bottom - 28.,
+        (width - side - 360.).max(1.),
+        22.,
         Some(&status),
-        Some(theme.header),
+        None,
         20,
     );
     if state.close_pending {
@@ -1464,7 +1469,7 @@ fn synchronize(
         }
     }
     workbench::synchronize(world, camera, &state.controls, width, height, side,
-        presentation.mode == native_viewport::ViewportMode::Sketch, &owner)?;
+        presentation.mode == native_viewport::ViewportMode::Sketch, &owner, services)?;
     files::synchronize(world, services, &owner, width, height)?;
     if assembly::active(world) { browser::hide(world); } else {
     browser::synchronize(
@@ -1540,6 +1545,7 @@ fn synchronize(
             name: "close-document".into(),
             text: Some("Unsaved changes".into()),
         }))
+        .chain(workbench::modal(world).map(|name| Surface { name: name.into(), text: None }))
         .chain(history::modal(world).map(|name| Surface {
             name: name.into(),
             text: None,
@@ -1555,6 +1561,7 @@ fn synchronize(
             vec!["close-document".into()]
         } else {
             files::modal(world)
+                .or_else(|| workbench::modal(world))
                 .or_else(|| history::modal(world))
                 .or_else(|| crate::native_editor::panel::modal(world))
                 .or_else(|| crate::native_editor::support::modal(world))

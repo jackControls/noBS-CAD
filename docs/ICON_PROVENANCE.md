@@ -129,7 +129,11 @@ renders `src/assets/ribbon-icons/*.svg` through Rust/resvg into cached Bevy
 textures. React reads the same canonical CAD vectors; geometry is no longer
 recreated independently for each renderer. The sketch, point, spline, finish,
 cancel and chevron assets retain Lucide 0.474.0 PenLine, Crosshair, Spline,
-Check, X and ChevronDown geometry and the ISC notices above. These are
+Check, X and ChevronDown geometry. The native tabs, file menu, history and
+navigation toolbar also use Lucide 0.474.0 BookOpen, FileDown, FileUp,
+FolderOpen, Grid3x3, Hand, History, Maximize, Monitor, Move3d, Redo2, Ruler,
+SquareDashed, Undo2 and ZoomIn. Their source SVGs carry attribution, and
+`src/assets/ribbon-icons/LICENSE.lucide` retains the ISC notice. These are
 renderer ports, not new command identities. The icon audit also checks these
 sources for external references and executable content. Visual parity remains
 part of the native-interface draft review.

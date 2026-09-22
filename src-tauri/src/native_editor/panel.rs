@@ -93,6 +93,7 @@ pub(super) fn synchronize(
                     24,
                 )?;
                 interface_shell::caption_size(world, entity, 10.);
+                interface_shell::center_caption(world, entity);
             }
             if let Some(menu) = editor.interaction.menu {
                 let rows: Vec<(String, EditorCommand)> = match menu {

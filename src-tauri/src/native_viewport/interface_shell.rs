@@ -1076,6 +1076,34 @@ pub(crate) fn caption_size(world: &mut World, entity: Entity, size: f32) {
     }
 }
 
+/// Center the caption in the control's real bounds. A left inset on a flex
+/// child shifts its visual center even when the parent is center-aligned.
+pub(crate) fn center_caption(world: &mut World, entity: Entity) {
+    let Some(label) = world.get::<InterfaceLabel>(entity).map(|label| label.0) else { return; };
+    let bounds = Node { max_width: percent(100.), margin: UiRect::ZERO, ..default() };
+    if world.get::<Node>(label) != Some(&bounds) {
+        world.entity_mut(label).insert((bounds, TextLayout::justify(Justify::Center)));
+    }
+}
+
+pub(crate) fn tab_style(world: &mut World, entity: Entity) {
+    if let Some(mut style) = world.get_mut::<InterfaceButtonStyle>(entity) {
+        style.0.accent_soft = style.0.panel;
+    }
+    // A tab has its own selected perimeter, unlike a selected command row.
+    world.entity_mut(entity).remove::<InterfaceFlat>();
+}
+
+/// Shared state styling for tabs and history chips without altering their
+/// semantic names, actions or input ownership.
+pub(crate) fn control_colors(world: &mut World, entity: Entity, ink: Color, fill: Color) {
+    if let Some(mut style) = world.get_mut::<InterfaceButtonStyle>(entity) {
+        style.0.ink = ink;
+        style.0.panel = fill;
+        style.0.accent_soft = ribbon::css_mix(style.0.accent, fill, 0.15);
+    }
+}
+
 /// Reference cards reserve room for the separate clear control and explanatory
 /// line. Keep the actual accessible name intact for keyboard/MCP selection.
 pub(crate) fn reference_caption(world: &mut World, entity: Entity) {

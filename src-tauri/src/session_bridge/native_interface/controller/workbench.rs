@@ -1,52 +1,147 @@
-//! The 0.20 workbench: declarative tool groups, compact navigation and a
-//! controlled Feathers number input. Commands still belong to the controller.
+//! Native workbench chrome follows the same command catalog and proportions
+//! as React. Retained controls keep the normal document/binding guards.
 use super::*;
-use bevy::scene as bevy_scene;
+use chrome::{rect, Widgets};
+use interface_shell::ribbon::{self, Icon};
 
-const GROUPS: &[(&str, &[&str])] = &[
-    ("CREATE", &["extrude", "revolve", "sweep", "loft", "rib"]),
-    (
-        "MODIFY",
-        &[
-            "solid-fillet",
-            "solid-chamfer",
-            "solid-shell",
-            "combine",
-            "hole",
-            "external-thread",
-        ],
-    ),
-    ("CONSTRUCT", &["offset-plane", "midplane", "angle-plane"]),
-    (
-        "PATTERN",
-        &[
-            "solid-mirror",
-            "split-body",
-            "solid-rectangular-pattern",
-            "solid-circular-pattern",
-            "move-copy",
-        ],
-    ),
-    ("ASSEMBLE", &["assembly", "joint"]),
-];
+#[derive(Resource, Default)]
+pub(crate) struct NavigationRectangle(pub Option<InterfaceRect>);
 
-#[derive(Resource)]
+mod ribbon_menu;
+#[cfg(test)]
+mod tests;
+mod viewport;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum NavigationTool {
+    #[default]
+    Select,
+    Orbit,
+    Pan,
+    Zoom,
+    ZoomWindow,
+}
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Command {
+    Menu(String),
+    Dismiss,
+    Navigation(NavigationTool),
+}
+#[derive(Resource, Default)]
 struct Workbench {
-    ribbon: Entity,
-    groups: Vec<Entity>,
-    navigation: Entity,
+    owner: Option<DocumentContext>,
+    menu: Option<String>,
+    menu_x: f32,
+    navigation: NavigationTool,
+    sketch: bool,
+    dial: Option<InterfaceRect>,
+    widgets: Widgets,
+    axes: Option<Entity>,
+}
+
+pub(crate) fn modal(world: &World) -> Option<&'static str> {
+    world
+        .get_resource::<Workbench>()
+        .and_then(|s| s.menu.as_ref())
+        .map(|_| "workbench-menu")
+}
+pub(crate) fn escape(world: &mut World) {
+    if let Some(mut state) = world.get_resource_mut::<Workbench>() {
+        state.menu = None;
+    }
+}
+pub(crate) fn navigation(world: &World) -> NavigationTool {
+    world
+        .get_resource::<Workbench>()
+        .map_or(NavigationTool::Select, |s| s.navigation)
+}
+pub(crate) fn dial(world: &World) -> Option<InterfaceRect> {
+    world.get_resource::<Workbench>().and_then(|s| s.dial)
+}
+pub(crate) fn dial_key(world: &World) -> Option<nbcad_interface::ControlKey> {
+    world
+        .get_resource::<Workbench>()
+        .and_then(|s| s.axes)
+        .map(|e| nbcad_interface::ControlKey(e.to_bits()))
+}
+pub(crate) fn execute(world: &mut World, command: &Command) -> Result<Value, String> {
+    world.init_resource::<Workbench>();
+    let mut state = world.resource_mut::<Workbench>();
+    match command {
+        Command::Menu(menu) => {
+            state.menu = (state.menu.as_ref() != Some(menu)).then(|| menu.clone())
+        }
+        Command::Dismiss => state.menu = None,
+        Command::Navigation(tool) => {
+            state.navigation = if state.navigation == *tool {
+                NavigationTool::Select
+            } else {
+                *tool
+            };
+            state.menu = None;
+        }
+    }
+    Ok(json!({"handled":true}))
 }
 
 pub(super) fn tool_node() -> Node {
-    let mut node = interface_shell::ribbon::node(0., 0., 48.);
-    node.position_type = PositionType::Relative;
-    node.left = Val::Auto;
-    node.top = Val::Auto;
-    node.width = Val::Auto;
-    node.min_width = px(0.);
-    node.flex_basis = px(0.);
-    node.flex_grow = 1.;
-    node
+    ribbon::node(0., 0., 48.)
+}
+
+fn centered_button(
+    widgets: &mut Widgets,
+    world: &mut World,
+    camera: Entity,
+    key: &str,
+    label: &str,
+    caption: &str,
+    command: NativeCommand,
+    mut bounds: Node,
+    selected: Option<bool>,
+    disabled: bool,
+    z: i32,
+) -> Result<Entity, String> {
+    let mut control = InterfaceControl::button("document/session", label);
+    control.selected = selected;
+    control.disabled = disabled;
+    bounds.justify_content = JustifyContent::Center;
+    let entity = widgets.button(
+        world,
+        camera,
+        key,
+        control,
+        Some(caption),
+        command,
+        bounds,
+        None,
+        z,
+    )?;
+    if world.get::<ribbon::RibbonButton>(entity).is_none() {
+        interface_shell::center_caption(world, entity);
+        interface_shell::caption_size(world, entity, 10.);
+    }
+    Ok(entity)
+}
+
+pub(super) fn card(
+    widgets: &mut Widgets,
+    world: &mut World,
+    camera: Entity,
+    key: &str,
+    mut bounds: Node,
+    fill: Color,
+    radius: f32,
+    z: i32,
+) {
+    let theme = ViewportUiTheme::from_palette(&ViewportPalette::default());
+    bounds.border = UiRect::all(px(1.));
+    bounds.border_radius = BorderRadius::all(px(radius));
+    widgets.panel(world, camera, key, bounds, fill, z);
+    if let Some(entity) = widgets.entity(key) {
+        world
+            .entity_mut(entity)
+            .insert(BorderColor::all(theme.edge));
+    }
 }
 
 pub(super) fn synchronize(
@@ -58,118 +153,39 @@ pub(super) fn synchronize(
     side: f32,
     sketch: bool,
     owner: &DocumentContext,
+    services: &NativeServices,
 ) -> Result<(), String> {
-    let theme = ViewportUiTheme::from_palette(&ViewportPalette::default());
-    let assets = world.resource::<ViewportUiAssets>().clone();
-    if !world.contains_resource::<Workbench>() {
-        // BSN builds the retained group hierarchy. Flex layout distributes the
-        // actual controls, so a narrow window cannot drop the last tools.
-        let ribbon = world
-            .spawn_scene(bsn! {
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(100), top: px(38), right: px(12), height: px(74),
-                    column_gap: px(10),
-                }
-                ~{UiTargetCamera(camera)}
-                ZIndex(30)
-            })
-            .map_err(|e| e.to_string())?
-            .id();
-        let mut groups = Vec::new();
-        for (title, keys) in GROUPS {
-            let group = world
-                .spawn_scene(bsn! {
-                    Node {
-                        flex_grow: {keys.len() as f32}, flex_basis: px(0), min_width: px(0),
-                        flex_direction: FlexDirection::Column,
-                        row_gap: px(5),
-                        border: UiRect::left(px(1)), padding: UiRect::left(px(8)),
-                    }
-                    ~{BorderColor::all(theme.edge)}
-                    Children [
-                        Node { height: px(54), column_gap: px(2), width: percent(100) }
-                        --
-                        Text({*title})
-                        TextFont { font_size: bevy::text::FontSize::Px(9.) }
-                        TextColor({theme.mute})
-                        bevy::text::LetterSpacing::Px(1.)
-                    ]
-                })
-                .map_err(|e| e.to_string())?
-                .id();
-            let row = world.get::<Children>(group).unwrap()[0];
-            let caption = world.get::<Children>(group).unwrap()[1];
-            world
-                .entity_mut(caption)
-                .insert(theme.text(&assets, 9., FontWeight::SEMIBOLD));
-            world.entity_mut(ribbon).add_child(group);
-            groups.push(row);
+    let mut state = world.remove_resource::<Workbench>().unwrap_or_default();
+    let result = (|| {
+        if state.owner.as_ref() != Some(owner) {
+            state.menu = None;
+            state.navigation = NavigationTool::Select;
+            state.owner = Some(owner.clone());
         }
-        let navigation = world
-            .spawn_scene(bsn! {
-                Node { border_radius: BorderRadius::all(px(9)), border: UiRect::all(px(1)) }
-                ~{UiTargetCamera(camera)}
-                ZIndex(25)
-                BackgroundColor({theme.panel})
-                ~{BorderColor::all(theme.edge)}
-                ~{bevy::ui::BoxShadow::new(theme.shadow, px(0), px(4), px(0), px(16))}
-                interface_shell::InterfaceOccluder
-            })
-            .map_err(|e| e.to_string())?
-            .id();
-        world.insert_resource(Workbench {
-            ribbon,
-            groups,
-            navigation,
-        });
-    }
-    let state = world.resource::<Workbench>();
-    let (ribbon, groups, navigation) = (state.ribbon, state.groups.clone(), state.navigation);
-    world.entity_mut(ribbon).insert(if sketch {
-        Visibility::Hidden
-    } else {
-        Visibility::Inherited
-    });
-    for ((_, keys), group) in GROUPS.iter().zip(groups) {
-        for key in *keys {
-            let Some(&entity) = controls.get(*key) else {
-                continue;
-            };
-            if world.get::<ChildOf>(entity).map(ChildOf::parent) != Some(group) {
-                world.entity_mut(group).add_child(entity);
-            }
+        if sketch != state.sketch {
+            state.navigation = NavigationTool::Select;
+            state.sketch = sketch;
         }
-    }
-    let nav_width = 434.;
-    let x = side + ((width - side - nav_width) * 0.5).max(10.);
-    let y = height - 120.;
-    let mut node = chrome::rect(x - 6., y - 5., nav_width + 12., 40.);
-    node.border_radius = BorderRadius::all(px(9.));
-    node.border = UiRect::all(px(1));
-    world.entity_mut(navigation).insert(node);
-    for (i, key) in ["undo", "redo", "fit", "isometric", "front", "top", "clear"]
-        .iter()
-        .enumerate()
-    {
-        if let Some(&entity) = controls.get(*key) {
-            let mut node = chrome::rect(x + i as f32 * 62., y, 60., 30.);
-            node.justify_content = JustifyContent::Center;
-            node.border_radius = BorderRadius::all(px(5.));
-            world
-                .entity_mut(entity)
-                .insert((node, interface_shell::InterfaceFlat));
-            interface_shell::caption_size(world, entity, 11.);
-            let caption = match *key {
-                "isometric" => "Iso",
-                "clear" => "Clear",
-                _ => continue,
-            };
-            world
-                .entity_mut(entity)
-                .insert(interface_shell::InterfaceCaption(caption.into()));
+        if sketch
+            && state
+                .menu
+                .as_deref()
+                .is_some_and(|menu| menu != "workspace")
+        {
+            state.menu = None;
         }
-    }
-    interface_shell::studio::synchronize(world, camera, owner, width, height)?;
-    Ok(())
+        if files::modal(world).is_some() || history::modal(world).is_some() {
+            state.menu = None;
+        }
+        state.widgets.begin();
+        ribbon_menu::synchronize(world, camera, controls, width, sketch, services, &mut state)?;
+        viewport::synchronize(world, camera, controls, width, height, side, &mut state)?;
+        state.widgets.finish(world);
+        // The experimental light editor remains available without crowding
+        // the camera navigation toolbar in the center of the viewport.
+        interface_shell::studio::synchronize(world, camera, owner, width, height)?;
+        Ok(())
+    })();
+    world.insert_resource(state);
+    result
 }
