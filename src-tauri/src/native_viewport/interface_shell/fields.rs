@@ -748,6 +748,8 @@ fn synchronize_fields(
 
 fn update_ime(
     handle: Res<NativeInterfaceHandle>,
+    focus: Option<Res<bevy::input_focus::InputFocus>>,
+    standard_fields: Query<(), With<bevy::ui_widgets::TextInput>>,
     fields: Query<
         (
             &EditableText,
@@ -760,6 +762,11 @@ fn update_ime(
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     scale: Res<UiScale>,
 ) {
+    if focus.as_deref().and_then(bevy::input_focus::InputFocus::get)
+        .is_some_and(|entity| standard_fields.get(entity).is_ok()) {
+        // The Feathers input uses Bevy's own IME placement and enablement.
+        return;
+    }
     let Ok(mut window) = windows.single_mut() else {
         return;
     };

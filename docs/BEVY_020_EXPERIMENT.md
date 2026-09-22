@@ -1,4 +1,4 @@
-# Bevy 0.20 code reduction experiment
+# Bevy 0.20 UI and code reduction experiment
 
 - Branch: `feat/bevy-020-code-savings`
 - Baseline: `ad01489d2bade99d41941d7def5495abced66fb4` (the Bevy 0.19.1 upgrade in PR #153)
@@ -6,11 +6,16 @@
 
 ## Result
 
-The application ports to **0.20.0-rc.1** with small changes to text scrolling,
-clipping and render receipts. This experiment removes **31 net lines** across
-the changed production Rust files. It does not justify upgrading for code size
-alone. Keep the 0.19.1 migration separate while evaluating the remaining widget
-integration and platform behavior here.
+The application runs on **0.20.0-rc.1** with a working native UI experiment:
+grouped modeling tools, clearer feature forms, compact view controls and a
+scrubbable Feathers numeric input controlling viewport lighting. The native
+sketch, extrusion, editing, undo/redo and save/reopen workflow passes on macOS.
+
+The initial compatibility port removed **31 net lines** across its changed
+production Rust files. This subsequent UI experiment adds presentation and
+integration code; it is not a further code reduction. BSN and Feathers are useful
+building blocks, but upgrading alone does not improve the design or remove the
+CAD input adapter. Keep this experiment separate from the 0.19.1 migration.
 
 The dependency versions are pinned to the exact release candidate. This is
 still a [prerelease](https://github.com/bevyengine/bevy/releases/tag/v0.20.0-rc.1).
@@ -18,7 +23,39 @@ Bevy itself declares Rust 1.96.0, but the resolved WESL 0.4.4 dependencies requi
 1.97.1. This branch pins Rust 1.97.1 locally in `rust-toolchain.toml`; it does not
 change the machine's default toolchain. The renderer dependency moves to wgpu 30.
 
-## Implemented reductions
+## Native UI experiment
+
+- **BSN scene composition:** retained Create, Modify, Construct, Pattern and
+  Assemble groups distribute existing command entities using flex layout.
+  Their semantic control identities and controller bindings remain intact.
+- **Presentation:** larger toolbar captions, slate surfaces with a blue accent,
+  clearer feature headings and fields, an explicit primary Apply action, and a
+  compact floating navigation bar. These are application design changes, not
+  automatic benefits of the engine upgrade.
+- **FeathersNumberInput:** the view-only Light control uses the real 0.20 scene
+  component, `f64` values, soft/hard limits, precision, scrubbing and typed entry.
+  Its `ValueChange` observer resolves and enqueues an owned controller action;
+  the reducer validates the current document and binding before accepting a
+  finite value in 0.25–2.00. MCP and accessibility expose the same accepted value.
+- **Viewport lighting:** a camera-relative directional key and softer fill make
+  adjacent model faces distinguishable. The Light control scales the studio rig
+  without changing the camera, CAD model or saved file.
+- **Input coexistence:** Feathers receives its pointer/text events while the
+  CAD router excludes them. Publishing the existing accessibility proxies now
+  preserves a focused Bevy text widget; native IME placement leaves that widget
+  to Bevy. A regression covers this focus conflict found during live testing.
+
+The native host enables BSN, Feathers, UI picking and custom cursors. The explicit
+custom-cursor feature is needed for this release candidate's winit feature
+combination. Only Feathers' core plugin is installed: global tab navigation
+remains with the existing controller. CAD dimensions retain units, formulas and
+ordered draft commits through the existing `EditableText` adapter.
+
+The two new UI modules contain 427 lines including comments and tests. This is
+an experiment in capabilities and presentation, not evidence that Feathers
+reduces the current application's total code size.
+
+## Initial port reductions (commit 23fe206)
 
 | Production area | Baseline lines | Experiment lines | Net change |
 | --- | ---: | ---: | ---: |
@@ -64,27 +101,38 @@ probes in `src-tauri/tests/bevy_020_widgets.rs` confirm these integration limits
    The controller must preserve the original document/control owner and process
    typing, focus changes and model actions in their original order.
 
-`bevy_ui_widgets` is a **test-only dependency**. The production event router
-continues to use `EditableText`; enabling a second global text-input handler
-would not be a safe code reduction. Passing the probes records the candidate's
-current behavior; it does not establish UI parity.
+The direct `bevy_ui_widgets` dependency supports the probes; the native host now
+also enables those widgets through Feathers for the isolated lighting control.
+The CAD event router continues to use `EditableText`. Existing CAD fields do not
+carry `TextInput`, so Bevy's widget handler does not also edit those fields.
+Passing the probes records the candidate's current behavior; it does not
+establish general input parity.
 
 ## Validation
 
 On macOS arm64 with OCCT 7.9.3:
 
-- Native library: 291 passed, 2 existing ignored tests.
+- Native library: 293 passed, 2 existing ignored tests.
 - Native startup: 2 passed.
 - Candidate widget probes: 3 passed.
 - Default desktop library: 177 passed, 2 existing ignored tests.
 - Default desktop startup: 2 passed.
-- Native application build passed; all targets with native-host and UI-lab
-  features passed `cargo check`.
+- Native application build passed. The initial port also passed `cargo check`
+  for all targets with native-host and UI-lab features.
+- Native macOS window, dark appearance, 1360 × 860 logical pixels: inspected
+  the feature preview, finished model, grouped toolbar and lighting control.
+- The 14-step native lifecycle passed: New, rectangle sketch, invalid distance,
+  preview, Apply, edit preview, Cancel, edit Apply, Undo, Redo, Save, close, open,
+  and independent cold archive recomputation. The final solid was 35 mm high.
+- Real pointer-selected text entry committed Light = 1.35. Real mouse scrubbing
+  changed it to 2.00; before/after camera values and the exported model hash were
+  identical. MCP restored the default value of 1.00.
 
 The six added production regressions cover read-only selection, provisional
 IME history, scrolled pointer/IME coordinates, fully clipped controls, nested
 clips at changed DPI, and rotated clipping for controls and panel occlusion.
 Existing ownership, file lifecycle and modeling tests remain in the native run.
+The UI phase adds finite/range validation and native/Feathers focus regressions.
 
 Reproduce from this worktree, with `OCCT_ROOT` set for the local installation:
 
@@ -92,26 +140,32 @@ Reproduce from this worktree, with `OCCT_ROOT` set for the local installation:
 export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0
 cargo test --locked --manifest-path src-tauri/Cargo.toml --features dev-bevy-host --tests --target-dir target/bevy-020
 cargo test --locked --manifest-path src-tauri/Cargo.toml --tests --target-dir target/bevy-020
+cargo run --locked --manifest-path src-tauri/Cargo.toml --features dev-bevy-host --bin nbcad --target-dir target/bevy-020
 ```
 
-Live window, accessibility, system clipboard, OS IME, rendered submission and
-visual parity have not been validated for this branch. These runs make no
-performance claim. Windows and Linux have not been compiled or exercised here.
+Live evidence was collected from an isolated native macOS app bundle using the
+built `nbcad` executable and a private session directory, not browser rendering.
+The lifecycle fixture is `xtask test-mcp native-lifecycle`; its JSON report and
+screenshots are local artifacts, not tracked product assets.
 
-The local native executable is retained at `target/bevy-020-preview/nbcad` for
-the deferred live check. Temporary build intermediates were removed to recover
-disk space; they are recreated by the commands above. The executable is a local
-artifact, not a tracked file or a distributable app bundle.
+One immediate capture after reopening omitted several group-caption glyphs and
+part of the numeric text. The subsequent live window and a settled native
+capture rendered them correctly. The cause is not established; capture/text
+invalidation through document transitions remains an upgrade gate.
+
+This is not full accessibility, system clipboard, modifier-key or OS IME
+certification for Feathers. These runs make no performance claim. The new UI
+has not been exercised on Windows or Linux, and minimum-size/DPI coverage is
+still pending.
 
 ## Next experiments, in order
 
-1. Validate rendering and actual text input on an unlocked Mac before treating
-   this branch as an upgrade candidate; then run Windows and Linux checks.
-2. Trial the new
-   [`FeathersNumberInput`](https://github.com/bevyengine/bevy/blob/v0.20.0-rc.1/_release-content/release-notes/number_input.md)
-   on one numeric control. It supports `f64` and scrubbing, but CAD unit/formula
-   parsing and owned draft commits must remain intact. Measure the adapter and
-   styling cost before converting more fields.
+1. Resolve the transient glyph/capture discrepancy through document transitions;
+   check the supported minimum window size and changed DPI, then Windows/Linux.
+2. Extend the Feathers numeric trial only after keyboard shortcuts, clipboard,
+   assistive technology and OS IME work with the existing event ordering. Keep
+   CAD unit/formula parsing and owned draft commits intact; measure integration
+   cost before converting dimension fields.
 3. Only replace the text-input router after an adapter passes ordered typing /
    Tab / typing, IME / submit, stale-document, read-only, clipboard, undo and MCP
    tests without duplicate event delivery. Measure the final net deletion.

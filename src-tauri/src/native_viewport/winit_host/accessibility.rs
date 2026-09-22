@@ -188,6 +188,11 @@ fn publish(world: &mut World) {
         world.despawn(entity);
     }
     world.resource_mut::<AccessibleControls>().0 = current;
+    if next_focus.is_none() && super::super::interface_shell::studio::owns_text_focus(world) {
+        // Feathers owns its real text entity and publishes its own AccessKit
+        // node. Clearing this focus would make its input blur every frame.
+        return;
+    }
     let mut focus = world.resource_mut::<InputFocus>();
     if focus.get() != next_focus {
         if let Some(entity) = next_focus {
@@ -239,6 +244,22 @@ fn apply_requests(
         if let Err(error) = handle.assistive_action(action, activate) {
             eprintln!("Native accessibility action rejected: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod feathers_focus_tests {
+    use super::*;
+
+    #[test]
+    fn publishing_guarded_accessibility_nodes_preserves_standard_widget_text_focus() {
+        let (mut app, handle, _, _) = super::super::super::interface_shell::tests::fixture();
+        app.init_resource::<InputFocus>().init_resource::<AccessibleControls>();
+        let field = app.world_mut().spawn(bevy::ui_widgets::TextInput::default()).id();
+        app.world_mut().resource_mut::<InputFocus>().set(field, FocusCause::Pressed);
+        publish(app.world_mut());
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(field));
+        assert!(handle.focused_key().is_none());
     }
 }
 

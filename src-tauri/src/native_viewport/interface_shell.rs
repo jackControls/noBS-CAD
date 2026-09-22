@@ -23,6 +23,8 @@ use super::ui::{ViewportUiAssets, ViewportUiTheme};
 
 #[cfg(feature = "dev-bevy-host")]
 pub(crate) mod fields;
+#[cfg(feature = "dev-bevy-host")]
+pub(crate) mod studio;
 mod geometry;
 pub(crate) mod ranges;
 pub(crate) mod ribbon;
@@ -108,7 +110,7 @@ pub(crate) struct InterfaceTextRevision(pub u64);
 
 /// A painted panel blocks model picking without inventing an actionable
 /// control for its background. Its children retain normal control semantics.
-#[derive(Component)]
+#[derive(Component, Clone, Default)]
 pub(crate) struct InterfaceOccluder;
 
 impl InterfaceControl {

@@ -2897,6 +2897,8 @@ fn apply_camera(
     presentation: Res<PresentationResource>,
     mut ambient: ResMut<GlobalAmbientLight>,
     mut revisions: ResMut<RenderedRevisions>,
+    #[cfg(feature = "dev-bevy-host")]
+    studio: Option<Res<super::interface_shell::studio::StudioLight>>,
     mut query: Query<(&mut Transform, &mut Projection), With<NativeViewportCamera>>,
     mut key_lights: Query<
         (&mut Transform, &mut DirectionalLight),
@@ -2916,7 +2918,11 @@ fn apply_camera(
     >,
 ) {
     let cam_lighting = presentation.0.cam_stock_visible;
-    let ambient_brightness = if cam_lighting { 500.0 } else { 900.0 };
+    #[cfg(feature = "dev-bevy-host")]
+    let studio_level = studio.as_ref().map_or(1., |s| s.0 as f32);
+    #[cfg(not(feature = "dev-bevy-host"))]
+    let studio_level = 1.;
+    let ambient_brightness = if cam_lighting { 500.0 } else { 350.0 * studio_level };
     if revisions.camera == camera.revision && ambient.brightness == ambient_brightness {
         return;
     }
@@ -2946,11 +2952,11 @@ fn apply_camera(
     };
     for (mut transform, mut light) in &mut key_lights {
         *transform = key_transform;
-        light.illuminance = if cam_lighting { 2_600.0 } else { 2_200.0 };
+        light.illuminance = if cam_lighting { 2_600.0 } else { 3_200.0 * studio_level };
     }
     for (mut transform, mut light) in &mut fill_lights {
         *transform = fill_transform;
-        light.illuminance = if cam_lighting { 750.0 } else { 2_200.0 };
+        light.illuminance = if cam_lighting { 750.0 } else { 650.0 * studio_level };
     }
 }
 
@@ -2989,9 +2995,8 @@ pub(super) fn cam_stock_material() -> StandardMaterial {
     }
 }
 
-/// A neutral, camera-relative two-light studio rig. The equal left/right
-/// offsets remove the arbitrary world-side darkening that makes a CAD part
-/// appear fixed under a room light while preserving gentle normal cues.
+/// Camera-relative key and softer fill make neighboring CAD faces distinct
+/// while keeping illumination stable as the view orbits.
 fn camera_relative_light_transforms(camera: ViewportCamera) -> (Transform, Transform) {
     let target = Vec3::from_array(camera.target);
     let eye = Vec3::from_array(camera.position);
@@ -3014,8 +3019,8 @@ fn camera_relative_light_transforms(camera: ViewportCamera) -> (Transform, Trans
         right
     };
     let rig_distance = eye.distance(target).max(100.0);
-    let key_position = target + (view + right * 0.28).normalize() * rig_distance;
-    let fill_position = target + (view - right * 0.28).normalize() * rig_distance;
+    let key_position = target + (view + right * 0.85 + up_hint * 0.65).normalize() * rig_distance;
+    let fill_position = target + (view - right * 0.6).normalize() * rig_distance;
     (
         Transform::from_translation(key_position)
             .looking_at(target, stable_view_up(target - key_position, up_hint)),
@@ -6299,6 +6304,8 @@ pub(super) fn install_native_scene(app: &mut bevy::app::App) {
 #[cfg(all(test, feature = "dev-bevy-host"))]
 pub(crate) fn interface_scene_fixture() -> bevy::app::App {
     let mut app = bevy::app::App::new();
+    #[cfg(feature = "dev-bevy-host")]
+    app.add_plugins((bevy::app::TaskPoolPlugin::default(), bevy::asset::AssetPlugin::default(), bevy::scene::ScenePlugin));
     install_native_scene(&mut app);
     app
 }
@@ -7635,7 +7642,7 @@ mod tests {
     }
 
     #[test]
-    fn cad_studio_lights_are_camera_relative_and_bilaterally_balanced() {
+    fn cad_studio_lights_are_camera_relative_and_reveal_different_face_normals() {
         let camera = ViewportCamera::default();
         let target = Vec3::from_array(camera.target);
         let view = (Vec3::from_array(camera.position) - target).normalize();
@@ -7645,8 +7652,9 @@ mod tests {
         let key_direction = (key.translation - target).normalize();
         let fill_direction = (fill.translation - target).normalize();
 
-        assert!((key_direction.dot(view) - fill_direction.dot(view)).abs() < 1.0e-6);
-        assert!((key_direction.dot(right) + fill_direction.dot(right)).abs() < 1.0e-6);
+        assert!(key_direction.dot(view) > 0. && fill_direction.dot(view) > 0.);
+        assert!(key_direction.dot(right) > 0. && fill_direction.dot(right) < 0.);
+        assert!(key_direction.dot(up) > fill_direction.dot(up));
 
         let rotated = ViewportCamera {
             position: [-170.0, -170.0, 130.0],

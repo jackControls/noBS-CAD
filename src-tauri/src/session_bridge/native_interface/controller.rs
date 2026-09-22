@@ -34,6 +34,7 @@ pub(crate) mod chrome;
 pub(crate) mod files;
 pub(crate) mod history;
 pub(crate) mod worker;
+mod workbench;
 
 #[derive(Resource, Clone)]
 pub(crate) struct NativeServices {
@@ -1099,9 +1100,9 @@ fn synchronize(
         services,
         &owner,
         InterfaceRect {
-            x: if width <= 1400. { 60. } else { 112. },
-            y: 34.,
-            width: (width - if width <= 1400. { 60. } else { 112. }).max(1.) as f64,
+            x: 16.,
+            y: 42.,
+            width: (width - 28.).max(1.) as f64,
             height: 72.,
         },
         InterfaceRect {
@@ -1394,7 +1395,7 @@ fn synchronize(
             entity
         };
         let desired = if is_extrude {
-            interface_shell::ribbon::node(x, y, width)
+            workbench::tool_node()
         } else {
             Node {
                 position_type: PositionType::Absolute,
@@ -1462,6 +1463,8 @@ fn synchronize(
             world.entity_mut(entity).insert(ZIndex(z));
         }
     }
+    workbench::synchronize(world, camera, &state.controls, width, height, side,
+        presentation.mode == native_viewport::ViewportMode::Sketch, &owner)?;
     files::synchronize(world, services, &owner, width, height)?;
     if assembly::active(world) { browser::hide(world); } else {
     browser::synchronize(

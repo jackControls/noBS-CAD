@@ -131,7 +131,8 @@ fn synchronize_owned(
                 Name::new("Solid feature panel"),
                 Node::default(),
                 BackgroundColor(theme.panel.with_alpha(1.)),
-                BorderColor::all(theme.accent),
+                BorderColor::all(theme.edge),
+                bevy::ui::BoxShadow::new(theme.dialog_shadow, px(0), px(12), px(0), px(32)),
                 UiTargetCamera(camera),
                 InterfaceOccluder,
                 ZIndex(40),
@@ -841,6 +842,7 @@ fn widget(
 ) -> Result<(), String> {
     live.insert(key.into());
     node.border = UiRect::all(px(1.));
+    node.border_radius = BorderRadius::all(px(5.));
     node.padding = UiRect::axes(px(7.), px(3.));
     let entity = if let Some((entity, _)) = state.controls.get(key) {
         *entity
@@ -915,10 +917,11 @@ fn widget(
     if world.get::<ZIndex>(entity) != Some(&ZIndex(42)) {
         world.entity_mut(entity).insert(ZIndex(42));
     }
+    if key == "apply" { interface_shell::primary_button(world, entity); }
     let caption = if key == "close" {
         Some("×")
     } else if key == "apply" {
-        Some("OK")
+        Some("Apply")
     } else if key == "cancel" {
         Some("Cancel")
     } else if key == "scroll-up" {
@@ -1039,9 +1042,9 @@ fn label(
                 theme.text(
                     assets,
                     if strong {
-                        12.
+                        14.
                     } else if key.ends_with("-label") {
-                        10.
+                        11.
                     } else {
                         11.
                     },

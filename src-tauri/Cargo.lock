@@ -942,6 +942,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_feathers"
+version = "0.20.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c53f92b53fa12ff014fc56324963ac7e556aa49175940bda39645006d3c1f2c3"
+dependencies = [
+ "accesskit",
+ "bevy_a11y",
+ "bevy_app",
+ "bevy_asset",
+ "bevy_camera",
+ "bevy_color",
+ "bevy_derive",
+ "bevy_ecs",
+ "bevy_input",
+ "bevy_input_focus",
+ "bevy_log",
+ "bevy_math",
+ "bevy_picking",
+ "bevy_platform",
+ "bevy_reflect",
+ "bevy_render",
+ "bevy_scene",
+ "bevy_shader",
+ "bevy_text",
+ "bevy_ui",
+ "bevy_ui_render",
+ "bevy_ui_widgets",
+ "bevy_window",
+ "smol_str",
+]
+
+[[package]]
 name = "bevy_gizmos"
 version = "0.20.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1091,6 +1123,7 @@ dependencies = [
  "bevy_diagnostic",
  "bevy_ecs",
  "bevy_extract",
+ "bevy_feathers",
  "bevy_gizmos",
  "bevy_gizmos_render",
  "bevy_image",
@@ -1102,10 +1135,12 @@ dependencies = [
  "bevy_math",
  "bevy_mesh",
  "bevy_pbr",
+ "bevy_picking",
  "bevy_platform",
  "bevy_ptr",
  "bevy_reflect",
  "bevy_render",
+ "bevy_scene",
  "bevy_shader",
  "bevy_shape",
  "bevy_sprite",
@@ -1117,6 +1152,7 @@ dependencies = [
  "bevy_transform",
  "bevy_ui",
  "bevy_ui_render",
+ "bevy_ui_widgets",
  "bevy_utils",
  "bevy_window",
  "bevy_winit",
@@ -1477,6 +1513,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_scene"
+version = "0.20.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57fccf567057b385308406f18aace2ae4138420f37ba36870c986a64619d550c"
+dependencies = [
+ "bevy_app",
+ "bevy_asset",
+ "bevy_derive",
+ "bevy_ecs",
+ "bevy_log",
+ "bevy_platform",
+ "bevy_reflect",
+ "bevy_scene_macros",
+ "bevy_utils",
+ "smallvec",
+ "thiserror 2.0.18",
+ "tracing",
+ "variadics_please",
+]
+
+[[package]]
+name = "bevy_scene_macros"
+version = "0.20.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7503865a2acb43e7cee20f1677aa2986b0d2de7db19ccdbf2e3f0223f1a50532"
+dependencies = [
+ "bevy_ecs_macro_logic",
+ "bevy_macro_utils",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "bevy_shader"
 version = "0.20.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1697,6 +1767,7 @@ dependencies = [
  "bevy_input_focus",
  "bevy_log",
  "bevy_math",
+ "bevy_picking",
  "bevy_platform",
  "bevy_reflect",
  "bevy_sprite",
@@ -1712,6 +1783,7 @@ dependencies = [
  "taffy",
  "thiserror 2.0.18",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1797,7 +1869,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48e1e140d997701c2befa65f38d8ee7429c1c2ed7b49fd892f2a70d929749632"
 dependencies = [
  "bevy_app",
+ "bevy_asset",
  "bevy_ecs",
+ "bevy_image",
  "bevy_input",
  "bevy_math",
  "bevy_platform",
@@ -1819,8 +1893,10 @@ dependencies = [
  "bevy_a11y",
  "bevy_android",
  "bevy_app",
+ "bevy_asset",
  "bevy_derive",
  "bevy_ecs",
+ "bevy_image",
  "bevy_input",
  "bevy_input_focus",
  "bevy_log",
@@ -1829,10 +1905,12 @@ dependencies = [
  "bevy_reflect",
  "bevy_tasks",
  "bevy_window",
+ "bytemuck",
  "js-sys",
  "tracing",
  "wasm-bindgen",
  "web-sys",
+ "wgpu-types",
  "winit",
 ]
 
@@ -2766,7 +2844,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.8.9",
+ "libloading 0.7.4",
 ]
 
 [[package]]
@@ -3531,7 +3609,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.18",
- "windows 0.62.0",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -3835,7 +3913,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -5002,7 +5080,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 3.5.0",
+ "proc-macro-crate 1.3.1",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -5501,7 +5579,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]

@@ -41,12 +41,14 @@ impl RibbonButton {
             Color::NONE
         }
     }
-    pub(super) fn ink(&self, theme: ViewportUiTheme, _disabled: bool) -> Color {
-        // The original caption explicitly uses text-mute, including disabled cells.
+    pub(super) fn ink(&self, theme: ViewportUiTheme, disabled: bool) -> Color {
+        // Captions remain readable at the supported minimum window size.
         if self.finish {
             Color::WHITE
-        } else {
+        } else if disabled {
             theme.mute
+        } else {
+            theme.ink
         }
     }
     pub(super) fn label(&self) -> &str {
@@ -441,7 +443,12 @@ pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
         "Three-point arc" => "Arc",
         "Fit-point spline" => "Spline",
         "Center-to-center slot" => "Slot",
-        "Create Sketch" => "Create\nSketch",
+        "Create Sketch" => "Sketch",
+        "Rectangular Pattern" => "Rect. pattern",
+        "Circular Pattern" => "Circ. pattern",
+        "External Thread" => "Thread",
+        "Offset Plane" => "Offset plane",
+        "Plane at Angle" => "Angled plane",
         "Finish sketch" => "FINISH SKETCH",
         "Finish spline" => "FINISH SPLINE",
         other => other,
@@ -457,7 +464,7 @@ pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
         Text::new(&display_label),
         theme.text(
             &assets,
-            if finish { 11. } else { 8. },
+            if finish { 11. } else { 10. },
             if finish {
                 FontWeight::SEMIBOLD
             } else {
@@ -466,7 +473,7 @@ pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
         ),
         TextLayout::justify(Justify::Center),
         FontHinting::Enabled,
-        LineHeight::Px(if finish { 16.5 } else { 8. }),
+        LineHeight::Px(if finish { 16.5 } else { 11. }),
         LetterSpacing::Px(if finish { 0.275 } else { 0. }),
         Node {
             position_type: if finish {
@@ -477,7 +484,7 @@ pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
             top: if finish {
                 Val::Auto
             } else {
-                px(40. - lines * 4.)
+                px(38. - lines * 4.)
             },
             left: if finish { Val::Auto } else { px(0.) },
             width: if finish { Val::Auto } else { percent(100.) },
@@ -493,7 +500,7 @@ pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
         world,
         entity,
         icon,
-        if finish { 8. } else { 13. },
+        if finish { 8. } else { 0. },
         if finish { 9. } else { 5. },
         if finish { 14. } else { 22. },
         if finish {
@@ -504,6 +511,12 @@ pub(crate) fn decorate(world: &mut World, entity: Entity, icon: Icon) {
             theme.ink
         },
     );
+    if !finish {
+        if let Some(mut node) = world.get_mut::<Node>(primary_glyph) {
+            node.left = percent(50.);
+            node.margin.left = px(-11.);
+        }
+    }
     if finish {
         world
             .entity_mut(entity)
