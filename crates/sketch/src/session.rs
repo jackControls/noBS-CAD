@@ -1678,6 +1678,46 @@ impl SketchSession {
         self.try_add_independent_auto_constraint(constraint)
     }
 
+    /// Bind a selectable, constrainable center point to a freshly drawn circle
+    /// (issue #151). A circle's center is implicit — stored inline on
+    /// `Entity::Circle` — so without this link it can be neither picked nor
+    /// constrained. `CenterCoincident` determines the two handle coordinates
+    /// from the curve center, so the handle adds no degree of freedom.
+    ///
+    /// A free pick gets its own generated handle. An intentional acquisition
+    /// keeps the acquired point as the handle, so Ctrl still suppresses it and
+    /// no redundant second point appears at the same spot. The datum relations
+    /// for origin/edge acquisitions keep the curve as their carrier, exactly as
+    /// before, and the handle simply follows the curve center.
+    fn attach_circle_center(
+        &mut self,
+        circle: EntityId,
+        center: Vec2,
+        mode: CircleMode,
+        center_target: SnapTarget,
+    ) -> EntityId {
+        // 2-Point circles derive their center from the two diameter picks, so
+        // only Center-Diameter has a picked center that can acquire anything.
+        let target = if mode == CircleMode::CenterDiameter {
+            center_target
+        } else {
+            SnapTarget::None
+        };
+        self.attach_curve_center_if_acquired(circle, target);
+        if let SnapTarget::Point { entity } = target {
+            return entity;
+        }
+        let point = self.sketch.add_generated_point(center);
+        let relation = Constraint::CenterCoincident {
+            point,
+            curve: circle,
+        };
+        if !self.has_relation(&relation) {
+            self.sketch.add_constraint(relation);
+        }
+        point
+    }
+
     fn has_relation(&self, relation: &Constraint) -> bool {
         self.sketch
             .constraints()
@@ -2530,9 +2570,12 @@ impl SketchSession {
         acquisitions: [(Vec2, SnapTarget); 2],
     ) {
         for (position, target) in acquisitions {
-            // A center-rectangle's virtual center is not an owned corner.
-            // Never constrain an unrelated existing point at that location.
-            if let Some(point) = entities.iter().take(4).copied().find(|id| {
+            // Only the rectangle's own points are acquisition targets: the four
+            // corners, plus the owned center for a center rectangle. Never
+            // constrain an unrelated existing point that merely happens to sit
+            // at a requested position. `point_position` is `None` for lines, so
+            // scanning the whole authored list is safe.
+            if let Some(point) = entities.iter().copied().find(|id| {
                 self.sketch
                     .point_position(*id)
                     .is_some_and(|p| p.distance(position) <= MERGE_EPS)
@@ -2548,6 +2591,13 @@ impl SketchSession {
     /// Rectangle mutation only (shared by plain and locked/dimensioned
     /// creation): 4 corner points + 4 H/V-constrained lines, returned as
     /// [points…, lines…].
+    ///
+    /// A center rectangle also owns a real, selectable center point, appended
+    /// after the corners and lines so callers that index the corners as
+    /// `entities[0..=3]` stay valid. Binding that point to a diagonal's
+    /// midpoint is what keeps the rectangle symmetric about its center: a
+    /// corner drag moves the opposite corner instead of leaving the far side
+    /// behind (issue #151).
     fn create_rectangle(
         &mut self,
         mode: RectangleMode,
@@ -2585,8 +2635,26 @@ impl SketchSession {
         self.sketch.add_constraint(Constraint::Vertical {
             entity: line_ids[3],
         });
-        let mut entities = point_ids;
+        let mut entities = point_ids.clone();
         entities.extend(line_ids);
+        if mode == RectangleMode::Center {
+            let position = (corners[0] + corners[2]) * 0.5;
+            let existing = (self.point_snap && allow_merge)
+                .then(|| self.sketch.nearest_point(position, MERGE_EPS))
+                .flatten()
+                .map(|(id, _)| id)
+                // Never adopt one of this rectangle's own corners: a
+                // borderline-thin pick can sit within epsilon of the center,
+                // and a center that is also a corner cannot be a midpoint.
+                .filter(|id| !point_ids.contains(id));
+            let center = existing.unwrap_or_else(|| self.sketch.add_generated_point(position));
+            self.sketch.add_constraint(Constraint::SpanMidpoint {
+                point: center,
+                start: point_ids[0],
+                end: point_ids[2],
+            });
+            entities.push(center);
+        }
         Ok(entities)
     }
 
@@ -2630,10 +2698,8 @@ impl SketchSession {
         } = self.resolve_circle(request)?;
 
         let before = self.sketch.snapshot();
-        let id = self.create_circle(mode, anchor, second)?;
-        if mode == CircleMode::CenterDiameter {
-            self.attach_curve_center_if_acquired(id, anchor_target);
-        }
+        let (id, center) = self.create_circle(mode, anchor, second)?;
+        self.attach_circle_center(id, center, mode, anchor_target);
         let d_text = request
             .diameter_text
             .clone()
@@ -2657,10 +2723,8 @@ impl SketchSession {
         center_target: SnapTarget,
     ) -> Result<ToolResult, SessionError> {
         let before = self.sketch.snapshot();
-        let id = self.create_circle(mode, p1, p2)?;
-        if mode == CircleMode::CenterDiameter {
-            self.attach_curve_center_if_acquired(id, center_target);
-        }
+        let (id, center) = self.create_circle(mode, p1, p2)?;
+        self.attach_circle_center(id, center, mode, center_target);
         self.recompute();
         self.push_command(before);
         Ok(ToolResult {
@@ -2670,13 +2734,14 @@ impl SketchSession {
     }
 
     /// Circle mutation only (shared by plain and locked/dimensioned
-    /// creation).
+    /// creation). Returns the new circle and its center, which the caller
+    /// needs to seat the selectable center handle.
     fn create_circle(
         &mut self,
         mode: CircleMode,
         p1: Vec2,
         p2: Vec2,
-    ) -> Result<EntityId, SessionError> {
+    ) -> Result<(EntityId, Vec2), SessionError> {
         let (center, radius) = match mode {
             CircleMode::CenterDiameter => (p1, p1.distance(p2)),
             CircleMode::TwoPoint => (((p1 + p2) * 0.5), p1.distance(p2) / 2.0),
@@ -2684,7 +2749,10 @@ impl SketchSession {
         if radius < MIN_LINE_LENGTH_MM {
             return Err(SessionError::DegenerateSegment);
         }
-        Ok(self.sketch.add_entity(Entity::Circle { center, radius }))
+        Ok((
+            self.sketch.add_entity(Entity::Circle { center, radius }),
+            center,
+        ))
     }
 
     /// Slot (M1 follow-up): a capsule of 2 parallel
@@ -3154,6 +3222,10 @@ impl SketchSession {
         for id in existing {
             removed.extend(self.sketch.remove_entity(id));
         }
+        // Deleting every carrier of a center rectangle leaves a relation
+        // between its own generated handles, which would otherwise keep the
+        // center and its diagonal corners alive as orphan points.
+        removed.extend(self.sketch.collect_detached_generated_islands());
         removed.sort();
         removed.dedup();
         self.recompute();

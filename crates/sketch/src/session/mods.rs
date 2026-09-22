@@ -67,6 +67,24 @@ impl SketchSession {
             .collect()
     }
 
+    /// Center handles a curve owns (issue #151), mirroring
+    /// `arc_endpoint_points`. A center the user acquired on an existing point
+    /// *is* that point, so transforming the curve has to carry the attachment
+    /// with it and keep the relation exactly satisfied; leaving it behind
+    /// would make the solver split the difference and move both.
+    fn curve_center_points(&self, curve: EntityId) -> Vec<EntityId> {
+        self.sketch
+            .constraints()
+            .filter_map(|(_, constraint)| match *constraint {
+                Constraint::CenterCoincident {
+                    point,
+                    curve: owner,
+                } if owner == curve => Some(point),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Trim/Break change the finite sweep. Keep original endpoint references
     /// on the surviving pieces and give each cut a new point, shared across
     /// adjacent pieces. Stale anchors must not pull the edited angles back.
@@ -1418,8 +1436,12 @@ impl SketchSession {
                     source_points.insert(start);
                     source_points.insert(end);
                 }
-                Some(Entity::Arc { .. }) => source_points.extend(self.arc_endpoint_points(*id)),
-                Some(Entity::Circle { .. }) | Some(Entity::Spline { .. }) => {}
+                Some(Entity::Arc { .. }) => {
+                    source_points.extend(self.arc_endpoint_points(*id));
+                    source_points.extend(self.curve_center_points(*id));
+                }
+                Some(Entity::Circle { .. }) => source_points.extend(self.curve_center_points(*id)),
+                Some(Entity::Spline { .. }) => {}
                 None => return Err(SessionError::EntityNotFound(*id)),
             }
         }
@@ -1555,6 +1577,29 @@ impl SketchSession {
             .collect();
         for relation in relations {
             self.sketch.add_constraint(relation);
+        }
+        // Every copied occurrence owns its own center handle, exactly like a
+        // freshly drawn circle. The remap above preserves a source handle that
+        // was copied with it; derived, legacy or acquired-center curves may
+        // have had none, so materialize one for each still-unbound circle.
+        for id in ids {
+            let Some(Entity::Circle { center, .. }) = self.sketch.entity(*id).cloned() else {
+                continue;
+            };
+            let Some(copied) = entity_map.get(id).copied() else {
+                continue;
+            };
+            let bound = self.sketch.constraints().any(|(_, relation)| {
+                matches!(relation, Constraint::CenterCoincident { curve, .. } if *curve == copied)
+            });
+            if bound {
+                continue;
+            }
+            let point = self.sketch.add_generated_point(transform(center));
+            self.sketch.add_constraint(Constraint::CenterCoincident {
+                point,
+                curve: copied,
+            });
         }
         Ok(())
     }
@@ -1712,9 +1757,14 @@ impl SketchSession {
                         }
                         Some(Entity::Arc { .. }) => {
                             point_ids.extend(s.arc_endpoint_points(id));
+                            point_ids.extend(s.curve_center_points(id));
                             direct_ids.push(id);
                         }
-                        Some(Entity::Circle { .. }) | Some(Entity::Spline { .. }) => {
+                        Some(Entity::Circle { .. }) => {
+                            point_ids.extend(s.curve_center_points(id));
+                            direct_ids.push(id);
+                        }
+                        Some(Entity::Spline { .. }) => {
                             direct_ids.push(id);
                         }
                         None => return Err(SessionError::EntityNotFound(id)),
@@ -1785,8 +1835,11 @@ impl SketchSession {
                         point_ids.push(start);
                         point_ids.push(end);
                     }
-                    Some(Entity::Arc { .. }) => point_ids.extend(s.arc_endpoint_points(*id)),
-                    Some(Entity::Circle { .. }) => {}
+                    Some(Entity::Arc { .. }) => {
+                        point_ids.extend(s.arc_endpoint_points(*id));
+                        point_ids.extend(s.curve_center_points(*id));
+                    }
+                    Some(Entity::Circle { .. }) => point_ids.extend(s.curve_center_points(*id)),
                     // Splines scale below via their fit points.
                     Some(Entity::Spline { .. }) => {}
                     None => return Err(SessionError::EntityNotFound(*id)),

@@ -198,6 +198,62 @@ impl Sketch {
         removed
     }
 
+    /// Delete detached tool scaffolding that binds generated handles to each
+    /// other instead of to a carrier.
+    ///
+    /// A center rectangle keeps its own center through a `SpanMidpoint`
+    /// between its generated corners. Deleting every carrier line leaves that
+    /// relation holding its own handles alive, which would strand orphan
+    /// points and a dangling relation behind. Such a relation is an island:
+    /// every operand is a generated point that no surviving entity references.
+    ///
+    /// Only these point-to-point span midpoints participate. A single-operand
+    /// relation such as `Fix` is the user pinning a handle and must survive,
+    /// and a relation that still touches a user point or a carrier is never an
+    /// island, so authored intent is preserved.
+    pub(crate) fn collect_detached_generated_islands(&mut self) -> Vec<EntityId> {
+        let mut removed = Vec::new();
+        loop {
+            let stale: Vec<ConstraintId> = {
+                let entities = &self.entities;
+                let generated = &self.generated_points;
+                let detached = |id: EntityId| {
+                    generated.contains(&id)
+                        && !entities
+                            .iter()
+                            .any(|(_, entity)| entity.referenced_entities().contains(&id))
+                };
+                self.constraints
+                    .iter()
+                    .filter(|(_, constraint)| {
+                        matches!(constraint, Constraint::SpanMidpoint { .. })
+                            && constraint
+                                .referenced_entities()
+                                .iter()
+                                .all(|id| detached(*id))
+                    })
+                    .map(|(id, _)| *id)
+                    .collect()
+            };
+            if stale.is_empty() {
+                break;
+            }
+            let operands: Vec<EntityId> = self
+                .constraints
+                .iter()
+                .filter(|(id, _)| stale.contains(id))
+                .flat_map(|(_, constraint)| constraint.referenced_entities())
+                .collect();
+            self.constraints.retain(|(id, _)| !stale.contains(id));
+            let points = self.remove_unused_generated_points(operands);
+            if points.is_empty() {
+                break;
+            }
+            removed.extend(points);
+        }
+        removed
+    }
+
     /// Modify tools can detach/rebind handles without deleting the original
     /// curve. Clean up after their complete topology edit, not mid-edit, and
     /// never sweep unrelated points the user had already detached earlier.
