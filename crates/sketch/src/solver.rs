@@ -14,7 +14,7 @@
 //! used for constraint-state coloring (an entity is fully defined when none
 //! of its unknowns are free).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::constraint::{ArcEndpoint, Constraint, ConstraintId};
 use crate::entity::{Entity, EntityId, AXIS_SENTINEL};
@@ -545,17 +545,73 @@ struct VarMap {
     /// participate in incidence/tangent constraints, but they must still
     /// carry real DOF so Fix/Unfix and transform solving are truthful.
     splines: HashMap<EntityId, Vec<Pt>>,
+    /// Generated center handles whose coordinates *are* their curve's center.
+    /// They alias into the curve's variables instead of adding two unknowns and
+    /// two equations, which keeps a circle's cost at three unknowns whether or
+    /// not it exposes a center (issue #151).
+    aliases: HashSet<EntityId>,
     n: usize,
 }
 
+/// Center handles that can alias into the curve they belong to: a generated
+/// point whose only relation is `CenterCoincident` to a curve and that no entity
+/// references. Anything else — an acquired center the user attached to other
+/// geometry, or a handle a line also uses — stays an independent variable so its
+/// other relations keep their own freedom.
+fn aliased_handles(
+    sketch: &Sketch,
+    excluded: &BTreeSet<ConstraintId>,
+) -> HashMap<EntityId, EntityId> {
+    let mut references: HashMap<EntityId, usize> = HashMap::new();
+    let mut centers: HashMap<EntityId, EntityId> = HashMap::new();
+    let mut excluded_points: HashSet<EntityId> = HashSet::new();
+    for (id, constraint) in sketch.constraints() {
+        for operand in constraint.referenced_entities() {
+            *references.entry(operand).or_default() += 1;
+        }
+        if let Constraint::CenterCoincident { point, curve } = *constraint {
+            if excluded.contains(&id) {
+                excluded_points.insert(point);
+            }
+            centers.insert(point, curve);
+        }
+    }
+    centers
+        .into_iter()
+        .filter(|(point, curve)| {
+            !excluded_points.contains(point) &&
+            // The curve must actually own a center to alias into. A malformed
+            // relation naming something else would otherwise leave the handle
+            // with no variables at all, and the value writers index that map
+            // unconditionally.
+            matches!(
+                sketch.entity(*curve),
+                Some(Entity::Circle { .. } | Entity::Arc { .. })
+            ) && sketch.is_generated_point(*point)
+                && !sketch.is_referenced_by_entity(*point)
+                && references.get(point) == Some(&1)
+        })
+        .collect()
+}
+
 fn build_var_map(sketch: &Sketch) -> VarMap {
+    build_var_map_excluding(sketch, &BTreeSet::new())
+}
+
+/// Build the variable map while ignoring `excluded` relations when deciding
+/// which center handles may alias. A relation under admission has to be judged
+/// on its own equations, so the point it would bind keeps its two variables on
+/// that side of the comparison instead of disappearing into the curve center.
+fn build_var_map_excluding(sketch: &Sketch, excluded: &BTreeSet<ConstraintId>) -> VarMap {
     let mut map = VarMap {
         points: HashMap::new(),
         circles: HashMap::new(),
         arcs: HashMap::new(),
         splines: HashMap::new(),
+        aliases: HashSet::new(),
         n: 0,
     };
+    let aliased = aliased_handles(sketch, excluded);
     let mut alloc = |count: usize| {
         let start = map.n;
         map.n += count;
@@ -564,8 +620,14 @@ fn build_var_map(sketch: &Sketch) -> VarMap {
     for (id, entity) in sketch.entities() {
         match entity {
             Entity::Point { .. } => {
-                let i = alloc(2);
-                map.points.insert(id, (i, i + 1));
+                // An aliased handle reuses its curve's center variables, so it
+                // contributes no unknown of its own.
+                if aliased.contains_key(&id) {
+                    map.aliases.insert(id);
+                } else {
+                    let i = alloc(2);
+                    map.points.insert(id, (i, i + 1));
+                }
             }
             Entity::Circle { .. } => {
                 let i = alloc(3);
@@ -586,6 +648,18 @@ fn build_var_map(sketch: &Sketch) -> VarMap {
             }
         }
     }
+    // The curves are all allocated now, whichever order the handle was visited
+    // in, so the alias can point at its center's variables.
+    for (handle, curve) in aliased {
+        let center = map
+            .circles
+            .get(&curve)
+            .map(|(center, _)| *center)
+            .or_else(|| map.arcs.get(&curve).map(|(center, ..)| *center));
+        if let Some(center) = center {
+            map.points.insert(handle, center);
+        }
+    }
     map
 }
 
@@ -594,6 +668,11 @@ fn read_values(sketch: &Sketch, map: &VarMap) -> Vec<f64> {
     for (id, entity) in sketch.entities() {
         match entity {
             Entity::Point { position } => {
+                // An aliased handle has no variables of its own; the curve
+                // center is the authority so the two can never disagree.
+                if map.aliases.contains(&id) {
+                    continue;
+                }
                 let p = map.points[&id];
                 x[p.0] = position.x;
                 x[p.1] = position.y;
@@ -841,8 +920,13 @@ fn build_equations(
             Constraint::CenterCoincident { point, curve } => {
                 if let (Some(point), Some(center)) = (map.pt(sketch, point), map.pt(sketch, curve))
                 {
-                    push_lin(&mut eqs, cid, vec![(center.0, 1.0), (point.0, -1.0)], 0.0);
-                    push_lin(&mut eqs, cid, vec![(center.1, 1.0), (point.1, -1.0)], 0.0);
+                    // An owned handle aliases its curve's center, so the
+                    // relation is already satisfied by construction and would
+                    // otherwise add a null row.
+                    if point != center {
+                        push_lin(&mut eqs, cid, vec![(center.0, 1.0), (point.0, -1.0)], 0.0);
+                        push_lin(&mut eqs, cid, vec![(center.1, 1.0), (point.1, -1.0)], 0.0);
+                    }
                 }
             }
             Constraint::Coincident { a, b } => {
@@ -2416,7 +2500,7 @@ pub fn constraint_residual(sketch: &Sketch, cid: ConstraintId) -> f64 {
 /// singular pose. This helper keeps the final geometry fixed and changes only
 /// the equation set.
 pub(crate) fn rank_excluding_constraints(sketch: &Sketch, excluded: &[ConstraintId]) -> usize {
-    let map = build_var_map(sketch);
+    let map = build_var_map_excluding(sketch, &excluded.iter().copied().collect());
     let eqs = build_equations(sketch, &map, &[]);
     let x = read_values(sketch, &map);
     let (_, jac) = eval_all(&eqs, &x, map.n);
@@ -2436,7 +2520,7 @@ pub(crate) fn rank_excluding_constraints(sketch: &Sketch, excluded: &[Constraint
 /// example, the two incidence rows have the same first derivative although
 /// a point on the circle can still move away from the line.
 pub(crate) fn constraints_are_redundant(sketch: &Sketch, proposed: &[ConstraintId]) -> bool {
-    let map = build_var_map(sketch);
+    let map = build_var_map_excluding(sketch, &proposed.iter().copied().collect());
     let eqs = build_equations(sketch, &map, &[]);
     let x = read_values(sketch, &map);
     let (_, jac) = eval_all(&eqs, &x, map.n);
@@ -2621,5 +2705,60 @@ fn finish_analysis(
         rank,
         dof: map.n.saturating_sub(rank) as i32,
         entity_free,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constraint::Constraint;
+    use crate::geometry::Vec2;
+
+    #[test]
+    fn an_owned_center_handle_adds_no_unknowns() {
+        // Issue #151, review finding 8: a circle keeps its three unknowns
+        // (centre and radius) whether or not it exposes a centre handle,
+        // because the handle aliases the centre rather than duplicating it.
+        let mut sketch = Sketch::new();
+        let circle = sketch.add_entity(Entity::circle(20.0, 10.0, 5.0));
+        let handle = sketch.add_generated_point(Vec2::new(20.0, 10.0));
+        sketch.add_constraint(Constraint::CenterCoincident {
+            point: handle,
+            curve: circle,
+        });
+        assert_eq!(build_var_map(&sketch).n, 3);
+    }
+
+    #[test]
+    fn an_acquired_center_keeps_its_own_variables() {
+        // A centre the user attached to their own point is not owned by the
+        // circle, so both points stay real unknowns and the relation stays a
+        // real equation.
+        let mut sketch = Sketch::new();
+        let circle = sketch.add_entity(Entity::circle(20.0, 10.0, 5.0));
+        let acquired = sketch.add_entity(Entity::point(20.0, 10.0));
+        sketch.add_constraint(Constraint::CenterCoincident {
+            point: acquired,
+            curve: circle,
+        });
+        assert_eq!(build_var_map(&sketch).n, 5);
+    }
+
+    #[test]
+    fn a_center_relation_naming_a_non_curve_keeps_the_point_real() {
+        // A malformed relation must not alias a point into a "center" the named
+        // entity does not have: the value writers index the point map
+        // unconditionally, so that would be a panic on load, not a rejection.
+        let mut sketch = Sketch::new();
+        let a = sketch.add_entity(Entity::point(0.0, 0.0));
+        let b = sketch.add_entity(Entity::point(10.0, 0.0));
+        let line = sketch.add_entity(Entity::line(a, b));
+        let handle = sketch.add_generated_point(Vec2::new(5.0, 0.0));
+        sketch.add_constraint(Constraint::CenterCoincident {
+            point: handle,
+            curve: line,
+        });
+        assert_eq!(build_var_map(&sketch).n, 6);
+        assert_eq!(solve(&mut sketch, &[]).converged, true);
     }
 }
