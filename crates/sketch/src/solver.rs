@@ -2684,3 +2684,40 @@ fn finish_analysis(
         entity_free,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constraint::Constraint;
+    use crate::geometry::Vec2;
+
+    #[test]
+    fn an_owned_center_handle_adds_no_unknowns() {
+        // Issue #151, review finding 8: a circle keeps its three unknowns
+        // (centre and radius) whether or not it exposes a centre handle,
+        // because the handle aliases the centre rather than duplicating it.
+        let mut sketch = Sketch::new();
+        let circle = sketch.add_entity(Entity::circle(20.0, 10.0, 5.0));
+        let handle = sketch.add_generated_point(Vec2::new(20.0, 10.0));
+        sketch.add_constraint(Constraint::CenterCoincident {
+            point: handle,
+            curve: circle,
+        });
+        assert_eq!(build_var_map(&sketch).n, 3);
+    }
+
+    #[test]
+    fn an_acquired_center_keeps_its_own_variables() {
+        // A centre the user attached to their own point is not owned by the
+        // circle, so both points stay real unknowns and the relation stays a
+        // real equation.
+        let mut sketch = Sketch::new();
+        let circle = sketch.add_entity(Entity::circle(20.0, 10.0, 5.0));
+        let acquired = sketch.add_entity(Entity::point(20.0, 10.0));
+        sketch.add_constraint(Constraint::CenterCoincident {
+            point: acquired,
+            curve: circle,
+        });
+        assert_eq!(build_var_map(&sketch).n, 5);
+    }
+}
