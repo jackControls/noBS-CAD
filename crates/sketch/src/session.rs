@@ -1698,12 +1698,15 @@ impl SketchSession {
     /// constrained.
     ///
     /// A free pick gets its own handle. An intentional acquisition keeps the
-    /// acquired point as the handle, and a pick that lands exactly on an
-    /// existing point reuses it, so no second vertex is manufactured at the same
-    /// coordinate (`resolve_endpoint` does the same for line endpoints). The
-    /// datum relations for origin/edge acquisitions keep the curve as their
-    /// carrier, exactly as before, and the handle simply follows the curve
-    /// center.
+    /// acquired point, and a pick that lands exactly on an existing point
+    /// reuses it, so no second vertex is manufactured at the same coordinate
+    /// (`resolve_endpoint` does the same for line endpoints). Origin and edge
+    /// acquisitions keep the curve as their datum carrier, exactly as before.
+    ///
+    /// The center relation is added directly rather than through the
+    /// opportunistic gate: a freshly drawn circle's center is always
+    /// independent, and a gate that measures rank would call it redundant
+    /// whenever the handle aliases the circle's own center variables.
     fn attach_circle_center(
         &mut self,
         circle: EntityId,
@@ -1718,17 +1721,17 @@ impl SketchSession {
         } else {
             SnapTarget::None
         };
-        self.attach_curve_center_if_acquired(circle, target);
-        if let SnapTarget::Point { entity } = target {
-            return entity;
+        if !matches!(target, SnapTarget::Point { .. }) {
+            self.attach_curve_center_if_acquired(circle, target);
         }
-        // `center` is already the snapped position, so an exact vertex match
-        // covers both the origin and a suppressed (Ctrl) pick. Manufacturing a
-        // second point at the same coordinate is what `resolve_endpoint` avoids
-        // for line endpoints, and a curve center deserves the same treatment.
-        let point = match self.sketch.nearest_point(center, MERGE_EPS) {
-            Some((point, _)) => point,
-            None => return self.attach_owned_center(circle, center),
+        let point = match target {
+            SnapTarget::Point { entity } => entity,
+            // `center` is already the snapped position, so a nearest match also
+            // covers an origin pick and a suppressed (Ctrl) one.
+            _ => match self.sketch.nearest_point(center, MERGE_EPS) {
+                Some((point, _)) => point,
+                None => return self.attach_owned_center(circle, center),
+            },
         };
         self.sketch.add_constraint(Constraint::CenterCoincident {
             point,
@@ -3195,24 +3198,42 @@ impl SketchSession {
     /// center anchored by this corner. A center rectangle resizes *about* its
     /// center, so the dragged corner moves and the opposite corner mirrors it,
     /// rather than the whole shape sliding and the center absorbing the change.
+    ///
+    /// A rectangle's diagonal names two opposite corners, but the user can grab
+    /// any of the four. The other two are the ones a single line away from a
+    /// named corner, so the center is pinned for those as well.
     fn span_center_anchored_by(&self, corner: EntityId) -> Option<EntityId> {
+        let neighbours: Vec<EntityId> = self
+            .sketch
+            .lines_connected_to(corner)
+            .into_iter()
+            .filter_map(|line| self.sketch.line_endpoint_ids(line))
+            .flat_map(|(a, b)| [a, b])
+            .filter(|point| *point != corner)
+            .collect();
         self.sketch
             .constraints()
             .filter_map(|(_, constraint)| match *constraint {
-                Constraint::SpanMidpoint { point, start, end }
-                    if start == corner || end == corner =>
-                {
-                    Some(point)
-                }
+                Constraint::SpanMidpoint { point, start, end } => Some((point, start, end)),
                 _ => None,
             })
-            .find(|point| {
-                self.sketch.is_generated_point(*point)
-                    && !self.sketch.is_referenced_by_entity(*point)
-                    && self.sketch.relations_pointing_at(*point).all(|constraint| {
-                        matches!(constraint,
-                            Constraint::SpanMidpoint { point: center, .. } if center == point)
-                    })
+            .find(|(point, start, end)| {
+                (corner == *start
+                    || corner == *end
+                    || neighbours.contains(start)
+                    || neighbours.contains(end))
+                    && self.is_owned_span_center(*point)
+            })
+            .map(|(point, _, _)| point)
+    }
+
+    /// A generated center owned only by the span midpoints that bind it.
+    fn is_owned_span_center(&self, point: EntityId) -> bool {
+        self.sketch.is_generated_point(point)
+            && !self.sketch.is_referenced_by_entity(point)
+            && self.sketch.relations_pointing_at(point).all(|constraint| {
+                matches!(constraint,
+                    Constraint::SpanMidpoint { point: center, .. } if *center == point)
             })
     }
 
@@ -3245,7 +3266,20 @@ impl SketchSession {
                 pins.push((center, position));
             }
         }
-        let analysis = solver::solve(&mut self.sketch, &pins);
+        // Keep the pose the pinned attempt starts from, so the fallback below
+        // does not begin from a half-converged solve.
+        let before_pins = (pins.len() > 1).then(|| self.sketch.snapshot());
+        let mut analysis = solver::solve(&mut self.sketch, &pins);
+        if !analysis.converged {
+            if let Some(before_pins) = before_pins {
+                // A fully dimensioned center rectangle has nothing left but
+                // translation, and holding the center removes exactly that, so
+                // the corner could not follow the cursor at all. Fall back to
+                // an ordinary corner drag, as a two-point rectangle does.
+                self.sketch.restore(before_pins);
+                analysis = solver::solve(&mut self.sketch, &[(point_id, target)]);
+            }
+        }
         if analysis.converged {
             // Hard-set the pin exactly: the damped solve can land ~1e-9
             // off, and chained geometry deserves exact shared points.
@@ -3295,8 +3329,12 @@ impl SketchSession {
             ));
         }
         let before = self.sketch.snapshot();
-        // Corners of the lines this delete removes, so only span midpoints the
-        // delete actually disturbed are reconsidered afterwards.
+        // Everything this delete disturbs, so only span midpoints it actually
+        // touched are reconsidered afterwards: the corners of the removed lines,
+        // and the operands of every relation the removal takes down with it.
+        // A filleted corner is no longer a line endpoint — only its relations
+        // hold it — so without the second part a rounded rectangle's diagonal
+        // would outlive the curves it describes.
         let line_corners: Vec<(EntityId, [EntityId; 2])> = self
             .sketch
             .entities()
@@ -3304,6 +3342,11 @@ impl SketchSession {
                 Entity::Line { start, end } => Some((line, [*start, *end])),
                 _ => None,
             })
+            .collect();
+        let relation_operands: Vec<Vec<EntityId>> = self
+            .sketch
+            .constraints()
+            .map(|(_, constraint)| constraint.referenced_entities())
             .collect();
         let mut removed = Vec::new();
         for id in existing {
@@ -3317,6 +3360,13 @@ impl SketchSession {
                     .iter()
                     .filter(|(line, _)| removed.contains(line))
                     .flat_map(|(_, corners)| corners.iter().copied()),
+            )
+            .chain(
+                relation_operands
+                    .iter()
+                    .filter(|operands| operands.iter().any(|id| removed.contains(id)))
+                    .flatten()
+                    .copied(),
             )
             .collect();
         removed.extend(self.sketch.sweep_detached_span_midpoints(&affected));

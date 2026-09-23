@@ -571,8 +571,15 @@ fn aliased_handles(sketch: &Sketch) -> HashMap<EntityId, EntityId> {
     }
     centers
         .into_iter()
-        .filter(|(point, _)| {
-            sketch.is_generated_point(*point)
+        .filter(|(point, curve)| {
+            // The curve must actually own a center to alias into. A malformed
+            // relation naming something else would otherwise leave the handle
+            // with no variables at all, and the value writers index that map
+            // unconditionally.
+            matches!(
+                sketch.entity(*curve),
+                Some(Entity::Circle { .. } | Entity::Arc { .. })
+            ) && sketch.is_generated_point(*point)
                 && !sketch.is_referenced_by_entity(*point)
                 && references.get(point) == Some(&1)
         })
@@ -2719,5 +2726,23 @@ mod tests {
             curve: circle,
         });
         assert_eq!(build_var_map(&sketch).n, 5);
+    }
+
+    #[test]
+    fn a_center_relation_naming_a_non_curve_keeps_the_point_real() {
+        // A malformed relation must not alias a point into a "center" the named
+        // entity does not have: the value writers index the point map
+        // unconditionally, so that would be a panic on load, not a rejection.
+        let mut sketch = Sketch::new();
+        let a = sketch.add_entity(Entity::point(0.0, 0.0));
+        let b = sketch.add_entity(Entity::point(10.0, 0.0));
+        let line = sketch.add_entity(Entity::line(a, b));
+        let handle = sketch.add_generated_point(Vec2::new(5.0, 0.0));
+        sketch.add_constraint(Constraint::CenterCoincident {
+            point: handle,
+            curve: line,
+        });
+        assert_eq!(build_var_map(&sketch).n, 6);
+        assert_eq!(solve(&mut sketch, &[]).converged, true);
     }
 }

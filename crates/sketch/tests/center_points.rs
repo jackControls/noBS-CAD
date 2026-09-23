@@ -1,9 +1,9 @@
 //! Issue #151: circle and center-rectangle centers are selectable,
 //! constrainable, and keep their shape symmetric about that center.
 use nbcad_sketch::{
-    CircleMode, Constraint, DragPhase, EntityDto, EntityId, FilletRequest, MoveCopyRequest,
-    MovePointRequest, OffsetRequest, OriginPlane, PlaneRef, RectangleMode, ScaleRequest, SketchDto,
-    SketchSession, SnapTarget, Vec2,
+    CircleMode, Constraint, DragPhase, EntityDto, EntityId, FilletRequest, LockedRectangleRequest,
+    MoveCopyRequest, MovePointRequest, OffsetRequest, OriginPlane, PlaneRef, RectangleMode,
+    ScaleRequest, SketchDto, SketchSession, SnapTarget, Vec2,
 };
 
 fn v(x: f64, y: f64) -> Vec2 {
@@ -693,4 +693,161 @@ fn a_ctrl_placed_center_reuses_an_exact_vertex() {
         2,
         "the line's two endpoints are still the only points"
     );
+}
+
+#[test]
+fn deleting_a_filleted_center_rectangles_curves_collects_its_center() {
+    // Review finding 11: after a fillet the original corner is retained by
+    // relations rather than by line endpoints, so the delete has to treat the
+    // operands of the relations it removed as disturbed too.
+    let mut s = session();
+    let created = s
+        .add_rectangle(RectangleMode::Center, v(20.0, 20.0), v(30.0, 26.0))
+        .unwrap();
+    let [bottom, right, top, left] = [4, 5, 6, 7].map(|i| created.entities[i]);
+    for (l1, l2) in [(bottom, left), (bottom, right), (top, right), (top, left)] {
+        s.fillet_lines(&FilletRequest {
+            l1,
+            l2,
+            radius_text: "1".into(),
+        })
+        .unwrap();
+    }
+    let curves: Vec<EntityId> = s
+        .dto()
+        .entities
+        .iter()
+        .filter(|entity| !matches!(entity, EntityDto::Point { .. }))
+        .map(|entity| entity.id())
+        .collect();
+    assert_eq!(
+        curves.len(),
+        8,
+        "four trimmed carriers plus four fillet arcs"
+    );
+    s.delete_entities(&curves).unwrap();
+    assert!(
+        s.dto().entities.is_empty(),
+        "a fully erased rounded rectangle leaves nothing: {:?}",
+        s.dto().entities
+    );
+}
+
+#[test]
+fn dragging_any_corner_resizes_a_center_rectangle_about_its_center() {
+    // Review finding 12: all four corners must resize about the center, not
+    // just the two the diagonal names.
+    let moves = [
+        (v(30.0, 30.0), v(70.0, 70.0)),
+        (v(70.0, 30.0), v(30.0, 70.0)),
+        (v(70.0, 70.0), v(30.0, 30.0)),
+        (v(30.0, 70.0), v(70.0, 30.0)),
+    ];
+    for (index, (target, opposite)) in moves.into_iter().enumerate() {
+        let mut s = session();
+        let created = s
+            .add_rectangle(RectangleMode::Center, v(50.0, 50.0), v(60.0, 60.0))
+            .unwrap();
+        let center = rectangle_center(&s.dto());
+        let dragged = created.entities[index];
+        let opposite_id = created.entities[(index + 2) % 4];
+        drag(&mut s, dragged, target);
+        let dto = s.dto();
+        assert!(
+            point(&dto, dragged).distance(target) < 1e-6,
+            "corner {index} did not follow the cursor"
+        );
+        assert!(
+            point(&dto, center).distance(v(50.0, 50.0)) < 1e-6,
+            "corner {index} moved the center to {:?}",
+            point(&dto, center)
+        );
+        assert!(
+            point(&dto, opposite_id).distance(opposite) < 1e-6,
+            "corner {index} left the opposite corner at {:?}",
+            point(&dto, opposite_id)
+        );
+    }
+}
+
+#[test]
+fn a_dimensioned_center_rectangle_still_moves_when_a_corner_is_dragged() {
+    // Review finding 13: with width and height dimensions translation is the
+    // only freedom left, so holding the center would freeze the drag.
+    let mut s = session();
+    let created = s
+        .add_rectangle_locked(&LockedRectangleRequest {
+            mode: RectangleMode::Center,
+            anchor: v(50.0, 50.0),
+            width_mm: Some(20.0),
+            height_mm: Some(10.0),
+            width_text: None,
+            height_text: None,
+            corner_hint: v(60.0, 55.0),
+            ctrl_held: false,
+        })
+        .unwrap();
+    let bl = created.entities[0];
+    assert!(point(&s.dto(), bl).distance(v(40.0, 45.0)) < 1e-6);
+    drag(&mut s, bl, v(35.0, 40.0));
+    let dto = s.dto();
+    assert!(
+        point(&dto, bl).distance(v(35.0, 40.0)) < 1e-6,
+        "a dimensioned center rectangle must still translate, got {:?}",
+        point(&dto, bl)
+    );
+}
+
+#[test]
+fn a_circle_center_snapped_onto_an_orphaned_handle_is_bound() {
+    // Review finding 14: a fresh circle's center relation is always
+    // independent, so the redundancy gate must not roll it back.
+    let mut s = session();
+    let arc = s
+        .add_arc_center(v(30.0, 30.0), v(40.0, 30.0), v(30.0, 40.0))
+        .unwrap()
+        .entities[0];
+    let endpoints: Vec<EntityId> = s
+        .dto()
+        .constraints
+        .iter()
+        .filter_map(|constraint| match constraint.constraint {
+            Constraint::ArcEndpointCoincident {
+                point, arc: owner, ..
+            } if owner == arc => Some(point),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(endpoints.len(), 2);
+    // Detach one endpoint relation but keep the handle, which is deliberate.
+    let relation = s
+        .dto()
+        .constraints
+        .iter()
+        .find(|constraint| {
+            matches!(constraint.constraint,
+                Constraint::ArcEndpointCoincident { point, .. } if point == endpoints[0])
+        })
+        .expect("the endpoint relation")
+        .id;
+    s.delete_constraint(relation).unwrap();
+    let orphan = endpoints[0];
+    let position = point(&s.dto(), orphan);
+
+    let circle = s
+        .add_circle_selective(
+            CircleMode::CenterDiameter,
+            position,
+            position + v(6.0, 0.0),
+            false,
+        )
+        .unwrap()
+        .entities[0];
+    let dto = s.dto();
+    assert_eq!(
+        center_handles(&dto, circle),
+        vec![orphan],
+        "the acquired centre must be bound, not silently dropped"
+    );
+    assert!(circle_center_of(&dto, circle).distance(position) < 1e-6);
 }
