@@ -3227,13 +3227,16 @@ impl SketchSession {
             .map(|(point, _, _)| point)
     }
 
-    /// A generated center owned only by the span midpoints that bind it.
+    /// A generated rectangle center remains a resize anchor when circles also
+    /// use it. Pinning its existing position keeps those circles stationary;
+    /// the failed-pin fallback still handles dimensioned translation cases.
     fn is_owned_span_center(&self, point: EntityId) -> bool {
         self.sketch.is_generated_point(point)
             && !self.sketch.is_referenced_by_entity(point)
             && self.sketch.relations_pointing_at(point).all(|constraint| {
                 matches!(constraint,
-                    Constraint::SpanMidpoint { point: center, .. } if *center == point)
+                    Constraint::SpanMidpoint { point: center, .. }
+                    | Constraint::CenterCoincident { point: center, .. } if *center == point)
             })
     }
 
