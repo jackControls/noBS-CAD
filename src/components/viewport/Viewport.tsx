@@ -104,6 +104,7 @@ import {
   type ClipPolylineCandidate,
   type ScreenPick,
 } from '../../modeling/screenSpaceEntityPicker';
+import { coincidentCircleAt } from '../../modeling/sketchCenterPick';
 import {
   VIEWPORT_INTERACTION_STROKE_PX,
   viewportInteractionScale,
@@ -5155,7 +5156,17 @@ export function Viewport() {
         switch (entity.kind) {
           case 'point': {
             const d = Math.hypot(entity.position.x - p.x, entity.position.y - p.y);
-            if (d <= tol) return entity.id; // points win outright
+            if (d <= tol) {
+              // Concentric circles share one center handle, so aiming at that
+              // handle is ambiguous about which circle is meant. Hand the click
+              // to the circle drawn last; a lone circle's center still wins,
+              // because picking the center is how a center is constrained.
+              const shared =
+                allowedKinds && !allowedKinds.has('circle')
+                  ? null
+                  : coincidentCircleAt(sketch.entities, entity.position, tol);
+              return shared ?? entity.id; // points win outright otherwise
+            }
             break;
           }
           case 'line':
