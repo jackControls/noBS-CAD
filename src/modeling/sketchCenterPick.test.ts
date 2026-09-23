@@ -1,9 +1,9 @@
 /**
  * Concentric circles share one center handle, so a click on that handle has to
- * resolve to a circle rather than to the shared point. Run with:
- * `npm run test:center-pick`.
+ * resolve to a circle rather than to the shared point — and only when the point
+ * is genuinely shared. Run with: `npm run test:center-pick`.
  */
-import type { EntityDto } from '../engine/types';
+import type { ConstraintDto, EntityDto } from '../engine/types';
 import { coincidentCircleAt } from './sketchCenterPick';
 
 let failures = 0;
@@ -27,55 +27,65 @@ const point = (id: number, x: number, y: number): EntityDto => ({
   fully_defined: false,
 });
 
-const TOLERANCE = 0.5;
+const center = (id: number, pointId: number, curve: number): ConstraintDto => ({
+  id,
+  type: 'center_coincident',
+  point: pointId,
+  curve,
+});
 
 check(
   'a lone circle keeps its center point pickable',
-  coincidentCircleAt([point(1, 20, 10), circle(2, 20, 10)], { x: 20, y: 10 }, TOLERANCE) === null,
+  coincidentCircleAt([point(1, 20, 10), circle(2, 20, 10)], [center(1, 1, 2)], 1) === null,
 );
 
 check(
   'concentric circles resolve to the last one drawn',
   coincidentCircleAt(
     [circle(4, 20, 10, 5), point(5, 20, 10), circle(9, 20, 10, 8)],
-    { x: 20, y: 10 },
-    TOLERANCE,
+    [center(1, 5, 4), center(2, 5, 9)],
+    5,
   ) === 9,
 );
 
 check(
   'resolution follows creation order, not radius',
-  coincidentCircleAt([circle(9, 20, 10, 8), circle(4, 20, 10, 5)], { x: 20, y: 10 }, TOLERANCE) ===
-    4,
+  coincidentCircleAt(
+    [circle(9, 20, 10, 8), circle(4, 20, 10, 5), point(5, 20, 10)],
+    [center(1, 5, 9), center(2, 5, 4)],
+    5,
+  ) === 4,
 );
 
 check(
-  'a merely nearby center is not concentric',
+  'a point bound to one circle is never redirected',
   coincidentCircleAt(
-    [circle(1, 20, 10, 5), circle(2, 30, 10, 5)],
-    { x: 20, y: 10 },
-    TOLERANCE,
+    [point(1, 20, 10), point(2, 20.1, 10.1), circle(3, 20, 10)],
+    [center(1, 1, 3)],
+    2,
   ) === null,
-  'a circle centred outside tolerance must not claim the click',
+  'an unrelated nearby point has no center binding at all',
 );
 
 check(
-  'a shared center is shared to within tolerance, not exactly',
+  'circles centred a fraction apart keep independent handles',
   coincidentCircleAt(
-    [circle(1, 20, 10, 5), circle(2, 20.2, 10.1, 8)],
-    { x: 20, y: 10 },
-    TOLERANCE,
-  ) === 2,
+    [point(1, 20, 10), circle(2, 20, 10), point(3, 20.2, 10), circle(4, 20.2, 10)],
+    [center(1, 1, 2), center(2, 3, 4)],
+    1,
+  ) === null,
+  'proximity is not identity: each center is bound to exactly one circle',
 );
 
 check(
-  'arcs sharing a center do not claim the click',
+  'a circle-arc pair does not claim the click',
   coincidentCircleAt(
     [
-      circle(1, 20, 10, 5),
+      point(1, 20, 10),
+      circle(2, 20, 10),
       {
         kind: 'arc',
-        id: 2,
+        id: 3,
         center: { x: 20, y: 10 },
         radius: 9,
         start_angle: 0,
@@ -83,8 +93,8 @@ check(
         fully_defined: false,
       },
     ],
-    { x: 20, y: 10 },
-    TOLERANCE,
+    [center(1, 1, 2), center(2, 1, 3)],
+    1,
   ) === null,
   'only circles participate, so a circle-arc pair keeps the center point',
 );
