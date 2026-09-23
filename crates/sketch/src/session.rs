@@ -558,6 +558,10 @@ impl SketchSession {
             session.refresh_reference_edges();
             session.restore_projected_midpoints();
         }
+        // A project saved before center handles existed has circles whose center
+        // cannot be picked or constrained. Give those the same handle the circle
+        // tool creates, so issue #151 is fixed for existing projects too.
+        session.attach_missing_circle_centers();
         session.recompute();
         session.refresh_profile_identities();
         Ok(session)
@@ -1678,17 +1682,28 @@ impl SketchSession {
         self.try_add_independent_auto_constraint(constraint)
     }
 
+    /// Give a curve a generated center handle bound by `CenterCoincident`.
+    /// `CenterCoincident` determines the two handle coordinates from the curve
+    /// center, so the handle adds no degree of freedom.
+    fn attach_owned_center(&mut self, curve: EntityId, center: Vec2) -> EntityId {
+        let point = self.sketch.add_generated_point(center);
+        self.sketch
+            .add_constraint(Constraint::CenterCoincident { point, curve });
+        point
+    }
+
     /// Bind a selectable, constrainable center point to a freshly drawn circle
     /// (issue #151). A circle's center is implicit — stored inline on
     /// `Entity::Circle` — so without this link it can be neither picked nor
-    /// constrained. `CenterCoincident` determines the two handle coordinates
-    /// from the curve center, so the handle adds no degree of freedom.
+    /// constrained.
     ///
-    /// A free pick gets its own generated handle. An intentional acquisition
-    /// keeps the acquired point as the handle, so Ctrl still suppresses it and
-    /// no redundant second point appears at the same spot. The datum relations
-    /// for origin/edge acquisitions keep the curve as their carrier, exactly as
-    /// before, and the handle simply follows the curve center.
+    /// A free pick gets its own handle. An intentional acquisition keeps the
+    /// acquired point as the handle, and a pick that lands exactly on an
+    /// existing point reuses it, so no second vertex is manufactured at the same
+    /// coordinate (`resolve_endpoint` does the same for line endpoints). The
+    /// datum relations for origin/edge acquisitions keep the curve as their
+    /// carrier, exactly as before, and the handle simply follows the curve
+    /// center.
     fn attach_circle_center(
         &mut self,
         circle: EntityId,
@@ -1707,15 +1722,47 @@ impl SketchSession {
         if let SnapTarget::Point { entity } = target {
             return entity;
         }
-        let point = self.sketch.add_generated_point(center);
-        let relation = Constraint::CenterCoincident {
+        // `center` is already the snapped position, so an exact vertex match
+        // covers both the origin and a suppressed (Ctrl) pick. Manufacturing a
+        // second point at the same coordinate is what `resolve_endpoint` avoids
+        // for line endpoints, and a curve center deserves the same treatment.
+        let point = match self.sketch.nearest_point(center, MERGE_EPS) {
+            Some((point, _)) => point,
+            None => return self.attach_owned_center(circle, center),
+        };
+        self.sketch.add_constraint(Constraint::CenterCoincident {
             point,
             curve: circle,
-        };
-        if !self.has_relation(&relation) {
-            self.sketch.add_constraint(relation);
-        }
+        });
         point
+    }
+
+    /// Every circle that predates center handles gains one, so issue #151 is
+    /// fixed for projects saved before the handle existed as well as for circles
+    /// the offset tool derives. Idempotent: a circle that already has a center
+    /// relation is left alone, so a user who detached a handle deliberately is
+    /// not overruled until the project is reopened.
+    fn attach_missing_circle_centers(&mut self) {
+        let circles: Vec<(EntityId, Vec2)> = self
+            .sketch
+            .entities()
+            .filter_map(|(id, entity)| match entity {
+                Entity::Circle { center, .. } => Some((id, *center)),
+                _ => None,
+            })
+            .collect();
+        for (circle, center) in circles {
+            let bound = self
+                .sketch
+                .constraints()
+                .any(|(_, constraint)| match *constraint {
+                    Constraint::CenterCoincident { curve, .. } => curve == circle,
+                    _ => false,
+                });
+            if !bound {
+                self.attach_owned_center(circle, center);
+            }
+        }
     }
 
     fn has_relation(&self, relation: &Constraint) -> bool {
@@ -2698,8 +2745,7 @@ impl SketchSession {
         } = self.resolve_circle(request)?;
 
         let before = self.sketch.snapshot();
-        let (id, center) = self.create_circle(mode, anchor, second)?;
-        self.attach_circle_center(id, center, mode, anchor_target);
+        let id = self.create_circle(mode, anchor, second, anchor_target)?;
         let d_text = request
             .diameter_text
             .clone()
@@ -2723,8 +2769,7 @@ impl SketchSession {
         center_target: SnapTarget,
     ) -> Result<ToolResult, SessionError> {
         let before = self.sketch.snapshot();
-        let (id, center) = self.create_circle(mode, p1, p2)?;
-        self.attach_circle_center(id, center, mode, center_target);
+        let id = self.create_circle(mode, p1, p2, center_target)?;
         self.recompute();
         self.push_command(before);
         Ok(ToolResult {
@@ -2733,15 +2778,16 @@ impl SketchSession {
         })
     }
 
-    /// Circle mutation only (shared by plain and locked/dimensioned
-    /// creation). Returns the new circle and its center, which the caller
-    /// needs to seat the selectable center handle.
+    /// Circle mutation only (shared by plain and locked/dimensioned creation),
+    /// including seating the selectable center handle so every circle tool goes
+    /// through one path.
     fn create_circle(
         &mut self,
         mode: CircleMode,
         p1: Vec2,
         p2: Vec2,
-    ) -> Result<(EntityId, Vec2), SessionError> {
+        center_target: SnapTarget,
+    ) -> Result<EntityId, SessionError> {
         let (center, radius) = match mode {
             CircleMode::CenterDiameter => (p1, p1.distance(p2)),
             CircleMode::TwoPoint => (((p1 + p2) * 0.5), p1.distance(p2) / 2.0),
@@ -2749,10 +2795,9 @@ impl SketchSession {
         if radius < MIN_LINE_LENGTH_MM {
             return Err(SessionError::DegenerateSegment);
         }
-        Ok((
-            self.sketch.add_entity(Entity::Circle { center, radius }),
-            center,
-        ))
+        let id = self.sketch.add_entity(Entity::Circle { center, radius });
+        self.attach_circle_center(id, center, mode, center_target);
+        Ok(id)
     }
 
     /// Slot (M1 follow-up): a capsule of 2 parallel
@@ -3146,6 +3191,31 @@ impl SketchSession {
         })
     }
 
+    /// The center a corner drag must not disturb: a generated span-midpoint
+    /// center anchored by this corner. A center rectangle resizes *about* its
+    /// center, so the dragged corner moves and the opposite corner mirrors it,
+    /// rather than the whole shape sliding and the center absorbing the change.
+    fn span_center_anchored_by(&self, corner: EntityId) -> Option<EntityId> {
+        self.sketch
+            .constraints()
+            .filter_map(|(_, constraint)| match *constraint {
+                Constraint::SpanMidpoint { point, start, end }
+                    if start == corner || end == corner =>
+                {
+                    Some(point)
+                }
+                _ => None,
+            })
+            .find(|point| {
+                self.sketch.is_generated_point(*point)
+                    && !self.sketch.is_referenced_by_entity(*point)
+                    && self.sketch.relations_pointing_at(*point).all(|constraint| {
+                        matches!(constraint,
+                            Constraint::SpanMidpoint { point: center, .. } if center == point)
+                    })
+            })
+    }
+
     /// Rubber-band drag of a point via the solver: the dragged point is
     /// pinned to the cursor, everything else is re-solved each call, so
     /// coincident/shared points and all constraints keep holding (D4.4).
@@ -3168,7 +3238,14 @@ impl SketchSession {
 
         // Snap gives the pin target (coordinates only — never a merge).
         let (target, _) = self.snap_inner(request.to_raw, !request.ctrl_held, false, None);
-        let analysis = solver::solve(&mut self.sketch, &[(point_id, target)]);
+        let mut pins = vec![(point_id, target)];
+        // A center rectangle's center stays where it is while a corner moves.
+        if let Some(center) = self.span_center_anchored_by(point_id) {
+            if let Some(position) = self.sketch.point_position(center) {
+                pins.push((center, position));
+            }
+        }
+        let analysis = solver::solve(&mut self.sketch, &pins);
         if analysis.converged {
             // Hard-set the pin exactly: the damped solve can land ~1e-9
             // off, and chained geometry deserves exact shared points.
@@ -3218,14 +3295,31 @@ impl SketchSession {
             ));
         }
         let before = self.sketch.snapshot();
+        // Corners of the lines this delete removes, so only span midpoints the
+        // delete actually disturbed are reconsidered afterwards.
+        let line_corners: Vec<(EntityId, [EntityId; 2])> = self
+            .sketch
+            .entities()
+            .filter_map(|(line, entity)| match entity {
+                Entity::Line { start, end } => Some((line, [*start, *end])),
+                _ => None,
+            })
+            .collect();
         let mut removed = Vec::new();
         for id in existing {
             removed.extend(self.sketch.remove_entity(id));
         }
-        // Deleting every carrier of a center rectangle leaves a relation
-        // between its own generated handles, which would otherwise keep the
-        // center and its diagonal corners alive as orphan points.
-        removed.extend(self.sketch.collect_detached_generated_islands());
+        let affected: BTreeSet<EntityId> = removed
+            .iter()
+            .copied()
+            .chain(
+                line_corners
+                    .iter()
+                    .filter(|(line, _)| removed.contains(line))
+                    .flat_map(|(_, corners)| corners.iter().copied()),
+            )
+            .collect();
+        removed.extend(self.sketch.sweep_detached_span_midpoints(&affected));
         removed.sort();
         removed.dedup();
         self.recompute();
@@ -3577,7 +3671,22 @@ impl SketchSession {
             ));
         }
         let before = self.sketch.snapshot();
+        // The relations this module owns as tool scaffolding exist only to bind
+        // a generated handle, so detaching one reaps the handle it owned instead
+        // of leaving an orphan point behind. Arc endpoint handles are
+        // deliberately not reaped here: a trimmed carrier can be re-attached to
+        // one, which is why `modify_does_not_collect_a_previously_detached_point`
+        // requires them to survive.
+        let owned_handle = match constraint {
+            Constraint::CenterCoincident { point, .. } | Constraint::SpanMidpoint { point, .. } => {
+                Some(point)
+            }
+            _ => None,
+        };
         self.sketch.remove_constraint(cid);
+        if let Some(point) = owned_handle {
+            self.sketch.remove_unused_generated_points([point]);
+        }
         self.recompute();
         self.push_command(before);
         Ok(AddConstraintResult {

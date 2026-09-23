@@ -1,8 +1,9 @@
 //! Issue #151: circle and center-rectangle centers are selectable,
 //! constrainable, and keep their shape symmetric about that center.
 use nbcad_sketch::{
-    CircleMode, Constraint, DragPhase, EntityDto, EntityId, MoveCopyRequest, MovePointRequest,
-    OriginPlane, PlaneRef, RectangleMode, ScaleRequest, SketchDto, SketchSession, SnapTarget, Vec2,
+    CircleMode, Constraint, DragPhase, EntityDto, EntityId, FilletRequest, MoveCopyRequest,
+    MovePointRequest, OffsetRequest, OriginPlane, PlaneRef, RectangleMode, ScaleRequest, SketchDto,
+    SketchSession, SnapTarget, Vec2,
 };
 
 fn v(x: f64, y: f64) -> Vec2 {
@@ -230,17 +231,27 @@ fn a_center_rectangle_exposes_its_center_and_stays_symmetric() {
     // A center is determined by the diagonal, so it adds no freedom.
     assert_eq!(dto.dof.value, 4, "center rectangle keeps its 4 DOF");
 
-    // Drag one corner: the opposite corner follows so the center stays the
-    // true midpoint of both diagonals.
+    // Dragging a corner resizes the rectangle *about* its center: the center
+    // holds its ground and the opposite corner mirrors the dragged one. A
+    // midpoint assertion alone would pass even if nothing else moved, so pin
+    // the intended positions of every corner.
     drag(&mut s, bl, v(30.0, 30.0));
     let after = s.dto();
-    let center_at = point(&after, center);
-    assert!(point(&after, bl).distance(v(30.0, 30.0)) < 1e-6);
-    for (a, b) in [(bl, tr), (br, tl)] {
-        let (a, b) = (point(&after, a), point(&after, b));
+    assert!(
+        point(&after, center).distance(v(50.0, 50.0)) < 1e-6,
+        "the center must not drift, got {:?}",
+        point(&after, center)
+    );
+    for (corner, expected) in [
+        (bl, v(30.0, 30.0)),
+        (br, v(70.0, 30.0)),
+        (tr, v(70.0, 70.0)),
+        (tl, v(30.0, 70.0)),
+    ] {
         assert!(
-            ((a + b) * 0.5).distance(center_at) < 1e-6,
-            "the center must stay the midpoint of its diagonals"
+            point(&after, corner).distance(expected) < 1e-6,
+            "corner {corner:?} should be at {expected:?}, got {:?}",
+            point(&after, corner)
         );
     }
     assert_eq!(after.dof.value, 4, "the drag must not add freedom");
@@ -390,5 +401,296 @@ fn copied_and_transformed_circles_keep_an_attached_center() {
     assert!(
         point(&copied.sketch, copy_handles[0]).distance(v(150.0, 14.0)) < 1e-6,
         "the copied handle follows the copied center"
+    );
+}
+
+#[test]
+fn deleting_unrelated_geometry_keeps_a_rounded_center_rectangle_centered() {
+    // Review finding 1: the delete sweep must not retire a live relation just
+    // because the corners it anchors are no longer line endpoints. Fillet keeps
+    // a trimmed corner through its own relations, so the diagonal survives and
+    // an unrelated delete is a no-op for the rectangle.
+    let mut s = session();
+    let created = s
+        .add_rectangle(RectangleMode::Center, Vec2::ZERO, v(20.0, 10.0))
+        .unwrap();
+    let [bottom, right, top, left] = [4, 5, 6, 7].map(|i| created.entities[i]);
+    for (l1, l2) in [(bottom, left), (top, right)] {
+        s.fillet_lines(&FilletRequest {
+            l1,
+            l2,
+            radius_text: "2".into(),
+        })
+        .unwrap();
+    }
+    let center = rectangle_center(&s.dto());
+    let rounding_dof = s.dto().dof.value;
+    let other = s
+        .add_line(v(100.0, 100.0), v(120.0, 100.0), true)
+        .unwrap()
+        .entity_id;
+    s.delete_entities(&[other]).unwrap();
+    let after = s.dto();
+    assert!(
+        after
+            .constraints
+            .iter()
+            .any(|c| matches!(c.constraint, Constraint::SpanMidpoint { .. })),
+        "an unrelated delete must not drop the rectangle's diagonal relation"
+    );
+    assert_eq!(
+        after.dof.value, rounding_dof,
+        "the rectangle must keep its constraint count"
+    );
+    // And the relation is still enforced: the center remains the midpoint of
+    // the diagonal it was bound to.
+    let (bl, tr) = (created.entities[0], created.entities[2]);
+    let (bl, tr) = (point(&after, bl), point(&after, tr));
+    assert!(
+        ((bl + tr) * 0.5).distance(point(&after, center)) < 1e-6,
+        "the surviving center must still govern its diagonal"
+    );
+}
+
+#[test]
+fn moving_a_center_rectangle_by_its_edges_carries_its_center() {
+    // Review finding 2: a center rectangle selected by its four edges must move
+    // as a whole rather than leaving its center behind for the solver to split.
+    let mut s = session();
+    let created = s
+        .add_rectangle(RectangleMode::Center, v(50.0, 50.0), v(60.0, 56.0))
+        .unwrap();
+    s.move_copy_entities(&MoveCopyRequest {
+        entity_ids: created.entities[4..8].to_vec(),
+        dx: 10.0,
+        dy: 0.0,
+        copy: false,
+    })
+    .unwrap();
+    let dto = s.dto();
+    assert!(
+        point(&dto, created.entities[0]).distance(v(50.0, 44.0)) < 1e-6,
+        "bottom-left corner should land exactly, got {:?}",
+        point(&dto, created.entities[0])
+    );
+    assert!(
+        point(&dto, created.entities[8]).distance(v(60.0, 50.0)) < 1e-6,
+        "the center should travel with the rectangle, got {:?}",
+        point(&dto, created.entities[8])
+    );
+
+    // Scale is the same contract.
+    s.scale_entities(&ScaleRequest {
+        entity_ids: created.entities[4..8].to_vec(),
+        origin: v(0.0, 0.0),
+        factor_text: "2".to_string(),
+    })
+    .unwrap();
+    let dto = s.dto();
+    assert!(point(&dto, created.entities[0]).distance(v(100.0, 88.0)) < 1e-6);
+    assert!(point(&dto, created.entities[8]).distance(v(120.0, 100.0)) < 1e-6);
+}
+
+#[test]
+fn deleting_part_of_a_center_rectangle_drops_the_unused_corner() {
+    // Review finding 4: a partial erase must not keep a corner no line uses,
+    // exactly as it does not for a two-point rectangle.
+    let mut s = session();
+    let created = s
+        .add_rectangle(RectangleMode::Center, v(50.0, 50.0), v(60.0, 56.0))
+        .unwrap();
+    let [bl, br, tr, tl] = [
+        created.entities[0],
+        created.entities[1],
+        created.entities[2],
+        created.entities[3],
+    ];
+    let (right, top) = (created.entities[5], created.entities[6]);
+    s.delete_entities(&[right, top]).unwrap();
+    let dto = s.dto();
+    assert!(
+        dto.entities.iter().all(|e| e.id() != tr),
+        "the orphaned top-right corner must be collected, got {:?}",
+        dto.entities
+    );
+    for survivor in [bl, br, tl] {
+        assert!(dto.entities.iter().any(|e| e.id() == survivor));
+    }
+}
+
+#[test]
+fn moving_a_circle_with_a_shared_center_does_not_drag_its_neighbours() {
+    // Review finding 3: only a handle the curve owns exclusively travels with
+    // it. A center acquired from other geometry is left to the solver, so an
+    // unselected rectangle is not rigidly dragged along.
+    let mut s = session();
+    let created = s
+        .add_rectangle(RectangleMode::TwoPoint, v(10.0, 10.0), v(50.0, 40.0))
+        .unwrap();
+    let corner = created.entities[0];
+    let circle = s
+        .add_circle_selective(
+            CircleMode::CenterDiameter,
+            v(10.0, 10.0),
+            v(18.0, 10.0),
+            false,
+        )
+        .unwrap()
+        .entities[0];
+    assert_eq!(center_handles(&s.dto(), circle), vec![corner]);
+    let corner_before = point(&s.dto(), corner);
+
+    s.move_copy_entities(&MoveCopyRequest {
+        entity_ids: vec![circle],
+        dx: 100.0,
+        dy: 0.0,
+        copy: false,
+    })
+    .unwrap();
+    let dto = s.dto();
+    let moved = point(&dto, corner).distance(corner_before);
+    assert!(
+        moved < 100.0 - 1e-6,
+        "unselected geometry must not be dragged the whole delta, moved {moved}"
+    );
+    assert!(
+        circle_center_of(&dto, circle).distance(point(&dto, corner)) < 1e-6,
+        "the circle must stay on the point it was snapped to"
+    );
+}
+
+#[test]
+fn copying_a_center_rectangle_copies_its_center() {
+    // Review finding 5: the diagonal relation has to be remapped, otherwise the
+    // occurrence is a plain rectangle with an inert center point.
+    let mut s = session();
+    let created = s
+        .add_rectangle(RectangleMode::Center, v(20.0, 20.0), v(30.0, 26.0))
+        .unwrap();
+    let copied = s
+        .move_copy_entities(&MoveCopyRequest {
+            entity_ids: created.entities.clone(),
+            dx: 100.0,
+            dy: 0.0,
+            copy: true,
+        })
+        .unwrap();
+    let centers: Vec<EntityId> = copied
+        .sketch
+        .constraints
+        .iter()
+        .filter_map(|c| match c.constraint {
+            Constraint::SpanMidpoint { point, .. } => Some(point),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(centers.len(), 2, "source and occurrence each own a center");
+    let copy_center = centers
+        .into_iter()
+        .find(|point| *point != created.entities[8])
+        .expect("a distinct copied center");
+    let copied_circle_center = match copied
+        .sketch
+        .entities
+        .iter()
+        .find(|e| e.id() == copy_center)
+    {
+        Some(EntityDto::Point { position, .. }) => *position,
+        other => panic!("expected the copied center point, got {other:?}"),
+    };
+    assert!(
+        copied_circle_center.distance(v(120.0, 20.0)) < 1e-6,
+        "the copied center should sit at the occurrence's middle, got {copied_circle_center:?}"
+    );
+}
+
+#[test]
+fn an_offset_circle_owns_a_center_handle() {
+    // Review finding 6: a derived circle is still a circle the user can pick.
+    let mut s = session();
+    let source = s
+        .add_circle(CircleMode::CenterDiameter, v(20.0, 20.0), v(26.0, 20.0))
+        .unwrap()
+        .entities[0];
+    let offset = s
+        .offset_curve_op(&OffsetRequest {
+            entity: source,
+            distance_text: "4".into(),
+            cursor: v(20.0, 40.0),
+        })
+        .unwrap();
+    let derived = offset
+        .sketch
+        .entities
+        .iter()
+        .filter(|e| matches!(e, EntityDto::Circle { .. }))
+        .map(|e| e.id())
+        .find(|id| *id != source)
+        .expect("the offset circle");
+    assert_eq!(
+        center_handles(&offset.sketch, derived).len(),
+        1,
+        "an offset circle needs a selectable center"
+    );
+}
+
+#[test]
+fn deleting_a_center_relation_reaps_its_handle() {
+    // Review finding 7: detaching the relation must not strand the handle.
+    let mut s = session();
+    let circle = s
+        .add_circle(CircleMode::CenterDiameter, v(20.0, 20.0), v(28.0, 20.0))
+        .unwrap()
+        .entities[0];
+    let handle = center_handles(&s.dto(), circle)[0];
+    let relation = s
+        .dto()
+        .constraints
+        .iter()
+        .find(|c| {
+            matches!(c.constraint,
+                Constraint::CenterCoincident { point, curve } if point == handle && curve == circle)
+        })
+        .expect("the center relation")
+        .id;
+    s.delete_constraint(relation).unwrap();
+    let dto = s.dto();
+    assert!(
+        dto.entities.iter().all(|e| e.id() != handle),
+        "the orphaned handle must be reaped, got {:?}",
+        dto.entities
+    );
+    assert!(dto.entities.iter().any(|e| e.id() == circle));
+}
+
+#[test]
+fn a_ctrl_placed_center_reuses_an_exact_vertex() {
+    // Review finding 10: suppressing acquisition must not manufacture a second
+    // vertex at the exact same coordinate, exactly as line endpoints behave.
+    let mut s = session();
+    let line = s.add_line(v(10.0, 10.0), v(30.0, 10.0), true).unwrap();
+    let existing = line.start_point_id;
+    let circle = s
+        .add_circle_selective(
+            CircleMode::CenterDiameter,
+            v(10.0, 10.0),
+            v(18.0, 10.0),
+            true,
+        )
+        .unwrap()
+        .entities[0];
+    let dto = s.dto();
+    assert_eq!(
+        center_handles(&dto, circle),
+        vec![existing],
+        "a Ctrl pick exactly on a vertex reuses it"
+    );
+    assert_eq!(
+        dto.entities
+            .iter()
+            .filter(|e| matches!(e, EntityDto::Point { .. }))
+            .count(),
+        2,
+        "the line's two endpoints are still the only points"
     );
 }

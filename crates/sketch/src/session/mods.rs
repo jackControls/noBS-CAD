@@ -67,22 +67,93 @@ impl SketchSession {
             .collect()
     }
 
-    /// Center handles a curve owns (issue #151), mirroring
-    /// `arc_endpoint_points`. A center the user acquired on an existing point
-    /// *is* that point, so transforming the curve has to carry the attachment
-    /// with it and keep the relation exactly satisfied; leaving it behind
-    /// would make the solver split the difference and move both.
-    fn curve_center_points(&self, curve: EntityId) -> Vec<EntityId> {
-        self.sketch
+    /// The center handle a curve owns *exclusively*: a generated point whose
+    /// only relation is its `CenterCoincident` to this curve (issue #151).
+    ///
+    /// A center the user acquired on an existing point, or a handle other
+    /// geometry also depends on, is deliberately not owned: transforming the
+    /// curve alone would drag unselected geometry and land the curve somewhere
+    /// the user did not ask for. Those are left to the solver, as before.
+    fn exclusive_center_handle(&self, curve: EntityId) -> Option<EntityId> {
+        let point = self
+            .sketch
             .constraints()
-            .filter_map(|(_, constraint)| match *constraint {
+            .find_map(|(_, constraint)| match *constraint {
                 Constraint::CenterCoincident {
                     point,
                     curve: owner,
                 } if owner == curve => Some(point),
                 _ => None,
+            })?;
+        self.is_exclusive_handle(point).then_some(point)
+    }
+
+    /// A generated handle nothing but its owning relation depends on.
+    fn is_exclusive_handle(&self, point: EntityId) -> bool {
+        self.sketch.is_generated_point(point)
+            && !self.sketch.is_referenced_by_entity(point)
+            && self.sketch.relations_pointing_at(point).count() == 1
+    }
+
+    /// A center rectangle's center: a generated point owned only by the span
+    /// midpoints that bind it to a diagonal.
+    fn is_span_center(&self, point: EntityId) -> bool {
+        self.sketch.is_generated_point(point)
+            && !self.sketch.is_referenced_by_entity(point)
+            && self.sketch.relations_pointing_at(point).all(|constraint| {
+                matches!(
+                    constraint,
+                    Constraint::SpanMidpoint { point: center, .. } if *center == point
+                )
             })
-            .collect()
+    }
+
+    /// Every point a transform of `ids` has to carry with it, so shared geometry
+    /// stays together and the solver never has to split the difference between a
+    /// curve and the handle that defines it. Copy, Move and Scale share this
+    /// list.
+    ///
+    /// Which center a rectangle owns is a property of the relation, not of any
+    /// one selected edge, so the center is carried whenever both of its diagonal
+    /// corners are. That is what lets a center rectangle selected by its four
+    /// edges move as a whole instead of tearing its center loose.
+    fn owned_points(&self, ids: &BTreeSet<EntityId>) -> BTreeSet<EntityId> {
+        let mut points = BTreeSet::new();
+        for id in ids {
+            match self.sketch.entity(*id) {
+                Some(Entity::Point { .. }) => {
+                    points.insert(*id);
+                }
+                Some(Entity::Line { start, end }) => {
+                    points.insert(*start);
+                    points.insert(*end);
+                }
+                Some(Entity::Arc { .. }) => {
+                    points.extend(self.arc_endpoint_points(*id));
+                    points.extend(self.exclusive_center_handle(*id));
+                }
+                Some(Entity::Circle { .. }) => {
+                    points.extend(self.exclusive_center_handle(*id));
+                }
+                Some(Entity::Spline { .. }) | None => {}
+            }
+        }
+        let diagonal_centers: Vec<EntityId> = self
+            .sketch
+            .constraints()
+            .filter_map(|(_, constraint)| match *constraint {
+                Constraint::SpanMidpoint { point, start, end } => Some((point, start, end)),
+                _ => None,
+            })
+            .filter(|(_, start, end)| points.contains(start) && points.contains(end))
+            .map(|(point, _, _)| point)
+            .collect();
+        points.extend(
+            diagonal_centers
+                .into_iter()
+                .filter(|point| self.is_span_center(*point)),
+        );
+        points
     }
 
     /// Trim/Break change the finite sweep. Keep original endpoint references
@@ -728,6 +799,9 @@ impl SketchSession {
                         center: c.center,
                         radius: c.radius,
                     });
+                    // A derived circle is still a circle the user can pick, so
+                    // it needs the same selectable center as a drawn one.
+                    s.attach_owned_center(id, c.center);
                     s.constrain_radial_offset(
                         source,
                         id,
@@ -1426,25 +1500,15 @@ impl SketchSession {
         transform: impl Fn(Vec2) -> Vec2,
         reflected: bool,
     ) -> Result<(), SessionError> {
-        let mut source_points = BTreeSet::new();
         for id in ids {
-            match self.sketch.entity(*id).cloned() {
-                Some(Entity::Point { .. }) => {
-                    source_points.insert(*id);
-                }
-                Some(Entity::Line { start, end }) => {
-                    source_points.insert(start);
-                    source_points.insert(end);
-                }
-                Some(Entity::Arc { .. }) => {
-                    source_points.extend(self.arc_endpoint_points(*id));
-                    source_points.extend(self.curve_center_points(*id));
-                }
-                Some(Entity::Circle { .. }) => source_points.extend(self.curve_center_points(*id)),
-                Some(Entity::Spline { .. }) => {}
-                None => return Err(SessionError::EntityNotFound(*id)),
+            if self.sketch.entity(*id).is_none() {
+                return Err(SessionError::EntityNotFound(*id));
             }
         }
+        // One list of the points this selection owns, shared with Move and
+        // Scale, so a copied occurrence carries exactly what a transformed one
+        // does — including a selected center rectangle's center.
+        let source_points = self.owned_points(ids);
 
         let mut point_map = BTreeMap::new();
         for source in source_points {
@@ -1568,6 +1632,14 @@ impl SketchSession {
                         curve: *entity_map.get(&curve)?,
                     })
                 }
+                // A selected center rectangle's diagonal relation survives the
+                // copy when its center and both corners were carried, so the
+                // occurrence is a real center rectangle rather than a plain one.
+                Constraint::SpanMidpoint { point, start, end } => Some(Constraint::SpanMidpoint {
+                    point: *entity_map.get(&point)?,
+                    start: *entity_map.get(&start)?,
+                    end: *entity_map.get(&end)?,
+                }),
                 Constraint::Tangent { a, b } => Some(Constraint::Tangent {
                     a: *entity_map.get(&a)?,
                     b: *entity_map.get(&b)?,
@@ -1578,24 +1650,30 @@ impl SketchSession {
         for relation in relations {
             self.sketch.add_constraint(relation);
         }
-        // Every copied occurrence owns its own center handle, exactly like a
-        // freshly drawn circle. The remap above preserves a source handle that
-        // was copied with it; derived, legacy or acquired-center curves may
-        // have had none, so materialize one for each still-unbound circle.
-        for id in ids {
-            let Some(Entity::Circle { center, .. }) = self.sketch.entity(*id).cloned() else {
-                continue;
-            };
-            let Some(copied) = entity_map.get(id).copied() else {
-                continue;
-            };
+        // Every copied circle owns its own center handle, exactly like a freshly
+        // drawn one. The remap above preserves a source handle that was copied
+        // with it, so this only materializes a handle for circles whose source
+        // had none to carry (derived, legacy or acquired-center curves). It must
+        // run after the remap to see the relations the remap just added.
+        let copied_circles: Vec<(EntityId, Vec2)> = ids
+            .iter()
+            .filter_map(|id| match self.sketch.entity(*id) {
+                Some(Entity::Circle { center, .. }) => Some((*id, transform(*center))),
+                _ => None,
+            })
+            .collect();
+        for (source, center) in copied_circles {
+            let copied = entity_map
+                .get(&source)
+                .copied()
+                .expect("every selected entity was copied");
             let bound = self.sketch.constraints().any(|(_, relation)| {
                 matches!(relation, Constraint::CenterCoincident { curve, .. } if *curve == copied)
             });
             if bound {
                 continue;
             }
-            let point = self.sketch.add_generated_point(transform(center));
+            let point = self.sketch.add_generated_point(center);
             self.sketch.add_constraint(Constraint::CenterCoincident {
                 point,
                 curve: copied,
@@ -1743,31 +1821,20 @@ impl SketchSession {
             } else {
                 // Lines store geometry in shared point entities. Translate
                 // every selected point exactly once, even when several
-                // selected lines reference it.
-                let mut point_ids = BTreeSet::new();
+                // selected lines reference it. Curves move their own inline
+                // center, and `owned_points` supplies the handles that have to
+                // travel with them.
+                let point_ids = s.owned_points(&ids);
                 let mut direct_ids = Vec::new();
-                for id in ids {
-                    match s.sketch.entity(id).cloned() {
-                        Some(Entity::Point { .. }) => {
-                            point_ids.insert(id);
+                for id in &ids {
+                    match s.sketch.entity(*id) {
+                        Some(Entity::Line { .. }) | Some(Entity::Point { .. }) => {}
+                        Some(
+                            Entity::Circle { .. } | Entity::Arc { .. } | Entity::Spline { .. },
+                        ) => {
+                            direct_ids.push(*id);
                         }
-                        Some(Entity::Line { start, end }) => {
-                            point_ids.insert(start);
-                            point_ids.insert(end);
-                        }
-                        Some(Entity::Arc { .. }) => {
-                            point_ids.extend(s.arc_endpoint_points(id));
-                            point_ids.extend(s.curve_center_points(id));
-                            direct_ids.push(id);
-                        }
-                        Some(Entity::Circle { .. }) => {
-                            point_ids.extend(s.curve_center_points(id));
-                            direct_ids.push(id);
-                        }
-                        Some(Entity::Spline { .. }) => {
-                            direct_ids.push(id);
-                        }
-                        None => return Err(SessionError::EntityNotFound(id)),
+                        None => return Err(SessionError::EntityNotFound(*id)),
                     }
                 }
                 for point_id in point_ids {
@@ -1827,26 +1894,15 @@ impl SketchSession {
         let ids: BTreeSet<EntityId> = request.entity_ids.iter().copied().collect();
         self.mutate_with_undo(move |s| {
             // Scale in place: endpoints, centers, and radii scale about origin.
-            let mut point_ids: Vec<EntityId> = Vec::new();
+            // `owned_points` also supplies the curve handles and a selected
+            // center rectangle's center, so they land exactly on the scaled
+            // geometry instead of being pulled there by the solver.
             for id in &ids {
-                match s.sketch.entity(*id).cloned() {
-                    Some(Entity::Point { .. }) => point_ids.push(*id),
-                    Some(Entity::Line { start, end }) => {
-                        point_ids.push(start);
-                        point_ids.push(end);
-                    }
-                    Some(Entity::Arc { .. }) => {
-                        point_ids.extend(s.arc_endpoint_points(*id));
-                        point_ids.extend(s.curve_center_points(*id));
-                    }
-                    Some(Entity::Circle { .. }) => point_ids.extend(s.curve_center_points(*id)),
-                    // Splines scale below via their fit points.
-                    Some(Entity::Spline { .. }) => {}
-                    None => return Err(SessionError::EntityNotFound(*id)),
+                if s.sketch.entity(*id).is_none() {
+                    return Err(SessionError::EntityNotFound(*id));
                 }
             }
-            point_ids.sort();
-            point_ids.dedup();
+            let point_ids: Vec<EntityId> = s.owned_points(&ids).into_iter().collect();
             for pid in point_ids {
                 if let Some(Entity::Point { position }) = s.sketch.entity_mut(pid) {
                     *position = origin + (*position - origin) * factor;

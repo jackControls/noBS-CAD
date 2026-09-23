@@ -198,60 +198,73 @@ impl Sketch {
         removed
     }
 
-    /// Delete detached tool scaffolding that binds generated handles to each
-    /// other instead of to a carrier.
+    /// Whether a point is a tool-owned handle rather than user-authored.
+    pub(crate) fn is_generated_point(&self, id: EntityId) -> bool {
+        self.generated_points.contains(&id)
+    }
+
+    /// Whether any entity structurally references this point (a line endpoint).
+    pub(crate) fn is_referenced_by_entity(&self, point: EntityId) -> bool {
+        self.entities
+            .iter()
+            .any(|(_, entity)| entity.referenced_entities().contains(&point))
+    }
+
+    /// Every relation that mentions this point.
+    pub(crate) fn relations_pointing_at(
+        &self,
+        point: EntityId,
+    ) -> impl Iterator<Item = &Constraint> {
+        self.constraints
+            .iter()
+            .map(|(_, constraint)| constraint)
+            .filter(move |constraint| constraint.referenced_entities().contains(&point))
+    }
+
+    /// Retire `SpanMidpoint` relations whose diagonal anchors the last delete
+    /// detached, so a half-erased center rectangle does not keep a corner no
+    /// line uses.
     ///
-    /// A center rectangle keeps its own center through a `SpanMidpoint`
-    /// between its generated corners. Deleting every carrier line leaves that
-    /// relation holding its own handles alive, which would strand orphan
-    /// points and a dangling relation behind. Such a relation is an island:
-    /// every operand is a generated point that no surviving entity references.
-    ///
-    /// Only these point-to-point span midpoints participate. A single-operand
-    /// relation such as `Fix` is the user pinning a handle and must survive,
-    /// and a relation that still touches a user point or a carrier is never an
-    /// island, so authored intent is preserved.
-    pub(crate) fn collect_detached_generated_islands(&mut self) -> Vec<EntityId> {
-        let mut removed = Vec::new();
-        loop {
-            let stale: Vec<ConstraintId> = {
-                let entities = &self.entities;
-                let generated = &self.generated_points;
-                let detached = |id: EntityId| {
-                    generated.contains(&id)
-                        && !entities
-                            .iter()
-                            .any(|(_, entity)| entity.referenced_entities().contains(&id))
-                };
-                self.constraints
-                    .iter()
-                    .filter(|(_, constraint)| {
-                        matches!(constraint, Constraint::SpanMidpoint { .. })
-                            && constraint
-                                .referenced_entities()
-                                .iter()
-                                .all(|id| detached(*id))
-                    })
-                    .map(|(id, _)| *id)
-                    .collect()
-            };
-            if stale.is_empty() {
-                break;
-            }
-            let operands: Vec<EntityId> = self
-                .constraints
-                .iter()
-                .filter(|(id, _)| stale.contains(id))
-                .flat_map(|(_, constraint)| constraint.referenced_entities())
-                .collect();
-            self.constraints.retain(|(id, _)| !stale.contains(id));
-            let points = self.remove_unused_generated_points(operands);
-            if points.is_empty() {
-                break;
-            }
-            removed.extend(points);
+    /// Only relations touching `affected` are considered: the caller passes the
+    /// corners of the lines this delete removed, so an unrelated delete can
+    /// never retire a live relation. A corner still anchors its relation when
+    /// it is a live line endpoint, or when some relation other than a span
+    /// midpoint still holds it — which is exactly how Fillet/Chamfer retain a
+    /// trimmed corner. The center itself is left to the ordinary generated-point
+    /// reap once its relation is gone.
+    pub(crate) fn sweep_detached_span_midpoints(
+        &mut self,
+        affected: &BTreeSet<EntityId>,
+    ) -> Vec<EntityId> {
+        let anchored = |corner: EntityId| {
+            self.is_referenced_by_entity(corner)
+                || self
+                    .relations_pointing_at(corner)
+                    .any(|constraint| !matches!(constraint, Constraint::SpanMidpoint { .. }))
+        };
+        let stale: Vec<ConstraintId> = self
+            .constraints
+            .iter()
+            .filter(|(_, constraint)| match *constraint {
+                Constraint::SpanMidpoint { start, end, .. } => {
+                    (affected.contains(&start) || affected.contains(&end))
+                        && !(anchored(start) && anchored(end))
+                }
+                _ => false,
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        if stale.is_empty() {
+            return Vec::new();
         }
-        removed
+        let operands: Vec<EntityId> = self
+            .constraints
+            .iter()
+            .filter(|(id, _)| stale.contains(id))
+            .flat_map(|(_, constraint)| constraint.referenced_entities())
+            .collect();
+        self.constraints.retain(|(id, _)| !stale.contains(id));
+        self.remove_unused_generated_points(operands)
     }
 
     /// Modify tools can detach/rebind handles without deleting the original
