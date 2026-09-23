@@ -84,8 +84,3 @@ pages, matching flagship example policy.
 
 See [`machine-design-help-search.md`](machine-design-help-search.md) for the
 index, MCP tools, and Help UI plan.
-
-## Adversarial review
-
-See [`machine-design-adversarial-review.md`](machine-design-adversarial-review.md)
-for the 2026-09-11 pass (blockers: SOURCES ids, preferred-fit fence).

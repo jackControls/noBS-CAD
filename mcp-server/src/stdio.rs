@@ -137,11 +137,17 @@ pub(super) fn independent_of_default_document(name: &str, arguments: &Value) -> 
         | "material_catalog" => true,
         "cad_interface" => {
             let action = arguments["action"].as_str();
+            let grouped_help = action == Some("execute")
+                && arguments["operation"] == "cad_help"
+                && crate::interface::group_for("cad_help")
+                    .is_some_and(|group| arguments["group"] == group);
             arguments["action"].is_null()
                 || matches!(action, Some("catalog" | "recipes" | "launch"))
+                // Help does not select a document through either entry point.
+                || grouped_help
                 // Scripts select their supplied session themselves. Other UI
                 // controls already validate and use their explicit session.
-                // execute has no such selector: it always uses the attachment.
+                // Other execute operations have no selector and use the attachment.
                 || (action != Some("execute") && arguments.get("session_id").is_some())
         }
         _ => false,
@@ -398,8 +404,14 @@ mod tests {
         for (name, args) in [
             ("cad_list_sessions", json!({})),
             ("cad_attach", json!({"session_id":"explicit"})),
+            ("cad_help", json!({"action":"topics"})),
             ("cad_interface", json!({"action":"catalog"})),
             ("cad_interface", json!({"action":"recipes"})),
+            (
+                "cad_interface",
+                json!({"action":"execute", "group":"document/session", "operation":"cad_help",
+                    "arguments":{"action":"topics"}}),
+            ),
             (
                 "cad_interface",
                 json!({"action":"script","session_id":"explicit"}),
@@ -413,6 +425,26 @@ mod tests {
             (
                 "cad_interface",
                 json!({"action":"execute","session_id":"ignored"}),
+            ),
+            (
+                "cad_interface",
+                json!({"action":"execute", "operation":"cad_help",
+                    "arguments":{"action":"topics"}}),
+            ),
+            (
+                "cad_interface",
+                json!({"action":"execute", "group":"not-a-group", "operation":"cad_help",
+                    "arguments":{"action":"topics"}}),
+            ),
+            (
+                "cad_interface",
+                json!({"action":"execute", "group":"document/session", "operation":"cad_interface",
+                    "arguments":{"action":"catalog"}}),
+            ),
+            (
+                "cad_interface",
+                json!({"action":"execute", "group":"document/session", "operation":"sketch_begin",
+                    "arguments":{}}),
             ),
             (
                 "cad_interface",

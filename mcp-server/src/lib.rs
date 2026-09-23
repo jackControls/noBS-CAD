@@ -5579,6 +5579,99 @@ mod tests {
     }
 
     #[test]
+    fn desktop_cad_help_works_before_selection_and_after_detach() {
+        let mut server = CadServer::new().unwrap();
+        server.desktop_binding = Some(DesktopBinding {
+            // No desktop owns this PID, so accidental document selection fails.
+            process_id: u32::MAX,
+            initial_selection_pending: true,
+        });
+        let before = server.manager.export_project_model().unwrap();
+        let help_group = interface::group_for("cad_help").unwrap();
+
+        for detached in [false, true] {
+            if detached {
+                server.call_tool("cad_detach", json!({})).unwrap();
+            }
+            for arguments in [
+                json!({"action":"search", "query":"clearance fit"}),
+                json!({"action":"get", "id":"machine-design.concepts.fits-clearances"}),
+                json!({"action":"topics"}),
+            ] {
+                let direct = server.call_tool("cad_help", arguments.clone()).unwrap();
+                let grouped = server
+                    .call_tool(
+                        "cad_interface",
+                        json!({
+                            "action":"execute", "group":help_group, "operation":"cad_help",
+                            "arguments":arguments
+                        }),
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("grouped help failed (detached={detached}): {error}")
+                    });
+                assert_eq!(grouped, direct);
+            }
+
+            for arguments in [
+                json!({"action":"get", "id":"../etc/passwd"}),
+                json!({"action":"search"}),
+                json!({"action":"unknown"}),
+            ] {
+                let direct = server
+                    .call_tool("cad_help", arguments.clone())
+                    .expect_err("invalid help arguments must fail");
+                let grouped = server
+                    .call_tool(
+                        "cad_interface",
+                        json!({
+                            "action":"execute", "group":help_group, "operation":"cad_help",
+                            "arguments":arguments
+                        }),
+                    )
+                    .expect_err("grouped help must preserve argument validation");
+                assert_eq!(grouped, direct);
+            }
+
+            // The help exception must not let document reads or mutations run
+            // against the independent headless manager inside a desktop server.
+            for operation in ["cad_document", "sketch_begin"] {
+                let direct = server
+                    .call_tool(operation, json!({}))
+                    .expect_err("document operations still need a selected document");
+                let grouped = server
+                    .call_tool(
+                        "cad_interface",
+                        json!({
+                            "action":"execute", "group":interface::group_for(operation).unwrap(),
+                            "operation":operation, "arguments":{}
+                        }),
+                    )
+                    .expect_err("grouped document operations still need a selected document");
+                let expected = if detached {
+                    "no selected document"
+                } else {
+                    "desktop_not_ready"
+                };
+                assert!(direct.contains(expected), "{direct}");
+                assert!(grouped.contains(expected), "{grouped}");
+            }
+
+            assert!(server.attached_document_id.is_none());
+            assert_eq!(
+                server
+                    .desktop_binding
+                    .as_ref()
+                    .unwrap()
+                    .initial_selection_pending,
+                !detached
+            );
+            assert!(server.tool_trace.is_empty());
+            assert_eq!(server.manager.export_project_model().unwrap(), before);
+        }
+    }
+
+    #[test]
     fn dynamic_disclosure_lists_active_and_soft_tools() {
         DisclosureState::set_clock_for_test(0);
         let mut server = CadServer::new().unwrap();
