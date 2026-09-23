@@ -2212,6 +2212,7 @@
         "cad_get_tool_disclosure_mode",
         "cad_set_tool_disclosure_mode",
         "cad_list_all_tools",
+        "cad_help",
         "cad_cancel_recompute",
         "cad_list_sessions",
         "cad_interface",

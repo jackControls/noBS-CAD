@@ -4299,7 +4299,10 @@ fn cad_help_call(arguments: &Value) -> Result<Value, String> {
                 .get("query")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "search requires 'query'".to_string())?;
-            let limit = arguments.get("limit").and_then(Value::as_u64).map(|n| n as usize);
+            let limit = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize);
             let hits = store.search(query, limit);
             Ok(json!({
                 "action": "search",
@@ -4336,14 +4339,19 @@ fn cad_help_call(arguments: &Value) -> Result<Value, String> {
             }))
         }
         "topics" => {
-            let offset = arguments.get("offset").and_then(Value::as_u64).map(|n| n as usize);
+            let offset = arguments
+                .get("offset")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize);
             let mut value = store.topics(offset);
             if let Some(obj) = value.as_object_mut() {
                 obj.insert("action".into(), json!("topics"));
             }
             Ok(value)
         }
-        other => Err(format!("unknown cad_help action '{other}' (expected search|get|topics)")),
+        other => Err(format!(
+            "unknown cad_help action '{other}' (expected search|get|topics)"
+        )),
     }
 }
 
@@ -5500,6 +5508,7 @@ mod tests {
 
     #[test]
     fn cad_help_search_and_get_clearance_fit() {
+        assert_eq!(interface::group_for("cad_help"), Some("document/session"));
         let mut server = CadServer::new().expect("server");
         let search = server
             .call_tool(
@@ -5510,7 +5519,9 @@ mod tests {
         assert_eq!(search["action"], "search");
         let hits = search["hits"].as_array().expect("hits");
         assert!(!hits.is_empty());
-        assert!(hits.iter().any(|h| h["id"].as_str().unwrap_or("").contains("fits")));
+        assert!(hits
+            .iter()
+            .any(|h| h["id"].as_str().unwrap_or("").contains("fits")));
         let id = hits[0]["id"].as_str().unwrap();
         let got = server
             .call_tool("cad_help", json!({"action": "get", "id": id}))
@@ -5518,14 +5529,54 @@ mod tests {
         assert_eq!(got["id"], id);
         assert!(got["body"].as_str().unwrap().len() > 20);
         let err = server
-            .call_tool(
-                "cad_help",
-                json!({"action": "get", "id": "../etc/passwd"}),
-            )
+            .call_tool("cad_help", json!({"action": "get", "id": "../etc/passwd"}))
             .expect_err("path get must fail");
-        assert!(err.contains("id") || err.contains("invalid") || err.contains("path") || err.contains("allowlist") || err.contains("unknown"), "{err}");
-    }
+        assert!(
+            err.contains("id")
+                || err.contains("invalid")
+                || err.contains("path")
+                || err.contains("allowlist")
+                || err.contains("unknown"),
+            "{err}"
+        );
 
+        // Same spine via cad_interface execute (grouped dispatch).
+        let via_interface = server
+            .call_tool(
+                "cad_interface",
+                json!({
+                    "action": "execute",
+                    "group": "document/session",
+                    "operation": "cad_help",
+                    "arguments": {
+                        "action": "search",
+                        "query": "clearance fit",
+                        "limit": 5
+                    }
+                }),
+            )
+            .expect("cad_interface cad_help search");
+        assert_eq!(via_interface["action"], "search");
+        let iface_hits = via_interface["hits"].as_array().expect("iface hits");
+        assert!(!iface_hits.is_empty());
+        assert!(iface_hits
+            .iter()
+            .any(|h| h["id"].as_str().unwrap_or("").contains("fits")));
+        let iface_id = iface_hits[0]["id"].as_str().unwrap();
+        let iface_got = server
+            .call_tool(
+                "cad_interface",
+                json!({
+                    "action": "execute",
+                    "group": "document/session",
+                    "operation": "cad_help",
+                    "arguments": {"action": "get", "id": iface_id}
+                }),
+            )
+            .expect("cad_interface cad_help get");
+        assert_eq!(iface_got["id"], iface_id);
+        assert!(iface_got["body"].as_str().unwrap().len() > 20);
+    }
 
     #[test]
     fn dynamic_disclosure_lists_active_and_soft_tools() {

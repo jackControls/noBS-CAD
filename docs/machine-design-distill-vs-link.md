@@ -133,4 +133,4 @@ MCP / agent order:
 
 ## Decision for this branch
 
-Keep working on `docs/machine-design-kb` **without a PR** until the corpus and/or a first `kb-*` recipe are ready. SOURCES stays the machine-readable table; this file is the human explanation.
+Branch `docs/machine-design-kb` tracks the corpus; keep SOURCES and distill policy in sync until a first `kb-*` recipe is ready. SOURCES stays the machine-readable table; this file is the human explanation.

@@ -38,7 +38,9 @@ fn help_search_prompt(arguments: Option<&Value>) -> Value {
 
     let search_line = match &query {
         Some(q) => format!("Search for: {q}"),
-        None => "Search for: (derive a short query from the current design or process task)".to_string(),
+        None => {
+            "Search for: (derive a short query from the current design or process task)".to_string()
+        }
     };
 
     let text = format!(

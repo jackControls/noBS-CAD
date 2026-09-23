@@ -12,29 +12,30 @@ Tiny golden set for harness regression. Expand later; keep hermetic.
 | E4 | Replay E2 twice independently (fresh MCP processes) | Matching checks_completed + body presence |
 | E5 | One-step: `cad_new_project` → sketch rectangle → extrude → `solid_scene` | Stable body id; no invented tools |
 
-Design Ops runner:
+Repo-reproducible coverage (from repository root):
 
 ```bash
-source /home/box/nobs-cad-env.sh
-python3 /workspace/cad-design-ops/evals/run_modeling_goldens.py
+cargo test -p nbcad-help
+cargo test --manifest-path mcp-server/Cargo.toml -- --nocapture
+cargo xtask install-mcp --dry-run
 ```
-
-Fixtures/results: `modeling-goldens.json`, `modeling-golden-results.md` under `/workspace/cad-design-ops/evals/`. Shared stdio helper: `mcp_stdio.py`.
 
 Record: server revision, elapsed_ms, pass/fail/skip, tool error strings. Prefer honest SKIP over inventing geometry APIs.
 
 ## Help MCP wire (H1–H8 core; H9–H46 corpus; ops merged)
 
-In-process BM25 unit tests live in `crates/help`. **Wire** goldens exercise the installed stdio binary the Cursor client uses (`tools/call` `cad_help`).
+In-process BM25 unit tests live in `crates/help`. MCP unit coverage for `cad_help`
+(direct tool calls and `cad_interface` execute) lives in `nbcad-mcp`.
 
 ```bash
-source /home/box/nobs-cad-env.sh
-python3 /workspace/cad-design-ops/evals/run_help_goldens.py
-# optional modeling smoke from help runner:
-python3 /workspace/cad-design-ops/evals/run_help_goldens.py --bonus-e2
+cargo test -p nbcad-help
+cargo test --manifest-path mcp-server/Cargo.toml cad_help -- --nocapture
+npm run check:knowledge
+npm run check:help-sources
 ```
 
-Fixtures/results stay under `/workspace/cad-design-ops/evals/` (`help-goldens.json`, `help-golden-results.md`).
+Optional stdio wire checks against a freshly built `nbcad-mcp` binary
+(`cargo xtask install-mcp`) should exercise the same H1–H8 expectations below.
 
 | ID | Call | Pass |
 |----|------|------|

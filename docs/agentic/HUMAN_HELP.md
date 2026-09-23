@@ -44,15 +44,20 @@ As of 2026-09-20, `nbcad-mcp` advertises `prompts` and ships one template:
 agents to form a contextual query and call `cad_help` (`search` → `get` 1–2
 ids; optional `resources/read` for the full OKF page). Design-flow prompts
 (validate-before-show, research-before-commit) remain **knowledge pages +
-Cursor skills** for now — deferred as separate MCP prompts. See Design Ops
-`cad-design-ops/guidance/mcp-prompts-gap.md`.
+agent skills** for now — deferred as separate MCP prompts. Doctrine lives in
+the knowledge corpus (e.g. agent MCP workflow concepts).
 
 ## Rebuild reminder
 
-Knowledge embeds at MCP **build** time. After corpus changes on this machine:
-run `cad-design-ops/scripts/install-nbcad-mcp.sh` (stdio prove). **Cursor still
-lags** until Jeff re-Adds the MCP entry with **bash + `launch.sh`**. Prefer
-Jeff owning Uninstall/Add; pkill/Restart alone can leave a stale server.
+Knowledge embeds at MCP **build** time. After corpus changes, rebuild and
+reinstall from the repository root:
+
+```bash
+cargo xtask install-mcp --clients cursor
+```
+
+See [`INSTALL_MCP.md`](INSTALL_MCP.md). Reload/re-Add the MCP client after a
+binary replace; Restart alone can leave a stale server.
 
 ## Worked example (human via `cad_help`)
 

@@ -111,7 +111,12 @@ After the server is installed, prefer:
    full markdown page is needed.
 
 Rebuild/reinstall the MCP binary after knowledge or `crates/help` changes so the
-embedded corpus matches the checkout. On the Design Ops box use
-`cad-design-ops/scripts/install-nbcad-mcp.sh`, then re-Add the Cursor MCP server
-(restart alone is not enough after a binary replace).
+embedded corpus matches the checkout:
+
+```sh
+cargo xtask install-mcp --clients cursor
+```
+
+Then re-Add / reload the Cursor MCP server (restart alone is not enough after a
+binary replace).
 

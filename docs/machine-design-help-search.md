@@ -9,7 +9,7 @@ humans both need **low-latency** local search. The Help UI must **render**
 pages well (not dump raw markdown). Design the crate for that scale now —
 even while today’s seed is ~6–50 pages.
 
-No PR while this incubates on `docs/machine-design-kb`.
+Tracked on branch `docs/machine-design-kb` (PR #145).
 
 ## Status (2026-09-19 Design Ops)
 
@@ -21,8 +21,7 @@ the scale path behind `SearchIndex` when growth bars trip — not day-one.
 ### Caps (confirmed 2026-09-19 — **no retune**)
 
 Provisional start values were **locked** after Design Ops wire goldens
-**H1–H8 PASS** (`cad-design-ops/evals/run_help_goldens.py` →
-`help-golden-results.md`). Prefer retuning from a new honest FAIL on that
+**H1–H8 PASS** (see [`docs/agentic/EVALS.md`](agentic/EVALS.md)). Prefer retuning from a new honest FAIL on that
 harness (or successor) over anecdotes.
 
 | Knob | Value | Confirmed by |
@@ -33,17 +32,20 @@ harness (or successor) over anecdotes.
 | topics page size | **50** | H7 page ≤50 |
 | get | **id-only** allowlist (no paths) | H5 path-like → `isError` |
 
-**Prove bed runners** (this machine; not CI-wired yet):
+**Repo-reproducible checks** (from repository root):
 
 ```bash
-source /home/box/nobs-cad-env.sh
-python3 /workspace/cad-design-ops/evals/run_help_goldens.py      # H1–H8
-python3 /workspace/cad-design-ops/evals/run_modeling_goldens.py  # E1–E5
+cargo test -p nbcad-help
+cargo test --manifest-path mcp-server/Cargo.toml cad_help -- --nocapture
+npm run check:knowledge
+npm run check:help-sources
+cargo xtask install-mcp --dry-run
 ```
 
-In-repo unit goldens: `cargo test -p nbcad-help`. Local MCP rebuild helper:
-`cad-design-ops/scripts/install-nbcad-mcp.sh` (does not call Cursor; use
-Uninstall+AddMcpServer after binary replace).
+In-repo unit goldens live in `crates/help`. After corpus changes, rebuild and
+reinstall the MCP binary (`cargo xtask install-mcp --clients …`), then reload /
+re-Add the MCP client (restart alone can leave a stale server).
+
 
 
 ## Same content for all uses
@@ -215,6 +217,6 @@ Optional: boost `related_recipes` when the caller passes active recipe context.
 - [x] Agent doctrine page `concepts/agent-mcp-workflow`
 - [x] MCP initialize instructions mention tenacity / `cad_help`
 - [ ] Tauri Help panel (later)
-- [~] CI: `cargo test --workspace` covers `nbcad-help` (linux-engine-tests); knowledge path filter added; Node index deprecation → see `cad-design-ops/evals/ci-help-gap.md`
+- [~] CI: `cargo test --workspace` / `cargo test -p nbcad-help` (linux-engine-tests); `npm run check:knowledge` / `check:help-sources` on Pages knowledge workflow
 - [ ] Tantivy when growth bar trips
 
