@@ -1,5 +1,5 @@
-// Issue #151: a click on a sketch point must select that point, including the
-// shared center of concentric circles and points that merely sit nearby.
+// Issue #151: the nearest point wins its click; only a genuinely shared circle
+// center redirects to its newest circle. Creation order must not steal hits.
 // Real pointer events against the built browser engine (not native visual QA).
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
@@ -40,7 +40,7 @@ async function fixture(scenario) {
     if (scenario !== 'lone-circle') {
       // A distinct center sits 0.2 mm away: well inside the pointer hit
       // tolerance at ordinary zoom, but it is its own point.
-      const x = scenario === 'distinct-centers' ? 20.2 : 20;
+      const x = scenario.startsWith('distinct-centers') ? 20.2 : 20;
       result = await engine.addCircle({
         mode: 'center_diameter',
         p1: { x, y: 10 },
@@ -52,10 +52,15 @@ async function fixture(scenario) {
         c => c.type === 'center_coincident' && c.curve === secondCircle,
       ).point;
     }
+    if (scenario === 'unrelated-point-after-circles') {
+      result = await engine.addPoint({ position: { x: 20.1, y: 10.1 }, ctrl_held: true });
+      unrelated = result.entities[0];
+    }
     store.setActiveSketch(result.sketch);
     return {
-      expected: unrelated ?? firstCenter,
-      click: scenario === 'unrelated-point' ? { x: 20.1, y: 10.1 } : { x: 20, y: 10 },
+      expected: unrelated ?? (scenario === 'distinct-centers-second' ? secondCenter : firstCenter),
+      click: unrelated !== null ? { x: 20.1, y: 10.1 }
+        : { x: scenario === 'distinct-centers-second' ? 20.2 : 20, y: 10 },
       firstCenter,
       secondCenter,
       unrelated,
@@ -85,7 +90,8 @@ try {
 
   // A point that is not shared must win its own click, even 0.2 mm from
   // another center and even though both sit inside the pointer tolerance.
-  for (const scenario of ['lone-circle', 'distinct-centers', 'unrelated-point']) {
+  for (const scenario of ['lone-circle', 'distinct-centers', 'distinct-centers-second',
+    'unrelated-point', 'unrelated-point-after-circles']) {
     const data = await fixture(scenario);
     await page.evaluate(() => window.__cameraApi.fit());
     await page.waitForTimeout(500);
@@ -104,9 +110,9 @@ try {
     return store.activeSketch.entities.filter(e => e.kind === 'circle').map(e => e.id);
   });
   const selectedShared = await clickSketchPoint({ x: 20, y: 10 });
-  assert.ok(
-    onSharedCenter.includes(selectedShared),
-    `a shared center belongs to a circle, got entity ${selectedShared}`,
+  assert.equal(
+    selectedShared, onSharedCenter.at(-1),
+    'a genuinely shared center must select the newest circle',
   );
   assert.equal(shared.secondCenter, shared.firstCenter, 'the pair really shares one handle');
   console.log('PASS concentric-pair: a genuinely shared center resolves to its circle');

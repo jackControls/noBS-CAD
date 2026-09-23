@@ -5149,6 +5149,7 @@ export function Viewport() {
       if (!sketch) return null;
       const tol = worldPerPixel() * tolerancePx;
       let best: { id: number; d: number } | null = null;
+      let bestPoint: { id: number; d: number } | null = null;
       const consider = (current: typeof best, id: number, d: number): typeof best =>
         d <= tol && (!current || d < current.d) ? { id, d } : current;
       for (const entity of sketch.entities) {
@@ -5156,19 +5157,7 @@ export function Viewport() {
         switch (entity.kind) {
           case 'point': {
             const d = Math.hypot(entity.position.x - p.x, entity.position.y - p.y);
-            if (d <= tol) {
-              // Concentric circles share this handle, so aiming at it is
-              // ambiguous about which circle is meant. Hand the click to the
-              // newest circle that binds it; a lone circle's center still wins,
-              // because picking the center is how a center is constrained. The
-              // decision reads the point's own relations, so proximity alone
-              // never redirects a click away from a real point.
-              const shared =
-                allowedKinds && !allowedKinds.has('circle')
-                  ? null
-                  : coincidentCircleAt(sketch.entities, sketch.constraints, entity.id);
-              return shared ?? entity.id; // points win outright otherwise
-            }
+            bestPoint = consider(bestPoint, entity.id, d);
             break;
           }
           case 'line':
@@ -5197,6 +5186,16 @@ export function Viewport() {
             break;
           }
         }
+      }
+      if (bestPoint) {
+        // Points keep priority over curve edges, but choose the nearest point
+        // before resolving its ownership. Returning the first point in range
+        // makes an older handle steal clicks on a newer, adjacent center.
+        const shared =
+          allowedKinds && !allowedKinds.has('circle')
+            ? null
+            : coincidentCircleAt(sketch.entities, sketch.constraints, bestPoint.id);
+        return shared ?? bestPoint.id;
       }
       return best ? best.id : null;
     };
