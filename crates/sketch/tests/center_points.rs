@@ -1,9 +1,9 @@
 //! Issue #151: circle and center-rectangle centers are selectable,
 //! constrainable, and keep their shape symmetric about that center.
 use nbcad_sketch::{
-    CircleMode, Constraint, DragPhase, EntityDto, EntityId, FilletRequest, LockedRectangleRequest,
-    MoveCopyRequest, MovePointRequest, OffsetRequest, OriginPlane, PlaneRef, RectangleMode,
-    ScaleRequest, SketchDto, SketchSession, SnapTarget, Vec2,
+    CircleMode, Constraint, DragPhase, EntityDto, EntityId, FilletRequest, LockedCircleRequest,
+    LockedRectangleRequest, MoveCopyRequest, MovePointRequest, OffsetRequest, OriginPlane,
+    PlaneRef, RectangleMode, ScaleRequest, SketchDto, SketchSession, SnapTarget, Vec2,
 };
 
 fn v(x: f64, y: f64) -> Vec2 {
@@ -850,4 +850,233 @@ fn a_circle_center_snapped_onto_an_orphaned_handle_is_bound() {
         "the acquired centre must be bound, not silently dropped"
     );
     assert!(circle_center_of(&dto, circle).distance(position) < 1e-6);
+}
+
+/// Two circles drawn on one exact center, so they share a generated handle.
+fn concentric_pair(s: &mut SketchSession) -> Vec<EntityId> {
+    [10.0, 15.0]
+        .into_iter()
+        .map(|radius| {
+            s.add_circle_selective(
+                CircleMode::CenterDiameter,
+                v(20.0, 10.0),
+                v(20.0 + radius, 10.0),
+                true,
+            )
+            .unwrap()
+            .entities[0]
+        })
+        .collect()
+}
+
+#[test]
+fn moving_all_circles_that_share_a_center_reaches_the_requested_position() {
+    // Review finding 2: the shared handle belongs to the selection when every
+    // one of its owners is selected, so the move must land exactly.
+    let mut s = session();
+    let ids = concentric_pair(&mut s);
+    let dto = s.dto();
+    assert_eq!(
+        center_handles(&dto, ids[0]),
+        center_handles(&dto, ids[1]),
+        "the pair shares one handle"
+    );
+    s.move_copy_entities(&MoveCopyRequest {
+        entity_ids: ids.clone(),
+        dx: 12.0,
+        dy: 0.0,
+        copy: false,
+    })
+    .unwrap();
+    for id in ids {
+        let actual = circle_center_of(&s.dto(), id);
+        assert!(
+            actual.distance(v(32.0, 10.0)) < 1e-6,
+            "requested (32,10), got {actual:?}"
+        );
+    }
+}
+
+#[test]
+fn scaling_all_circles_that_share_a_center_reaches_the_requested_position() {
+    let mut s = session();
+    let ids = concentric_pair(&mut s);
+    s.scale_entities(&ScaleRequest {
+        entity_ids: ids.clone(),
+        origin: v(0.0, 0.0),
+        factor_text: "2".into(),
+    })
+    .unwrap();
+    for id in ids {
+        let actual = circle_center_of(&s.dto(), id);
+        assert!(
+            actual.distance(v(40.0, 20.0)) < 1e-6,
+            "requested (40,20), got {actual:?}"
+        );
+    }
+}
+
+#[test]
+fn copying_circles_that_share_a_center_keeps_their_incidence() {
+    let mut s = session();
+    let ids = concentric_pair(&mut s);
+    s.move_copy_entities(&MoveCopyRequest {
+        entity_ids: ids.clone(),
+        dx: 50.0,
+        dy: 0.0,
+        copy: true,
+    })
+    .unwrap();
+    let dto = s.dto();
+    let copied: Vec<EntityId> = dto
+        .entities
+        .iter()
+        .filter_map(|entity| match entity {
+            EntityDto::Circle { id, .. } if !ids.contains(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(copied.len(), 2);
+    assert_eq!(
+        center_handles(&dto, copied[0]),
+        center_handles(&dto, copied[1]),
+        "the occurrence keeps the pair concentric"
+    );
+}
+
+fn copied_rectangle_center_after_corner_drag(select_all: bool) -> Vec2 {
+    let mut s = session();
+    let created = s
+        .add_rectangle(RectangleMode::Center, v(50.0, 50.0), v(60.0, 60.0))
+        .unwrap();
+    let source_ids = created.entities.clone();
+    let selection = if select_all {
+        source_ids.clone()
+    } else {
+        source_ids[4..8].to_vec()
+    };
+    s.move_copy_entities(&MoveCopyRequest {
+        entity_ids: selection,
+        dx: 50.0,
+        dy: 0.0,
+        copy: true,
+    })
+    .unwrap();
+    let (center, corner) = s
+        .dto()
+        .constraints
+        .iter()
+        .find_map(|constraint| match constraint.constraint {
+            Constraint::SpanMidpoint { point, start, .. } if !source_ids.contains(&point) => {
+                Some((point, start))
+            }
+            _ => None,
+        })
+        .expect("the copied rectangle's diagonal");
+    assert!(point(&s.dto(), center).distance(v(100.0, 50.0)) < 1e-6);
+    drag(&mut s, corner, v(85.0, 35.0));
+    point(&s.dto(), center)
+}
+
+#[test]
+fn copying_center_rectangle_edges_keeps_centered_resize() {
+    // Control for the whole-selection case below.
+    let actual = copied_rectangle_center_after_corner_drag(false);
+    assert!(
+        actual.distance(v(100.0, 50.0)) < 1e-6,
+        "edge selection: got {actual:?}"
+    );
+}
+
+#[test]
+fn copying_a_whole_center_rectangle_keeps_centered_resize() {
+    // Review finding 4: ownership has to survive the copy even when the user
+    // selected the visible center explicitly.
+    let actual = copied_rectangle_center_after_corner_drag(true);
+    assert!(
+        actual.distance(v(100.0, 50.0)) < 1e-6,
+        "whole selection: got {actual:?}"
+    );
+}
+
+#[test]
+fn manually_binding_a_detached_arc_endpoint_to_a_circle_is_not_redundant() {
+    // Review finding 3: admission must judge the relation on its own equations,
+    // not assume the alias it would introduce.
+    let mut s = session();
+    let arc = s
+        .add_arc_center(v(30.0, 30.0), v(40.0, 30.0), v(30.0, 40.0))
+        .unwrap()
+        .entities[0];
+    let (relation, orphan) = s
+        .dto()
+        .constraints
+        .iter()
+        .find_map(|constraint| match constraint.constraint {
+            Constraint::ArcEndpointCoincident {
+                point, arc: owner, ..
+            } if owner == arc => Some((constraint.id, point)),
+            _ => None,
+        })
+        .unwrap();
+    s.delete_constraint(relation).unwrap();
+    let circle = s
+        .add_circle_selective(
+            CircleMode::CenterDiameter,
+            v(70.0, 70.0),
+            v(76.0, 70.0),
+            true,
+        )
+        .unwrap()
+        .entities[0];
+    assert!(point(&s.dto(), orphan).distance(circle_center_of(&s.dto(), circle)) > 1.0);
+
+    let added = s.add_constraint(Constraint::CenterCoincident {
+        point: orphan,
+        curve: circle,
+    });
+    assert!(
+        added.is_ok(),
+        "the independent binding was rejected: {added:?}"
+    );
+    assert!(
+        point(&s.dto(), orphan).distance(circle_center_of(&s.dto(), circle)) < 1e-6,
+        "the detached handle must land on the circle center"
+    );
+}
+
+#[test]
+fn the_vise_recipe_circle_is_located_on_its_point_without_an_explicit_step() {
+    // Review finding 1. The authored recipe step is gone because the binding is
+    // automatic; this is the sequence `author_vise::circle` now emits.
+    let mut s = session();
+    s.set_grid_snap(false);
+    let point = s.add_point(v(20.0, 10.0)).unwrap().entities[0];
+    s.add_constraint(Constraint::Fix { entity: point }).unwrap();
+    let circle = s
+        .add_circle_locked(&LockedCircleRequest {
+            mode: CircleMode::CenterDiameter,
+            anchor: v(20.0, 10.0),
+            edge_hint: v(25.0, 10.0),
+            diameter_mm: Some(10.0),
+            diameter_text: None,
+            ctrl_held: true,
+        })
+        .unwrap()
+        .entities[0];
+    let dto = s.dto();
+    assert_eq!(
+        center_handles(&dto, circle),
+        vec![point],
+        "the circle owns the point it was placed on"
+    );
+    assert!(circle_center_of(&dto, circle).distance(v(20.0, 10.0)) < 1e-6);
+    // Which is exactly why the recipe's explicit step had to go: keeping it
+    // would now be rejected as a duplicate.
+    assert!(s
+        .add_constraint(Constraint::CenterCoincident {
+            point,
+            curve: circle
+        })
+        .is_err());
 }

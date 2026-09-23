@@ -558,20 +558,28 @@ struct VarMap {
 /// references. Anything else — an acquired center the user attached to other
 /// geometry, or a handle a line also uses — stays an independent variable so its
 /// other relations keep their own freedom.
-fn aliased_handles(sketch: &Sketch) -> HashMap<EntityId, EntityId> {
+fn aliased_handles(
+    sketch: &Sketch,
+    excluded: &BTreeSet<ConstraintId>,
+) -> HashMap<EntityId, EntityId> {
     let mut references: HashMap<EntityId, usize> = HashMap::new();
     let mut centers: HashMap<EntityId, EntityId> = HashMap::new();
-    for (_, constraint) in sketch.constraints() {
+    let mut excluded_points: HashSet<EntityId> = HashSet::new();
+    for (id, constraint) in sketch.constraints() {
         for operand in constraint.referenced_entities() {
             *references.entry(operand).or_default() += 1;
         }
         if let Constraint::CenterCoincident { point, curve } = *constraint {
+            if excluded.contains(&id) {
+                excluded_points.insert(point);
+            }
             centers.insert(point, curve);
         }
     }
     centers
         .into_iter()
         .filter(|(point, curve)| {
+            !excluded_points.contains(point) &&
             // The curve must actually own a center to alias into. A malformed
             // relation naming something else would otherwise leave the handle
             // with no variables at all, and the value writers index that map
@@ -587,6 +595,14 @@ fn aliased_handles(sketch: &Sketch) -> HashMap<EntityId, EntityId> {
 }
 
 fn build_var_map(sketch: &Sketch) -> VarMap {
+    build_var_map_excluding(sketch, &BTreeSet::new())
+}
+
+/// Build the variable map while ignoring `excluded` relations when deciding
+/// which center handles may alias. A relation under admission has to be judged
+/// on its own equations, so the point it would bind keeps its two variables on
+/// that side of the comparison instead of disappearing into the curve center.
+fn build_var_map_excluding(sketch: &Sketch, excluded: &BTreeSet<ConstraintId>) -> VarMap {
     let mut map = VarMap {
         points: HashMap::new(),
         circles: HashMap::new(),
@@ -595,7 +611,7 @@ fn build_var_map(sketch: &Sketch) -> VarMap {
         aliases: HashSet::new(),
         n: 0,
     };
-    let aliased = aliased_handles(sketch);
+    let aliased = aliased_handles(sketch, excluded);
     let mut alloc = |count: usize| {
         let start = map.n;
         map.n += count;
@@ -2484,7 +2500,7 @@ pub fn constraint_residual(sketch: &Sketch, cid: ConstraintId) -> f64 {
 /// singular pose. This helper keeps the final geometry fixed and changes only
 /// the equation set.
 pub(crate) fn rank_excluding_constraints(sketch: &Sketch, excluded: &[ConstraintId]) -> usize {
-    let map = build_var_map(sketch);
+    let map = build_var_map_excluding(sketch, &excluded.iter().copied().collect());
     let eqs = build_equations(sketch, &map, &[]);
     let x = read_values(sketch, &map);
     let (_, jac) = eval_all(&eqs, &x, map.n);
@@ -2504,7 +2520,7 @@ pub(crate) fn rank_excluding_constraints(sketch: &Sketch, excluded: &[Constraint
 /// example, the two incidence rows have the same first derivative although
 /// a point on the circle can still move away from the line.
 pub(crate) fn constraints_are_redundant(sketch: &Sketch, proposed: &[ConstraintId]) -> bool {
-    let map = build_var_map(sketch);
+    let map = build_var_map_excluding(sketch, &proposed.iter().copied().collect());
     let eqs = build_equations(sketch, &map, &[]);
     let x = read_values(sketch, &map);
     let (_, jac) = eval_all(&eqs, &x, map.n);

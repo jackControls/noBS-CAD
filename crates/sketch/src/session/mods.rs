@@ -67,14 +67,21 @@ impl SketchSession {
             .collect()
     }
 
-    /// The center handle a curve owns *exclusively*: a generated point whose
-    /// only relation is its `CenterCoincident` to this curve (issue #151).
+    /// The center handle a curve owns within `selection`: a generated point all
+    /// of whose relations belong to curves being transformed, so nothing outside
+    /// the selection depends on it (issue #151).
     ///
-    /// A center the user acquired on an existing point, or a handle other
-    /// geometry also depends on, is deliberately not owned: transforming the
-    /// curve alone would drag unselected geometry and land the curve somewhere
-    /// the user did not ask for. Those are left to the solver, as before.
-    fn exclusive_center_handle(&self, curve: EntityId) -> Option<EntityId> {
+    /// A center the user acquired on an existing point is never owned, and a
+    /// handle shared with a curve outside the selection is left alone:
+    /// transforming without it would drag unselected geometry and land the curve
+    /// somewhere the user did not ask for. Two circles drawn on one center *are*
+    /// both in the selection, so that shared handle travels with them and the
+    /// move lands exactly.
+    fn selected_center_handle(
+        &self,
+        curve: EntityId,
+        selection: &BTreeSet<EntityId>,
+    ) -> Option<EntityId> {
         let point = self
             .sketch
             .constraints()
@@ -85,14 +92,22 @@ impl SketchSession {
                 } if owner == curve => Some(point),
                 _ => None,
             })?;
-        self.is_exclusive_handle(point).then_some(point)
+        self.is_selected_handle(point, selection).then_some(point)
     }
 
-    /// A generated handle nothing but its owning relation depends on.
-    fn is_exclusive_handle(&self, point: EntityId) -> bool {
-        self.sketch.is_generated_point(point)
-            && !self.sketch.is_referenced_by_entity(point)
-            && self.sketch.relations_pointing_at(point).count() == 1
+    /// A generated handle owned only by things being transformed.
+    fn is_selected_handle(&self, point: EntityId, selection: &BTreeSet<EntityId>) -> bool {
+        if !self.sketch.is_generated_point(point) || self.sketch.is_referenced_by_entity(point) {
+            return false;
+        }
+        let relations: Vec<&Constraint> = self.sketch.relations_pointing_at(point).collect();
+        !relations.is_empty()
+            && relations.iter().all(|constraint| {
+                matches!(
+                    constraint,
+                    Constraint::CenterCoincident { curve, .. } if selection.contains(curve)
+                )
+            })
     }
 
     /// A center rectangle's center: a generated point owned only by the span
@@ -130,10 +145,10 @@ impl SketchSession {
                 }
                 Some(Entity::Arc { .. }) => {
                     points.extend(self.arc_endpoint_points(*id));
-                    points.extend(self.exclusive_center_handle(*id));
+                    points.extend(self.selected_center_handle(*id, ids));
                 }
                 Some(Entity::Circle { .. }) => {
-                    points.extend(self.exclusive_center_handle(*id));
+                    points.extend(self.selected_center_handle(*id, ids));
                 }
                 Some(Entity::Spline { .. }) | None => {}
             }
@@ -1519,7 +1534,11 @@ impl SketchSession {
             let copied = self.sketch.add_entity(Entity::Point {
                 position: transform(position),
             });
-            if !ids.contains(&source) {
+            // Preserve the source's ownership. A handle the tools own stays a
+            // generated handle in the occurrence even when the user selected it
+            // explicitly — a copied center rectangle must keep centered resize.
+            // A point the user authored stays theirs either way.
+            if !ids.contains(&source) || self.sketch.is_generated_point(source) {
                 self.sketch.mark_generated_point(copied);
             }
             point_map.insert(source, copied);
