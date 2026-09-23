@@ -31,7 +31,8 @@ export function mountDimensionInputContract() {
   const sketch: SketchDto = {
     name: 'Input contract', plane: {type: 'origin_plane', plane: 'xy'},
     basis: {origin: [0, 0, 0], u: [1, 0, 0], v: [0, 1, 0], normal: [0, 0, 1]},
-    entities: [], constraints: [], reference_midpoints: [], dimension_style: 'aligned',
+    entities: [], constraints: [], reference_midpoints: [], projected_edges: [],
+    dimension_style: 'aligned',
     dimensions: [1, 2].map(id => ({
       constraint_id: id, mode: 'driving', kind: 'distance', entities: [],
       param_id: id, param_name: `d${id}`, param_expression: null,
