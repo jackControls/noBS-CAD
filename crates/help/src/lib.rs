@@ -261,12 +261,7 @@ impl SearchIndex for Bm25Index {
                         idf,
                     );
                 score += 1.0
-                    * self.field_score(
-                        term_tf(term, &body),
-                        self.avg_body,
-                        body.len() as f64,
-                        idf,
-                    );
+                    * self.field_score(term_tf(term, &body), self.avg_body, body.len() as f64, idf);
             }
             if score > 0.0 {
                 scored.push((score, page));
@@ -312,14 +307,18 @@ impl HelpStore {
     }
 
     pub fn search(&self, query: &str, limit: Option<usize>) -> Vec<SearchHit> {
-        let limit = limit.unwrap_or(SEARCH_DEFAULT_LIMIT).clamp(1, SEARCH_MAX_LIMIT);
+        let limit = limit
+            .unwrap_or(SEARCH_DEFAULT_LIMIT)
+            .clamp(1, SEARCH_MAX_LIMIT);
         self.index.search(&self.catalog, query, limit)
     }
 
     /// Id-only lookup. Paths and traversal attempts fail closed.
     pub fn get(&self, id: &str) -> Result<GetResult, String> {
         if !is_safe_id(id) {
-            return Err(format!("invalid help id '{id}': id-only allowlist (no paths)"));
+            return Err(format!(
+                "invalid help id '{id}': id-only allowlist (no paths)"
+            ));
         }
         let page = self
             .catalog
@@ -745,7 +744,9 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
     },
     KnowledgeFile {
         path: "machine-design/concepts/fastener-clearance-counterbore.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/fastener-clearance-counterbore.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/fastener-clearance-counterbore.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/am-ribs-gussets-draft.md",
@@ -769,11 +770,15 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
     },
     KnowledgeFile {
         path: "machine-design/concepts/am-hardware-pocket-research.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-hardware-pocket-research.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/am-hardware-pocket-research.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/am-cable-exits-strain-relief.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-cable-exits-strain-relief.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/am-cable-exits-strain-relief.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/captive-nut-hex-trap.md",
@@ -781,19 +786,27 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
     },
     KnowledgeFile {
         path: "machine-design/concepts/cosmetic-threads-vs-clearance.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/cosmetic-threads-vs-clearance.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/cosmetic-threads-vs-clearance.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/am-enclosure-lid-gasket-labyrinth.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-enclosure-lid-gasket-labyrinth.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/am-enclosure-lid-gasket-labyrinth.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/am-ventilation-grille-finger-trap.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-ventilation-grille-finger-trap.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/am-ventilation-grille-finger-trap.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/am-boss-standoff-patterns.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-boss-standoff-patterns.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/am-boss-standoff-patterns.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/am-assembly-join-choice.md",
@@ -801,7 +814,9 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
     },
     KnowledgeFile {
         path: "machine-design/concepts/am-warpage-cooling-flatness.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-warpage-cooling-flatness.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/am-warpage-cooling-flatness.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/fit-coupons-recipes-map.md",
@@ -809,7 +824,9 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
     },
     KnowledgeFile {
         path: "machine-design/concepts/datum-sketch-plane-choice.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/datum-sketch-plane-choice.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/datum-sketch-plane-choice.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/hole-wizard-vs-modeled.md",
@@ -817,11 +834,15 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
     },
     KnowledgeFile {
         path: "machine-design/concepts/power-screws-lead-screws.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/power-screws-lead-screws.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/power-screws-lead-screws.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/shafts-keys-retaining-rings.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/shafts-keys-retaining-rings.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/shafts-keys-retaining-rings.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/springs-couplings.md",
@@ -837,11 +858,15 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
     },
     KnowledgeFile {
         path: "machine-design/concepts/am-fdm-holes-fit-allowances.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-fdm-holes-fit-allowances.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/am-fdm-holes-fit-allowances.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/am-fdm-load-layers-infill.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-fdm-load-layers-infill.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/am-fdm-load-layers-infill.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/mechanisms-overview.md",
@@ -849,7 +874,9 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
     },
     KnowledgeFile {
         path: "machine-design/concepts/mechanisms-linkages-mobility.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/mechanisms-linkages-mobility.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/mechanisms-linkages-mobility.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/mechanisms-cams.md",
@@ -857,11 +884,15 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
     },
     KnowledgeFile {
         path: "machine-design/concepts/mechanisms-belts-pulleys.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/mechanisms-belts-pulleys.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/mechanisms-belts-pulleys.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/mechanisms-chains-sprockets.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/mechanisms-chains-sprockets.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/mechanisms-chains-sprockets.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/am-printed-gears-dfam.md",
@@ -869,11 +900,15 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
     },
     KnowledgeFile {
         path: "machine-design/concepts/mechanisms-intermittent-geneva.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/mechanisms-intermittent-geneva.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/mechanisms-intermittent-geneva.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/design-hygiene-requirements-bom.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/design-hygiene-requirements-bom.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/design-hygiene-requirements-bom.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/concepts/bearings-hubs-seats.md",
@@ -881,7 +916,9 @@ const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
     },
     KnowledgeFile {
         path: "machine-design/concepts/inspection-metrology-bridge.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/inspection-metrology-bridge.md"),
+        text: include_str!(
+            "../../../knowledge/machine-design/concepts/inspection-metrology-bridge.md"
+        ),
     },
     KnowledgeFile {
         path: "machine-design/taxonomy.md",
@@ -934,10 +971,7 @@ mod tests {
     fn clearance_fit_hits_fits_page() {
         let store = HelpStore::bundled();
         let hits = store.search("clearance fit", Some(5));
-        assert!(
-            !hits.is_empty(),
-            "expected hits for 'clearance fit'"
-        );
+        assert!(!hits.is_empty(), "expected hits for 'clearance fit'");
         let top_ids: Vec<_> = hits.iter().map(|h| h.id.as_str()).collect();
         assert!(
             top_ids
@@ -957,7 +991,9 @@ mod tests {
         assert!(
             top_ids.iter().any(|id| id.contains("dfm-process")
                 || id.contains("dfm-overview")
-                || hits.iter().any(|h| h.snippet.to_ascii_lowercase().contains("draft"))),
+                || hits
+                    .iter()
+                    .any(|h| h.snippet.to_ascii_lowercase().contains("draft"))),
             "expected DFM/draft hit, got {top_ids:?} snippets {:?}",
             hits.iter().map(|h| &h.snippet).collect::<Vec<_>>()
         );
@@ -1014,9 +1050,8 @@ mod tests {
         let store = HelpStore::bundled();
         let hits = store.search("cad_help tenacity", Some(5));
         assert!(
-            hits.iter()
-                .any(|h| h.id.contains("agent-mcp-workflow")
-                    || h.title.to_ascii_lowercase().contains("agent")),
+            hits.iter().any(|h| h.id.contains("agent-mcp-workflow")
+                || h.title.to_ascii_lowercase().contains("agent")),
             "agent doctrine should be searchable, got {:?}",
             hits.iter().map(|h| &h.id).collect::<Vec<_>>()
         );
@@ -1084,10 +1119,7 @@ mod tests {
         let store = HelpStore::bundled();
         for query in ["interference check", "assembly clearance"] {
             let hits = store.search(query, Some(5));
-            assert!(
-                !hits.is_empty(),
-                "expected hits for {query}"
-            );
+            assert!(!hits.is_empty(), "expected hits for {query}");
             assert!(
                 hits.iter().any(|h| h.id.contains("assembly-interference")),
                 "expected assembly-interference for {query}, got {:?}",
@@ -1168,15 +1200,13 @@ mod tests {
         for query in ["clamshell teeth cutout", "matching cutouts clip"] {
             let hits = store.search(query, Some(3));
             assert!(
-                hits
-                    .first()
+                hits.first()
                     .is_some_and(|h| h.id.contains("am-clamshell-retainer")),
                 "expected am-clamshell-retainer top for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
         }
     }
-
 
     #[test]
     fn heat_set_insert_boss_searchable() {
@@ -1200,8 +1230,7 @@ mod tests {
         for query in ["heat stake boss", "heat-set boss", "heat stake insert"] {
             let hits = store.search(query, Some(3));
             assert!(
-                hits
-                    .first()
+                hits.first()
                     .is_some_and(|h| h.id.contains("am-heat-set-inserts")),
                 "expected am-heat-set-inserts top for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
@@ -1212,11 +1241,7 @@ mod tests {
     #[test]
     fn fasteners_joints_preload_torque_searchable() {
         let store = HelpStore::bundled();
-        for query in [
-            "fastener preload",
-            "bolt torque friction",
-            "clamp load",
-        ] {
+        for query in ["fastener preload", "bolt torque friction", "clamp load"] {
             let hits = store.search(query, Some(5));
             assert!(
                 hits.iter().any(|h| h.id.contains("fasteners-joints")),
@@ -1307,7 +1332,9 @@ mod tests {
         let store = HelpStore::bundled();
         let seat_hits = store.search("press fit hub bearing seat", Some(5));
         assert!(
-            seat_hits.iter().any(|h| h.id.contains("bearings-hubs-seats")),
+            seat_hits
+                .iter()
+                .any(|h| h.id.contains("bearings-hubs-seats")),
             "expected bearings-hubs-seats, got {:?}",
             seat_hits.iter().map(|h| &h.id).collect::<Vec<_>>()
         );
@@ -1348,7 +1375,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("tolerance-stackup-intro")),
+                hits.iter()
+                    .any(|h| h.id.contains("tolerance-stackup-intro")),
                 "expected tolerance-stackup-intro for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1389,7 +1417,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn hardware_pocket_servo_bolt_circle_searchable() {
         let store = HelpStore::bundled();
@@ -1400,7 +1427,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("am-hardware-pocket-research")),
+                hits.iter()
+                    .any(|h| h.id.contains("am-hardware-pocket-research")),
                 "expected am-hardware-pocket-research for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1417,7 +1445,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("am-cable-exits-strain-relief")),
+                hits.iter()
+                    .any(|h| h.id.contains("am-cable-exits-strain-relief")),
                 "expected am-cable-exits-strain-relief for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1451,7 +1480,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("cosmetic-threads-vs-clearance")),
+                hits.iter()
+                    .any(|h| h.id.contains("cosmetic-threads-vs-clearance")),
                 "expected cosmetic-threads-vs-clearance for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1468,7 +1498,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("am-enclosure-lid-gasket-labyrinth")),
+                hits.iter()
+                    .any(|h| h.id.contains("am-enclosure-lid-gasket-labyrinth")),
                 "expected am-enclosure-lid-gasket-labyrinth for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1485,7 +1516,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("am-ventilation-grille-finger-trap")),
+                hits.iter()
+                    .any(|h| h.id.contains("am-ventilation-grille-finger-trap")),
                 "expected am-ventilation-grille-finger-trap for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1502,7 +1534,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("am-boss-standoff-patterns")),
+                hits.iter()
+                    .any(|h| h.id.contains("am-boss-standoff-patterns")),
                 "expected am-boss-standoff-patterns for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1519,7 +1552,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("am-assembly-join-choice")),
+                hits.iter()
+                    .any(|h| h.id.contains("am-assembly-join-choice")),
                 "expected am-assembly-join-choice for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1536,7 +1570,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("am-warpage-cooling-flatness")),
+                hits.iter()
+                    .any(|h| h.id.contains("am-warpage-cooling-flatness")),
                 "expected am-warpage-cooling-flatness for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1553,13 +1588,13 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("fit-coupons-recipes-map")),
+                hits.iter()
+                    .any(|h| h.id.contains("fit-coupons-recipes-map")),
                 "expected fit-coupons-recipes-map for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
         }
     }
-
 
     #[test]
     fn interference_fit_hits_fits_not_only_assembly_check() {
@@ -1595,13 +1630,13 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("datum-sketch-plane-choice")),
+                hits.iter()
+                    .any(|h| h.id.contains("datum-sketch-plane-choice")),
                 "expected datum-sketch-plane-choice for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
         }
     }
-
 
     #[test]
     fn hole_wizard_vs_modeled_searchable() {
@@ -1630,7 +1665,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("power-screws-lead-screws")),
+                hits.iter()
+                    .any(|h| h.id.contains("power-screws-lead-screws")),
                 "expected power-screws-lead-screws for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1647,7 +1683,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("shafts-keys-retaining-rings")),
+                hits.iter()
+                    .any(|h| h.id.contains("shafts-keys-retaining-rings")),
                 "expected shafts-keys-retaining-rings for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1688,7 +1725,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn dfam_fdm_overview_searchable() {
         let store = HelpStore::bundled();
@@ -1716,7 +1752,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("am-fdm-holes-fit-allowances")),
+                hits.iter()
+                    .any(|h| h.id.contains("am-fdm-holes-fit-allowances")),
                 "expected am-fdm-holes-fit-allowances for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1733,7 +1770,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("am-fdm-load-layers-infill")),
+                hits.iter()
+                    .any(|h| h.id.contains("am-fdm-load-layers-infill")),
                 "expected am-fdm-load-layers-infill for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1770,7 +1808,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("mechanisms-linkages-mobility")),
+                hits.iter()
+                    .any(|h| h.id.contains("mechanisms-linkages-mobility")),
                 "expected mechanisms-linkages-mobility for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1804,7 +1843,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("mechanisms-belts-pulleys")),
+                hits.iter()
+                    .any(|h| h.id.contains("mechanisms-belts-pulleys")),
                 "expected mechanisms-belts-pulleys for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1821,7 +1861,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("mechanisms-chains-sprockets")),
+                hits.iter()
+                    .any(|h| h.id.contains("mechanisms-chains-sprockets")),
                 "expected mechanisms-chains-sprockets for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1855,7 +1896,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("mechanisms-intermittent-geneva")),
+                hits.iter()
+                    .any(|h| h.id.contains("mechanisms-intermittent-geneva")),
                 "expected mechanisms-intermittent-geneva for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1913,7 +1955,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("design-hygiene-requirements-bom")),
+                hits.iter()
+                    .any(|h| h.id.contains("design-hygiene-requirements-bom")),
                 "expected design-hygiene-requirements-bom for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -1930,7 +1973,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("inspection-metrology-bridge")),
+                hits.iter()
+                    .any(|h| h.id.contains("inspection-metrology-bridge")),
                 "expected inspection-metrology-bridge for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -2016,7 +2060,8 @@ mod tests {
         ] {
             let hits = store.search(query, Some(5));
             assert!(
-                hits.iter().any(|h| h.id.contains("shared-reference-geometry")),
+                hits.iter()
+                    .any(|h| h.id.contains("shared-reference-geometry")),
                 "expected shared-reference-geometry for {query}, got {:?}",
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
@@ -2033,53 +2078,147 @@ mod tests {
     fn knowledge_resources_include_index_and_concepts() {
         let files = knowledge_files();
         assert!(files.iter().any(|f| f.path == "index.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/fits-clearances.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-snap-fit.md"));
-        assert!(files.iter().any(|f| f.path == "concepts/research-before-commit.md"));
-        assert!(files.iter().any(|f| f.path == "concepts/assembly-interference.md"));
-        assert!(files.iter().any(|f| f.path == "concepts/validate-before-show.md"));
-        assert!(files.iter().any(|f| f.path == "concepts/adversarial-mesh-audit.md"));
-        assert!(files.iter().any(|f| f.path == "concepts/design-version-scripts.md"));
-        assert!(files.iter().any(|f| f.path == "concepts/geometry-naming.md"));
-        assert!(files.iter().any(|f| f.path == "concepts/shared-reference-geometry.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/alignment-nubs-pins.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-clamshell-retainer.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-heat-set-inserts.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/fastener-clearance-counterbore.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-ribs-gussets-draft.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/locating-scheme-dof.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/tolerance-stackup-intro.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-supports-overhangs.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/technic-envelope.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-hardware-pocket-research.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-cable-exits-strain-relief.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/captive-nut-hex-trap.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/cosmetic-threads-vs-clearance.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-enclosure-lid-gasket-labyrinth.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-ventilation-grille-finger-trap.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-boss-standoff-patterns.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-assembly-join-choice.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-warpage-cooling-flatness.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/fit-coupons-recipes-map.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/datum-sketch-plane-choice.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/hole-wizard-vs-modeled.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/power-screws-lead-screws.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/shafts-keys-retaining-rings.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/springs-couplings.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/drawing-vs-mbd-pmi.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/dfam-fdm-overview.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-fdm-holes-fit-allowances.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-fdm-load-layers-infill.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-overview.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-linkages-mobility.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-cams.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-belts-pulleys.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-chains-sprockets.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/am-printed-gears-dfam.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/mechanisms-intermittent-geneva.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/design-hygiene-requirements-bom.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/bearings-hubs-seats.md"));
-        assert!(files.iter().any(|f| f.path == "machine-design/concepts/inspection-metrology-bridge.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/fits-clearances.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/am-snap-fit.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "concepts/research-before-commit.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "concepts/assembly-interference.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "concepts/validate-before-show.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "concepts/adversarial-mesh-audit.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "concepts/design-version-scripts.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "concepts/geometry-naming.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "concepts/shared-reference-geometry.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/alignment-nubs-pins.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/am-clamshell-retainer.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/am-heat-set-inserts.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/fastener-clearance-counterbore.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/am-ribs-gussets-draft.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/locating-scheme-dof.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/tolerance-stackup-intro.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/am-supports-overhangs.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/technic-envelope.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/am-hardware-pocket-research.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/am-cable-exits-strain-relief.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/captive-nut-hex-trap.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/cosmetic-threads-vs-clearance.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/am-enclosure-lid-gasket-labyrinth.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/am-ventilation-grille-finger-trap.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/am-boss-standoff-patterns.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/am-assembly-join-choice.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/am-warpage-cooling-flatness.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/fit-coupons-recipes-map.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/datum-sketch-plane-choice.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/hole-wizard-vs-modeled.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/power-screws-lead-screws.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/shafts-keys-retaining-rings.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/springs-couplings.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/drawing-vs-mbd-pmi.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/dfam-fdm-overview.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/am-fdm-holes-fit-allowances.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/am-fdm-load-layers-infill.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/mechanisms-overview.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/mechanisms-linkages-mobility.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/mechanisms-cams.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/mechanisms-belts-pulleys.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/mechanisms-chains-sprockets.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/am-printed-gears-dfam.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/mechanisms-intermittent-geneva.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/design-hygiene-requirements-bom.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/bearings-hubs-seats.md"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "machine-design/concepts/inspection-metrology-bridge.md"));
         let index = knowledge_file_by_uri("nbcad://knowledge/index.md").expect("index uri");
         assert!(index.text.contains("Open Knowledge Format"));
         assert!(knowledge_file_by_uri("nbcad://knowledge/../etc/passwd").is_none());
@@ -2087,6 +2226,9 @@ mod tests {
         // index stays out of BM25; concept pages remain searchable.
         let store = HelpStore::bundled();
         assert!(store.catalog().ids().all(|id| !id.ends_with("index")));
-        assert!(store.catalog().ids().any(|id| id.contains("fits-clearances")));
+        assert!(store
+            .catalog()
+            .ids()
+            .any(|id| id.contains("fits-clearances")));
     }
 }
