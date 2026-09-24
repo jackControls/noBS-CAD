@@ -871,6 +871,152 @@ mod tests {
         }
     }
 
+    /// Real production GPU path for grid stability: zoom out two decades in
+    /// 6 % steps over an empty sheet and follow the brightness of two fixed
+    /// world lines. Every line's colour must move smoothly as the drawn
+    /// lattices change, where the earlier sheet swapped its major lines at
+    /// each 1-2-5 step. Kept opt-in for GPU-less hosts; set
+    /// `NBCAD_PREVIEW_PROOF_DIR` to retain every frame.
+    #[test]
+    #[ignore = "requires a GPU; set NBCAD_PREVIEW_PROOF_DIR to retain visual evidence"]
+    fn native_ground_grid_zoom_is_continuous() {
+        // A speck of a body so the grid is the only thing that moves.
+        let speck: Frame = serde_json::from_value(serde_json::json!({
+            "caption": "speck",
+            "scene": {"bodies": [{"id": 1, "name": "Speck", "feature_id": 2, "faces": [],
+                "edges": [], "mesh": {"positions": [0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001, 0.0],
+                "normals": [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0], "indices": [0, 1, 2]}}],
+                "errors": []}
+        }))
+        .unwrap();
+        let mut document = PreviewDocument::new(vec![speck]).unwrap();
+        document.center = Vec3::ZERO;
+        let mut renderer = PreviewRenderer::new().unwrap();
+        let cancelled = AtomicBool::new(false);
+        let output = std::env::var_os("NBCAD_PREVIEW_PROOF_DIR");
+        if let Some(path) = &output {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        let mut request = request("grid-zoom".into(), String::new(), 1);
+        request.width = 640;
+        request.height = 400;
+        request.pitch = 0.6;
+        let viewport = ViewportSizeResource {
+            logical_width: 640.0,
+            logical_height: 400.0,
+        };
+        let [(_, ground, _), ..] = origin_plane_bases();
+        // Brightest pixel within a pixel of each sample along a world line,
+        // averaged: the line's brightness in this frame.
+        let line_brightness = |pixels: &[u8], camera: ViewportCamera, x: f32| {
+            let view = camera_transform(camera).to_matrix().inverse();
+            let projection = Mat4::perspective_infinite_reverse_rh(
+                camera.vertical_fov_degrees.to_radians(),
+                640.0 / 400.0,
+                0.1,
+            );
+            let samples = 9;
+            (0..samples)
+                .map(|sample| {
+                    let y = (sample as f32 / (samples - 1) as f32 - 0.5) * 12.0;
+                    let clip = projection * view * Vec3::new(x, y, 0.0).extend(1.0);
+                    let ndc = clip.truncate() / clip.w;
+                    let (px, py) = (
+                        ((ndc.x + 1.0) * 0.5 * 640.0).round() as i32,
+                        ((1.0 - ndc.y) * 0.5 * 400.0).round() as i32,
+                    );
+                    let mut brightest = 0u8;
+                    for dy in -1..=1 {
+                        for dx in -1..=1 {
+                            let (sx, sy) = (px + dx, py + dy);
+                            if sx < 0 || sy < 0 || sx >= 640 || sy >= 400 {
+                                continue;
+                            }
+                            let offset = ((sy * 640 + sx) * 4) as usize;
+                            brightest = brightest
+                                .max(pixels[offset..offset + 3].iter().copied().max().unwrap());
+                        }
+                    }
+                    f32::from(brightest)
+                })
+                .sum::<f32>()
+                / samples as f32
+        };
+        let mut previous: Option<[f32; 2]> = None;
+        let mut largest_jump = 0.0f32;
+        let mut finest_changes = 0;
+        let mut last_finest = None;
+        for step in 0..80 {
+            document.radius = 30.0 * 1.06f32.powi(step);
+            let camera = document.camera(&request);
+            let layout = grid_layout(camera, viewport, &ground);
+            let png = renderer
+                .render(
+                    &document,
+                    &request,
+                    &cancelled,
+                    Instant::now() + Duration::from_secs(60),
+                )
+                .unwrap();
+            if let Some(path) = &output {
+                std::fs::write(
+                    std::path::Path::new(path)
+                        .join(format!("grid-zoom-{step:03}-finest{}.png", layout.finest)),
+                    &png,
+                )
+                .unwrap();
+            }
+            let (_, _, pixels) = decode_rgba(&png);
+            let brightness = [
+                line_brightness(&pixels, camera, 20.0),
+                line_brightness(&pixels, camera, 50.0),
+            ];
+            if last_finest.is_some_and(|finest| finest != layout.finest) {
+                finest_changes += 1;
+            }
+            last_finest = Some(layout.finest);
+            if let Some(previous) = previous {
+                for (line, (now, before)) in brightness.iter().zip(previous).enumerate() {
+                    let jump = (now - before).abs();
+                    largest_jump = largest_jump.max(jump);
+                    assert!(
+                        jump <= 10.0,
+                        "line {} jumped {before:.1} -> {now:.1} at step {step} (finest {} mm)",
+                        [20, 50][line],
+                        layout.finest
+                    );
+                }
+            }
+            eprintln!(
+                "grid zoom step {step:>2} radius {:>7.1} finest {:>5} mm: 20 mm line {:>5.1}, 50 mm line {:>5.1}",
+                document.radius, layout.finest, brightness[0], brightness[1]
+            );
+            previous = Some(brightness);
+        }
+        assert!(
+            finest_changes >= 5,
+            "the sweep must cross several lattice changes, crossed {finest_changes}"
+        );
+        eprintln!("largest frame-to-frame line brightness change: {largest_jump:.1}");
+    }
+
+    fn decode_rgba(png: &[u8]) -> (u32, u32, Vec<u8>) {
+        use bevy::asset::RenderAssetUsages;
+        use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
+        let image = Image::from_buffer(
+            png,
+            ImageType::Extension("png"),
+            CompressedImageFormats::NONE,
+            true,
+            ImageSampler::Default,
+            RenderAssetUsages::MAIN_WORLD,
+        )
+        .unwrap();
+        let size = image.texture_descriptor.size;
+        let data = image.data.expect("decoded screenshot has pixels");
+        (size.width, size.height, data)
+    }
+
     /// Real production GPU path for the ground grid: a small part and one two
     /// hundred times larger must both sit on a legible sheet that follows the
     /// zoom. Kept opt-in for GPU-less hosts; set `NBCAD_PREVIEW_PROOF_DIR` to

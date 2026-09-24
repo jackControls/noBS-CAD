@@ -4365,12 +4365,28 @@ fn draw_cad_gizmos(
     if state.mode == ViewportMode::Sketch {
         if let Some(sketch) = &model.active_sketch {
             let layout = grid_layout(camera.camera, *viewport, &sketch.basis);
-            draw_grid_on_basis(&mut gizmos, &sketch.basis, layout, fine, major);
+            draw_grid_on_basis(
+                &mut gizmos,
+                &sketch.basis,
+                layout,
+                camera.camera,
+                *viewport,
+                fine,
+                major,
+            );
         }
     } else {
         let [(_, ground, _), ..] = origin_plane_bases();
         let layout = grid_layout(camera.camera, *viewport, &ground);
-        draw_grid_on_basis(&mut gizmos, &ground, layout, fine, major);
+        draw_grid_on_basis(
+            &mut gizmos,
+            &ground,
+            layout,
+            camera.camera,
+            *viewport,
+            fine,
+            major,
+        );
     }
 
     if state.mode == ViewportMode::PickPlane {
@@ -5239,18 +5255,41 @@ fn draw_marker_loop(gizmos: &mut Gizmos<CadHighlightGizmos>, points: &[Vec3], co
     }
 }
 
-/// Screen spacing the minor grid interval is chosen for. Shared with the
-/// browser sketch grid (`TARGET_SKETCH_GRID_PX`) so the engine's snap step and
-/// the native lines agree.
+/// Screen spacing the engine's sketch snap interval is chosen for. Shared with
+/// the browser sketch grid (`TARGET_SKETCH_GRID_PX`) so the snap step is always
+/// one of the fully drawn lattices below.
 const GRID_TARGET_PX: f32 = 24.0;
-/// Finest and coarsest minor intervals, in model millimetres.
+/// Finest and coarsest intervals, in model millimetres.
 const GRID_MIN_STEP: f32 = 0.001;
 const GRID_MAX_STEP: f32 = 1_000_000.0;
-/// Minor intervals drawn on each side of the view center. At the target
-/// spacing this spans several viewport heights, so the sheet reads as
-/// unbounded while the line count stays fixed however large the model is.
-const GRID_HALF_CELLS: i32 = 160;
-const GRID_MAJOR_EVERY: i32 = 10;
+/// A line fades in as the lattice it belongs to spreads from the first to the
+/// second spacing on screen, and reads as a major line from the third to the
+/// fourth. Brightness therefore follows the zoom continuously: nothing pops
+/// when the finest drawn interval moves along the 1-2-5 sequence.
+const GRID_LINE_FADE_IN_PX: [f32; 2] = [6.0, 20.0];
+const GRID_MAJOR_FADE_PX: [f32; 2] = [120.0, 300.0];
+/// Radius of the drawn sheet around the view centre, in viewport heights at
+/// the target depth, so its edge fade stays put on screen while zooming.
+const GRID_SHEET_RADIUS_HEIGHTS: f32 = 2.5;
+/// Hard cap on lines drawn on each side of the centre per axis.
+const GRID_MAX_HALF_LINES: i64 = 600;
+/// How far below its plane the sheet sits, as a fraction of the finest drawn
+/// interval, so it neither fights faces on the plane nor floats visibly under
+/// sketch geometry when zoomed far in.
+const GRID_PLANE_OFFSET_CELLS: f32 = 0.006;
+
+fn one_two_five_mantissa(normalized: f64) -> f64 {
+    // Geometric midpoints keep the choice symmetric on a logarithmic zoom.
+    if normalized < 2f64.sqrt() {
+        1.0
+    } else if normalized < 10f64.sqrt() {
+        2.0
+    } else if normalized < 50f64.sqrt() {
+        5.0
+    } else {
+        10.0
+    }
+}
 
 /// Nearest member of the 1-2-5 engineering sequence to the interval that
 /// covers `GRID_TARGET_PX` at the view center, like `adaptiveSketchGridStep`
@@ -5262,29 +5301,97 @@ fn adaptive_grid_step(world_per_pixel: f32) -> f32 {
     let desired =
         (f64::from(world_per_pixel) * f64::from(GRID_TARGET_PX)).max(f64::from(GRID_MIN_STEP));
     let decade = 10f64.powi(desired.log10().floor() as i32);
-    let normalized = desired / decade;
-    // Geometric midpoints keep the choice symmetric on a logarithmic zoom.
-    let multiplier = if normalized < 2f64.sqrt() {
+    ((one_two_five_mantissa(desired / decade) * decade) as f32).clamp(GRID_MIN_STEP, GRID_MAX_STEP)
+}
+
+/// Smallest member of the 1-2-5 sequence that is at least `value`.
+fn one_two_five_ceiling(value: f32) -> f32 {
+    if !value.is_finite() || value <= 0.0 {
+        return GRID_MIN_STEP;
+    }
+    let value = f64::from(value.max(GRID_MIN_STEP));
+    let decade = 10f64.powi(value.log10().floor() as i32);
+    let normalized = value / decade;
+    let mantissa = if normalized <= 1.0 + 1.0e-9 {
         1.0
-    } else if normalized < 10f64.sqrt() {
+    } else if normalized <= 2.0 + 1.0e-9 {
         2.0
-    } else if normalized < 50f64.sqrt() {
+    } else if normalized <= 5.0 + 1.0e-9 {
         5.0
     } else {
         10.0
     };
-    ((multiplier * decade) as f32).clamp(GRID_MIN_STEP, GRID_MAX_STEP)
+    ((mantissa * decade) as f32).clamp(GRID_MIN_STEP, GRID_MAX_STEP)
+}
+
+/// The coarsest 1-2-5 lattice a line belongs to, as a multiple of the finest
+/// drawn interval, from the line's index in that finest lattice. The origin
+/// line belongs to every lattice.
+fn coarsest_lattice_ratio(index: i64, finest_mantissa: u8) -> f64 {
+    if index == 0 {
+        return f64::INFINITY;
+    }
+    // Work in tenths of the finest interval so every coarser member is an
+    // integer: the finest is 10, 20 or 50 tenths.
+    let finest = 10 * i64::from(finest_mantissa);
+    let coordinate = index.unsigned_abs().saturating_mul(finest as u64);
+    let mut best = finest as u64;
+    let mut decade: u64 = 1;
+    while decade <= coordinate {
+        for mantissa in [1u64, 2, 5] {
+            let Some(step) = mantissa.checked_mul(decade) else {
+                break;
+            };
+            if step >= finest as u64 && step > best && coordinate % step == 0 {
+                best = step;
+            }
+        }
+        let Some(next) = decade.checked_mul(10) else {
+            break;
+        };
+        decade = next;
+    }
+    best as f64 / finest as f64
+}
+
+fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
+    let t = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Colour of a grid line whose coarsest lattice spreads `pixel_spacing` on
+/// screen: faint as it appears, minor while comfortably visible, major once
+/// its lattice is wide enough to structure the sheet.
+fn grid_line_color(pixel_spacing: f32, fine: Color, major: Color) -> Color {
+    let presence = smoothstep(
+        GRID_LINE_FADE_IN_PX[0],
+        GRID_LINE_FADE_IN_PX[1],
+        pixel_spacing,
+    );
+    let weight = smoothstep(GRID_MAJOR_FADE_PX[0], GRID_MAJOR_FADE_PX[1], pixel_spacing);
+    let (fine, major) = (fine.to_srgba(), major.to_srgba());
+    let mix = |a: f32, b: f32| a + (b - a) * weight;
+    Color::srgba(
+        mix(fine.red, major.red),
+        mix(fine.green, major.green),
+        mix(fine.blue, major.blue),
+        mix(fine.alpha, major.alpha) * presence,
+    )
 }
 
 /// Where and how densely the grid sheet is drawn for the current view.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct GridLayout {
-    /// Minor interval in model units; a major line falls on every tenth.
-    minor: f32,
-    /// Plane coordinates of the sheet center: the camera target snapped to
-    /// the major interval, so lines stay on world multiples while panning.
+    /// Finest lattice interval drawn, a 1-2-5 member; its lines are the
+    /// faintest and every coarser lattice is a subset of some finer one.
+    finest: f32,
+    /// Mantissa of `finest`: 1, 2 or 5.
+    finest_mantissa: u8,
+    /// Plane coordinates of the camera target: the sheet's fade is centred
+    /// here and moves continuously with the view.
     center: Vec2,
-    half_extent: f32,
+    /// Sheet radius in model units, a fixed number of screen heights.
+    radius: f32,
 }
 
 fn grid_layout(
@@ -5293,17 +5400,23 @@ fn grid_layout(
     basis: &PlaneBasis,
 ) -> GridLayout {
     let target = Vec3::from_array(camera.target);
-    let minor = adaptive_grid_step(world_per_pixel_at(camera, viewport, target));
-    let major = minor * GRID_MAJOR_EVERY as f32;
+    let world_per_pixel = world_per_pixel_at(camera, viewport, target);
+    let finest = one_two_five_ceiling(world_per_pixel * GRID_LINE_FADE_IN_PX[0]);
+    let decade = 10f64.powi(f64::from(finest).log10().floor() as i32);
+    let finest_mantissa = (f64::from(finest) / decade).round() as u8;
     let local = target - basis_vector(basis.origin);
-    let snap = |coordinate: f32| (coordinate / major).round() * major;
     GridLayout {
-        minor,
+        finest,
+        finest_mantissa: if [1, 2, 5].contains(&finest_mantissa) {
+            finest_mantissa
+        } else {
+            1
+        },
         center: Vec2::new(
-            snap(local.dot(basis_vector(basis.u))),
-            snap(local.dot(basis_vector(basis.v))),
+            local.dot(basis_vector(basis.u)),
+            local.dot(basis_vector(basis.v)),
         ),
-        half_extent: minor * GRID_HALF_CELLS as f32,
+        radius: world_per_pixel * viewport.logical_height.max(1.0) * GRID_SHEET_RADIUS_HEIGHTS,
     }
 }
 
@@ -5311,20 +5424,24 @@ fn draw_grid_on_basis(
     gizmos: &mut Gizmos,
     basis: &PlaneBasis,
     layout: GridLayout,
+    camera: ViewportCamera,
+    viewport: ViewportSizeResource,
     fine: Color,
     major: Color,
 ) {
-    let origin = basis_vector(basis.origin) - basis_vector(basis.normal) * 0.03;
+    let GridLayout {
+        finest,
+        finest_mantissa,
+        center,
+        radius,
+    } = layout;
+    let origin = basis_vector(basis.origin)
+        - basis_vector(basis.normal) * (finest * GRID_PLANE_OFFSET_CELLS);
     let u = basis_vector(basis.u);
     let v = basis_vector(basis.v);
-    let GridLayout {
-        minor,
-        center,
-        half_extent,
-    } = layout;
     // Lines thin out toward the sheet edge instead of stopping at a visible
     // border, so the finite patch reads as an unbounded plane.
-    let fade = |offset: f32| (1.0 - (offset / half_extent).powi(2)).clamp(0.0, 1.0);
+    let fade = |offset: f32| (1.0 - (offset / radius).powi(2)).clamp(0.0, 1.0);
     let mut faded_line = |start: Vec3, end: Vec3, color: Color, weight: f32| {
         let middle = (start + end) * 0.5;
         let strong = color.with_alpha(color.alpha() * weight);
@@ -5332,44 +5449,58 @@ fn draw_grid_on_basis(
         gizmos.line_gradient(middle, start, strong, clear);
         gizmos.line_gradient(middle, end, strong, clear);
     };
-    let color_for = |world_index: i64| {
-        if world_index % i64::from(GRID_MAJOR_EVERY) == 0 {
-            major
+    // Each line takes the spacing of its coarsest lattice as seen at its own
+    // depth, so far lines dim before they alias instead of shimmering.
+    let mut lattice_line = |index: i64, middle: Vec3, start: Vec3, end: Vec3, lateral: f32| {
+        let ratio = coarsest_lattice_ratio(index, finest_mantissa);
+        let spacing = if ratio.is_finite() {
+            (ratio as f32) * finest / world_per_pixel_at(camera, viewport, middle)
         } else {
-            fine
+            f32::INFINITY
+        };
+        let color = grid_line_color(spacing, fine, major);
+        if color.alpha() > 0.002 {
+            faded_line(start, end, color, fade(lateral));
         }
     };
-    let base_u = (center.x / minor).round() as i64;
-    let base_v = (center.y / minor).round() as i64;
-    for index in -GRID_HALF_CELLS..=GRID_HALF_CELLS {
-        let offset = index as f32 * minor;
-        let weight = fade(offset);
-        let along_v = origin + u * (center.x + offset);
-        faded_line(
-            along_v + v * (center.y - half_extent),
-            along_v + v * (center.y + half_extent),
-            color_for(base_u + i64::from(index)),
-            weight,
+    let range = |coordinate: f32| {
+        let centre_index = (coordinate / finest).round() as i64;
+        let span = ((radius / finest).ceil() as i64).min(GRID_MAX_HALF_LINES);
+        (centre_index - span)..=(centre_index + span)
+    };
+    for index in range(center.x) {
+        let coordinate = index as f32 * finest;
+        let along_v = origin + u * coordinate;
+        lattice_line(
+            index,
+            along_v + v * center.y,
+            along_v + v * (center.y - radius),
+            along_v + v * (center.y + radius),
+            coordinate - center.x,
         );
-        let along_u = origin + v * (center.y + offset);
-        faded_line(
-            along_u + u * (center.x - half_extent),
-            along_u + u * (center.x + half_extent),
-            color_for(base_v + i64::from(index)),
-            weight,
+    }
+    for index in range(center.y) {
+        let coordinate = index as f32 * finest;
+        let along_u = origin + v * coordinate;
+        lattice_line(
+            index,
+            along_u + u * center.x,
+            along_u + u * (center.x - radius),
+            along_u + u * (center.x + radius),
+            coordinate - center.y,
         );
     }
     // The plane's own axes stay anchored at its origin, however far the view
     // has panned from it.
     faded_line(
-        origin + u * (center.x - half_extent),
-        origin + u * (center.x + half_extent),
+        origin + u * (center.x - radius),
+        origin + u * (center.x + radius),
         Color::srgba(0.80, 0.25, 0.30, 0.62),
         fade(center.y),
     );
     faded_line(
-        origin + v * (center.y - half_extent),
-        origin + v * (center.y + half_extent),
+        origin + v * (center.y - radius),
+        origin + v * (center.y + radius),
         Color::srgba(0.25, 0.65, 0.38, 0.62),
         fade(center.x),
     );
@@ -7548,55 +7679,110 @@ mod tests {
     }
 
     #[test]
-    fn grid_sheet_follows_zoom_and_pan() {
+    fn grid_lattices_nest_along_the_sequence() {
+        assert_eq!(one_two_five_ceiling(0.3), 0.5);
+        assert_eq!(one_two_five_ceiling(2.0), 2.0);
+        assert_eq!(one_two_five_ceiling(2.1), 5.0);
+        assert_eq!(one_two_five_ceiling(60.0), 100.0);
+        assert_eq!(one_two_five_ceiling(-1.0), GRID_MIN_STEP);
+        // Finest lattice 2 mm: 6 mm is only a 2 mm line, 10 mm belongs to the
+        // 10 mm lattice, 50 mm to the 50 mm one, the origin to all of them.
+        assert_eq!(coarsest_lattice_ratio(3, 2), 1.0);
+        assert_eq!(coarsest_lattice_ratio(5, 2), 5.0);
+        assert_eq!(coarsest_lattice_ratio(25, 2), 25.0);
+        assert_eq!(coarsest_lattice_ratio(-25, 2), 25.0);
+        assert!(coarsest_lattice_ratio(0, 2).is_infinite());
+        // Finest lattice 5 mm: 10 mm is a 10 mm line, 15 mm only a 5 mm line.
+        assert_eq!(coarsest_lattice_ratio(2, 5), 2.0);
+        assert_eq!(coarsest_lattice_ratio(3, 5), 1.0);
+        assert_eq!(coarsest_lattice_ratio(20, 5), 20.0);
+    }
+
+    #[test]
+    fn grid_lines_brighten_continuously_with_their_spacing() {
+        let fine = Color::srgba(0.2, 0.2, 0.2, 0.3);
+        let major = Color::srgba(0.4, 0.4, 0.4, 0.5);
+        let alpha = |spacing: f32| grid_line_color(spacing, fine, major).alpha();
+        assert_eq!(alpha(4.0), 0.0);
+        assert!((alpha(20.0) - 0.3).abs() < 1.0e-6);
+        assert!((alpha(300.0) - 0.5).abs() < 1.0e-6);
+        let mut previous = alpha(1.0);
+        let mut spacing = 1.0f32;
+        while spacing < 1000.0 {
+            spacing *= 1.02;
+            let next = alpha(spacing);
+            assert!(
+                next >= previous - 1.0e-6,
+                "brightness never drops as a lattice spreads"
+            );
+            assert!(next - previous < 0.02, "no visible jump at {spacing} px");
+            previous = next;
+        }
+    }
+
+    #[test]
+    fn grid_sheet_follows_zoom_and_pan_without_jumps() {
         let viewport = ViewportSizeResource {
             logical_width: 1_200.0,
             logical_height: 800.0,
         };
         let [(_, ground, _), ..] = origin_plane_bases();
-        let near = ViewportCamera {
-            position: [0.0, 0.0, 200.0],
-            target: [0.0, 0.0, 0.0],
+        let fine = rgba([0.2, 0.2, 0.2], 0.28);
+        let major = rgba([0.4, 0.4, 0.4], 0.48);
+        // Brightness of the world line at x = 20 mm while zooming out two
+        // decades in 1 % steps: it is a 20 mm line however the finest drawn
+        // lattice moves, so its colour must never jump between frames.
+        let mut previous: Option<f32> = None;
+        let mut distance = 40.0f32;
+        while distance < 4_000.0 {
+            let camera = ViewportCamera {
+                position: [0.0, 0.0, distance],
+                target: [0.0, 0.0, 0.0],
+                up: [0.0, 1.0, 0.0],
+                vertical_fov_degrees: 45.0,
+            };
+            let layout = grid_layout(camera, viewport, &ground);
+            assert!([1, 2, 5].contains(&layout.finest_mantissa));
+            let pixel = world_per_pixel_at(camera, viewport, Vec3::ZERO);
+            assert!(
+                layout.finest / pixel >= GRID_LINE_FADE_IN_PX[0] - 1.0e-3,
+                "the finest lattice is never drawn denser than its fade-in spacing"
+            );
+            assert!(
+                layout.finest / pixel < GRID_LINE_FADE_IN_PX[0] * 2.5 + 1.0e-3,
+                "the finest lattice is never coarser than the next member down would allow"
+            );
+            assert!((layout.radius - pixel * 800.0 * GRID_SHEET_RADIUS_HEIGHTS).abs() < 1.0e-3);
+            // Once the finest drawn lattice is coarser than 20 mm the line is
+            // simply absent, which must coincide with it having faded out.
+            let index = (20.0 / layout.finest).round() as i64;
+            let alpha = if (index as f32 * layout.finest - 20.0).abs() < 1.0e-4 {
+                let spacing = coarsest_lattice_ratio(index, layout.finest_mantissa) as f32
+                    * layout.finest
+                    / pixel;
+                grid_line_color(spacing, fine, major).alpha()
+            } else {
+                0.0
+            };
+            if let Some(previous) = previous {
+                assert!(
+                    (alpha - previous).abs() < 0.02,
+                    "20 mm line alpha jumped {previous} -> {alpha} at distance {distance}"
+                );
+            }
+            previous = Some(alpha);
+            distance *= 1.01;
+        }
+        // Panning keeps the sheet centred on the target itself, on no grid multiple.
+        let panned = ViewportCamera {
+            position: [12_345.6, -678.9, 200.0],
+            target: [12_345.6, -678.9, 0.0],
             up: [0.0, 1.0, 0.0],
             vertical_fov_degrees: 45.0,
         };
-        let far = ViewportCamera {
-            position: [0.0, 0.0, 20_000.0],
-            ..near
-        };
-        let near_layout = grid_layout(near, viewport, &ground);
-        let far_layout = grid_layout(far, viewport, &ground);
-        assert!(
-            far_layout.minor > near_layout.minor * 10.0,
-            "a 100x larger part must coarsen the grid: {near_layout:?} -> {far_layout:?}"
-        );
-        for (camera, layout) in [(near, near_layout), (far, far_layout)] {
-            let world_per_pixel = world_per_pixel_at(camera, viewport, Vec3::ZERO);
-            let visible_half_height = world_per_pixel * viewport.logical_height * 0.5;
-            assert!(
-                layout.half_extent > visible_half_height * 2.0,
-                "the sheet must reach well past the visible plane: {layout:?}"
-            );
-            let pixels = layout.minor / world_per_pixel;
-            assert!(
-                (12.0..=60.0).contains(&pixels),
-                "the minor interval must stay legible, got {pixels} px"
-            );
-            assert_eq!(layout.center, Vec2::ZERO);
-        }
-        // Panning far from the origin keeps the sheet under the camera, with
-        // its center on a major multiple so lines never swim while panning.
-        let panned = ViewportCamera {
-            position: [12_345.0, -678.0, 200.0],
-            target: [12_345.0, -678.0, 0.0],
-            ..near
-        };
         let layout = grid_layout(panned, viewport, &ground);
-        let major = layout.minor * GRID_MAJOR_EVERY as f32;
-        assert!((layout.center.x - 12_345.0).abs() <= major * 0.5);
-        assert!((layout.center.y + 678.0).abs() <= major * 0.5);
-        assert!((layout.center.x / major).fract().abs() < 1.0e-3);
-        assert!((layout.center.y / major).fract().abs() < 1.0e-3);
+        assert!((layout.center.x - 12_345.6).abs() < 1.0e-2);
+        assert!((layout.center.y + 678.9).abs() < 1.0e-2);
     }
 
     #[test]
