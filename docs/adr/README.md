@@ -11,6 +11,7 @@ states its own status. Long design prose lives in `docs/mcp-harness.md` and
 | [0003](0003-3mf-export.md) | 3MF (+ STL) with materials/colors | Implemented for native export with per-body appearance |
 | [0005](0005-main-goals.md) | High-level product directions | Accepted |
 | [0006](0006-dynamic-mcp-focus.md) | Focus-scoped MCP + UI co-link | Proposed; multi-window **deferred** |
+| [0007](0007-out-of-process-plugins.md) | Out-of-process plugins that return native scripts | Proposed; host crate and MCP actions implemented, desktop menu pending |
 
 Treat proposed and deferred ADRs as reviewable direction, not permission to
 start them ahead of reliable mechanical CAD and local MCP fundamentals.

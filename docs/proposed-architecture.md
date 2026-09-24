@@ -129,3 +129,25 @@ norms. Relevant references if that discussion reopens:
 Tutor-style loops that reuse golden MCP scenarios are attractive later. Keep
 them out of the top-level committed goals until the CAD foundation and local
 automation path are stronger.
+
+---
+
+## 8. Out-of-process plugins — Proposed
+
+**Problem:** importers, generators and company-specific conventions (for
+example turning a scanned plate print into a part) need libraries and release
+cadences that do not belong in the Rust core, and some of them belong in
+private repositories.
+
+**Proposal ([ADR 0007](adr/0007-out-of-process-plugins.md)):** a plugin is a
+local program with a `nbcad-plugin.json` manifest. The host runs it with one
+JSON request on stdin and reads one JSON response on stdout. The response
+carries a version 1 native script and a report of flags; the host validates the
+script and runs it through the ordinary interpreter. Plugins never receive
+kernel, document or session access.
+
+**Status:** the host-neutral `nbcad-plugins` crate and the `cad_interface`
+actions `plugins` and `plugin` exist; see [PLUGINS.md](PLUGINS.md). A desktop
+`File → Import with plugin…` entry that hands the returned source to the
+Scripts workspace is the follow-up. Analysis plugins that must read the model
+are deferred until a snapshot-based read contract is wanted.

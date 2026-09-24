@@ -19,6 +19,8 @@
 
 - [MCP interface](../mcp-server/README.md) — operations and current boundaries.
 - [Native scripts](native-scripts.md) — construction source and presentation controls.
+- [Plugins](PLUGINS.md) — out-of-process importers and generators whose only
+  output is a native script.
 - [Live document ownership](mcp-harness.md) — discovery, attachment and ordered edits.
 - [Shared product interface](interface.md) — groups and operation contracts.
 - [Native drawing export](native-drawing-export.md) — SVG/DXF payloads and references.

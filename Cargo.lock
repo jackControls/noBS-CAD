@@ -336,6 +336,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nbcad-plugins"
+version = "0.2.0"
+dependencies = [
+ "nbcad-script",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nbcad-recipes"
 version = "0.2.0"
 dependencies = [

@@ -155,6 +155,18 @@ See [native scripts](../docs/native-scripts.md) for controls and source format,
 and [the recipe library](../examples/scripts/README.md) for runnable examples and
 their geometry/edit/replay evidence.
 
+## Plugins
+
+`{"action":"plugins"}` lists installed out-of-process plugins found in
+`NBCAD_PLUGIN_DIRS` and the per-user plugin directory, with their manifests'
+problems. `{"action":"plugin","plugin":"ID","input":"/absolute/file","options":{}}`
+runs one: the plugin receives one JSON request on stdin, answers with a version 1
+script and a report of flags, and that script then runs exactly like `script`,
+including `session_id`, `mode`, `speed` and `validate`. Add `"execute":false` to
+receive the validated source and report without running it. Plugins never touch
+the kernel or the document. See [plugins](../docs/PLUGINS.md) for the manifest
+and protocol.
+
 **Print handoff:** `solid_export_preflight` → `set_body_appearance` (optional) →
 `solid_export_3mf` (preferred for slicers). Use `solid_tessellate` to inspect
 triangle counts before exporting. `demo_export_pip_3mf` returns a built-in

@@ -1,0 +1,15 @@
+[package]
+name = "nbcad-plugins"
+version.workspace = true
+edition = "2021"
+license = "LGPL-2.1-or-later"
+description = "Out-of-process plugin discovery and stdio protocol; a plugin's only output is a native script"
+
+[dependencies]
+nbcad-script = { path = "../script" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[[bin]]
+name = "nbcad-plugin-example"
+path = "src/bin/nbcad-plugin-example.rs"

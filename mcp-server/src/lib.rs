@@ -15,6 +15,7 @@ mod drawing_tools;
 mod inbox;
 mod interface;
 mod knowledge;
+mod plugins;
 mod session;
 mod stdio;
 
@@ -42,6 +43,22 @@ pub fn recipe_id_from_uri(uri: &str) -> Result<&'static str, String> {
 pub fn open_recipe_in_running_desktop(recipe: &str) -> Result<bool, String> {
     nbcad_recipes::find(recipe)?;
     desktop::open_recipe(recipe)
+}
+
+/// Installed out-of-process plugins, for the desktop and other embedders.
+pub fn list_plugins() -> Value {
+    plugins::list()
+}
+
+/// Run an installed plugin and return its validated script without executing
+/// it, so a desktop can hand the source to the Scripts workspace first.
+pub fn import_with_plugin(arguments: Value) -> Result<Value, String> {
+    let outcome = plugins::import(&arguments)?;
+    let summary = outcome.summary();
+    let mut result = outcome.script.metadata();
+    result["source"] = Value::String(outcome.source);
+    result["plugin"] = summary;
+    Ok(result)
 }
 
 /// Inspect the same validated JSONC source accepted by `cad_interface/script`.
@@ -527,6 +544,10 @@ impl CadServer {
                     json!({"groups":interface::groups(),"operations":full_tool_catalog()})
                 } else if arguments["action"] == "recipes" {
                     nbcad_recipes::catalog(false)
+                } else if arguments["action"] == "plugins" {
+                    plugins::list()
+                } else if arguments["action"] == "plugin" {
+                    self.execute_plugin(&arguments)?
                 } else if arguments["action"] == "execute" {
                     self.execute_interface(&arguments)?
                 } else if arguments["action"] == "script" {
@@ -597,6 +618,40 @@ impl CadServer {
             other => return Err(format!("unknown control tool: {other}")),
         };
         Ok(value)
+    }
+
+    /// An installed plugin returns a script; that script then follows the
+    /// ordinary `script` path, so live and headless runs behave identically.
+    fn execute_plugin(&mut self, arguments: &Value) -> Result<Value, String> {
+        if self.script_running {
+            return Err("Scripts cannot run a plugin while another script is running".into());
+        }
+        if arguments
+            .get("execute")
+            .is_some_and(|value| !value.is_boolean())
+        {
+            return Err("plugin execute must be a boolean".into());
+        }
+        let outcome = plugins::import(arguments)?;
+        let summary = outcome.summary();
+        if arguments["execute"] == false {
+            let mut result = outcome.script.metadata();
+            result["source"] = Value::String(outcome.source);
+            result["plugin"] = summary;
+            return Ok(result);
+        }
+        let mut script_arguments = json!({"action":"script","source":outcome.source});
+        for key in ["session_id", "mode", "speed", "validate"] {
+            if let Some(value) = arguments.get(key) {
+                script_arguments[key] = value.clone();
+            }
+        }
+        let mut result = self.execute_script(&script_arguments)?;
+        if !result.is_object() {
+            result = json!({"result": result});
+        }
+        result["plugin"] = summary;
+        Ok(result)
     }
 
     fn execute_script(&mut self, arguments: &Value) -> Result<Value, String> {
@@ -1378,6 +1433,23 @@ fn object_schema(properties: Value, required: &[&str]) -> Value {
 
 fn object_or_null(schema: Value) -> Value {
     json!({ "oneOf": [schema, { "type": "null" }] })
+}
+
+/// `cad_interface` arguments for out-of-process plugins, merged outside the
+/// schema literal to keep the `json!` expansion within the recursion limit.
+fn with_plugin_arguments(mut properties: Value) -> Value {
+    let plugin = json!({
+        "plugin":{"type":"string","description":"Installed plugin ID for action plugin. List IDs with action plugins."},
+        "input":{"type":"string","description":"Absolute input file path for an import plugin."},
+        "options":{"type":"object","description":"Plugin options; see the plugin's options_schema in the plugins listing."},
+        "execute":{"type":"boolean","default":true,"description":"For action plugin: false returns the validated script source and report without running it."}
+    });
+    if let (Some(target), Some(extra)) = (properties.as_object_mut(), plugin.as_object()) {
+        for (key, value) in extra {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+    properties
 }
 
 fn dto_schema(description: &str) -> Value {
@@ -3788,10 +3860,10 @@ fn tool_specs() -> Vec<ToolSpec> {
         ),
         ToolSpec::control(
             "cad_interface", "Explore and drive the product interface",
-            "Catalog returns shared product groups and typed operations. Execute runs an operation by group and name with identical arguments/results headlessly or live. Recipes lists committed native examples without running them. Open_recipe queues a built-in recipe in the live Scripts source editor, preserving edited source with Save/Discard/Cancel; it never runs commands or replaces the model. Script runs one versioned JSONC command file selected by recipe ID, source or an absolute .nbcad.jsonc path in the current blank document; Rust sequences every operation, stops on failure, and runs final checks by default. Mode fast has no presentation delays; present requires an attached desktop. Presentation provides configure/note/pause/resume/step/stop/status/finish/dismiss/show and speed controls shared with native playback. View supports timed orientation and focus on an active sketch, body, or component. Launch connects a new desktop. Inspect returns rendered controls with fresh opaque target IDs for click/set_value/key. Window close requests guarded application exit; the reply acknowledges the request, not process termination. No selectors or executable script evaluation.",
-            object_schema(json!({
+            "Catalog returns shared product groups and typed operations. Execute runs an operation by group and name with identical arguments/results headlessly or live. Recipes lists committed native examples without running them. Plugins lists installed out-of-process plugins from NBCAD_PLUGIN_DIRS and the per-user plugin directory. Plugin runs one installed plugin on an absolute input file with options; the plugin returns a version 1 script that is validated and then runs exactly like script, or is returned unrun with execute false. Open_recipe queues a built-in recipe in the live Scripts source editor, preserving edited source with Save/Discard/Cancel; it never runs commands or replaces the model. Script runs one versioned JSONC command file selected by recipe ID, source or an absolute .nbcad.jsonc path in the current blank document; Rust sequences every operation, stops on failure, and runs final checks by default. Mode fast has no presentation delays; present requires an attached desktop. Presentation provides configure/note/pause/resume/step/stop/status/finish/dismiss/show and speed controls shared with native playback. View supports timed orientation and focus on an active sketch, body, or component. Launch connects a new desktop. Inspect returns rendered controls with fresh opaque target IDs for click/set_value/key. Window close requests guarded application exit; the reply acknowledges the request, not process termination. No selectors or executable script evaluation.",
+            object_schema(with_plugin_arguments(json!({
                 "session_id":{"type":"string"},
-                "action":{"type":"string","enum":["catalog","recipes","open_recipe","execute","script","presentation","launch","view","inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
+                "action":{"type":"string","enum":["catalog","recipes","plugins","plugin","open_recipe","execute","script","presentation","launch","view","inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
                 "recipe":{"type":"string","description":"Bundled recipe ID for script or open_recipe; mutually exclusive with source and path. List IDs with action recipes."},
                 "group":{"type":"string"},"operation":{"type":"string"},"arguments":{"type":"object"},
                 "executable":{"type":"string"},
@@ -3818,7 +3890,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "key":{"type":"string","enum":["Enter","Escape","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Home","Delete","Backspace"]},
                 "mode":{"type":"string","enum":["foreground","background","inspect","close","fast","present"]},
                 "pace_ms":{"type":"integer","minimum":0,"maximum":2000}
-            }), &[]),
+            })), &[]),
         ),
         ToolSpec::control(
             "cad_attach",
@@ -14291,5 +14363,146 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    mod plugin_actions {
+        use super::*;
+        use std::sync::Mutex;
+
+        /// `NBCAD_PLUGIN_DIRS` is process-wide, so these tests take turns.
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+        fn plugin_root(label: &str) -> std::path::PathBuf {
+            let dir = std::env::temp_dir()
+                .join(format!("nbcad-mcp-plugins-{}-{label}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            dir
+        }
+
+        #[test]
+        fn plugins_action_lists_manifests_and_rejects_unknown_ids() {
+            let _guard = ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let root = plugin_root("list");
+            let dir = root.join("ghost");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join(nbcad_plugins::MANIFEST_FILE),
+                json!({"protocol":1,"id":"ghost","name":"Ghost","version":"0.0.1","kind":"import",
+                    "command":["./missing-program"],"input":{"extensions":["json"]}})
+                .to_string(),
+            )
+            .unwrap();
+            std::env::set_var(nbcad_plugins::DIRS_ENV, &root);
+            let mut server = CadServer::new().unwrap();
+            let listing = server
+                .call_tool("cad_interface", json!({"action":"plugins"}))
+                .unwrap();
+            assert_eq!(listing["plugins"][0]["id"], "ghost");
+            assert_eq!(listing["directories"][0], root.to_string_lossy().as_ref());
+            let unknown = server
+                .call_tool("cad_interface", json!({"action":"plugin","plugin":"nope"}))
+                .unwrap_err();
+            assert!(unknown.contains("unknown plugin"), "{unknown}");
+            let no_id = server
+                .call_tool("cad_interface", json!({"action":"plugin"}))
+                .unwrap_err();
+            assert!(no_id.contains("plugin id"), "{no_id}");
+            let input = root.join("plate.json");
+            std::fs::write(&input, "{}").unwrap();
+            let cannot_start = server
+                .call_tool(
+                    "cad_interface",
+                    json!({"action":"plugin","plugin":"ghost","input":input.to_string_lossy()}),
+                )
+                .unwrap_err();
+            assert!(cannot_start.contains("cannot start"), "{cannot_start}");
+            std::env::remove_var(nbcad_plugins::DIRS_ENV);
+            let _ = std::fs::remove_dir_all(root);
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn plugin_action_runs_the_returned_script_like_script() {
+            let _guard = ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let root = plugin_root("run");
+            let dir = root.join("shell-plate");
+            std::fs::create_dir_all(&dir).unwrap();
+            // A plugin written in shell: ignore the request, answer with a fixed plate.
+            let script = json!({"version":1,"name":"Shell plate","starting_state":"empty","steps":[
+                {"id":"begin","call":{"group":"sketch/draw","operation":"sketch_begin",
+                    "arguments":{"name":"Plate","plane":{"type":"origin_plane","plane":"xy"}}}},
+                {"id":"rect","call":{"group":"sketch/draw","operation":"sketch_add_rectangle_locked",
+                    "arguments":{"mode":"two_point","anchor":{"x":-30,"y":-20},"corner_hint":{"x":30,"y":20},
+                        "width_mm":60,"height_mm":40,"ctrl_held":true}}},
+                {"id":"finish","call":{"group":"sketch/draw","operation":"sketch_finish","arguments":{}}},
+                {"id":"build","call":{"group":"solid/build","operation":"solid_extrude",
+                    "arguments":{"sketch_name":"Plate","profile_indices":[0],"operation":"new_body",
+                        "extent":{"type":"distance","distance":5},"taper_angle_deg":0,"flip":false,"target_body_ids":[]}}}
+            ]});
+            let response = json!({"protocol":1,"ok":true,"script":script,
+                "report":{"summary":"One plate","flags":[{"severity":"warning","message":"fixed size"}]}});
+            std::fs::write(dir.join("response.json"), response.to_string()).unwrap();
+            std::fs::write(
+                dir.join("plugin.sh"),
+                "#!/bin/sh\ncat >/dev/null\ncat response.json\n",
+            )
+            .unwrap();
+            std::fs::write(
+                dir.join(nbcad_plugins::MANIFEST_FILE),
+                json!({"protocol":1,"id":"shell-plate","name":"Shell plate","version":"0.0.1","kind":"import",
+                    "command":["/bin/sh","plugin.sh"],"input":{"extensions":["txt"]}})
+                .to_string(),
+            )
+            .unwrap();
+            let input = root.join("anything.txt");
+            std::fs::write(&input, "ignored").unwrap();
+            std::env::set_var(nbcad_plugins::DIRS_ENV, &root);
+
+            let mut preview = CadServer::new().unwrap();
+            let unrun = preview
+                .call_tool(
+                    "cad_interface",
+                    json!({"action":"plugin","plugin":"shell-plate","input":input.to_string_lossy(),"execute":false}),
+                )
+                .unwrap();
+            assert_eq!(unrun["step_count"], 4);
+            assert_eq!(unrun["plugin"]["report"]["summary"], "One plate");
+            assert!(unrun["source"].as_str().unwrap().contains("solid_extrude"));
+            assert!(
+                preview.manager.solid_scene().bodies.is_empty(),
+                "execute false must not build"
+            );
+
+            let mut server = CadServer::new().unwrap();
+            let result = server
+                .call_tool(
+                    "cad_interface",
+                    json!({"action":"plugin","plugin":"shell-plate","input":input.to_string_lossy()}),
+                )
+                .unwrap();
+            assert_eq!(result["steps_completed"], 4);
+            assert_eq!(result["plugin"]["id"], "shell-plate");
+            assert_eq!(
+                result["plugin"]["report"]["flags"][0]["severity"],
+                "warning"
+            );
+            assert_eq!(server.manager.solid_scene().bodies.len(), 1);
+            assert!(!server.script_running);
+
+            let relative = server
+                .call_tool(
+                    "cad_interface",
+                    json!({"action":"plugin","plugin":"shell-plate","input":"anything.txt"}),
+                )
+                .unwrap_err();
+            assert!(relative.contains("absolute"), "{relative}");
+            std::env::remove_var(nbcad_plugins::DIRS_ENV);
+            let _ = std::fs::remove_dir_all(root);
+        }
     }
 }
