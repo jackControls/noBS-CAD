@@ -353,6 +353,17 @@ try {
  assert.deepEqual(openFramingErrors,[],'Open framing must not leave asynchronous errors');
  console.log('PASS production Open framing: '+JSON.stringify(openFraming));
  await openFramingPage.close();
+ const tabCameraPage=await browser.newPage();
+ const tabCameraErrors=[];
+ tabCameraPage.on('pageerror',error=>tabCameraErrors.push(error.message));
+ await tabCameraPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const tabCameras=await tabCameraPage.evaluate(async()=>{
+  const {checkProjectTabCameras}=await import('/src/files/projectTabCamera.browser.test.tsx');
+  return checkProjectTabCameras();
+ });
+ assert.deepEqual(tabCameraErrors,[],'Per-tab cameras must not leave asynchronous errors');
+ console.log('PASS production per-tab cameras: '+JSON.stringify(tabCameras));
+ await tabCameraPage.close();
  const stepPage=await browser.newPage();
  await stepPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const step=await stepPage.evaluate(async()=>{
