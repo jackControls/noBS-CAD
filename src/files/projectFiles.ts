@@ -37,7 +37,7 @@ import { runExport } from './exportFlow';
 import { projectTransitions } from './projectTransitions';
 import type { EngineOperationOwner } from '../engine/activity';
 import { captureProjectOwner } from './projectOwnership';
-import { requestOpenedProjectFraming, type OpenedProjectOwner } from './openProjectFraming';
+import { requestProjectFraming, type ProjectFramingOwner } from './projectFraming';
 
 const PROJECT_TYPE: SaveType = {
   description: 'noBS CAD Project',
@@ -297,7 +297,7 @@ export async function openProject(options?: { filePath: string; discardChanges?:
   const releaseTransition = projectTransitions.begin();
   let changed = false;
   let published = false;
-  let openedOwner: OpenedProjectOwner;
+  let openedOwner: ProjectFramingOwner;
   try {
     await releaseTransition.waitForSnapshots();
     const engine = await getEngine();
@@ -359,7 +359,7 @@ export async function openProject(options?: { filePath: string; discardChanges?:
   } finally {
     releaseTransition(changed, published);
   }
-  requestOpenedProjectFraming(openedOwner);
+  requestProjectFraming(openedOwner);
   return true;
 }
 

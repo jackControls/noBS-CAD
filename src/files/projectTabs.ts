@@ -31,6 +31,8 @@ import type { SaveTarget } from './fileIO';
 import { projectTransitions, type ProjectTransitionRelease } from './projectTransitions';
 import type { EngineOperationOwner } from '../engine/activity';
 import { captureProjectOwner } from './projectOwnership';
+import { getSessionCameraSnapshot, type CameraSnapshot } from '../components/viewport/cameraApi';
+import { requestProjectFraming } from './projectFraming';
 
 interface ProjectTabRuntime {
   modelJson: string;
@@ -44,6 +46,8 @@ interface ProjectTabRuntime {
   workspaceTab: string;
   /** Frontend mirror retained by reference to avoid large mesh JSON on switch. */
   viewState: ProjectTabViewState | null;
+  /** Camera pose this tab was last viewed with; null frames the home view. */
+  camera: CameraSnapshot | null;
 }
 
 interface ProjectTabViewState {
@@ -224,6 +228,7 @@ async function ensureActiveProjectTab(
     lastUsedAt: Date.now(),
     workspaceTab: activeWorkspaceTab(),
     viewState: activeViewState(),
+    camera: getSessionCameraSnapshot(),
   });
   useAppStore.setState({
     activeProjectTabId: id,
@@ -263,6 +268,7 @@ async function snapshotActiveProjectTab(operationOwner?: EngineOperationOwner): 
     lastUsedAt: Date.now(),
     workspaceTab: activeWorkspaceTab(),
     viewState,
+    camera: getSessionCameraSnapshot() ?? runtime?.camera ?? null,
   });
   syncActiveSummary();
   return id;
@@ -392,6 +398,9 @@ async function hydrateProjectTab(tabId: string): Promise<void> {
       activeProjectTabId: tabId,
       dirty: tab.dirty,
     });
+    // Every tab keeps its own view. A tab that has never been shown frames
+    // the home view instead of inheriting the outgoing tab's camera.
+    requestProjectFraming(useAppStore.getState(), runtime.camera);
     // The workspace stage is per-project state nested under the project tab:
     // re-enter the stage this project was last viewed in. If an entry guard
     // rejects the transition, fall back to plain modeling.
@@ -478,6 +487,7 @@ export function createProjectTab(operationOwner?: EngineOperationOwner): Promise
       resident: true,
       lastUsedAt: Date.now(),
       workspaceTab: 'solid',
+      camera: null,
       viewState: {
         update,
         finishedSketches: [],
@@ -495,6 +505,7 @@ export function createProjectTab(operationOwner?: EngineOperationOwner): Promise
       activeProjectTabId: id,
       projectTabs: [...state.projectTabs, summaryFromActiveState(id)],
     });
+    requestProjectFraming(useAppStore.getState());
     return true;
   });
 }
@@ -572,6 +583,7 @@ export function closeProjectTab(
       resident: true,
       lastUsedAt: Date.now(),
       workspaceTab: 'solid',
+      camera: null,
       viewState: {
         update,
         finishedSketches: [],
@@ -589,6 +601,7 @@ export function closeProjectTab(
       activeProjectTabId: id,
       projectTabs: [summaryFromActiveState(id)],
     });
+    requestProjectFraming(useAppStore.getState());
     return true;
   });
 }
@@ -614,6 +627,7 @@ export async function recordActiveProjectSave(
     lastUsedAt: runtime?.lastUsedAt ?? Date.now(),
     workspaceTab: activeWorkspaceTab(),
     viewState: activeViewState(),
+    camera: runtime?.camera ?? null,
   });
   syncActiveSummary();
 }
@@ -636,6 +650,7 @@ export async function recordActiveProjectOpen(
     lastUsedAt: runtime?.lastUsedAt ?? Date.now(),
     workspaceTab: activeWorkspaceTab(),
     viewState: activeViewState(),
+    camera: runtime?.camera ?? null,
   });
   syncActiveSummary();
 }
@@ -674,6 +689,7 @@ export async function collectRecoverableProjectTabs(): Promise<{
             runtimes.get(state.activeProjectTabId)?.lastUsedAt ?? Date.now(),
           workspaceTab: activeWorkspaceTab(),
           viewState: activeViewState(),
+          camera: runtimes.get(state.activeProjectTabId)?.camera ?? null,
         });
       }
     } catch {
@@ -727,6 +743,7 @@ export async function restoreProjectTabs(
         resident: false,
         lastUsedAt: Date.now(),
         workspaceTab: 'solid',
+        camera: null,
         viewState:
           tab.id === active.id
             ? { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility, camDocument }
@@ -759,6 +776,7 @@ export async function restoreProjectTabs(
         workspaceTab: 'solid',
       })),
     });
+    requestProjectFraming(useAppStore.getState());
     return true;
   });
 }
