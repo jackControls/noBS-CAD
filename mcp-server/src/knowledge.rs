@@ -1,8 +1,9 @@
 //! Read-only, offline MCP access to the repository's existing OKF Markdown bundle.
+//!
+//! The inventory is the `nbcad-help` embed of every `knowledge/**/*.md` file, so
+//! `cad_help` search and these resources always describe the same revision.
+use nbcad_help::{knowledge_file_by_uri, knowledge_files};
 use serde_json::{json, Value};
-
-const PREFIX: &str = "nbcad://knowledge/";
-include!(concat!(env!("OUT_DIR"), "/knowledge_bundle.rs"));
 
 fn frontmatter<'a>(text: &'a str, key: &str) -> Option<&'a str> {
     let mut lines = text.lines();
@@ -16,20 +17,20 @@ fn frontmatter<'a>(text: &'a str, key: &str) -> Option<&'a str> {
 }
 
 pub(crate) fn list() -> Value {
-    let resources: Vec<Value> = DOCUMENTS
+    let resources: Vec<Value> = knowledge_files()
         .iter()
-        .map(|(path, text)| {
-            let title = frontmatter(text, "title")
-                .or_else(|| text.lines().find_map(|line| line.strip_prefix("# ")))
-                .unwrap_or(path);
+        .map(|file| {
+            let title = frontmatter(file.text, "title")
+                .or_else(|| file.text.lines().find_map(|line| line.strip_prefix("# ")))
+                .unwrap_or(file.path);
             let mut resource = json!({
-                "uri": format!("{PREFIX}{path}"),
-                "name": path,
+                "uri": file.uri(),
+                "name": file.path,
                 "title": title,
                 "mimeType": "text/markdown",
-                "size": text.len(),
+                "size": file.text.len(),
             });
-            if let Some(description) = frontmatter(text, "description") {
+            if let Some(description) = frontmatter(file.text, "description") {
                 resource["description"] = json!(description);
             }
             resource
@@ -39,10 +40,9 @@ pub(crate) fn list() -> Value {
 }
 
 pub(crate) fn read(uri: &str) -> Option<Value> {
-    let path = uri.strip_prefix(PREFIX)?;
     // Exact inventory lookup; never turn a client URI into a filesystem path.
-    let (_, text) = DOCUMENTS.iter().find(|(name, _)| *name == path)?;
-    Some(json!({"contents": [{"uri": uri, "mimeType": "text/markdown", "text": text}]}))
+    let file = knowledge_file_by_uri(uri)?;
+    Some(json!({"contents": [{"uri": uri, "mimeType": "text/markdown", "text": file.text}]}))
 }
 
 #[cfg(test)]
@@ -52,8 +52,8 @@ mod tests {
 
     #[test]
     fn knowledge_recipe_references_name_published_recipes() {
-        for (path, text) in DOCUMENTS {
-            let Some(references) = frontmatter(text, "related_recipes") else {
+        for file in knowledge_files() {
+            let Some(references) = frontmatter(file.text, "related_recipes") else {
                 continue;
             };
             if references == "[]" {
@@ -62,7 +62,8 @@ mod tests {
             for id in references.split(',').map(str::trim) {
                 assert!(
                     nbcad_recipes::find(id).is_ok(),
-                    "knowledge article {path} refers to an unpublished recipe: {id}"
+                    "knowledge article {} refers to an unpublished recipe: {id}",
+                    file.path
                 );
             }
         }
@@ -94,9 +95,9 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../knowledge");
         let mut actual = BTreeMap::new();
         collect(&root, &root, &mut actual);
-        let bundled: BTreeMap<_, _> = DOCUMENTS
+        let bundled: BTreeMap<_, _> = knowledge_files()
             .iter()
-            .map(|(path, text)| (path.to_string(), text.to_string()))
+            .map(|file| (file.path.to_string(), file.text.to_string()))
             .collect();
         assert_eq!(bundled, actual);
     }

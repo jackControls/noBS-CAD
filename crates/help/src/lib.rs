@@ -1,9 +1,10 @@
 //! Shared help catalog + in-process BM25 search for MCP `cad_help` and desktop Help.
 //!
-//! Corpus is embedded markdown under `knowledge/**`. The same embeds are also
-//! exposed as MCP resources (`nbcad://knowledge/...`) via [`knowledge_files`].
-//! Ranking lives behind [`SearchIndex`] so a later Tantivy impl can swap without
-//! tool schema churn.
+//! The corpus is every markdown file under `knowledge/**`, embedded by `build.rs`
+//! and listed by [`knowledge_files`]. The MCP server serves those same embeds as
+//! `nbcad://knowledge/...` resources; BM25 search covers the Concept pages
+//! filtered through [`parse_markdown`]. Ranking lives behind [`SearchIndex`] so a
+//! later Tantivy impl can swap without tool schema churn.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -136,14 +137,26 @@ impl Catalog {
 #[derive(Debug, Default)]
 pub struct Bm25Index {
     /// Precomputed avg field lengths for BM25 length normalization.
-    avg_title: f64,
-    avg_keywords: f64,
-    avg_topics: f64,
-    avg_description: f64,
-    avg_body: f64,
+    avg: [f64; FIELD_COUNT],
     n_docs: usize,
     /// term → document frequency
     df: HashMap<String, usize>,
+    /// Per-page term statistics in catalog (id) order, so a query never
+    /// re-tokenizes the corpus.
+    docs: Vec<DocStats>,
+}
+
+/// Scored fields: title, keywords, topics, description, body.
+const FIELD_COUNT: usize = 5;
+const FIELD_WEIGHTS: [f64; FIELD_COUNT] = [4.0, 3.0, 3.0, 2.0, 1.0];
+
+#[derive(Debug, Default)]
+struct DocStats {
+    id: String,
+    /// term → term frequency per field
+    tf: HashMap<String, [u32; FIELD_COUNT]>,
+    /// token count per field
+    len: [f64; FIELD_COUNT],
 }
 
 impl Bm25Index {
@@ -152,49 +165,43 @@ impl Bm25Index {
 
     pub fn build(catalog: &Catalog) -> Self {
         let mut df: HashMap<String, usize> = HashMap::new();
-        let mut sum_title = 0.0;
-        let mut sum_keywords = 0.0;
-        let mut sum_topics = 0.0;
-        let mut sum_description = 0.0;
-        let mut sum_body = 0.0;
+        let mut sums = [0.0f64; FIELD_COUNT];
+        let mut docs = Vec::with_capacity(catalog.len());
         let n = catalog.len().max(1);
 
         for page in catalog.pages() {
-            let title_toks = tokenize(&page.title);
-            let kw_toks = tokenize(&page.keywords.join(" "));
-            let topic_toks = tokenize(&page.topics.join(" "));
-            let desc_toks = tokenize(&page.description);
-            let body_toks = tokenize(&page.body);
-            sum_title += title_toks.len() as f64;
-            sum_keywords += kw_toks.len() as f64;
-            sum_topics += topic_toks.len() as f64;
-            sum_description += desc_toks.len() as f64;
-            sum_body += body_toks.len() as f64;
-
-            let mut uniq = HashSet::new();
-            for t in title_toks
-                .into_iter()
-                .chain(kw_toks)
-                .chain(topic_toks)
-                .chain(desc_toks)
-                .chain(body_toks)
-            {
-                uniq.insert(t);
+            let fields = [
+                tokenize(&page.title),
+                tokenize(&page.keywords.join(" ")),
+                tokenize(&page.topics.join(" ")),
+                tokenize(&page.description),
+                tokenize(&page.body),
+            ];
+            let mut tf: HashMap<String, [u32; FIELD_COUNT]> = HashMap::new();
+            let mut len = [0.0f64; FIELD_COUNT];
+            for (field, tokens) in fields.into_iter().enumerate() {
+                len[field] = tokens.len() as f64;
+                sums[field] += len[field];
+                for token in tokens {
+                    tf.entry(token).or_default()[field] += 1;
+                }
             }
-            for t in uniq {
-                *df.entry(t).or_default() += 1;
+            for term in tf.keys() {
+                *df.entry(term.clone()).or_default() += 1;
             }
+            docs.push(DocStats {
+                id: page.id.clone(),
+                tf,
+                len,
+            });
         }
 
         let n_f = n as f64;
         Self {
-            avg_title: sum_title / n_f,
-            avg_keywords: sum_keywords / n_f,
-            avg_topics: sum_topics / n_f,
-            avg_description: sum_description / n_f,
-            avg_body: sum_body / n_f,
+            avg: sums.map(|sum| sum / n_f),
             n_docs: n,
             df,
+            docs,
         }
     }
 
@@ -220,48 +227,25 @@ impl SearchIndex for Bm25Index {
         if q_terms.is_empty() || limit == 0 {
             return Vec::new();
         }
+        let weighted: Vec<(&str, f64)> = q_terms
+            .iter()
+            .map(|term| (term.as_str(), self.idf(term)))
+            .collect();
 
         let mut scored: Vec<(f64, &Page)> = Vec::new();
-        for page in catalog.pages() {
-            let title = tokenize(&page.title);
-            let keywords = tokenize(&page.keywords.join(" "));
-            let topics = tokenize(&page.topics.join(" "));
-            let description = tokenize(&page.description);
-            let body = tokenize(&page.body);
-
+        for doc in &self.docs {
+            let Some(page) = catalog.get(&doc.id) else {
+                continue;
+            };
             let mut score = 0.0;
-            for term in &q_terms {
-                let idf = self.idf(term);
-                score += 4.0
-                    * self.field_score(
-                        term_tf(term, &title),
-                        self.avg_title,
-                        title.len() as f64,
-                        idf,
-                    );
-                score += 3.0
-                    * self.field_score(
-                        term_tf(term, &keywords),
-                        self.avg_keywords,
-                        keywords.len() as f64,
-                        idf,
-                    );
-                score += 3.0
-                    * self.field_score(
-                        term_tf(term, &topics),
-                        self.avg_topics,
-                        topics.len() as f64,
-                        idf,
-                    );
-                score += 2.0
-                    * self.field_score(
-                        term_tf(term, &description),
-                        self.avg_description,
-                        description.len() as f64,
-                        idf,
-                    );
-                score += 1.0
-                    * self.field_score(term_tf(term, &body), self.avg_body, body.len() as f64, idf);
+            for &(term, idf) in &weighted {
+                let Some(tf) = doc.tf.get(term) else {
+                    continue;
+                };
+                for (field, (&weight, &avg)) in FIELD_WEIGHTS.iter().zip(&self.avg).enumerate() {
+                    score +=
+                        weight * self.field_score(f64::from(tf[field]), avg, doc.len[field], idf);
+                }
             }
             if score > 0.0 {
                 scored.push((score, page));
@@ -393,10 +377,6 @@ fn tokenize(text: &str) -> Vec<String> {
     out
 }
 
-fn term_tf(term: &str, tokens: &[String]) -> f64 {
-    tokens.iter().filter(|t| t.as_str() == term).count() as f64
-}
-
 fn make_snippet(body: &str, query_terms: &[String], limit: usize) -> String {
     let plain = body
         .lines()
@@ -410,19 +390,20 @@ fn make_snippet(body: &str, query_terms: &[String], limit: usize) -> String {
     let lower = plain.to_ascii_lowercase();
     let mut start = 0usize;
     for term in query_terms {
-        if let Some(pos) = lower.find(term) {
+        if let Some(pos) = lower.find(term.as_str()) {
+            // `lower` is ASCII-lowercased, so byte offsets match `plain`; the
+            // 40-byte lead-in may still land inside a multibyte character.
             start = pos.saturating_sub(40);
+            while !plain.is_char_boundary(start) {
+                start -= 1;
+            }
             break;
         }
     }
-    let slice = plain.get(start..).unwrap_or(plain.as_str());
-    let mut snippet = String::new();
-    for ch in slice.chars() {
-        if snippet.chars().count() >= limit {
-            snippet.push('…');
-            break;
-        }
-        snippet.push(ch);
+    let tail = &plain[start..];
+    let mut snippet: String = tail.chars().take(limit).collect();
+    if tail.chars().nth(limit).is_some() {
+        snippet.push('…');
     }
     snippet.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -595,11 +576,6 @@ impl KnowledgeFile {
     pub fn uri(&self) -> String {
         format!("{KNOWLEDGE_URI_PREFIX}{}", self.path)
     }
-
-    /// Short display name (final path segment).
-    pub fn name(&self) -> &'static str {
-        self.path.rsplit('/').next().unwrap_or(self.path)
-    }
 }
 
 /// All embedded knowledge markdown exposed as MCP `resources/*`.
@@ -620,315 +596,8 @@ pub fn knowledge_file_by_uri(uri: &str) -> Option<&'static KnowledgeFile> {
     knowledge_files().iter().find(|file| file.path == path)
 }
 
-/// Embedded knowledge sources: path relative to `knowledge/` → raw markdown.
-const KNOWLEDGE_FILES: &[KnowledgeFile] = &[
-    KnowledgeFile {
-        path: "index.md",
-        text: include_str!("../../../knowledge/index.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/architecture.md",
-        text: include_str!("../../../knowledge/concepts/architecture.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/export-print.md",
-        text: include_str!("../../../knowledge/concepts/export-print.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/mcp-harness.md",
-        text: include_str!("../../../knowledge/concepts/mcp-harness.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/process.md",
-        text: include_str!("../../../knowledge/concepts/process.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/product-stance.md",
-        text: include_str!("../../../knowledge/concepts/product-stance.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/agent-mcp-workflow.md",
-        text: include_str!("../../../knowledge/concepts/agent-mcp-workflow.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/design-version-scripts.md",
-        text: include_str!("../../../knowledge/concepts/design-version-scripts.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/geometry-naming.md",
-        text: include_str!("../../../knowledge/concepts/geometry-naming.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/shared-reference-geometry.md",
-        text: include_str!("../../../knowledge/concepts/shared-reference-geometry.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/gears.md",
-        text: include_str!("../../../knowledge/concepts/gears.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/additive-workholding.md",
-        text: include_str!("../../../knowledge/concepts/additive-workholding.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/small-wind-generators.md",
-        text: include_str!("../../../knowledge/concepts/small-wind-generators.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/bearing-stacks.md",
-        text: include_str!("../../../knowledge/concepts/bearing-stacks.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/dfm-overview.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/dfm-overview.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/dfm-process-guidelines.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/dfm-process-guidelines.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/fasteners-joints.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/fasteners-joints.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/fits-clearances.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/fits-clearances.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/gdt-intro.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/gdt-intro.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/materials-vocabulary.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/materials-vocabulary.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-snap-fit.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-snap-fit.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-thin-walls.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-thin-walls.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/fillet-chamfer.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/fillet-chamfer.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/research-before-commit.md",
-        text: include_str!("../../../knowledge/concepts/research-before-commit.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/assembly-interference.md",
-        text: include_str!("../../../knowledge/concepts/assembly-interference.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/validate-before-show.md",
-        text: include_str!("../../../knowledge/concepts/validate-before-show.md"),
-    },
-    KnowledgeFile {
-        path: "concepts/adversarial-mesh-audit.md",
-        text: include_str!("../../../knowledge/concepts/adversarial-mesh-audit.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/alignment-nubs-pins.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/alignment-nubs-pins.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-clamshell-retainer.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-clamshell-retainer.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-heat-set-inserts.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-heat-set-inserts.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/fastener-clearance-counterbore.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/fastener-clearance-counterbore.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-ribs-gussets-draft.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-ribs-gussets-draft.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/locating-scheme-dof.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/locating-scheme-dof.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/tolerance-stackup-intro.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/tolerance-stackup-intro.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-supports-overhangs.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-supports-overhangs.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/technic-envelope.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/technic-envelope.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-hardware-pocket-research.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/am-hardware-pocket-research.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-cable-exits-strain-relief.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/am-cable-exits-strain-relief.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/captive-nut-hex-trap.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/captive-nut-hex-trap.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/cosmetic-threads-vs-clearance.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/cosmetic-threads-vs-clearance.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-enclosure-lid-gasket-labyrinth.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/am-enclosure-lid-gasket-labyrinth.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-ventilation-grille-finger-trap.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/am-ventilation-grille-finger-trap.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-boss-standoff-patterns.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/am-boss-standoff-patterns.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-assembly-join-choice.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-assembly-join-choice.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-warpage-cooling-flatness.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/am-warpage-cooling-flatness.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/fit-coupons-recipes-map.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/fit-coupons-recipes-map.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/datum-sketch-plane-choice.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/datum-sketch-plane-choice.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/hole-wizard-vs-modeled.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/hole-wizard-vs-modeled.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/power-screws-lead-screws.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/power-screws-lead-screws.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/shafts-keys-retaining-rings.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/shafts-keys-retaining-rings.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/springs-couplings.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/springs-couplings.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/drawing-vs-mbd-pmi.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/drawing-vs-mbd-pmi.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/dfam-fdm-overview.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/dfam-fdm-overview.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-fdm-holes-fit-allowances.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/am-fdm-holes-fit-allowances.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-fdm-load-layers-infill.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/am-fdm-load-layers-infill.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/mechanisms-overview.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/mechanisms-overview.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/mechanisms-linkages-mobility.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/mechanisms-linkages-mobility.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/mechanisms-cams.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/mechanisms-cams.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/mechanisms-belts-pulleys.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/mechanisms-belts-pulleys.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/mechanisms-chains-sprockets.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/mechanisms-chains-sprockets.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/am-printed-gears-dfam.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/am-printed-gears-dfam.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/mechanisms-intermittent-geneva.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/mechanisms-intermittent-geneva.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/design-hygiene-requirements-bom.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/design-hygiene-requirements-bom.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/bearings-hubs-seats.md",
-        text: include_str!("../../../knowledge/machine-design/concepts/bearings-hubs-seats.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/concepts/inspection-metrology-bridge.md",
-        text: include_str!(
-            "../../../knowledge/machine-design/concepts/inspection-metrology-bridge.md"
-        ),
-    },
-    KnowledgeFile {
-        path: "machine-design/taxonomy.md",
-        text: include_str!("../../../knowledge/machine-design/taxonomy.md"),
-    },
-    KnowledgeFile {
-        path: "machine-design/SOURCES.md",
-        text: include_str!("../../../knowledge/machine-design/SOURCES.md"),
-    },
-];
+// `KNOWLEDGE_FILES`: every `knowledge/**/*.md` file, generated by build.rs.
+include!(concat!(env!("OUT_DIR"), "/knowledge_bundle.rs"));
 
 fn embedded_pages() -> Vec<Page> {
     knowledge_files()
@@ -2066,6 +1735,52 @@ mod tests {
                 hits.iter().map(|h| &h.id).collect::<Vec<_>>()
             );
         }
+    }
+
+    #[test]
+    fn snippet_keeps_query_context_after_multibyte_text() {
+        // 300 ASCII bytes, a 3-byte arrow, then the term 38 bytes later: the
+        // 40-byte lead-in starts inside the arrow.
+        let mut body = "a".repeat(300);
+        body.push('→');
+        body.push_str(&"b".repeat(38));
+        body.push_str(" clearance ");
+        body.push_str(&"c".repeat(400));
+        let snippet = make_snippet(&body, &["clearance".to_string()], SNIPPET_CHARS);
+        assert!(snippet.contains("clearance"), "{snippet}");
+        assert!(snippet.chars().count() <= SNIPPET_CHARS + 1);
+    }
+
+    #[test]
+    fn embedded_files_match_every_repository_markdown_file() {
+        fn collect(
+            root: &std::path::Path,
+            dir: &std::path::Path,
+            out: &mut BTreeMap<String, String>,
+        ) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    collect(root, &path, out);
+                } else if path.extension().is_some_and(|ext| ext == "md") {
+                    let relative = path
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .replace('\\', "/");
+                    out.insert(relative, std::fs::read_to_string(&path).unwrap());
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../knowledge");
+        let mut expected = BTreeMap::new();
+        collect(&root, &root, &mut expected);
+        let embedded: BTreeMap<String, String> = knowledge_files()
+            .iter()
+            .map(|file| (file.path.to_string(), file.text.to_string()))
+            .collect();
+        assert_eq!(embedded, expected);
     }
 
     #[test]
