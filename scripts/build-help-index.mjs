@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Build search index over knowledge/machine-design markdown articles.
 // Skips pages with searchable: false (SOURCES, taxonomy).
+// Output is deterministic: the pages-knowledge workflow regenerates it and
+// fails when the committed knowledge/machine-design/search-index.json is stale.
 // Usage: node scripts/build-help-index.mjs
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -88,11 +90,10 @@ for (const abs of files) {
   });
 }
 
-entries.sort((a, b) => a.id.localeCompare(b.id));
+entries.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
 const index = {
   version: 1,
-  generated: new Date().toISOString().slice(0, 10),
   count: entries.length,
   entries,
 };

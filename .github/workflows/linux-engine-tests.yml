@@ -48,8 +48,3 @@ jobs:
 
       - name: Test complete host-neutral workspace
         run: cargo test --locked --workspace
-
-      # nbcad-help embeds knowledge/**; path filter above + this package test
-      # keep BM25/catalog goldens green without waiting for Node help-index CI.
-      - name: Test nbcad-help (explicit)
-        run: cargo test --locked -p nbcad-help

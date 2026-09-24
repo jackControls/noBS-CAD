@@ -1,6 +1,5 @@
 {
   "version": 1,
-  "generated": "2026-09-21",
   "count": 47,
   "entries": [
     {
@@ -896,7 +895,7 @@
         "revolved-spacer"
       ],
       "sources": [
-        "nwtc-guns-dfm"
+        "nwtc-guns-processes"
       ],
       "snippet": "Attribution: heuristics adapted from Guns / NWTC LibreTexts Ch. 2 — DFM Guidelines for Specific Manufacturing Processes, CC BY 4.0. Numbers below are starting guidance, not shop standards — confirm with your process, ma…"
     },

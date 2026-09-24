@@ -70,7 +70,7 @@ test('both native platforms run every shard and all CI inputs trigger native acc
     assert.match(config, /name: MCP bench and complete feature workshop\n        if: matrix.shard == 'core'/);
     assert.match(config, /name: Upload successful demo input[\s\S]*?if-no-files-found: error\n          overwrite: true/);
   }
-  for (const input of ['crates/cam/**', 'scripts/ci/**', '.github/actions/setup-windows-occt/**']) {
+  for (const input of ['crates/cam/**', 'crates/help/**', 'scripts/ci/**', '.github/actions/setup-windows-occt/**']) {
     assert.equal(mcp.split(`- '${input}'`).length - 1, 2, `${input} must be in both event filters`);
   }
   assert(read('mcp-server/tests/recipes.rs').includes(`fn ${flagshipTests.turbine}()`));
