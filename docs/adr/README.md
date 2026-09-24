@@ -10,7 +10,7 @@ states its own status. Long design prose lives in `docs/mcp-harness.md` and
 | [0002](0002-bevy-viewport.md) | Native Bevy viewport boundary | Accepted |
 | [0003](0003-3mf-export.md) | 3MF (+ STL) with materials/colors | Implemented for native export with per-body appearance |
 | [0005](0005-main-goals.md) | High-level product directions | Accepted |
-| [0006](0006-dynamic-mcp-focus.md) | Focus-scoped MCP + UI co-link | Proposed; multi-window **deferred** |
+| [0006](0006-dynamic-mcp-focus.md) | Focus-scoped MCP + UI co-link | **Accepted** (2026-09-20); multi-window **deferred** |
 
 Treat proposed and deferred ADRs as reviewable direction, not permission to
 start them ahead of reliable mechanical CAD and local MCP fundamentals.

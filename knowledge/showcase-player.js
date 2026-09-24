@@ -1,5 +1,5 @@
-// Switching examples must not leave an invisible film decoding in the background.
-// Playback starts only through the user's player controls; navigation never resumes it.
+// When switching examples, stop any background film decode.
+// Playback starts only through the user's player controls; navigation leaves playback stopped.
 const films = [...document.querySelectorAll('.showcases video')];
 const sections = [...document.querySelectorAll('.showcases > section')];
 function selectedExample() {

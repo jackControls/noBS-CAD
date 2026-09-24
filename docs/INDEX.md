@@ -35,6 +35,8 @@
 - [Architecture proposals](proposed-architecture.md) — future approaches and rationale.
 - [Agent and maintainer guidance](agentic/INDEX.md) — disclosure, source installation
   and implementation contracts.
+- [Machine-design knowledge base](machine-design-kb.md) — OKF domain help, licenses, MCP plan.
+- [Help search ADR](machine-design-help-search.md) — BM25 `cad_help` caps and growth bar.
 
 <details>
 <summary>Specialist implementation references</summary>
