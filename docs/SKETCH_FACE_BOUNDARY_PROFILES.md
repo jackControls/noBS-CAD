@@ -151,6 +151,10 @@ preserved conservatively. Undo/redo and save/reopen retain ownership.
 - Native model-edge strokes use a capped 0.0001 mm camera lift and no global
   depth bias. The former one-pixel lift and bias leaked hidden edges through
   thin solids at some zoom levels; the GPU regression checks this explicitly.
+  An edge whose planar neighbour rises towards the camera (both faces of an
+  inside corner do) is lifted further by the depth its own stroke width spans
+  across that face, bounded to 2.5 px and 1 % of the body radius, so concave
+  edges read like convex ones without lifting silhouette edges at all.
 
 ## Tests
 
