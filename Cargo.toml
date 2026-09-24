@@ -16,6 +16,7 @@ members = [
     "crates/mcp-mutate",
     "crates/script",
     "crates/recipes",
+    "crates/plugins",
     "crates/wasm",
     "xtask",
 ]
