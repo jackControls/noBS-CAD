@@ -4364,10 +4364,13 @@ fn draw_cad_gizmos(
 
     if state.mode == ViewportMode::Sketch {
         if let Some(sketch) = &model.active_sketch {
-            draw_grid_on_basis(&mut gizmos, &sketch.basis, fine, major);
+            let layout = grid_layout(camera.camera, *viewport, &sketch.basis);
+            draw_grid_on_basis(&mut gizmos, &sketch.basis, layout, fine, major);
         }
     } else {
-        draw_grid_on_basis(&mut gizmos, &origin_plane_bases()[0].1, fine, major);
+        let [(_, ground, _), ..] = origin_plane_bases();
+        let layout = grid_layout(camera.camera, *viewport, &ground);
+        draw_grid_on_basis(&mut gizmos, &ground, layout, fine, major);
     }
 
     if state.mode == ViewportMode::PickPlane {
@@ -5236,33 +5239,139 @@ fn draw_marker_loop(gizmos: &mut Gizmos<CadHighlightGizmos>, points: &[Vec3], co
     }
 }
 
-fn draw_grid_on_basis(gizmos: &mut Gizmos, basis: &PlaneBasis, fine: Color, major: Color) {
+/// Screen spacing the minor grid interval is chosen for. Shared with the
+/// browser sketch grid (`TARGET_SKETCH_GRID_PX`) so the engine's snap step and
+/// the native lines agree.
+const GRID_TARGET_PX: f32 = 24.0;
+/// Finest and coarsest minor intervals, in model millimetres.
+const GRID_MIN_STEP: f32 = 0.001;
+const GRID_MAX_STEP: f32 = 1_000_000.0;
+/// Minor intervals drawn on each side of the view center. At the target
+/// spacing this spans several viewport heights, so the sheet reads as
+/// unbounded while the line count stays fixed however large the model is.
+const GRID_HALF_CELLS: i32 = 160;
+const GRID_MAJOR_EVERY: i32 = 10;
+
+/// Nearest member of the 1-2-5 engineering sequence to the interval that
+/// covers `GRID_TARGET_PX` at the view center, like `adaptiveSketchGridStep`
+/// in the browser viewport.
+fn adaptive_grid_step(world_per_pixel: f32) -> f32 {
+    if !world_per_pixel.is_finite() || world_per_pixel <= 0.0 {
+        return 10.0;
+    }
+    let desired =
+        (f64::from(world_per_pixel) * f64::from(GRID_TARGET_PX)).max(f64::from(GRID_MIN_STEP));
+    let decade = 10f64.powi(desired.log10().floor() as i32);
+    let normalized = desired / decade;
+    // Geometric midpoints keep the choice symmetric on a logarithmic zoom.
+    let multiplier = if normalized < 2f64.sqrt() {
+        1.0
+    } else if normalized < 10f64.sqrt() {
+        2.0
+    } else if normalized < 50f64.sqrt() {
+        5.0
+    } else {
+        10.0
+    };
+    ((multiplier * decade) as f32).clamp(GRID_MIN_STEP, GRID_MAX_STEP)
+}
+
+/// Where and how densely the grid sheet is drawn for the current view.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct GridLayout {
+    /// Minor interval in model units; a major line falls on every tenth.
+    minor: f32,
+    /// Plane coordinates of the sheet center: the camera target snapped to
+    /// the major interval, so lines stay on world multiples while panning.
+    center: Vec2,
+    half_extent: f32,
+}
+
+fn grid_layout(
+    camera: ViewportCamera,
+    viewport: ViewportSizeResource,
+    basis: &PlaneBasis,
+) -> GridLayout {
+    let target = Vec3::from_array(camera.target);
+    let minor = adaptive_grid_step(world_per_pixel_at(camera, viewport, target));
+    let major = minor * GRID_MAJOR_EVERY as f32;
+    let local = target - basis_vector(basis.origin);
+    let snap = |coordinate: f32| (coordinate / major).round() * major;
+    GridLayout {
+        minor,
+        center: Vec2::new(
+            snap(local.dot(basis_vector(basis.u))),
+            snap(local.dot(basis_vector(basis.v))),
+        ),
+        half_extent: minor * GRID_HALF_CELLS as f32,
+    }
+}
+
+fn draw_grid_on_basis(
+    gizmos: &mut Gizmos,
+    basis: &PlaneBasis,
+    layout: GridLayout,
+    fine: Color,
+    major: Color,
+) {
     let origin = basis_vector(basis.origin) - basis_vector(basis.normal) * 0.03;
     let u = basis_vector(basis.u);
     let v = basis_vector(basis.v);
-    for index in -30..=30 {
-        let coordinate = index as f32 * 5.0;
-        let color = if index % 5 == 0 { major } else { fine };
-        gizmos.line(
-            origin + u * coordinate - v * 150.0,
-            origin + u * coordinate + v * 150.0,
-            color,
+    let GridLayout {
+        minor,
+        center,
+        half_extent,
+    } = layout;
+    // Lines thin out toward the sheet edge instead of stopping at a visible
+    // border, so the finite patch reads as an unbounded plane.
+    let fade = |offset: f32| (1.0 - (offset / half_extent).powi(2)).clamp(0.0, 1.0);
+    let mut faded_line = |start: Vec3, end: Vec3, color: Color, weight: f32| {
+        let middle = (start + end) * 0.5;
+        let strong = color.with_alpha(color.alpha() * weight);
+        let clear = color.with_alpha(0.0);
+        gizmos.line_gradient(middle, start, strong, clear);
+        gizmos.line_gradient(middle, end, strong, clear);
+    };
+    let color_for = |world_index: i64| {
+        if world_index % i64::from(GRID_MAJOR_EVERY) == 0 {
+            major
+        } else {
+            fine
+        }
+    };
+    let base_u = (center.x / minor).round() as i64;
+    let base_v = (center.y / minor).round() as i64;
+    for index in -GRID_HALF_CELLS..=GRID_HALF_CELLS {
+        let offset = index as f32 * minor;
+        let weight = fade(offset);
+        let along_v = origin + u * (center.x + offset);
+        faded_line(
+            along_v + v * (center.y - half_extent),
+            along_v + v * (center.y + half_extent),
+            color_for(base_u + i64::from(index)),
+            weight,
         );
-        gizmos.line(
-            origin - u * 150.0 + v * coordinate,
-            origin + u * 150.0 + v * coordinate,
-            color,
+        let along_u = origin + v * (center.y + offset);
+        faded_line(
+            along_u + u * (center.x - half_extent),
+            along_u + u * (center.x + half_extent),
+            color_for(base_v + i64::from(index)),
+            weight,
         );
     }
-    gizmos.line(
-        origin - u * 150.0,
-        origin + u * 150.0,
+    // The plane's own axes stay anchored at its origin, however far the view
+    // has panned from it.
+    faded_line(
+        origin + u * (center.x - half_extent),
+        origin + u * (center.x + half_extent),
         Color::srgba(0.80, 0.25, 0.30, 0.62),
+        fade(center.y),
     );
-    gizmos.line(
-        origin - v * 150.0,
-        origin + v * 150.0,
+    faded_line(
+        origin + v * (center.y - half_extent),
+        origin + v * (center.y + half_extent),
         Color::srgba(0.25, 0.65, 0.38, 0.62),
+        fade(center.x),
     );
 }
 
@@ -7423,6 +7532,71 @@ mod tests {
                 .corner_radius,
             0.0
         );
+    }
+
+    #[test]
+    fn grid_step_follows_the_1_2_5_sequence_and_clamps() {
+        let close = |actual: f32, expected: f32| (actual - expected).abs() <= expected * 1.0e-5;
+        // 24 px at the view center: 0.1 mm/px asks for 2.4 mm and gets 2 mm.
+        assert!(close(adaptive_grid_step(0.1), 2.0));
+        assert!(close(adaptive_grid_step(0.3), 10.0));
+        assert!(close(adaptive_grid_step(1.0), 20.0));
+        assert!(close(adaptive_grid_step(2.0), 50.0));
+        assert!(close(adaptive_grid_step(1.0e-9), GRID_MIN_STEP));
+        assert!(close(adaptive_grid_step(1.0e9), GRID_MAX_STEP));
+        assert!(close(adaptive_grid_step(f32::NAN), 10.0));
+    }
+
+    #[test]
+    fn grid_sheet_follows_zoom_and_pan() {
+        let viewport = ViewportSizeResource {
+            logical_width: 1_200.0,
+            logical_height: 800.0,
+        };
+        let [(_, ground, _), ..] = origin_plane_bases();
+        let near = ViewportCamera {
+            position: [0.0, 0.0, 200.0],
+            target: [0.0, 0.0, 0.0],
+            up: [0.0, 1.0, 0.0],
+            vertical_fov_degrees: 45.0,
+        };
+        let far = ViewportCamera {
+            position: [0.0, 0.0, 20_000.0],
+            ..near
+        };
+        let near_layout = grid_layout(near, viewport, &ground);
+        let far_layout = grid_layout(far, viewport, &ground);
+        assert!(
+            far_layout.minor > near_layout.minor * 10.0,
+            "a 100x larger part must coarsen the grid: {near_layout:?} -> {far_layout:?}"
+        );
+        for (camera, layout) in [(near, near_layout), (far, far_layout)] {
+            let world_per_pixel = world_per_pixel_at(camera, viewport, Vec3::ZERO);
+            let visible_half_height = world_per_pixel * viewport.logical_height * 0.5;
+            assert!(
+                layout.half_extent > visible_half_height * 2.0,
+                "the sheet must reach well past the visible plane: {layout:?}"
+            );
+            let pixels = layout.minor / world_per_pixel;
+            assert!(
+                (12.0..=60.0).contains(&pixels),
+                "the minor interval must stay legible, got {pixels} px"
+            );
+            assert_eq!(layout.center, Vec2::ZERO);
+        }
+        // Panning far from the origin keeps the sheet under the camera, with
+        // its center on a major multiple so lines never swim while panning.
+        let panned = ViewportCamera {
+            position: [12_345.0, -678.0, 200.0],
+            target: [12_345.0, -678.0, 0.0],
+            ..near
+        };
+        let layout = grid_layout(panned, viewport, &ground);
+        let major = layout.minor * GRID_MAJOR_EVERY as f32;
+        assert!((layout.center.x - 12_345.0).abs() <= major * 0.5);
+        assert!((layout.center.y + 678.0).abs() <= major * 0.5);
+        assert!((layout.center.x / major).fract().abs() < 1.0e-3);
+        assert!((layout.center.y / major).fract().abs() < 1.0e-3);
     }
 
     #[test]

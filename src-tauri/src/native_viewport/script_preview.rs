@@ -871,6 +871,82 @@ mod tests {
         }
     }
 
+    /// Real production GPU path for the ground grid: a small part and one two
+    /// hundred times larger must both sit on a legible sheet that follows the
+    /// zoom. Kept opt-in for GPU-less hosts; set `NBCAD_PREVIEW_PROOF_DIR` to
+    /// retain the rendered evidence.
+    #[test]
+    #[ignore = "requires a GPU; set NBCAD_PREVIEW_PROOF_DIR to retain visual evidence"]
+    fn native_ground_grid_visual_matrix() {
+        let block = |size: f32| -> Frame {
+            let (x, y, z) = (size, size * 0.6, size * 0.2);
+            let corners: [[f32; 3]; 8] = [
+                [0.0, 0.0, 0.0],
+                [x, 0.0, 0.0],
+                [x, y, 0.0],
+                [0.0, y, 0.0],
+                [0.0, 0.0, z],
+                [x, 0.0, z],
+                [x, y, z],
+                [0.0, y, z],
+            ];
+            let positions: Vec<f32> = corners.iter().flatten().copied().collect();
+            let normals: Vec<f32> = corners.iter().flat_map(|_| [0.0, 0.0, 1.0]).collect();
+            let indices: Vec<u32> = vec![
+                0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2,
+                7, 6, 3, 0, 4, 3, 4, 7,
+            ];
+            serde_json::from_value(serde_json::json!({
+                "caption": format!("{size} mm block"),
+                "scene": {"bodies": [{"id": 1, "name": "Block", "feature_id": 2, "faces": [],
+                    "edges": [], "mesh": {"positions": positions, "normals": normals,
+                    "indices": indices}}], "errors": []}
+            }))
+            .unwrap()
+        };
+        let mut renderer = PreviewRenderer::new().unwrap();
+        let cancelled = AtomicBool::new(false);
+        let output = std::env::var_os("NBCAD_PREVIEW_PROOF_DIR");
+        if let Some(path) = &output {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        for (label, size) in [("small", 20.0), ("large", 4_000.0)] {
+            let mut document = PreviewDocument::new(vec![block(size)]).unwrap();
+            let base_radius = document.radius;
+            let mut request = request(format!("grid-{label}"), String::new(), 1);
+            request.width = 800;
+            request.height = 600;
+            for (zoom_label, zoom, pitch) in [
+                ("fit", 1.0, 0.6),
+                ("far", 4.0, 0.6),
+                ("close", 0.25, 0.6),
+                ("grazing", 1.0, 0.12),
+            ] {
+                document.radius = base_radius * zoom;
+                request.pitch = pitch;
+                let png = renderer
+                    .render(
+                        &document,
+                        &request,
+                        &cancelled,
+                        Instant::now() + Duration::from_secs(60),
+                    )
+                    .unwrap();
+                assert!(
+                    png.len() > 5_000,
+                    "a scene must be rendered, not an empty target"
+                );
+                if let Some(path) = &output {
+                    std::fs::write(
+                        std::path::Path::new(path).join(format!("grid-{label}-{zoom_label}.png")),
+                        png,
+                    )
+                    .unwrap();
+                }
+            }
+        }
+    }
+
     /// Real production GPU path: projected partial arcs on both face normals,
     /// thin solids, multiple zooms and palettes. Kept opt-in for GPU-less hosts.
     #[test]
