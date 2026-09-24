@@ -81,8 +81,8 @@ abutment diameter alone does not define the largest safe spacer diameter.
 For two bearings, calculate the inner-ring stack and housing shoulder spacing
 from the same datums, including widths, spacer length and shim tolerances.
 Define the intended axial location, permitted float or specified preload.
-Prefer measuring and coupons before clamping an uncertain printed stack between collars until it appears
-tight: excess fit or unintended preload can increase drag and damage bearings.
+Prefer measuring and coupons over clamping an uncertain printed stack between
+collars until it merely feels tight: excess fit or unintended preload can increase drag and damage bearings.
 Provide adjustment and measure free rotation after each retaining operation.
 [NSK fits and internal clearance](https://www.nsk.com/tools-resources/abc-bearings/fits-and-internal-clearance/).
 

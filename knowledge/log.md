@@ -1,11 +1,17 @@
-## 2026-09-21 — critical: clamshell teeth↔cutouts + heat stake insert
+# noBS CAD knowledge update log
+
+## 2026-09-21
+
+### critical: clamshell teeth↔cutouts + heat stake insert
 
 - Deepened `am-clamshell-retainer` mating-half CAD roles (tooth↔receptacle, tooth
   count, envelope span); keywords lock `clamshell teeth cutout` / `matching cutouts clip`.
 - Heat-set: keyword + opening phrase `heat stake insert` (counterbore stays #2, not top).
 - Goldens H107–H109; Rust BM25 top_id; rebuild search-index; MCP reinstall.
 
-## 2026-09-20 — dogfood round 2 (heat-stake boss ranking)
+## 2026-09-20
+
+### dogfood round 2 (heat-stake boss ranking)
 
 - Proven WEAK: `heat stake boss` / `heat-set boss` ranked `am-boss-standoff-patterns`
   ahead of `am-heat-set-inserts` (stake≠set token; boss page keyword `heat-set boss`
@@ -14,7 +20,7 @@
   stake synonyms; boss-standoff drops `heat-set boss` keyword (keeps body link).
 - Goldens H105–H106; Rust BM25 top_id asserts; rebuild search-index; MCP reinstall.
 
-## 2026-09-20 — quality pass (snippet honesty + Prefer cruft)
+### quality pass (snippet honesty + Prefer cruft)
 
 - AGMA/chart queries: openings on `gears`, `am-printed-gears-dfam`, and
   `mechanisms-overview` now lead with **no chart in Help / VERIFY datasheet**.
@@ -23,7 +29,7 @@
   shorter allowables honesty.
 - `am-snap-fit`: opening leads with class / thickness / orientation before sizing.
 
-## 2026-09-20 — dogfood weak areas (bearing seat ranking + chart honesty)
+### dogfood weak areas (bearing seat ranking + chart honesty)
 
 - **Bearing seat ranking:** retitled/keywords `bearings-hubs-seats` for singular
   bearing seat / bore / hub seat; shifted `bearing-stacks` to purchased SKU /
@@ -34,7 +40,7 @@
   for curated browse (topics stays alpha labels).
 - Goldens H100–H104; Rust BM25 queries; rebuild search-index; MCP reinstall.
 
-## 2026-09-20 — dogfood slop purge (prefer tone leftovers)
+### dogfood slop purge (prefer tone leftovers)
 
 - Folded leftover `## Anti-patterns` on mechanisms-overview + design-hygiene into
   Prefer tables (golden-path; no negative-bias lecture headers).
@@ -42,7 +48,7 @@
   to Prefer-instead tables.
 - No page deletes; no MatWeb / tooth charts invented.
 
-## 2026-09-20 — Materials vocabulary deepen (CAD-time props)
+### Materials vocabulary deepen (CAD-time props)
 
 - Deepened `machine-design.concepts.materials-vocabulary`: CAD-time roles for
   **E / Sy / Sut / hardness / fatigue / CTE / density / corrosion**, isotropic vs
@@ -54,7 +60,7 @@
   Index quick-lookup + bullet. Goldens H97–H99; Rust BM25 queries.
 - Rebuilt search-index.json; MCP embed via install script (no Cursor Uninstall/Add).
 
-## 2026-09-20 — Mechanisms overview hub deepen
+### Mechanisms overview hub deepen
 
 - Deepened `machine-design.concepts.mechanisms-overview`: CAD-time vocabulary
   (motion class / element family / soft sync / CAD-vs-catalog), navigate-by-need
@@ -65,7 +71,7 @@
   datasheet. Index quick-lookup + bullet. Goldens H94–H96; Rust BM25 queries.
 - Rebuilt search-index.json; MCP embed via install script (no Cursor Uninstall/Add).
 
-## 2026-09-20 — Design hygiene requirements/BOM deepen
+### Design hygiene requirements/BOM deepen
 
 - Deepened `machine-design.concepts.design-hygiene-requirements-bom`: make-vs-buy
   per body, BOM roles (purchased / fab / phantom / fastener kit), reference
@@ -77,7 +83,7 @@
   Index quick-lookup + bullet. Goldens H91–H93; Rust BM25 queries.
 - Rebuilt search-index.json; MCP embed via install script (no Cursor Uninstall/Add).
 
-## 2026-09-20 — Fasteners preload / torque deepen (NASA RP-1228)
+### Fasteners preload / torque deepen (NASA RP-1228)
 
 - Deepened `machine-design.concepts.fasteners-joints`: preload / clamp load,
   torque as install method vs proof, friction/lube / *K* sensitivity, grip &
@@ -88,14 +94,14 @@
   SOURCES note. Goldens H88–H90; Rust BM25 queries.
 - Rebuilt search-index.json; MCP embed via install script (no Cursor Uninstall/Add).
 
-## 2026-09-20
+### Technic-style envelope (LDraw LDU nominals)
 
 - Deepened [Technic-style envelope](machine-design/concepts/technic-envelope.md) with open-source **LDraw LDU** brick/stud/Technic nominals (1 LDU ≈ 0.4 mm; stud pitch 20 LDU / 8 mm; brick 24 LDU / 9.6 mm; plate 8 LDU / 3.2 mm; stud/hole class 12 LDU / 4.8 mm; axle length modules N×8 mm) plus MIT Technic.scad print-oriented hole bias; kept unofficial / trademark / measure-first tone.
 - Added SOURCES ids `ldraw-ffs`, `ldraw-opls`, `technic-scad` (distill) and link-only `stegu-ldu`, `cailliau-lego-dims`.
 - Help goldens H85–H87 for LDU / stud pitch / Technic hole diameter discoverability.
 - Spec↔MCP align: ADR 0006 index → Accepted; `mcp-harness` cad_help-first.
 
-## 2026-09-20 — Shared reference geometry (followers / named parents)
+### Shared reference geometry (followers / named parents)
 
 - Seeded `concepts.shared-reference-geometry`: prefer named shared references
   (planes, axes, sketches, faces) over duplicated numeric offsets; drive
@@ -105,7 +111,7 @@
 - Soft pointers: geometry-naming, datum-sketch-plane-choice; index + taxonomy H;
   Design Ops guidance; goldens H82+ + Rust BM25 queries.
 
-## 2026-09-20 — Geometry naming (bodies / faces / scripts / STEP)
+### Geometry naming (bodies / faces / scripts / STEP)
 
 - Seeded `concepts.geometry-naming`: role-noun bodies, feature/history names
   aligned with script steps, name mating/datum/export-critical faces/edges;
@@ -115,7 +121,7 @@
 - Soft pointers: agent-mcp-workflow, design-version-scripts; index + taxonomy H;
   Design Ops guidance; goldens H79+ + Rust BM25 queries.
 
-## 2026-09-20 — Design VERSION / JSONC script golden path (correction)
+### Design VERSION / JSONC script golden path (correction)
 
 - Rewrote `concepts.design-version-scripts`: authoritative artifact is
   versioned / VERSION-embedded `.nbcad.jsonc` — **not** a Python `gen_v*.py`
@@ -129,7 +135,7 @@
 - Soft pointers: agent-mcp-workflow, index, taxonomy, docs/agentic INDEX;
   Design Ops guidance; goldens H76–H78 + Rust BM25 queries retargeted.
 
-## 2026-09-20 — Bearings / hubs / seats CAD-time deepen
+### Bearings / hubs / seats CAD-time deepen
 
 - Seeded `machine-design.concepts.bearings-hubs-seats` (shaft/housing seats,
   fit roles, preload/spacer stacks; load/speed/life as VERIFY→catalog; **no**
@@ -141,7 +147,7 @@
   springs/fits/fit-coupons cross-links.
 - Rebuilt search-index.json; Rust embed + BM25/unit tests; wire goldens H73+.
 
-## 2026-09-20 — Design hygiene BOM + intermittent/Geneva
+### Design hygiene BOM + intermittent/Geneva
 
 - Seeded `machine-design.concepts.design-hygiene-requirements-bom` (requirements
   → embodiment → purchased vs print → BOM roles; golden-path checklist; link
@@ -156,7 +162,7 @@
   cams, research-before-commit, hardware-pocket.
 - Rebuilt search-index.json; Rust embed + BM25/unit tests; wire goldens H68+.
 
-## 2026-09-20 — Chains/sprockets + printed gears DFAM
+### Chains/sprockets + printed gears DFAM
 
 - Seeded `machine-design.concepts.mechanisms-chains-sprockets` (center distance,
   wrap, tension path, purchased pitch; cite `mit-272`; link mechanisms hub +
@@ -170,7 +176,7 @@
   belts, gears, DFAM hub, load-layers. Rebuilt search-index.json; Rust embed +
   BM25/unit tests; wire goldens H64+.
 
-## 2026-09-20 — Mechanisms corpus (hub + linkages/cams/belts)
+### Mechanisms corpus (hub + linkages/cams/belts)
 
 - Seeded `machine-design.concepts.mechanisms-overview` (motion class → element
   family → envelopes/centers/DOFs → VERIFY hub; table to gears + elements).
@@ -188,7 +194,7 @@
 - Cite `mit-272` link-out on mechanisms pages. Rebuilt search-index.json; Rust
   embed + BM25/unit tests; floor ≥50; wire goldens H56–H63.
 
-## 2026-09-20 — FDM load / layers / infill
+### FDM load / layers / infill
 
 - Seeded `machine-design.concepts.am-fdm-load-layers-infill` (name primary load
   → bed face so tension in-plane; shells vs infill roles; coupons; no %
@@ -197,7 +203,7 @@
   rows updated. Rebuilt `machine-design/search-index.json`; Rust embed +
   BM25/unit tests + wire goldens H54–H55.
 
-## 2026-09-20 — DFAM FDM hub + printed holes
+### DFAM FDM hub + printed holes
 
 - Seeded `machine-design.concepts.dfam-fdm-overview` (golden-path hub:
   process → orientation → walls → supports → joints → coupons; AM Concept
@@ -210,7 +216,7 @@
 - Rebuilt `machine-design/search-index.json`; Rust embed + BM25/unit tests +
   wire goldens H50–H53.
 
-## 2026-09-20 — Drawing vs MBD / PMI concept
+### Drawing vs MBD / PMI concept
 
 - Seeded `machine-design.concepts.drawing-vs-mbd-pmi` (CAD-time packs: drawing
   vs MBD vs dual; datum packs sheet/3D; VERIFY PMI↔process). Taxonomy A +
@@ -219,7 +225,7 @@
   hole, fasteners, locating. Rebuilt `machine-design/search-index.json`; Rust
   embed + BM25/unit tests + wire golden H49.
 
-## 2026-09-20 — Springs/couplings concept
+### Springs/couplings concept
 
 - Seeded `machine-design.concepts.springs-couplings` (CAD-time seats, coupling
   misalignment class, VERIFY → datasheets; no rate/angle charts). Taxonomy B +
@@ -228,9 +234,7 @@
   bearings. Rebuilt `machine-design/search-index.json`; Rust embed + BM25/unit
   tests + wire golden H48.
 
-# noBS CAD knowledge update log
-
-## 2026-09-20 — Shafts/keys/rings + browse decruft
+### Shafts/keys/rings + browse decruft
 
 - Seeded `machine-design.concepts.shafts-keys-retaining-rings` (CAD-time roles;
   no key/circlip charts). Taxonomy B row + Still-thin note updated.
@@ -239,11 +243,10 @@
 - Rebuilt `machine-design/search-index.json`; wired Rust embed + BM25/unit tests
   + wire golden H47.
 
-## 2026-09-20 — Layout stage + decruft pass
+### Layout stage + decruft pass
 
 - Decided **not** to move `knowledge/` under `docs/` on this draft PR (stable
-  `nbcad://knowledge/` + embeds); Design Ops write-up:
-  `cad-design-ops/ship-clean/layout-review-2026-09-20.md`.
+  `nbcad://knowledge/` + embeds).
 - Taxonomy: dropped duplicate power-screws rows (section H + stale “Still thin”);
   softened door wording; prompts row notes `help_search` shipped.
 - Rebuilt `machine-design/search-index.json` (31 Concepts, includes power-screws).
@@ -251,21 +254,20 @@
   “no search engine”), HUMAN_HELP shared-corpus doors, index/taxonomy prefer tone,
   power-screws lead/travel line.
 
-## 2026-09-20 — Ship-clean slop purge (materials + prefer tone)
+### Ship-clean slop purge (materials + prefer tone)
 
 - Rewrote leftover `Agent anti-patterns` on materials vocabulary to preferred callouts.
 - Soft: renamed Agent loop / Agent search tip; prefer-tone on taxonomy, index, INSTALL, INSTALL_MCP.
 
-
-## 2026-09-20 — Golden-path tone sweep
+### Golden-path tone sweep
 
 - Corpus + agentic ADR wording flipped to prefer / golden-path packs (what to do);
   kept engineering content and link-out copyright stance. Soft prefer OK; jail
   language out.
-- Design Ops `guidance/help-unified-plan.md` gained a short Doctrine block (OKF,
-  one corpus, golden-path authorship, structure adjustable, ship when Jeff says).
+- Doctrine recorded in-repo (one OKF corpus, golden-path authorship):
+  `docs/machine-design-help-search.md`.
 
-## 2026-09-20 — Purge MCP ops micro-pages (golden-path rewrite)
+### Purge MCP ops micro-pages (golden-path rewrite)
 
 Merged MCP ops Concepts into `concepts/agent-mcp-workflow.md` (help, soft focus,
 inspect, topology ids, solid_edit_*, units/drivers, headless vs attach). Folded
@@ -274,23 +276,22 @@ uncommitted expansion drafts (anti-patterns, AM mirror, draft-injection-vs-AM,
 STEP import). Stripped Anti-patterns sections corpus-wide; tone is golden-path.
 Wire goldens retargeted; embeds updated (reinstall MCP for live cad_help).
 
-
-## 2026-09-20 — AM/mechanical Concept wave (searchable KB)
+### AM/mechanical Concept wave (searchable KB)
 
 Added heat-set inserts, fastener clearance/counterbore, ribs/gussets/draft,
 locating-scheme DOF, tolerance stack-up intro (citation-only), supports/overhangs,
 and unofficial Technic envelope. Deepened bearing-stacks (press-fit hub / lead-in /
 shoulder). Wired embeds + BM25 unit tests; corpus now 32 Concept pages.
 
+## 2026-09-19
 
-## 2026-09-19 — sync docs/machine-design-kb onto main
+### sync docs/machine-design-kb onto main
 
 Replayed help/KB unique work onto `origin/main` tip (full 139-commit rebase abandoned:
 ~254 conflicted paths). Added `crates/help` + MCP `cad_help`, expanded machine-design
 pages (taxonomy, fasteners, materials, search-index), agent-mcp-workflow doctrine, and
 kept main's product concepts (gears, workholding, bearings, wind) plus existing
 `resources/*` bundle.
-
 
 ## 2026-09-13
 

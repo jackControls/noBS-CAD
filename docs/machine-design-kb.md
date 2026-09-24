@@ -6,9 +6,8 @@ OKF concepts, not inside them.
 
 ## Who it is for
 
-- **Humans** — browse `knowledge/machine-design/` in git or the [knowledge
-  site](https://jackcontrols.github.io/noBS-CAD/) once this branch reaches
-  `main`.
+- **Humans** — browse `knowledge/machine-design/` in git or on the [knowledge
+  site](https://jackcontrols.github.io/noBS-CAD/).
 - **Agents** — use `cad_help` **search**, then `get` on returned ids. If the
   full markdown page is needed, use `resources/read` on its selected
   `nbcad://knowledge/...` URI; do not glob resources as the first search. Do not
@@ -68,14 +67,16 @@ thin OKF pages; link NC courses and proprietary standards without copying.
 
 ## Milestones
 
-1. **A (this branch)** — OKF scaffold, license table, **six** seed concepts,
-   SOURCES ids, class-only fits (no preferred-fit designation table),
-   search plan (BM25 now, Tantivy behind a `SearchIndex` trait as the
-   corpus grows; Help UI markdown render), adversarial pass.
+1. **A (shipped with the unified-help PR)** — OKF scaffold, license table,
+   seeded concept pages (machine-design plus agent doctrine), SOURCES ids,
+   class-only fits (no preferred-fit designation table), BM25 `cad_help`
+   search/get/topics behind a `SearchIndex` trait, the `help_search` MCP
+   prompt, and the H-series wire goldens in [`agentic/EVALS.md`](agentic/EVALS.md).
 2. **B** — Fill taxonomy thin concepts; cross-link remaining recipes.
-3. **C** — Live `kb-*` recipes + help UI mini-viewport.
-4. **D** — `cad_help` search/get/topics and an evaluation set of design-time
-   questions.
+3. **C** — Live `kb-*` recipes and the desktop Help panel (deferred; same
+   `nbcad-help` crate, no Bevy viewport inside Help).
+4. **D** — Tantivy behind `SearchIndex` when the growth bar trips; a broader
+   evaluation set of design-time questions.
 
 Physical load, wear, and print qualification stay out of scope for help
 pages, matching flagship example policy.

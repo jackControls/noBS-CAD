@@ -21,6 +21,7 @@ ShareAlike (SA) and NC sources stay **link-only** for commercial Help distill.
 |----|-----------|--------|---------|
 | `doe-3d` | [DOE Build4Scale Module 3D — Design for Manufacturing, Assembly, and Reliability](https://www.energy.gov/sites/default/files/2021-07/Module_3D.pdf) | U.S. Department of Energy (Build4Scale; LLNL-led) | [U.S. government work (public domain)](https://www.usa.gov/government-works) |
 | `nwtc-guns-dfm` | [Design for Manufacturing (NWTC LibreTexts)](https://eng.libretexts.org/Courses/Northeast_Wisconsin_Technical_College/Design_for_Various_Manufacturing_Methods/01%3A_Design_for_Manufacturing_%28DFM%29) | Bryan Guns, Northeast Wisconsin Technical College | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
+| `nwtc-guns-processes` | [DFM Guidelines for Specific Manufacturing Processes (NWTC LibreTexts)](https://eng.libretexts.org/Courses/Northeast_Wisconsin_Technical_College/Design_for_Various_Manufacturing_Methods/02%3A_DFM_Guidelines_for_Specific_Manufacturing_Processes) | Bryan Guns, Northeast Wisconsin Technical College | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | `nasa-fastener` | [NASA Fastener Design Manual (RP-1228)](https://ntrs.nasa.gov/citations/19900009424) | Richard T. Barrett, NASA Lewis Research Center | [U.S. government work (public domain)](https://www.usa.gov/government-works) |
 | `palni-dfma` | [Design for Manufacture and Assembly](https://pressbooks.palni.org/designmanufactureassembly/) | Roberta Gagnon and Andrea Bearman, Trine University / PALNI Open Press | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | `nist-gdt-2` | [Fundamentals of Geometric Dimensioning and Tolerancing, Part II, v1.0.0](https://zenodo.org/records/8237278) | Jaime Berez and Maxwell Praniewicz | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
@@ -46,5 +47,5 @@ edition for a drawing; use the applicable standards for contractual definitions
 and fit designations. This bundle does not reproduce standards tables, certify
 compliance or provide material allowables.
 
-Policy narrative: [`docs/machine-design-distill-vs-link.md`](https://github.com/jackControls/noBS-CAD/blob/docs/machine-design-kb/docs/machine-design-distill-vs-link.md)
-(GitHub blob — not available on the Pages-only artifact).
+Policy narrative: [`docs/machine-design-distill-vs-link.md`](../../docs/machine-design-distill-vs-link.md)
+(repository checkout; not part of the Pages artifact or the MCP resource bundle).

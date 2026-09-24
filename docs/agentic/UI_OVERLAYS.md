@@ -3,7 +3,7 @@
 Use this note whenever adding or changing a menu, popover, combobox list,
 tooltip, context menu, or dialog in the React/Tauri shell.
 
-## Recurring failure mode (prefer this fix)
+## The failure we must not repeat
 
 The File menu was an absolutely positioned child of the ribbon. The ribbon
 used `overflow-hidden`, and the menu began exactly at the ribbon's bottom edge
@@ -30,7 +30,7 @@ events outside an ancestor's overflow clip, regardless of stacking order.
    semantics connected to the trigger even though the surface moved in the
    DOM.
 
-Prefer fixing the portal/clip path over removing a deliberate shell clip, adding an
+Do not work around the problem by removing a deliberate shell clip, adding an
 extreme `z-index`, hard-coding another shell-height offset, or expanding the
 native viewport mask to include an invisible/clipped element.
 
@@ -40,7 +40,7 @@ A menu flyout is an `absolute` child that paints outside its menu's border
 box. On the desktop builds the native viewport is an opaque child above the
 webview, and it is cut open only around the rectangles collected from
 `[data-native-viewport-overlay]`, `.feature-dialog`, `[role="dialog"]` and
-`[data-ribbon-menu]` roots. A `getBoundingClientRect()` omits an
+`[data-ribbon-menu]` roots. A `getBoundingClientRect()` never includes an
 overflowing descendant, so a flyout could paint and hit-test correctly in the
 browser while remaining behind the native surface in the packaged app: the
 menu appeared, the submenu did not.
@@ -51,8 +51,8 @@ Therefore:
    host cuts it out of the native viewport.
 2. Reveal it by mounting/unmounting it (or otherwise mutating the DOM). The
    native mask is refreshed from DOM mutations; a CSS-only `:hover` reveal
-   leaves the compositor unaware that a new island exists.
-3. Prefer a click/focus-open path alongside `:hover` for reachability: the same state should open the
+   never tells the compositor that a new island exists.
+3. Do not rely on `:hover` alone for reachability: the same state must open the
    panel from a pointer press and from the keyboard.
 
 `cargo xtask test-mcp contracts` asserts the island rectangle covers a flyout
@@ -81,15 +81,15 @@ not prove the windowed surface is painted and interactive.
 This policy applies to Solid Modeling, Sketch, Drawing, Assembly, and CAM.
 
 1. Keep every workflow group visible at ordinary desktop widths. In particular,
-   keep a primary action such as **Select** reachable without requiring
-   horizontal ribbon scroll first.
+   a primary action such as **Select** must not be available only after
+   horizontally scrolling the ribbon.
 2. When the command strip loses space, move secondary direct buttons into that
    panel's existing flyout before hiding a panel or enabling horizontal scroll.
    Panels without a curated flyout must expose an equivalent generated menu so
    no command becomes unreachable.
 3. Measure the usable strip after fixed chrome (the workspace switcher and, in
-   Sketch, Finish Sketch). Prefer restoring mode chrome from that measured space
-   over a global viewport breakpoint; restore direct buttons as soon as space returns.
+   Sketch, Finish Sketch). Do not rely on a global viewport breakpoint: restore
+   direct buttons as soon as that measured space returns.
 4. Horizontal scrolling is the final fallback, only after the localized panel
    labels and one primary action from each group cannot coexist. Center a
    one-command group over its panel label and use the same button width and

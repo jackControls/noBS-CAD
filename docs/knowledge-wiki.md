@@ -24,9 +24,10 @@ The Pages site is intentionally a thin landing page over the source bundle.
 A richer viewer can be added later without changing `knowledge/` as the source
 of truth.
 
-The MCP inventory embeds Concept pages plus `knowledge/index.md` (and taxonomy/
-SOURCES) at compile time via `crates/help`. `knowledge/log.md` is checkout-only.
-Reads return the compiled Markdown unchanged, without
+The MCP inventory is derived from every `knowledge/**/*.md` file during compilation
+(`crates/help/build.rs`), including the index and update log; `cad_help` search
+covers the Concept pages of that same bundle. Reads return the compiled Markdown
+unchanged, without
 network requests, arbitrary file access, document mutation or an additional tool
 surface. The immutable bundle does not advertise subscriptions or list changes;
 rebuild the server when updating it. Links outside `knowledge/` point to supporting

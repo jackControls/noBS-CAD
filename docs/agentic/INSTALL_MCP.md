@@ -13,7 +13,7 @@ It does not launch CAD or create a live session.
 Use the [developer guide](../DEVELOPMENT.md#standalone-mcp-server) to build the
 standalone server and configure its native OCCT runtime. Pair it with a desktop
 from the same source revision when using live control. This installer launches
-its selected binary with no arguments; prefer the MCP launch path over a packaged CAD executable
+its selected binary with no arguments; do not pass a packaged CAD executable
 to `--binary`.
 
 From the repository root:

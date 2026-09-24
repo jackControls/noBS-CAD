@@ -7,7 +7,7 @@ updated: 2026-09-20
 topics: dfm, cnc, sheet-metal, casting, injection-molding, welding, edm, additive
 keywords: draft angle, wall thickness, bend radius, tool access, fillet, pocket depth, additive, FDM, anisotropy, manufacturability heuristics
 related_recipes: mounting-plate, angle-bracket, fillet-basics, revolved-spacer
-sources: nwtc-guns-dfm
+sources: nwtc-guns-processes
 ---
 
 # DFM process guidelines

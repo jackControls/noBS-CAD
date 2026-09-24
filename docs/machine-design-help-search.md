@@ -11,16 +11,16 @@ even while today’s seed is ~6–50 pages.
 
 Tracked on branch `docs/machine-design-kb` (PR #145).
 
-## Status (2026-09-19 Design Ops)
+## Status (2026-09-19)
 
 **Ship BM25-first** in `crates/help` (`nbcad-help`). Unified product plan:
-Design Ops `help-unified-plan.md` (frozen interview). One corpus, many doors
+this document plus [`machine-design-kb.md`](machine-design-kb.md). One corpus, many doors
 (`cad_help`, desktop Help, Pages). No separate agent ranker. Tantivy remains
 the scale path behind `SearchIndex` when growth bars trip — not day-one.
 
 ### Caps (confirmed 2026-09-19 — **no retune**)
 
-Provisional start values were **locked** after Design Ops wire goldens
+Provisional start values were **locked** after wire goldens
 **H1–H8 PASS** (see [`docs/agentic/EVALS.md`](agentic/EVALS.md)). Prefer retuning from a new honest FAIL on that
 harness (or successor) over anecdotes.
 
@@ -38,7 +38,6 @@ harness (or successor) over anecdotes.
 cargo test -p nbcad-help
 cargo test --manifest-path mcp-server/Cargo.toml cad_help -- --nocapture
 npm run check:knowledge
-npm run check:help-sources
 cargo xtask install-mcp --dry-run
 ```
 
@@ -94,7 +93,7 @@ tool schemas or the Help panel.
 | Layer | Tech | Why |
 |-------|------|-----|
 | Full-text / fielded | Tiny in-process **BM25** (or weighted TF) over embedded `Page`s | Corpus is still recipes-sized; zero mmap/segment complexity |
-| Corpus load | `include_str!` / `include_dir!` like `crates/recipes` | Same rebuild story |
+| Corpus load | `build.rs` walks `knowledge/**` into `include_str!` embeds — one inventory for `cad_help` and MCP resources | Same rebuild story |
 | Quick jump (UI) | **`nucleo-matcher`** (MPL-2.0 — THIRD_PARTY) | Instant title/id palette; separate from full-text |
 | Escape | Web after local miss | Prefer link-out; keep ASME/ISO body text outside the corpus |
 
@@ -190,8 +189,9 @@ Optional: boost `related_recipes` when the caller passes active recipe context.
    webview pipeline
 2. MCP — `cad_help` + caps + allowlist tests
 3. Tauri — desktop invoke `help_search` / `help_get` (not the MCP prompt); Help panel (palette + article); nucleo
-4. CI — `build:help-index` freshness; `check:help-sources`; exclude
-   SOURCES/taxonomy unless `searchable`
+4. CI — `build:help-index` freshness on the Pages knowledge workflow;
+   `check:knowledge` validates `sources` ids; exclude SOURCES/taxonomy unless
+   `searchable`
 5. When growth bar trips — Tantivy impl of `SearchIndex`; keep API stable
 6. This file remains the ADR
 
@@ -217,6 +217,6 @@ Optional: boost `related_recipes` when the caller passes active recipe context.
 - [x] Agent doctrine page `concepts/agent-mcp-workflow`
 - [x] MCP initialize instructions mention tenacity / `cad_help`
 - [ ] Tauri Help panel (later)
-- [~] CI: `cargo test --workspace` / `cargo test -p nbcad-help` (linux-engine-tests); `npm run check:knowledge` / `check:help-sources` on Pages knowledge workflow
+- [x] CI: `cargo test --workspace` (linux-engine-tests, includes `nbcad-help`); MCP acceptance also runs on `crates/help/**`; `npm run check:knowledge` + `search-index.json` freshness on the Pages knowledge workflow
 - [ ] Tantivy when growth bar trips
 
