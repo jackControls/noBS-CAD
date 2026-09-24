@@ -871,6 +871,309 @@ mod tests {
         }
     }
 
+    /// Real production GPU path for model-edge strokes on an inside corner: the
+    /// two faces beside a concave edge both rise towards the camera, so a stroke
+    /// that only wins exact depth ties loses most of its width to them. The
+    /// probe compares renders with and without edges along a concave edge and a
+    /// convex one of the same plate. Kept opt-in for GPU-less hosts; set
+    /// `NBCAD_PREVIEW_PROOF_DIR` to retain the rendered evidence.
+    #[test]
+    #[ignore = "requires a GPU; set NBCAD_PREVIEW_PROOF_DIR to retain visual evidence"]
+    fn native_concave_edge_strokes_read_like_convex_ones() {
+        use nbcad_core::{OriginPlane, PlaneRef};
+        use nbcad_sketch::{
+            RectangleMode, RectangleRequest, SegmentRequest, SetGridSnapRequest, SketchManager,
+            Vec2 as P,
+        };
+        use nbcad_solid::{CommitKernelRequest, ExtrudeExtent, ExtrudeOperation, ExtrudeRequest};
+        let extrude = |manager: &mut SketchManager,
+                       kernel: &mut nbcad_occt::OcctKernel,
+                       sketch: &str,
+                       operation: ExtrudeOperation,
+                       distance: f64,
+                       flip: bool| {
+            let targets = manager
+                .solid_scene()
+                .bodies
+                .iter()
+                .map(|body| body.id)
+                .collect::<Vec<_>>();
+            let plan = manager
+                .prepare_extrude(ExtrudeRequest {
+                    source_face: None,
+                    sketch_name: sketch.into(),
+                    profile_indices: vec![0],
+                    operation,
+                    extent: ExtrudeExtent::Distance { distance },
+                    taper_angle_deg: 0.0,
+                    flip,
+                    target_body_ids: if operation == ExtrudeOperation::NewBody {
+                        vec![]
+                    } else {
+                        targets
+                    },
+                })
+                .unwrap();
+            let scene = kernel.recompute(&plan).unwrap();
+            manager
+                .commit_solid(CommitKernelRequest {
+                    transaction_id: plan.transaction_id,
+                    scene,
+                })
+                .unwrap();
+        };
+        let begin = |manager: &mut SketchManager| {
+            manager
+                .begin_sketch(PlaneRef::OriginPlane {
+                    plane: OriginPlane::Xy,
+                })
+                .unwrap();
+            manager
+                .set_grid_snap(SetGridSnapRequest { enabled: false })
+                .unwrap();
+        };
+        let rectangle = |manager: &mut SketchManager, p1: P, p2: P| {
+            manager
+                .add_rectangle(RectangleRequest {
+                    mode: RectangleMode::TwoPoint,
+                    p1,
+                    p2,
+                    ctrl_held: true,
+                })
+                .unwrap();
+        };
+
+        // The reported part: a 25 mm square plate with a 5 x 20 mm strip
+        // removed, leaving a 5 mm arm along the back and an inside corner at
+        // (20, 20). Five millimetres thick.
+        let mut manager = SketchManager::new();
+        let mut kernel = nbcad_occt::OcctKernel::new().unwrap();
+        begin(&mut manager);
+        let outline = [
+            P::new(0.0, 0.0),
+            P::new(0.0, 25.0),
+            P::new(25.0, 25.0),
+            P::new(25.0, 20.0),
+            P::new(20.0, 20.0),
+            P::new(20.0, 0.0),
+        ];
+        for index in 0..outline.len() {
+            manager
+                .add_line(SegmentRequest {
+                    from: outline[index],
+                    to_raw: outline[(index + 1) % outline.len()],
+                    ctrl_held: true,
+                })
+                .unwrap();
+        }
+        manager.end_sketch().unwrap();
+        extrude(
+            &mut manager,
+            &mut kernel,
+            "Sketch1",
+            ExtrudeOperation::NewBody,
+            5.0,
+            false,
+        );
+        let plate = manager.solid_scene();
+
+        // A 30 mm square block, 8 mm thick, hanging below the XY plane with a
+        // 16 mm square pocket 4 mm deep opening upwards: every floor edge is an
+        // inside corner between the floor and a wall.
+        let mut manager = SketchManager::new();
+        let mut kernel = nbcad_occt::OcctKernel::new().unwrap();
+        begin(&mut manager);
+        rectangle(&mut manager, P::new(0.0, 0.0), P::new(30.0, 30.0));
+        manager.end_sketch().unwrap();
+        extrude(
+            &mut manager,
+            &mut kernel,
+            "Sketch1",
+            ExtrudeOperation::NewBody,
+            8.0,
+            true,
+        );
+        begin(&mut manager);
+        rectangle(&mut manager, P::new(7.0, 7.0), P::new(23.0, 23.0));
+        manager.end_sketch().unwrap();
+        extrude(
+            &mut manager,
+            &mut kernel,
+            "Sketch2",
+            ExtrudeOperation::Cut,
+            4.0,
+            true,
+        );
+        let pocket = manager.solid_scene();
+        assert_eq!(pocket.bodies.len(), 1, "the pocket cut must leave one body");
+
+        let mut renderer = PreviewRenderer::new().unwrap();
+        let cancelled = AtomicBool::new(false);
+        let output = std::env::var_os("NBCAD_PREVIEW_PROOF_DIR");
+        if let Some(path) = &output {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        // Seen from the front right and above, like the report: both faces of
+        // each inside corner and of its convex reference edge are visible.
+        let cases = [
+            (
+                "inside-corner",
+                plate,
+                [20.0, 20.0, 0.0, 5.0],
+                [20.0, 0.0, 0.0, 5.0],
+            ),
+            // Far floor edge of the pocket against the top rim above it.
+            (
+                "pocket-floor",
+                pocket,
+                [7.0, 23.0, -4.0, 23.0],
+                [0.0, 30.0, 0.0, 30.0],
+            ),
+        ];
+        for (label, scene, concave_edge, convex_edge) in cases {
+            let mut without_edges = scene.clone();
+            without_edges.bodies[0].edges.clear();
+            let document = PreviewDocument::new(vec![
+                Frame {
+                    caption: format!("{label} with edges"),
+                    scene,
+                },
+                Frame {
+                    caption: format!("{label} without edges"),
+                    scene: without_edges,
+                },
+            ])
+            .unwrap();
+            let mut request = request(label.into(), String::new(), 1);
+            request.width = 800;
+            request.height = 600;
+            request.yaw = std::f32::consts::FRAC_PI_4 * 0.75;
+            request.pitch = 0.55;
+            let mut renders = Vec::new();
+            for frame_index in 0..2 {
+                request.frame_index = frame_index;
+                let png = renderer
+                    .render(
+                        &document,
+                        &request,
+                        &cancelled,
+                        Instant::now() + Duration::from_secs(60),
+                    )
+                    .unwrap();
+                if let Some(path) = &output {
+                    std::fs::write(
+                        std::path::Path::new(path).join(format!(
+                            "{label}-{}.png",
+                            if frame_index == 0 { "with" } else { "without" }
+                        )),
+                        &png,
+                    )
+                    .unwrap();
+                }
+                renders.push(decode_rgba(&png));
+            }
+            let (width, height, with_edges) = &renders[0];
+            let (_, _, without_edges) = &renders[1];
+            let camera = document.camera(&request);
+            let view = camera_transform(camera).to_matrix().inverse();
+            let projection = Mat4::perspective_infinite_reverse_rh(
+                camera.vertical_fov_degrees.to_radians(),
+                *width as f32 / *height as f32,
+                0.1,
+            );
+            let to_pixel = |point: Vec3| {
+                let clip = projection * view * point.extend(1.0);
+                let ndc = clip.truncate() / clip.w;
+                (
+                    (ndc.x + 1.0) * 0.5 * *width as f32,
+                    (1.0 - ndc.y) * 0.5 * *height as f32,
+                )
+            };
+            // Strongest change any pixel within two pixels of the true edge shows
+            // once strokes are drawn, averaged along the edge.
+            let stroke_strength = |from: Vec3, to: Vec3| {
+                let samples = 9;
+                (1..=samples)
+                    .map(|index| {
+                        let (x, y) = to_pixel(from.lerp(to, index as f32 / (samples + 1) as f32));
+                        let mut strongest = 0i32;
+                        for dy in -2..=2 {
+                            for dx in -2..=2 {
+                                let (px, py) = (x.round() as i32 + dx, y.round() as i32 + dy);
+                                if px < 0 || py < 0 || px >= *width as i32 || py >= *height as i32 {
+                                    continue;
+                                }
+                                let offset = ((py as u32 * width + px as u32) * 4) as usize;
+                                let change = (0..3)
+                                    .map(|channel| {
+                                        (i32::from(with_edges[offset + channel])
+                                            - i32::from(without_edges[offset + channel]))
+                                        .abs()
+                                    })
+                                    .max()
+                                    .unwrap_or(0);
+                                strongest = strongest.max(change);
+                            }
+                        }
+                        strongest as f32
+                    })
+                    .sum::<f32>()
+                    / samples as f32
+            };
+            // Edges run along one axis between the given coordinates: an axis
+            // pair plus a fixed pair, the varying axis being the one that differs.
+            let segment = |edge: [f32; 4]| {
+                let (a, b) = if label == "inside-corner" {
+                    (
+                        Vec3::new(edge[0], edge[1], edge[2]),
+                        Vec3::new(edge[0], edge[1], edge[3]),
+                    )
+                } else {
+                    (
+                        Vec3::new(edge[0], edge[1], edge[2]),
+                        Vec3::new(edge[3], edge[1], edge[2]),
+                    )
+                };
+                (a, b)
+            };
+            let (concave_from, concave_to) = segment(concave_edge);
+            let (convex_from, convex_to) = segment(convex_edge);
+            let concave = stroke_strength(concave_from, concave_to);
+            let convex = stroke_strength(convex_from, convex_to);
+            eprintln!("{label} stroke strength: concave {concave:.1}, convex {convex:.1}");
+            assert!(
+                convex > 40.0,
+                "{label}: the convex reference edge must be a clear stroke ({convex:.1})"
+            );
+            assert!(
+                concave >= convex * 0.8,
+                "{label}: the inside-corner stroke ({concave:.1}) must read like the convex one ({convex:.1})"
+            );
+        }
+    }
+
+    fn decode_rgba(png: &[u8]) -> (u32, u32, Vec<u8>) {
+        use bevy::asset::RenderAssetUsages;
+        use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
+        let image = Image::from_buffer(
+            png,
+            ImageType::Extension("png"),
+            CompressedImageFormats::NONE,
+            true,
+            ImageSampler::Default,
+            RenderAssetUsages::MAIN_WORLD,
+        )
+        .unwrap();
+        let size = image.texture_descriptor.size;
+        let data = image.data.expect("decoded screenshot has pixels");
+        assert_eq!(
+            data.len(),
+            (size.width * size.height * 4) as usize,
+            "RGBA8 screenshot"
+        );
+        (size.width, size.height, data)
+    }
+
     /// Real production GPU path: projected partial arcs on both face normals,
     /// thin solids, multiple zooms and palettes. Kept opt-in for GPU-less hosts.
     #[test]
