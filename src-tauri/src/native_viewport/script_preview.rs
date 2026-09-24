@@ -977,35 +977,52 @@ mod tests {
         );
         let plate = manager.solid_scene();
 
-        // A 30 mm square block, 8 mm thick, hanging below the XY plane with a
-        // 16 mm square pocket 4 mm deep opening upwards: every floor edge is an
-        // inside corner between the floor and a wall.
-        let mut manager = SketchManager::new();
-        let mut kernel = nbcad_occt::OcctKernel::new().unwrap();
-        begin(&mut manager);
-        rectangle(&mut manager, P::new(0.0, 0.0), P::new(30.0, 30.0));
-        manager.end_sketch().unwrap();
-        extrude(
-            &mut manager,
-            &mut kernel,
-            "Sketch1",
-            ExtrudeOperation::NewBody,
-            8.0,
-            true,
-        );
-        begin(&mut manager);
-        rectangle(&mut manager, P::new(7.0, 7.0), P::new(23.0, 23.0));
-        manager.end_sketch().unwrap();
-        extrude(
-            &mut manager,
-            &mut kernel,
-            "Sketch2",
-            ExtrudeOperation::Cut,
-            4.0,
-            true,
-        );
-        let pocket = manager.solid_scene();
-        assert_eq!(pocket.bodies.len(), 1, "the pocket cut must leave one body");
+        // A 30 mm square block, 8 mm thick, with a 16 mm square pocket 4 mm
+        // deep cut from its top face: every floor edge is an inside corner
+        // between the floor and a wall. The face sketch's cut direction is
+        // found by trying both, since only one removes material.
+        let pocket = [false, true]
+            .into_iter()
+            .find_map(|flip| {
+                let mut manager = SketchManager::new();
+                let mut kernel = nbcad_occt::OcctKernel::new().unwrap();
+                begin(&mut manager);
+                rectangle(&mut manager, P::new(0.0, 0.0), P::new(30.0, 30.0));
+                manager.end_sketch().unwrap();
+                extrude(
+                    &mut manager,
+                    &mut kernel,
+                    "Sketch1",
+                    ExtrudeOperation::NewBody,
+                    8.0,
+                    false,
+                );
+                let top = manager.solid_scene().bodies[0]
+                    .faces
+                    .iter()
+                    .find(|face| face.plane.is_some_and(|plane| plane.normal[2] > 0.9))
+                    .map(|face| face.id)
+                    .expect("the block has a top face");
+                manager
+                    .begin_sketch(PlaneRef::PlanarFace { face_id: top })
+                    .unwrap();
+                manager
+                    .set_grid_snap(SetGridSnapRequest { enabled: false })
+                    .unwrap();
+                rectangle(&mut manager, P::new(-8.0, -8.0), P::new(8.0, 8.0));
+                manager.end_sketch().unwrap();
+                extrude(
+                    &mut manager,
+                    &mut kernel,
+                    "Sketch2",
+                    ExtrudeOperation::Cut,
+                    4.0,
+                    flip,
+                );
+                let scene = manager.solid_scene();
+                (scene.bodies.len() == 1 && scene.bodies[0].faces.len() == 11).then_some(scene)
+            })
+            .expect("one cut direction hollows the pocket: 6 block faces, 4 walls, 1 floor");
 
         let mut renderer = PreviewRenderer::new().unwrap();
         let cancelled = AtomicBool::new(false);
@@ -1022,12 +1039,12 @@ mod tests {
                 [20.0, 20.0, 0.0, 5.0],
                 [20.0, 0.0, 0.0, 5.0],
             ),
-            // Far floor edge of the pocket against the top rim above it.
+            // Far floor edge of the pocket against the back top rim above it.
             (
                 "pocket-floor",
                 pocket,
-                [7.0, 23.0, -4.0, 23.0],
-                [0.0, 30.0, 0.0, 30.0],
+                [7.0, 23.0, 4.0, 23.0],
+                [0.0, 30.0, 8.0, 30.0],
             ),
         ];
         for (label, scene, concave_edge, convex_edge) in cases {
