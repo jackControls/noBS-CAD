@@ -2177,6 +2177,16 @@
   ],
   "groups": [
     {
+      "id": "solid/primitives",
+      "labelKey": "solid/primitives",
+      "operations": ["solid_box"]
+    },
+    {
+      "id": "print/read",
+      "labelKey": "print/read",
+      "operations": ["print_calibrate", "print_crop", "print_probe", "print_symbols"]
+    },
+    {
       "id": "document/scripts",
       "labelKey": "document/scripts",
       "operations": ["cad_script"]

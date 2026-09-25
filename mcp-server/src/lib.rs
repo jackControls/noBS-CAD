@@ -18,6 +18,7 @@ mod knowledge;
 mod prompts;
 mod session;
 mod stdio;
+mod summary;
 
 pub use stdio::{prepare_desktop_stdio, run_desktop_stdio, run_stdio, shutdown_desktop_stdio};
 
@@ -224,6 +225,8 @@ struct CadServer {
     pending_recompute_transaction: Option<u64>,
     /// Forward record of successful mutating `tools/call` entries for `cad_script`.
     tool_trace: Vec<Value>,
+    /// Depth of composite tools (`solid_box`) whose parts must not be traced twice.
+    composite_depth: u32,
     /// Scripts use authoritative live results without rebuilding a second
     /// OCCT model after each mutation. Snapshot reads still refresh on demand.
     script_running: bool,
@@ -252,6 +255,7 @@ impl CadServer {
             loaded_snapshot_json: None,
             pending_recompute_transaction: None,
             tool_trace: Vec::new(),
+            composite_depth: 0,
             script_running: false,
             script_progress: None,
             live_snapshot_dirty: false,
@@ -264,7 +268,8 @@ impl CadServer {
         let live_mutation = self.attached_document_id.is_some() && is_modeling_mutate(name);
         let trace_args = arguments.clone();
         let result = self.dispatch_tool(name, arguments);
-        if result.is_ok() && records_in_script(name) && !live_mutation {
+        if result.is_ok() && records_in_script(name) && !live_mutation && self.composite_depth == 0
+        {
             self.tool_trace.push(json!({
                 "name": name,
                 "arguments": trace_args,
@@ -484,6 +489,10 @@ impl CadServer {
 
     fn call_control(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
         let value = match name {
+            "solid_box" => self.solid_box(arguments)?,
+            "print_calibrate" | "print_crop" | "print_probe" | "print_symbols" => {
+                self.print_tool(name, arguments)?
+            }
             "cad_get_focus" => self.disclosure.status_json(),
             "cad_set_focus" => {
                 let focus_name = arguments
@@ -533,6 +542,10 @@ impl CadServer {
                     self.execute_interface(&arguments)?
                 } else if arguments["action"] == "script" {
                     self.execute_script(&arguments)?
+                } else if arguments["action"] == "summary" {
+                    self.feature_summary(&arguments)?
+                } else if arguments["action"] == "check" {
+                    self.check_features(&arguments)?
                 } else if arguments["action"] == "open_recipe" {
                     // Source-editor delivery is independent of the CAD model.
                     // The window receipt includes active_session_id, but this
@@ -630,6 +643,11 @@ impl CadServer {
         {
             return Err("script validate must be a boolean".into());
         }
+        let detail_full = match arguments.get("detail").and_then(Value::as_str) {
+            None | Some("compact") => false,
+            Some("full") => true,
+            Some(_) => return Err("script detail must be compact or full".into()),
+        };
         let presentation = mode == "present";
         if presentation && self.attached_document_id.is_none() {
             return Err(
@@ -737,7 +755,381 @@ impl CadServer {
                 }
             }
         }
+        // Feedback the agent can act on: what was built, in feature terms, and
+        // the mistakes that do not raise errors. Compact unless detail is full.
+        result.map(|mut report| {
+            let scene = self.manager.solid_scene();
+            let definitions = self.manager.hole_definitions();
+            let built = summary::summarize(&scene, &definitions);
+            report["summary"] = built.json(detail_full);
+            report["warnings"] = Value::Array(summary::warnings(
+                &built,
+                &definitions,
+                &script.unused_bindings(),
+            ));
+            report
+        })
+    }
+
+    /// The built model in feature terms: bodies with bounding boxes and every
+    /// hole with its position, diameter, depth, face and thread, plus the
+    /// warnings the script report would carry.
+    fn feature_summary(&mut self, arguments: &Value) -> Result<Value, String> {
+        let full = match arguments.get("detail").and_then(Value::as_str) {
+            None | Some("full") => true,
+            Some("compact") => false,
+            Some(_) => return Err("summary detail must be compact or full".into()),
+        };
+        if self.attached_document_id.is_some() {
+            self.refresh_read_only_snapshot()?;
+        }
+        let scene = self.manager.solid_scene();
+        let definitions = self.manager.hole_definitions();
+        let built = summary::summarize(&scene, &definitions);
+        let mut value = built.json(full);
+        value["warnings"] = Value::Array(summary::warnings(&built, &definitions, &[]));
+        Ok(value)
+    }
+
+    /// Compare an expected feature table with the built model: bounding box
+    /// extents and holes matched by position within a tolerance.
+    fn check_features(&mut self, arguments: &Value) -> Result<Value, String> {
+        let expected = arguments
+            .get("expected")
+            .ok_or("check requires expected: {bbox: [x, y, z]?, holes: [{x, y, z?, diameter?, counterbore_diameter?, through?, depth?}]?}")?;
+        if !expected.is_object() {
+            return Err("expected must be an object".into());
+        }
+        let tolerance = match arguments.get("tolerance_mm") {
+            None => 0.6,
+            Some(value) => value
+                .as_f64()
+                .filter(|t| *t > 0.0)
+                .ok_or("tolerance_mm must be a positive number")?,
+        };
+        if self.attached_document_id.is_some() {
+            self.refresh_read_only_snapshot()?;
+        }
+        let scene = self.manager.solid_scene();
+        let definitions = self.manager.hole_definitions();
+        let built = summary::summarize(&scene, &definitions);
+        summary::check(&built, expected, tolerance)
+    }
+
+    /// A rectangular block through the ordinary sketch and extrude tools, so
+    /// the result is editable history: an offset plane when the origin is off
+    /// the XY plane, a dimensioned rectangle fixed at its origin corner, and
+    /// one extrude. The parts are not traced separately.
+    fn solid_box(&mut self, arguments: Value) -> Result<Value, String> {
+        let triple = |key: &str, default: Option<[f64; 3]>| -> Result<[f64; 3], String> {
+            match arguments.get(key) {
+                None => default.ok_or_else(|| format!("solid_box requires {key}: [x, y, z]")),
+                Some(value) => {
+                    let list = value
+                        .as_array()
+                        .filter(|list| list.len() == 3)
+                        .ok_or_else(|| format!("{key} must be [x, y, z]"))?;
+                    let mut out = [0.0; 3];
+                    for (i, entry) in list.iter().enumerate() {
+                        out[i] = entry
+                            .as_f64()
+                            .ok_or_else(|| format!("{key} entries must be numbers"))?;
+                    }
+                    Ok(out)
+                }
+            }
+        };
+        let origin = triple("origin", Some([0.0; 3]))?;
+        let size = triple("size", None)?;
+        if size.iter().any(|s| *s <= 0.0) {
+            return Err("size entries must be positive".into());
+        }
+        let operation = arguments
+            .get("operation")
+            .and_then(Value::as_str)
+            .unwrap_or("new_body");
+        if !matches!(operation, "new_body" | "join" | "cut" | "intersect") {
+            return Err("operation must be new_body, join, cut or intersect".into());
+        }
+        let target_body_ids = arguments
+            .get("target_body_ids")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        if !target_body_ids.is_array() {
+            return Err("target_body_ids must be an array of body ids".into());
+        }
+        let name = arguments
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("Box {} x {} x {}", size[0], size[1], size[2]));
+        self.composite_depth += 1;
+        let result = self.solid_box_steps(origin, size, operation, target_body_ids, &name);
+        self.composite_depth -= 1;
         result
+    }
+
+    fn solid_box_steps(
+        &mut self,
+        origin: [f64; 3],
+        size: [f64; 3],
+        operation: &str,
+        target_body_ids: Value,
+        name: &str,
+    ) -> Result<Value, String> {
+        let plane = if origin[2].abs() < 1e-9 {
+            json!({"type":"origin_plane","plane":"xy"})
+        } else {
+            let planes = self.call_tool(
+                "construction_plane_offset",
+                json!({"name": format!("{name} base"), "reference": {"type":"origin_plane","plane":"xy"}, "distance": origin[2]}),
+            )?;
+            let datum_id = planes["planes"]
+                .as_array()
+                .and_then(|planes| planes.last())
+                .and_then(|plane| plane["datum_id"].as_u64())
+                .ok_or("offset plane did not return a datum_id")?;
+            json!({"type":"datum_plane","datum_id":datum_id})
+        };
+        self.call_tool("sketch_begin", json!({"name": name, "plane": plane}))?;
+        let rectangle = self.call_tool(
+            "sketch_add_rectangle_locked",
+            json!({"mode":"two_point","anchor":{"x":origin[0],"y":origin[1]},"corner_hint":{"x":origin[0]+size[0],"y":origin[1]+size[1]},"width_mm":size[0],"height_mm":size[1],"ctrl_held":true}),
+        )?;
+        let near =
+            |value: &Value, wanted: f64| value.as_f64().is_some_and(|v| (v - wanted).abs() < 1e-6);
+        let corner = rectangle["sketch"]["entities"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|entity| {
+                entity["kind"] == "point"
+                    && near(&entity["position"]["x"], origin[0])
+                    && near(&entity["position"]["y"], origin[1])
+            })
+            .and_then(|entity| entity["id"].as_u64())
+            .ok_or("rectangle origin corner not found in the sketch")?;
+        self.call_tool(
+            "sketch_add_constraint",
+            json!({"type":"fix","entity":corner}),
+        )?;
+        self.call_tool("sketch_finish", json!({}))?;
+        let update = self.call_tool(
+            "solid_extrude",
+            json!({"sketch_name":name,"profile_indices":[0],"operation":operation,"extent":{"type":"distance","distance":size[2]},"taper_angle_deg":0.0,"flip":false,"target_body_ids":target_body_ids}),
+        )?;
+        let feature_id = update["document"]["features"]
+            .as_array()
+            .and_then(|features| features.last())
+            .and_then(|feature| feature["id"].as_u64());
+        let body_ids: Vec<u64> = update["scene"]["bodies"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|body| feature_id.is_none() || body["feature_id"].as_u64() == feature_id)
+            .filter_map(|body| body["id"].as_u64())
+            .collect();
+        let scene = self.manager.solid_scene();
+        let definitions = self.manager.hole_definitions();
+        Ok(json!({
+            "feature_id": feature_id,
+            "body_ids": body_ids,
+            "sketch_name": name,
+            "origin": origin,
+            "size": size,
+            "operation": operation,
+            "summary": summary::summarize(&scene, &definitions).json(false),
+        }))
+    }
+
+    /// The print and plate size named by a print tool call.
+    fn print_source(arguments: &Value) -> Result<(nbcad_print::Source, f64, f64), String> {
+        let path = arguments["path"]
+            .as_str()
+            .ok_or("print tools need path: an absolute PDF, PNG or PGM file of the print")?;
+        let file = std::path::Path::new(path);
+        if !file.is_absolute() {
+            return Err("path must be absolute".into());
+        }
+        let page = match arguments.get("page") {
+            None => 1,
+            Some(page) => page
+                .as_u64()
+                .filter(|p| *p >= 1)
+                .ok_or("page must be a positive integer")? as u32,
+        };
+        let length = arguments["length_mm"]
+            .as_f64()
+            .filter(|v| *v > 0.0)
+            .ok_or("length_mm must be a positive number: the plate's plan-view length along x")?;
+        let width = arguments["width_mm"]
+            .as_f64()
+            .filter(|v| *v > 0.0)
+            .ok_or("width_mm must be a positive number: the plate's plan-view width along y")?;
+        let source = nbcad_print::Source::open(file, page)?;
+        match arguments.get("hint") {
+            None => nbcad_print::set_hint(None),
+            Some(hint) => {
+                let text = hint
+                    .as_str()
+                    .ok_or("hint must be \"x0,y0,x1,y1\" page fractions around the plan view")?;
+                nbcad_print::set_hint(Some(nbcad_print::parse_region(text)?));
+            }
+        }
+        Ok((source, length, width))
+    }
+
+    /// Holes to draw or check on the print: the document's own holes (default),
+    /// an explicit list, or none. `frame: "bbox_min"` shifts the document's
+    /// holes so the bodies' lower-left corner is the print origin.
+    fn print_holes(&mut self, arguments: &Value) -> Result<Vec<nbcad_print::Hole>, String> {
+        let explicit = match arguments.get("holes") {
+            None => None,
+            Some(Value::String(mode)) if mode == "document" => None,
+            Some(Value::String(mode)) if mode == "none" => return Ok(Vec::new()),
+            Some(Value::Array(list)) => Some(list.clone()),
+            Some(_) => return Err("holes must be \"document\", \"none\" or a list of {x, y, diameter, counterbore_diameter?}".into()),
+        };
+        if let Some(list) = explicit {
+            return list
+                .iter()
+                .map(|hole| {
+                    Ok(nbcad_print::Hole {
+                        x: hole["x"].as_f64().ok_or("hole needs x")?,
+                        y: hole["y"].as_f64().ok_or("hole needs y")?,
+                        d: hole["diameter"].as_f64().unwrap_or(3.0),
+                        cb: hole.get("counterbore_diameter").and_then(Value::as_f64),
+                    })
+                })
+                .collect();
+        }
+        if self.attached_document_id.is_some() {
+            self.refresh_read_only_snapshot()?;
+        }
+        let scene = self.manager.solid_scene();
+        let definitions = self.manager.hole_definitions();
+        let built = summary::summarize(&scene, &definitions);
+        let (dx, dy) = match arguments.get("frame").and_then(Value::as_str) {
+            None | Some("world") => (0.0, 0.0),
+            Some("bbox_min") => built
+                .bodies
+                .iter()
+                .fold((f64::INFINITY, f64::INFINITY), |(x, y), body| {
+                    (x.min(body.min[0]), y.min(body.min[1]))
+                }),
+            Some(_) => return Err("frame must be world or bbox_min".into()),
+        };
+        let (dx, dy) = if dx.is_finite() { (dx, dy) } else { (0.0, 0.0) };
+        Ok(built
+            .holes
+            .iter()
+            .filter(|hole| hole.normal[2].abs() > 0.9)
+            .map(|hole| nbcad_print::Hole {
+                x: hole.position[0] - dx,
+                y: hole.position[1] - dy,
+                d: hole.diameter,
+                cb: hole.counterbore_diameter,
+            })
+            .collect())
+    }
+
+    fn print_tool(&mut self, name: &str, arguments: Value) -> Result<Value, String> {
+        let (source, length, width) = Self::print_source(&arguments)?;
+        let cal = nbcad_print::calibrate(&source, length, width)?;
+        let dpi = |default: u32| -> Result<u32, String> {
+            match arguments.get("dpi") {
+                None => Ok(default),
+                Some(v) => v
+                    .as_u64()
+                    .filter(|d| (72..=1600).contains(d))
+                    .map(|d| d as u32)
+                    .ok_or("dpi must be between 72 and 1600".into()),
+            }
+        };
+        let out_png = match arguments.get("out_png") {
+            None => None,
+            Some(v) => {
+                let path = v.as_str().ok_or("out_png must be a path")?;
+                if !std::path::Path::new(path).is_absolute() {
+                    return Err("out_png must be an absolute path".into());
+                }
+                Some(path.to_owned())
+            }
+        };
+        let write_png = |bytes: &[u8]| -> Result<Value, String> {
+            match &out_png {
+                Some(path) => {
+                    std::fs::write(path, bytes).map_err(|e| format!("write {path}: {e}"))?;
+                    Ok(json!(path))
+                }
+                None => Ok(Value::Null),
+            }
+        };
+        let calibration: Value = serde_json::from_str(&cal.json()).map_err(|e| e.to_string())?;
+        match name {
+            "print_calibrate" => Ok(
+                json!({"ok": true, "calibration": calibration, "length_mm": length, "width_mm": width}),
+            ),
+            "print_crop" => {
+                let region = nbcad_print::parse_region(
+                    arguments["region"]
+                        .as_str()
+                        .ok_or("print_crop needs region: \"x0,y0,x1,y1\" in plate millimetres")?,
+                )?;
+                let grid = match arguments.get("grid_mm") {
+                    None => 10.0,
+                    Some(v) => v
+                        .as_f64()
+                        .filter(|g| *g >= 0.0)
+                        .ok_or("grid_mm must be a non-negative number")?,
+                };
+                let holes = self.print_holes(&arguments)?;
+                let image = nbcad_print::crop(&source, &cal, region, dpi(400)?, &holes, grid)?;
+                let png_path = write_png(&image.png)?;
+                Ok(json!({
+                    "ok": true,
+                    "region_mm": [region.0, region.1, region.2, region.3],
+                    "holes_drawn": holes.len(),
+                    "legend": "red = model hole at its diameter, blue = counterbore, green ticks every grid_mm from the region corner (long tick and faint line every fifth)",
+                    "png_path": png_path,
+                    "image": {"png_base64": base64::engine::general_purpose::STANDARD.encode(&image.png), "width": image.width, "height": image.height, "dpi": image.dpi, "px_per_mm": image.px_per_mm},
+                }))
+            }
+            "print_probe" => {
+                let holes = self.print_holes(&arguments)?;
+                let search = match arguments.get("search_mm") {
+                    None => 2.5,
+                    Some(v) => v
+                        .as_f64()
+                        .filter(|s| *s > 0.0)
+                        .ok_or("search_mm must be positive")?,
+                };
+                let report = nbcad_print::ring_score(&source, &cal, &holes, dpi(600)?, search)?;
+                serde_json::from_str(&report).map_err(|e| e.to_string())
+            }
+            "print_symbols" => {
+                let region = match arguments.get("region") {
+                    None => None,
+                    Some(v) => Some(nbcad_print::parse_region(
+                        v.as_str().ok_or("region must be \"x0,y0,x1,y1\"")?,
+                    )?),
+                };
+                let holes = self.print_holes(&arguments)?;
+                let draw = arguments
+                    .get("draw")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(out_png.is_some());
+                let report = nbcad_print::symbols(&source, &cal, region, dpi(400)?, &holes, draw)?;
+                let mut value: Value =
+                    serde_json::from_str(&report.json).map_err(|e| e.to_string())?;
+                if let Some(png) = report.png {
+                    value["png_path"] = write_png(&png)?;
+                    value["image"] = json!({"png_base64": base64::engine::general_purpose::STANDARD.encode(&png)});
+                }
+                Ok(value)
+            }
+            other => Err(format!("unknown print tool {other}")),
+        }
     }
 
     fn wait_for_script_presentation(&mut self, initial: &Value) -> Result<(), String> {
@@ -817,7 +1209,7 @@ impl CadServer {
         }
         // A completed-model refresh already seeded a replay baseline containing
         // this edit. Only active-sketch edits still need an individual entry.
-        if applied["refreshed"] != true {
+        if applied["refreshed"] != true && self.composite_depth == 0 {
             self.tool_trace
                 .push(json!({"name":name,"arguments":payload}));
         }
@@ -1378,6 +1770,24 @@ fn object_schema(properties: Value, required: &[&str]) -> Value {
     })
 }
 
+/// Shared input schema of the print tools: the print file, the plate size, and
+/// where the holes to draw or check come from.
+fn print_schema(extra: Value) -> Value {
+    let mut properties = json!({
+        "path": {"type":"string","description":"Absolute path of the print: PDF (rendered through pdftoppm), PNG or PGM"},
+        "page": {"type":"integer","minimum":1,"default":1},
+        "length_mm": {"type":"number","exclusiveMinimum":0,"description":"Plate length along x in the plan view"},
+        "width_mm": {"type":"number","exclusiveMinimum":0,"description":"Plate width along y in the plan view"},
+        "hint": {"type":"string","description":"Optional \"x0,y0,x1,y1\" page fractions (top-left origin) around the plan view when the automatic outline search picks another rectangle"},
+        "holes": {"description":"\"document\" (default: the current document's holes in world x, y), \"none\", or a list of {x, y, diameter, counterbore_diameter?} in plate mm"},
+        "frame": {"type":"string","enum":["world","bbox_min"],"default":"world","description":"With bbox_min the document's holes are shifted so the bodies' lower-left corner is the print origin"}
+    });
+    for (key, value) in extra.as_object().into_iter().flatten() {
+        properties[key] = value.clone();
+    }
+    object_schema(properties, &["path", "length_mm", "width_mm"])
+}
+
 fn object_or_null(schema: Value) -> Value {
     json!({ "oneOf": [schema, { "type": "null" }] })
 }
@@ -1471,6 +1881,12 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "body_appearances"
             | "cam_get_document"
             | "cam_toolpath_statuses"
+            | "print_calibrate"
+            | "print_crop"
+            | "print_probe"
+            | "print_symbols"
+            // A composite: each part routes through the live inbox itself.
+            | "solid_box"
     )
 }
 
@@ -3722,6 +4138,58 @@ fn tool_specs() -> Vec<ToolSpec> {
             ),
         ),
         ToolSpec::control(
+            "solid_box",
+            "Create box",
+            "Create a rectangular block from an origin corner and a size, as ordinary editable history: an offset plane when the origin is off the XY plane, a dimensioned rectangle fixed at its origin corner, and one extrude (new_body, join, cut or intersect). Returns the feature id, body ids and a feature summary. Use it for stock, plates and blocks instead of a five-step sketch.",
+            object_schema(
+                json!({
+                    "origin": {"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"Lower-left-bottom corner [x, y, z] in mm; default [0, 0, 0]"},
+                    "size": {"type":"array","items":{"type":"number","exclusiveMinimum":0},"minItems":3,"maxItems":3,"description":"Extents [length x, width y, height z] in mm"},
+                    "operation": {"type":"string","enum":["new_body","join","cut","intersect"],"default":"new_body"},
+                    "target_body_ids": {"type":"array","items":{"type":"integer","minimum":1},"description":"Bodies a join, cut or intersect applies to"},
+                    "name": {"type":"string","minLength":1,"description":"Sketch name kept in history"}
+                }),
+                &["size"],
+            ),
+        ),
+        ToolSpec::control(
+            "print_calibrate",
+            "Locate the plate on a scanned print",
+            "Find the plate's plan-view outline on a scanned 2D print (PDF, PNG or PGM) from its length and width and report the calibration: corners, pixels per millimetre and skew. The outline is chosen by aspect ratio and line weight (visible outlines are drawn heavier than dimension lines and table rules). Pass hint as \"x0,y0,x1,y1\" page fractions around the plan view when a sheet defeats the search.",
+            print_schema(json!({})),
+        ),
+        ToolSpec::control(
+            "print_crop",
+            "Millimetre crop of a print with a grid and hole overlay",
+            "Render a millimetre window of the print (plan-view frame: origin at the plate's lower-left corner, y up) with green tick marks every grid_mm and, by default, the current document's holes drawn in red (counterbores blue), returned as image content and optionally written to out_png. Positions can be read off the ticks; every red circle must sit on a drawn hole symbol.",
+            print_schema(json!({
+                "region": {"type":"string","description":"\"x0,y0,x1,y1\" in plate mm"},
+                "dpi": {"type":"integer","minimum":72,"maximum":1600,"default":400},
+                "grid_mm": {"type":"number","minimum":0,"default":10},
+                "out_png": {"type":"string","description":"Absolute path to also write the PNG to"}
+            })),
+        ),
+        ToolSpec::control(
+            "print_probe",
+            "What is drawn at each model hole",
+            "For every hole (the document's by default) say what the print shows at that point or within search_mm of it: symbol (a circle with a light interior, with its centre, the offset in mm and the drawn diameter and counterbore), dot (a solid dot), dashed (a partial ring such as a hidden-line circle) or none. Run it after every script run and look at every hole with an offset over 1 mm or nothing drawn.",
+            print_schema(json!({
+                "search_mm": {"type":"number","exclusiveMinimum":0,"default":2.5},
+                "dpi": {"type":"integer","minimum":72,"maximum":1600,"default":600}
+            })),
+        ),
+        ToolSpec::control(
+            "print_symbols",
+            "Drawn hole symbols and coverage",
+            "List the circles and solid dots found at ink crossings in a region of the print and match them to the model's holes: model_only are holes with no drawn symbol, print_only are drawn symbols with no hole. Text, arrowheads and concentric rings can still appear in print_only, so treat those entries as places to look at on a crop, never as positions to model from. With draw or out_png the match is returned as an image.",
+            print_schema(json!({
+                "region": {"type":"string","description":"\"x0,y0,x1,y1\" in plate mm; default the whole plate"},
+                "dpi": {"type":"integer","minimum":72,"maximum":1600,"default":400},
+                "draw": {"type":"boolean","default":false},
+                "out_png": {"type":"string"}
+            })),
+        ),
+        ToolSpec::control(
             "cad_get_focus",
             "Get focus state",
             "Return the active focus pack, soft packs, TTLs, and disclosure mode.",
@@ -3826,10 +4294,10 @@ fn tool_specs() -> Vec<ToolSpec> {
         ),
         ToolSpec::control(
             "cad_interface", "Explore and drive the product interface",
-            "Catalog returns shared product groups and typed operations. Execute runs an operation by group and name with identical arguments/results headlessly or live. Recipes lists committed native examples without running them. Open_recipe queues a built-in recipe in the live Scripts source editor, preserving edited source with Save/Discard/Cancel; it never runs commands or replaces the model. Script runs one versioned JSONC command file selected by recipe ID, source or an absolute .nbcad.jsonc path in the current blank document; Rust sequences every operation, stops on failure, and runs final checks by default. Mode fast has no presentation delays; present requires an attached desktop. Presentation provides configure/note/pause/resume/step/stop/status/finish/dismiss/show and speed controls shared with native playback. View supports timed orientation and focus on an active sketch, body, or component. Launch connects a new desktop. Inspect returns rendered controls with fresh opaque target IDs for click/set_value/key. Window close requests guarded application exit; the reply acknowledges the request, not process termination. No selectors or executable script evaluation.",
+            "Catalog returns shared product groups and typed operations. Execute runs an operation by group and name with identical arguments/results headlessly or live. Recipes lists committed native examples without running them. Open_recipe queues a built-in recipe in the live Scripts source editor, preserving edited source with Save/Discard/Cancel; it never runs commands or replaces the model. Script runs one versioned JSONC command file selected by recipe ID, source or an absolute .nbcad.jsonc path in the current blank document; Rust sequences every operation, stops on failure, and runs final checks by default. Its result carries a feature summary (bodies with bounding boxes, holes tallied by class; detail full lists every hole with position, diameter, depth, face and thread) and warnings for mistakes that raise no error: a hole position left out of positions, overlapping holes, holes off the body, blind depths deeper than the body, unused bindings; a failing step names the step, the reason and, for selectors, the candidates or the values present. Summary returns that feature summary of the current document (detail compact or full). Check compares expected {bbox: [x, y, z], holes: [{x, y, z?, diameter?, counterbore_diameter?, through?, depth?}]} with the built model within tolerance_mm (default 0.6) and reports matched, missing and extra holes with offsets. Mode fast has no presentation delays; present requires an attached desktop. Presentation provides configure/note/pause/resume/step/stop/status/finish/dismiss/show and speed controls shared with native playback. View supports timed orientation and focus on an active sketch, body, or component. Launch connects a new desktop. Inspect returns rendered controls with fresh opaque target IDs for click/set_value/key. Window close requests guarded application exit; the reply acknowledges the request, not process termination. No selectors or executable script evaluation.",
             object_schema(json!({
                 "session_id":{"type":"string"},
-                "action":{"type":"string","enum":["catalog","recipes","open_recipe","execute","script","presentation","launch","view","inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
+                "action":{"type":"string","enum":["catalog","recipes","open_recipe","execute","script","summary","check","presentation","launch","view","inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
                 "recipe":{"type":"string","description":"Bundled recipe ID for script or open_recipe; mutually exclusive with source and path. List IDs with action recipes."},
                 "group":{"type":"string"},"operation":{"type":"string"},"arguments":{"type":"object"},
                 "executable":{"type":"string"},
@@ -4032,6 +4500,10 @@ fn records_in_script(name: &str) -> bool {
             | "body_appearances"
             | "project_visibility"
             | "demo_export_pip_3mf"
+            | "print_calibrate"
+            | "print_crop"
+            | "print_probe"
+            | "print_symbols"
     ) {
         return false;
     }
@@ -4096,16 +4568,30 @@ fn tool_list_result(disclosure: &mut DisclosureState) -> Value {
 }
 
 fn success_result(value: Value) -> Value {
+    // A tool that produced a picture returns it as MCP image content next to
+    // its text, so a vision-capable agent sees it without a file round trip.
+    let mut value = value;
+    let image = value
+        .pointer("/image/png_base64")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if image.is_some() {
+        value["image"]["png_base64"] = json!("(attached as image content)");
+    }
     let structured = if value.is_object() {
         value.clone()
     } else {
         json!({ "value": value.clone() })
     };
+    let mut content = vec![json!({
+        "type": "text",
+        "text": serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
+    })];
+    if let Some(png) = image {
+        content.push(json!({"type": "image", "data": png, "mimeType": "image/png"}));
+    }
     json!({
-        "content": [{
-            "type": "text",
-            "text": serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
-        }],
+        "content": content,
         "structuredContent": structured,
         "isError": false
     })
@@ -14661,5 +15147,279 @@ mod tests {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod agent_feedback_tests {
+    use super::*;
+
+    fn feedback_script() -> &'static str {
+        r#"{"version":1,"name":"feedback","steps":[
+            {"id":"stock","call":{"group":"solid/primitives","operation":"solid_box","arguments":{"size":[100,50,10]}}},
+            {"id":"scene","call":{"group":"solid/check","operation":"solid_scene","arguments":{}}},
+            {"let":{"plate_body":{"$select":{"from":{"$ref":"scene"},"path":"/bodies","take":"first"}}}},
+            {"let":{"top":{"$select":{"from":{"$ref":"plate_body"},"path":"/faces","where":{"/plane/normal/2":1,"/plane/origin/2":10},"take":"one"}}}},
+            {"id":"pair","call":{"group":"solid/refine","operation":"solid_hole","arguments":{
+                "body_id":{"$ref":"plate_body","pointer":"/id"},"face_id":{"$ref":"top","pointer":"/id"},
+                "position":{"$project":{"point":[20,25,10],"basis":{"$ref":"top","pointer":"/plane"}}},
+                "positions":[{"position":{"$project":{"point":[20,25,10],"basis":{"$ref":"top","pointer":"/plane"}}}},{"position":{"$project":{"point":[24,25,10],"basis":{"$ref":"top","pointer":"/plane"}}}}],
+                "diameter":6,"extent":{"type":"through_all"},"style":"simple","counterbore_diameter":0,"counterbore_depth":0,"countersink_diameter":0,"countersink_angle_deg":90,"flip":false}}},
+            {"id":"scene2","call":{"group":"solid/check","operation":"solid_scene","arguments":{}}},
+            {"let":{"top2":{"$select":{"from":{"$select":{"from":{"$ref":"scene2"},"path":"/bodies","take":"first"}},"path":"/faces","where":{"/plane/normal/2":1,"/plane/origin/2":10},"take":"one"}}}},
+            {"id":"lonely","call":{"group":"solid/refine","operation":"solid_hole","arguments":{
+                "body_id":{"$ref":"plate_body","pointer":"/id"},"face_id":{"$ref":"top2","pointer":"/id"},
+                "position":{"$project":{"point":[60,25,10],"basis":{"$ref":"top2","pointer":"/plane"}}},
+                "positions":[{"position":{"$project":{"point":[80,25,10],"basis":{"$ref":"top2","pointer":"/plane"}}}}],
+                "diameter":4,"extent":{"type":"distance","depth":30},"style":"simple","counterbore_diameter":0,"counterbore_depth":0,"countersink_diameter":0,"countersink_angle_deg":90,"flip":false}}},
+            {"let":{"unused":{"$ref":"lonely","pointer":"/document"}}}
+        ]}"#
+    }
+
+    #[test]
+    fn script_report_carries_a_feature_summary_and_warnings() {
+        let mut server = CadServer::new().unwrap();
+        let report = server
+            .call_tool(
+                "cad_interface",
+                json!({"action":"script","source":feedback_script()}),
+            )
+            .unwrap();
+        assert_eq!(report["steps_completed"], 9);
+        let summary = &report["summary"];
+        assert_eq!(summary["hole_source"], "features");
+        assert_eq!(summary["hole_count"], 3);
+        assert_eq!(summary["bodies"][0]["size"], json!([100.0, 50.0, 10.0]));
+        assert!(
+            summary.get("holes").is_none(),
+            "compact by default: {summary}"
+        );
+        let classes = summary["holes_by_class"].as_array().unwrap();
+        assert_eq!(classes.len(), 2, "{classes:?}");
+        let codes: Vec<&str> = report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["code"].as_str().unwrap())
+            .collect();
+        assert!(codes.contains(&"holes_overlap"), "{codes:?}");
+        assert!(codes.contains(&"hole_position_ignored"), "{codes:?}");
+        assert!(codes.contains(&"blind_depth_exceeds_body"), "{codes:?}");
+        assert!(codes.contains(&"unused_binding"), "{codes:?}");
+
+        let full = server
+            .call_tool("cad_interface", json!({"action":"summary"}))
+            .unwrap();
+        let holes = full["holes"].as_array().unwrap();
+        assert_eq!(holes.len(), 3);
+        assert!(
+            holes
+                .iter()
+                .any(|h| h["x"] == 80.0 && h["y"] == 25.0 && h["depth"] == 30.0),
+            "{holes:?}"
+        );
+        assert!(
+            holes
+                .iter()
+                .all(|h| h["z"] == 10.0 && h["normal"][2] == 1.0),
+            "{holes:?}"
+        );
+    }
+
+    #[test]
+    fn check_matches_expected_holes_and_reports_missing_and_extra() {
+        let mut server = CadServer::new().unwrap();
+        server
+            .call_tool(
+                "cad_interface",
+                json!({"action":"script","source":feedback_script()}),
+            )
+            .unwrap();
+        let check = server
+            .call_tool(
+                "cad_interface",
+                json!({"action":"check","tolerance_mm":0.5,"expected":{
+                "bbox":[100,50,10],
+                "holes":[
+                    {"x":20,"y":25,"diameter":6,"through":true},
+                    {"x":24.3,"y":25,"diameter":6},
+                    {"x":80,"y":25,"diameter":5},
+                    {"x":90,"y":40,"diameter":4}
+                ]}}),
+            )
+            .unwrap();
+        assert_eq!(check["bbox"]["ok"], true, "{check}");
+        let holes = &check["holes"];
+        assert_eq!(holes["matched"].as_array().unwrap().len(), 3, "{holes}");
+        assert_eq!(holes["missing"].as_array().unwrap().len(), 1, "{holes}");
+        assert_eq!(holes["missing"][0]["expected_index"], 3);
+        assert!(
+            holes["missing"][0]["nearest_built"]["offset_mm"]
+                .as_f64()
+                .unwrap()
+                > 10.0
+        );
+        assert_eq!(holes["extra"].as_array().unwrap().len(), 0);
+        let off = holes["matched"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["expected_index"] == 1)
+            .unwrap();
+        assert!(
+            (off["offset_mm"].as_f64().unwrap() - 0.3).abs() < 0.01,
+            "{off}"
+        );
+        let wrong_diameter = holes["matched"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["expected_index"] == 2)
+            .unwrap();
+        assert_eq!(wrong_diameter["diameter_ok"], false);
+        assert_eq!(check["ok"], false);
+        assert!(server
+            .call_tool("cad_interface", json!({"action":"check"}))
+            .is_err());
+    }
+
+    #[test]
+    fn failing_selector_names_the_values_present() {
+        let mut server = CadServer::new().unwrap();
+        let error = server
+            .call_tool("cad_interface", json!({"action":"script","source":r#"{"version":1,"name":"bad","steps":[
+                {"id":"stock","call":{"group":"solid/primitives","operation":"solid_box","arguments":{"size":[100,50,10]}}},
+                {"id":"scene","call":{"group":"solid/check","operation":"solid_scene","arguments":{}}},
+                {"let":{"top":{"$select":{"from":{"$select":{"from":{"$ref":"scene"},"path":"/bodies","take":"first"}},"path":"/faces","where":{"/plane/normal/2":1,"/plane/origin/2":11.5},"take":"one"}}}}
+            ]}"#}))
+            .unwrap_err();
+        assert!(
+            error.contains("matched no geometry among 6 entries"),
+            "{error}"
+        );
+        assert!(error.contains("/plane/origin/2: [0.0, 10.0]"), "{error}");
+    }
+
+    #[test]
+    fn solid_box_builds_editable_history_at_an_offset_and_traces_once() {
+        let mut server = CadServer::new().unwrap();
+        let built = server
+            .call_tool(
+                "solid_box",
+                json!({"origin":[5,7,2],"size":[30,20,4],"name":"Riser"}),
+            )
+            .unwrap();
+        assert_eq!(built["body_ids"].as_array().unwrap().len(), 1, "{built}");
+        let body = &built["summary"]["bodies"][0];
+        assert_eq!(body["bbox_min"], json!([5.0, 7.0, 2.0]), "{body}");
+        assert_eq!(body["bbox_max"], json!([35.0, 27.0, 6.0]), "{body}");
+        let traced: Vec<&str> = server
+            .tool_trace
+            .iter()
+            .map(|entry| entry["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(traced, vec!["solid_box"], "{traced:?}");
+        assert!(server
+            .call_tool("solid_box", json!({"size":[0,1,1]}))
+            .is_err());
+        let cut = server
+            .call_tool("solid_box", json!({"origin":[10,10,2],"size":[5,5,4],"operation":"cut","target_body_ids":built["body_ids"].clone()}))
+            .unwrap();
+        assert_eq!(
+            cut["summary"]["bodies"].as_array().unwrap().len(),
+            1,
+            "{cut}"
+        );
+        assert!(
+            cut["summary"]["bodies"][0]["faces"].as_u64().unwrap() > 6,
+            "{cut}"
+        );
+    }
+
+    #[test]
+    fn print_tools_read_a_synthetic_sheet_and_check_the_document_holes() {
+        let dir = std::env::temp_dir().join(format!("nbcad-print-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sheet = dir.join("sheet.png");
+        // a 200 x 80 plate with two hole symbols at (50, 30) and (100, 30)
+        let (mut image, ppm, (ox, oy)) = nbcad_print::synthetic::sheet();
+        nbcad_print::synthetic::symbol(
+            &mut image,
+            ox as f64 + 50.0 * ppm,
+            oy as f64 - 30.0 * ppm,
+            12.0,
+        );
+        nbcad_print::synthetic::symbol(
+            &mut image,
+            ox as f64 + 100.0 * ppm,
+            oy as f64 - 30.0 * ppm,
+            12.0,
+        );
+        std::fs::write(&sheet, nbcad_print::synthetic::png(&image)).unwrap();
+        let path = sheet.to_string_lossy().to_string();
+
+        let mut server = CadServer::new().unwrap();
+        let calibration = server
+            .call_tool(
+                "print_calibrate",
+                json!({"path":path,"length_mm":200,"width_mm":80}),
+            )
+            .unwrap();
+        assert!(
+            (calibration["calibration"]["px_per_mm"].as_f64().unwrap() - 5.0).abs() < 0.05,
+            "{calibration}"
+        );
+
+        // model: the plate with one hole on a symbol and one on blank paper
+        server
+            .call_tool("cad_interface", json!({"action":"script","source":r#"{"version":1,"name":"two holes","steps":[
+                {"id":"stock","call":{"group":"solid/primitives","operation":"solid_box","arguments":{"size":[200,80,10]}}},
+                {"id":"scene","call":{"group":"solid/check","operation":"solid_scene","arguments":{}}},
+                {"let":{"plate_body":{"$select":{"from":{"$ref":"scene"},"path":"/bodies","take":"first"}}}},
+                {"let":{"top":{"$select":{"from":{"$ref":"plate_body"},"path":"/faces","where":{"/plane/normal/2":1,"/plane/origin/2":10},"take":"one"}}}},
+                {"id":"holes","call":{"group":"solid/refine","operation":"solid_hole","arguments":{
+                    "body_id":{"$ref":"plate_body","pointer":"/id"},"face_id":{"$ref":"top","pointer":"/id"},
+                    "position":{"$project":{"point":[50,30,10],"basis":{"$ref":"top","pointer":"/plane"}}},
+                    "positions":[{"position":{"$project":{"point":[50,30,10],"basis":{"$ref":"top","pointer":"/plane"}}}},{"position":{"$project":{"point":[150,30,10],"basis":{"$ref":"top","pointer":"/plane"}}}}],
+                    "diameter":5,"extent":{"type":"through_all"},"style":"simple","counterbore_diameter":0,"counterbore_depth":0,"countersink_diameter":0,"countersink_angle_deg":90,"flip":false}}}
+            ]}"#}))
+            .unwrap();
+        let probe = server
+            .call_tool(
+                "print_probe",
+                json!({"path":path,"length_mm":200,"width_mm":80}),
+            )
+            .unwrap();
+        assert_eq!(probe["holes"], 2, "{probe}");
+        assert_eq!(probe["nothing_drawn_within_search"], 1, "{probe}");
+        let items = probe["items"].as_array().unwrap();
+        assert_eq!(items[0]["drawn"], "symbol");
+        assert_eq!(items[1]["drawn"], "none");
+
+        let symbols = server
+            .call_tool(
+                "print_symbols",
+                json!({"path":path,"length_mm":200,"width_mm":80}),
+            )
+            .unwrap();
+        assert_eq!(symbols["symbols_found"], 2, "{symbols}");
+        assert_eq!(symbols["matched"], 1, "{symbols}");
+        assert_eq!(symbols["print_only"].as_array().unwrap().len(), 1);
+
+        let out = dir.join("crop.png");
+        let crop = server
+            .call_tool("print_crop", json!({"path":path,"length_mm":200,"width_mm":80,"region":"0,0,120,60","out_png":out.to_string_lossy()}))
+            .unwrap();
+        assert_eq!(crop["holes_drawn"], 2, "{crop}");
+        assert!(crop["image"]["png_base64"].as_str().unwrap().len() > 100);
+        assert!(std::fs::read(&out).unwrap().starts_with(b"\x89PNG"));
+        let result = success_result(crop);
+        assert_eq!(result["content"][1]["type"], "image");
+        assert_eq!(result["content"][1]["mimeType"], "image/png");
+        assert_eq!(
+            result["structuredContent"]["image"]["png_base64"],
+            "(attached as image content)"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

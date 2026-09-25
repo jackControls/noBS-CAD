@@ -138,6 +138,65 @@ session. A successful whole-document replacement waits for its new publisher
 and updates the initiating attachment; other queued work stays with the retired
 document. Reading an old session's receipt does not change the current attachment.
 
+## Feedback for agents
+
+A script run answers in feature terms, not only with a step count. The
+`cad_interface` `script` result carries:
+
+- `summary`: bodies with bounding boxes and face counts, the hole count and a
+  tally of holes by class (diameter, style, counterbore, thread, through or
+  depth). `detail: "full"` adds every hole with its position, normal, depth,
+  face and thread. Holes come from the feature history; an imported STEP has
+  none, so its cylinders are read back from the geometry instead
+  (`hole_source: "scene"`).
+- `warnings`: the mistakes that never raise an error. `hole_position_ignored`
+  (a `positions` list that leaves out `position`, so that point is not
+  drilled), `holes_overlap` (two openings the kernel merges),
+  `hole_outside_body`, `blind_depth_exceeds_body`, and `unused_binding`.
+- A failing step names the script, the step and the reason. A selector that
+  matched several entries lists the candidates with the fields that tell
+  them apart; one that matched nothing lists what each `where` test asked for
+  and the values actually present at those pointers; an unknown result name
+  lists similar earlier names.
+
+Two more `cad_interface` actions read the current document the same way:
+`summary` returns the feature summary (`detail` compact or full), and `check`
+compares an expected feature table with the built model:
+
+```json
+{"action":"check","tolerance_mm":0.6,"expected":{"bbox":[241,40,11.5],
+ "holes":[{"x":15,"y":7.5,"diameter":6.6,"counterbore_diameter":11,"through":true}]}}
+```
+
+The reply lists matched holes with their offsets and whether diameter,
+counterbore, through and depth agree, missing expected holes with the nearest
+built hole, extra built holes, and the bounding-box comparison.
+
+`solid_box` creates a rectangular block from an origin corner and a size as
+ordinary editable history (an offset plane when the origin is off the XY
+plane, a dimensioned rectangle fixed at its corner, one extrude with
+`new_body`, `join`, `cut` or `intersect`); the script trace records the one
+call.
+
+### Reading a scanned print
+
+Four tools read a scanned 2D print of a plate (PDF through `pdftoppm`, PNG or
+PGM) in plate millimetres, origin at the plan view's lower-left corner:
+
+- `print_calibrate` finds the plate outline from `length_mm` and `width_mm`
+  and reports pixels per millimetre and skew. Outlines are chosen by aspect
+  ratio and line weight; `hint` restricts the search to a page window.
+- `print_crop` returns a millimetre window as MCP image content with a tick
+  grid and the document's holes drawn on it (red hole, blue counterbore).
+- `print_probe` says what is drawn at or within `search_mm` of each hole:
+  symbol with centre and offset, dot, dashed, or none.
+- `print_symbols` lists the circles and dots it finds and which model holes
+  or drawn symbols are unmatched; a place to look, never a position source.
+
+`holes` defaults to the current document; a list of `{x, y, diameter}` or
+`"none"` overrides it, and `frame: "bbox_min"` shifts the document's holes so
+the bodies' lower-left corner is the print origin.
+
 ## Authored recipes
 
 Use `cad_interface` with `action: "recipes"` to discover the Rust-owned catalog.
