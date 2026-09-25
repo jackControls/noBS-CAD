@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -63,7 +63,14 @@ impl std::error::Error for SolveError {}
 /// for undo/redo. Cheap at sketch scale and exact by construction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SketchSnapshot {
+    #[serde(default)]
+    offset_sides: HashMap<ConstraintId, f64>,
+    #[serde(default)]
+    reference_edges: Vec<crate::dto::ProjectedEdgeDto>,
     entities: Vec<(EntityId, Entity)>,
+    /// Missing on legacy projects: preserve their points conservatively.
+    #[serde(default)]
+    generated_points: BTreeSet<EntityId>,
     constraints: Vec<(ConstraintId, Constraint)>,
     fix_targets: HashMap<ConstraintId, Vec<f64>>,
     params: ParamTable,
@@ -78,6 +85,9 @@ pub struct SketchSnapshot {
 }
 
 impl SketchSnapshot {
+    pub(crate) fn set_reference_edges(&mut self, edges: &[crate::dto::ProjectedEdgeDto]) {
+        self.reference_edges = edges.to_vec();
+    }
     /// Refresh saved support-edge midpoint targets without discarding an
     /// active session's undo/redo history. Every historical state must use
     /// the same current external reference or Undo could reintroduce drift.
@@ -93,7 +103,10 @@ impl SketchSnapshot {
 /// entities (structural coincident, see [`Entity`]).
 #[derive(Debug, Clone, Default)]
 pub struct Sketch {
+    offset_sides: HashMap<ConstraintId, f64>,
+    reference_edges: Vec<crate::dto::ProjectedEdgeDto>,
     entities: Vec<(EntityId, Entity)>,
+    generated_points: BTreeSet<EntityId>,
     constraints: Vec<(ConstraintId, Constraint)>,
     /// Fix-constraint pin targets (entity unknown values captured when the
     /// Fix was added), keyed by constraint id. The `Constraint::Fix`
@@ -109,10 +122,20 @@ pub struct Sketch {
     /// dimensions without an entry remain driving by default.
     dim_modes: HashMap<ConstraintId, DimensionMode>,
     next_entity: u64,
+    // Kept outside undo snapshots: branching after Undo must not recycle an
+    // identity still referenced by a saved region or a downstream feature.
+    entity_id_high_water: u64,
     next_constraint: u64,
 }
 
 impl Sketch {
+    pub(crate) fn set_reference_edges(&mut self, edges: &[crate::dto::ProjectedEdgeDto]) {
+        self.reference_edges = edges.to_vec();
+    }
+
+    pub(crate) fn reference_edge(&self, edge: EdgeId) -> Option<&crate::dto::ProjectedEdgeDto> {
+        self.reference_edges.iter().find(|e| e.edge_id == edge)
+    }
     pub fn new() -> Self {
         Self::default()
     }
@@ -126,10 +149,145 @@ impl Sketch {
     // --- Entities ---
 
     pub fn add_entity(&mut self, entity: Entity) -> EntityId {
-        self.next_entity += 1;
+        self.next_entity = self.next_entity.max(self.entity_id_high_water) + 1;
+        self.entity_id_high_water = self.next_entity;
         let id = EntityId(self.next_entity);
         self.entities.push((id, entity));
         id
+    }
+
+    /// A handle created as part of geometry, not by the standalone Point tool.
+    pub(crate) fn add_generated_point(&mut self, position: Vec2) -> EntityId {
+        let id = self.add_entity(Entity::Point { position });
+        self.mark_generated_point(id);
+        id
+    }
+
+    pub(crate) fn mark_generated_point(&mut self, id: EntityId) {
+        debug_assert!(matches!(self.entity(id), Some(Entity::Point { .. })));
+        self.generated_points.insert(id);
+    }
+
+    /// An explicit Point-tool placement on an existing handle adopts it.
+    pub(crate) fn retain_point(&mut self, id: EntityId) -> bool {
+        self.generated_points.remove(&id)
+    }
+
+    /// Only generated, unused handles are disposable. In particular, a user
+    /// point acquired by an arc is not owned by that arc. Check *all* relations,
+    /// not just incident lines, before removing a now-unused tool handle.
+    pub(crate) fn remove_unused_generated_points(
+        &mut self,
+        candidates: impl IntoIterator<Item = EntityId>,
+    ) -> Vec<EntityId> {
+        let mut removed = Vec::new();
+        for point in candidates {
+            if self.generated_points.contains(&point)
+                && !self
+                    .entities
+                    .iter()
+                    .any(|(_, e)| e.referenced_entities().contains(&point))
+                && !self
+                    .constraints
+                    .iter()
+                    .any(|(_, c)| c.referenced_entities().contains(&point))
+            {
+                removed.extend(self.remove_entity(point));
+            }
+        }
+        removed
+    }
+
+    /// Whether a point is a tool-owned handle rather than user-authored.
+    pub(crate) fn is_generated_point(&self, id: EntityId) -> bool {
+        self.generated_points.contains(&id)
+    }
+
+    /// Whether any entity structurally references this point (a line endpoint).
+    pub(crate) fn is_referenced_by_entity(&self, point: EntityId) -> bool {
+        self.entities
+            .iter()
+            .any(|(_, entity)| entity.referenced_entities().contains(&point))
+    }
+
+    /// Every relation that mentions this point.
+    pub(crate) fn relations_pointing_at(
+        &self,
+        point: EntityId,
+    ) -> impl Iterator<Item = &Constraint> {
+        self.constraints
+            .iter()
+            .map(|(_, constraint)| constraint)
+            .filter(move |constraint| constraint.referenced_entities().contains(&point))
+    }
+
+    /// Retire `SpanMidpoint` relations whose diagonal anchors the last delete
+    /// detached, so a half-erased center rectangle does not keep a corner no
+    /// line uses.
+    ///
+    /// Only relations touching `affected` are considered: the caller passes the
+    /// corners of the lines this delete removed, so an unrelated delete can
+    /// never retire a live relation. A corner still anchors its relation when
+    /// it is a live line endpoint, or when some relation other than a span
+    /// midpoint still holds it — which is exactly how Fillet/Chamfer retain a
+    /// trimmed corner. The center itself is left to the ordinary generated-point
+    /// reap once its relation is gone.
+    pub(crate) fn sweep_detached_span_midpoints(
+        &mut self,
+        affected: &BTreeSet<EntityId>,
+    ) -> Vec<EntityId> {
+        let anchored = |corner: EntityId| {
+            self.is_referenced_by_entity(corner)
+                || self
+                    .relations_pointing_at(corner)
+                    .any(|constraint| !matches!(constraint, Constraint::SpanMidpoint { .. }))
+        };
+        let stale: Vec<ConstraintId> = self
+            .constraints
+            .iter()
+            .filter(|(_, constraint)| match *constraint {
+                Constraint::SpanMidpoint { start, end, .. } => {
+                    (affected.contains(&start) || affected.contains(&end))
+                        && !(anchored(start) && anchored(end))
+                }
+                _ => false,
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        if stale.is_empty() {
+            return Vec::new();
+        }
+        let operands: Vec<EntityId> = self
+            .constraints
+            .iter()
+            .filter(|(id, _)| stale.contains(id))
+            .flat_map(|(_, constraint)| constraint.referenced_entities())
+            .collect();
+        self.constraints.retain(|(id, _)| !stale.contains(id));
+        self.remove_unused_generated_points(operands)
+    }
+
+    /// Modify tools can detach/rebind handles without deleting the original
+    /// curve. Clean up after their complete topology edit, not mid-edit, and
+    /// never sweep unrelated points the user had already detached earlier.
+    pub(crate) fn cleanup_generated_points(&mut self, before: &SketchSnapshot) {
+        let candidates: BTreeSet<_> = before
+            .entities
+            .iter()
+            .flat_map(|(_, e)| e.referenced_entities())
+            .chain(
+                before
+                    .constraints
+                    .iter()
+                    .flat_map(|(_, c)| c.referenced_entities()),
+            )
+            .chain(
+                self.generated_points
+                    .difference(&before.generated_points)
+                    .copied(),
+            )
+            .collect();
+        self.remove_unused_generated_points(candidates);
     }
 
     /// Remove an entity, every entity that structurally references it
@@ -162,9 +320,23 @@ impl Sketch {
                 break;
             }
         }
+        let candidates: BTreeSet<_> = self
+            .entities
+            .iter()
+            .filter(|(eid, _)| removed.contains(eid))
+            .flat_map(|(_, e)| e.referenced_entities())
+            .chain(
+                self.constraints
+                    .iter()
+                    .filter(|(_, c)| c.referenced_entities().iter().any(|r| removed.contains(r)))
+                    .flat_map(|(_, c)| c.referenced_entities()),
+            )
+            .collect();
         self.entities.retain(|(eid, _)| !removed.contains(eid));
         self.constraints
             .retain(|(_, c)| !c.referenced_entities().iter().any(|r| removed.contains(r)));
+        self.generated_points.retain(|id| !removed.contains(id));
+        removed.extend(self.remove_unused_generated_points(candidates));
         self.fix_targets
             .retain(|cid, _| self.constraints.iter().any(|(id, _)| id == cid));
         self.dim_params
@@ -172,6 +344,8 @@ impl Sketch {
         self.dim_placements
             .retain(|cid, _| self.constraints.iter().any(|(id, _)| id == cid));
         self.dim_modes
+            .retain(|cid, _| self.constraints.iter().any(|(id, _)| id == cid));
+        self.offset_sides
             .retain(|cid, _| self.constraints.iter().any(|(id, _)| id == cid));
         removed
     }
@@ -282,6 +456,7 @@ impl Sketch {
         self.dim_params.remove(&id);
         self.dim_placements.remove(&id);
         self.dim_modes.remove(&id);
+        self.offset_sides.remove(&id);
         Some(self.constraints.remove(index).1)
     }
 
@@ -532,11 +707,39 @@ impl Sketch {
             .unwrap_or(fallback)
     }
 
+    pub(crate) fn offset_side(&self, cid: ConstraintId) -> Option<f64> {
+        self.offset_sides.get(&cid).copied()
+    }
+
+    pub(crate) fn set_offset_side(&mut self, cid: ConstraintId, side: f64) {
+        self.offset_sides.insert(cid, side);
+    }
+
+    pub(crate) fn measure_dimension(
+        &self,
+        cid: ConstraintId,
+        constraint: Constraint,
+    ) -> Option<f64> {
+        if let (
+            Some(side),
+            Constraint::Distance {
+                from, to: Some(to), ..
+            },
+        ) = (self.offset_side(cid), constraint)
+        {
+            let (a, b) = self.resolved_line(from)?;
+            let (q, _) = self.resolved_line(to)?;
+            let d = b - a;
+            return Some((d.x * (q.y - a.y) - d.y * (q.x - a.x)) / d.length() / side);
+        }
+        self.measure_dimension_constraint(constraint)
+    }
+
     /// Copy a constraint with its parameter-backed value materialized.
     pub fn effective_constraint(&self, cid: ConstraintId, constraint: Constraint) -> Constraint {
         let mut effective = constraint;
         let value = if self.is_reference_dimension(&cid) {
-            self.measure_dimension_constraint(constraint)
+            self.measure_dimension(cid, constraint)
         } else {
             self.dim_params
                 .get(&cid)
@@ -621,6 +824,16 @@ impl Sketch {
                 }
                 _ => None,
             },
+            Constraint::ArcAngle { entity, .. } => match self.entity(entity) {
+                // The stored arc sweeps counter-clockwise, so its included
+                // angle is the positive remainder of start to end.
+                Some(Entity::Arc {
+                    start_angle,
+                    end_angle,
+                    ..
+                }) => Some(crate::geometry::arc_span(*start_angle, *end_angle).to_degrees()),
+                _ => None,
+            },
             Constraint::Angle { a, b, .. } => {
                 let (a_start, a_end) = self.resolved_line(a)?;
                 let a_angle = line_angle(a_end - a_start)?;
@@ -649,7 +862,7 @@ impl Sketch {
             .iter()
             .filter_map(|(cid, constraint)| {
                 let value = if self.is_reference_dimension(cid) {
-                    self.measure_dimension_constraint(*constraint)
+                    self.measure_dimension(*cid, *constraint)
                 } else {
                     self.dim_params
                         .get(cid)
@@ -681,7 +894,10 @@ impl Sketch {
 
     pub fn snapshot(&self) -> SketchSnapshot {
         SketchSnapshot {
+            offset_sides: self.offset_sides.clone(),
+            reference_edges: self.reference_edges.clone(),
             entities: self.entities.clone(),
+            generated_points: self.generated_points.clone(),
             constraints: self
                 .constraints
                 .iter()
@@ -698,7 +914,10 @@ impl Sketch {
     }
 
     pub fn restore(&mut self, snapshot: SketchSnapshot) {
+        self.offset_sides = snapshot.offset_sides;
+        self.reference_edges = snapshot.reference_edges;
         self.entities = snapshot.entities;
+        self.generated_points = snapshot.generated_points;
         self.constraints = snapshot.constraints;
         self.fix_targets = snapshot.fix_targets;
         self.params = snapshot.params;
@@ -711,11 +930,19 @@ impl Sketch {
             self.dim_modes.entry(*cid).or_default();
         }
         self.next_entity = snapshot.next_entity;
+        self.entity_id_high_water = self.entity_id_high_water.max(self.next_entity);
         self.next_constraint = snapshot.next_constraint;
         self.sync_dimension_constraint_values();
     }
 
     // --- Solver API ---
+    pub(crate) fn entity_id_high_water(&self) -> u64 {
+        self.entity_id_high_water
+    }
+
+    pub(crate) fn reserve_entity_ids(&mut self, through: u64) {
+        self.entity_id_high_water = self.entity_id_high_water.max(through);
+    }
 
     /// Real DOF report from the constraint solver's rank analysis:
     /// `unknowns − rank(Jacobian)`.
@@ -803,8 +1030,42 @@ impl SketchSnapshot {
         if entity_ids.iter().map(|id| id.0).max().unwrap_or(0) > self.next_entity {
             return Err("next entity id is behind the saved entity table".to_string());
         }
+        for point in &self.generated_points {
+            if !self
+                .entities
+                .iter()
+                .any(|(id, entity)| id == point && matches!(entity, Entity::Point { .. }))
+            {
+                return Err(format!("generated point {} is not a saved point", point.0));
+            }
+        }
 
         let mut constraint_ids = HashSet::new();
+        let mut edge_ids = HashSet::new();
+        for edge in &self.reference_edges {
+            if !edge_ids.insert(edge.edge_id)
+                || edge.points.len() < 2
+                || edge
+                    .points
+                    .iter()
+                    .any(|p| !p.x.is_finite() || !p.y.is_finite())
+                || edge.circle.is_some_and(|c| {
+                    !c.radius.is_finite()
+                        || c.radius <= 0.0
+                        || !c.center.x.is_finite()
+                        || !c.center.y.is_finite()
+                })
+            {
+                return Err("invalid cached support edge".into());
+            }
+        }
+        if self
+            .offset_sides
+            .values()
+            .any(|side| *side != 1.0 && *side != -1.0)
+        {
+            return Err("invalid signed offset direction".into());
+        }
         for (id, constraint) in &self.constraints {
             if id.0 == 0 || !constraint_ids.insert(*id) {
                 return Err(format!("duplicate or zero constraint id {}", id.0));
@@ -829,6 +1090,7 @@ impl SketchSnapshot {
             .chain(self.dim_params.keys())
             .chain(self.dim_placements.keys())
             .chain(self.dim_modes.keys())
+            .chain(self.offset_sides.keys())
             .any(|id| !constraint_ids.contains(id))
         {
             return Err("constraint metadata references a missing constraint".to_string());

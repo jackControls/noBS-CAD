@@ -3735,24 +3735,6 @@
       "id": "Bridge bolt left / frame clearance_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Bridge bolt left / frame clearance_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Bridge bolt left / frame clearance_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Bridge bolt left / frame clearance_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -4439,24 +4421,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "Bridge bolt right / frame clearance_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Bridge bolt right / frame clearance_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Bridge bolt right / frame clearance_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Bridge bolt right / frame clearance_locate"
     },
     {
       "duration_ms": 400,
@@ -7884,24 +7848,6 @@
       "id": "Jaw / full round thrust chamber_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Jaw / full round thrust chamber_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Jaw / full round thrust chamber_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Jaw / full round thrust chamber_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -8965,24 +8911,6 @@
       "id": "Jaw / keeper pin clearance_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Jaw / keeper pin clearance_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Jaw / keeper pin clearance_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Jaw / keeper pin clearance_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -9411,24 +9339,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "Jaw / recessed keeper pin head_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Jaw / recessed keeper pin head_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Jaw / recessed keeper pin head_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Jaw / recessed keeper pin head_locate"
     },
     {
       "duration_ms": 400,
@@ -11752,24 +11662,6 @@
       "id": "Bridge bolt left / self-supporting bore_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Bridge bolt left / self-supporting bore_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Bridge bolt left / self-supporting bore_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Bridge bolt left / self-supporting bore_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -12536,24 +12428,6 @@
       "id": "Bridge bolt right / self-supporting bore_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Bridge bolt right / self-supporting bore_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Bridge bolt right / self-supporting bore_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Bridge bolt right / self-supporting bore_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -13192,24 +13066,6 @@
       "id": "Screw / 24 mm rounded-thread blank_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Screw / 24 mm rounded-thread blank_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Screw / 24 mm rounded-thread blank_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Screw / 24 mm rounded-thread blank_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -13515,24 +13371,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "Screw / 18 mm removable-fitting stub_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Screw / 18 mm removable-fitting stub_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Screw / 18 mm removable-fitting stub_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Screw / 18 mm removable-fitting stub_locate"
     },
     {
       "duration_ms": 400,
@@ -14843,24 +14681,6 @@
       "id": "Screw / axial M5 clearance_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Screw / axial M5 clearance_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Screw / axial M5 clearance_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Screw / axial M5 clearance_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -15894,24 +15714,6 @@
       "id": "Thrust fitting / full round neck_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Thrust fitting / full round neck_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Thrust fitting / full round neck_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Thrust fitting / full round neck_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -16146,24 +15948,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "Thrust fitting / 32 mm load head_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Thrust fitting / 32 mm load head_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Thrust fitting / 32 mm load head_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Thrust fitting / 32 mm load head_locate"
     },
     {
       "duration_ms": 400,
@@ -16444,24 +16228,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "Thrust fitting / D socket_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Thrust fitting / D socket_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Thrust fitting / D socket_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Thrust fitting / D socket_locate"
     },
     {
       "duration_ms": 400,
@@ -17164,24 +16930,6 @@
       "id": "Thrust fitting / axial retaining screw_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Thrust fitting / axial retaining screw_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Thrust fitting / axial retaining screw_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Thrust fitting / axial retaining screw_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -17385,24 +17133,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "Thrust fitting / recessed M5 socket head_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Thrust fitting / recessed M5 socket head_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Thrust fitting / recessed M5 socket head_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Thrust fitting / recessed M5 socket head_locate"
     },
     {
       "duration_ms": 400,
@@ -18550,24 +18280,6 @@
       "id": "Keeper / sleeve running clearance_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Keeper / sleeve running clearance_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Keeper / sleeve running clearance_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Keeper / sleeve running clearance_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -19056,24 +18768,6 @@
       "id": "Keeper / cross-pin clearance_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Keeper / cross-pin clearance_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Keeper / cross-pin clearance_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Keeper / cross-pin clearance_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -19502,24 +19196,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "Keeper / cross-pin axial slot front_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Keeper / cross-pin axial slot front_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Keeper / cross-pin axial slot front_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Keeper / cross-pin axial slot front_locate"
     },
     {
       "duration_ms": 400,
@@ -20345,24 +20021,6 @@
       "id": "bridge_screw_left / M6 x 35 shaft_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "bridge_screw_left / M6 x 35 shaft_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "bridge_screw_left / M6 x 35 shaft_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "bridge_screw_left / M6 x 35 shaft_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -20597,24 +20255,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "bridge_screw_left / socket head_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "bridge_screw_left / socket head_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "bridge_screw_left / socket head_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "bridge_screw_left / socket head_locate"
     },
     {
       "duration_ms": 400,
@@ -21240,24 +20880,6 @@
       "id": "bridge_nut_left / thread envelope_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "bridge_nut_left / thread envelope_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "bridge_nut_left / thread envelope_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "bridge_nut_left / thread envelope_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -21425,24 +21047,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "bridge_screw_right / M6 x 35 shaft_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "bridge_screw_right / M6 x 35 shaft_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "bridge_screw_right / M6 x 35 shaft_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "bridge_screw_right / M6 x 35 shaft_locate"
     },
     {
       "duration_ms": 400,
@@ -21643,24 +21247,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "bridge_screw_right / socket head_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "bridge_screw_right / socket head_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "bridge_screw_right / socket head_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "bridge_screw_right / socket head_locate"
     },
     {
       "duration_ms": 400,
@@ -22214,24 +21800,6 @@
       "id": "bridge_nut_right / thread envelope_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "bridge_nut_right / thread envelope_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "bridge_nut_right / thread envelope_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "bridge_nut_right / thread envelope_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -22435,24 +22003,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "Keeper pin / M5 x 90 shaft_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Keeper pin / M5 x 90 shaft_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Keeper pin / M5 x 90 shaft_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Keeper pin / M5 x 90 shaft_locate"
     },
     {
       "duration_ms": 400,
@@ -22689,24 +22239,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "Keeper pin / recessed socket head_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Keeper pin / recessed socket head_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Keeper pin / recessed socket head_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Keeper pin / recessed socket head_locate"
     },
     {
       "duration_ms": 400,
@@ -23296,24 +22828,6 @@
       "id": "Keeper pin nut / thread envelope_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Keeper pin nut / thread envelope_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Keeper pin nut / thread envelope_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Keeper pin nut / thread envelope_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -23519,24 +23033,6 @@
       "id": "Thrust screw / M5 x 25 shaft_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Thrust screw / M5 x 25 shaft_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Thrust screw / M5 x 25 shaft_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Thrust screw / M5 x 25 shaft_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -23735,24 +23231,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "Thrust screw / recessed socket head_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Thrust screw / recessed socket head_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Thrust screw / recessed socket head_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Thrust screw / recessed socket head_locate"
     },
     {
       "duration_ms": 400,
@@ -24378,24 +23856,6 @@
       "id": "Thrust nut / thread envelope_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Thrust nut / thread envelope_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Thrust nut / thread envelope_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Thrust nut / thread envelope_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -24599,24 +24059,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_0_0_bolt / M6 x 45 shaft_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_0_0_bolt / M6 x 45 shaft_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_0_0_bolt / M6 x 45 shaft_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_0_0_bolt / M6 x 45 shaft_locate"
     },
     {
       "duration_ms": 400,
@@ -24855,24 +24297,6 @@
       "id": "mount_0_0_bolt / socket head_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_0_0_bolt / socket head_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_0_0_bolt / socket head_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_0_0_bolt / socket head_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -25040,24 +24464,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_0_0_top_washer / broad washer_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_0_0_top_washer / broad washer_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_0_0_top_washer / broad washer_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_0_0_top_washer / broad washer_locate"
     },
     {
       "duration_ms": 400,
@@ -25296,24 +24702,6 @@
       "id": "mount_0_0_top_washer / clearance_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_0_0_top_washer / clearance_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_0_0_top_washer / clearance_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_0_0_top_washer / clearance_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -25517,24 +24905,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_0_0_bottom_washer / broad washer_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_0_0_bottom_washer / broad washer_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_0_0_bottom_washer / broad washer_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_0_0_bottom_washer / broad washer_locate"
     },
     {
       "duration_ms": 400,
@@ -25771,24 +25141,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_0_0_bottom_washer / clearance_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_0_0_bottom_washer / clearance_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_0_0_bottom_washer / clearance_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_0_0_bottom_washer / clearance_locate"
     },
     {
       "duration_ms": 400,
@@ -26414,24 +25766,6 @@
       "id": "mount_0_0_nut / thread envelope_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_0_0_nut / thread envelope_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_0_0_nut / thread envelope_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_0_0_nut / thread envelope_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -26599,24 +25933,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_0_1_bolt / M6 x 45 shaft_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_0_1_bolt / M6 x 45 shaft_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_0_1_bolt / M6 x 45 shaft_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_0_1_bolt / M6 x 45 shaft_locate"
     },
     {
       "duration_ms": 400,
@@ -26819,24 +26135,6 @@
       "id": "mount_0_1_bolt / socket head_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_0_1_bolt / socket head_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_0_1_bolt / socket head_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_0_1_bolt / socket head_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -27004,24 +26302,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_0_1_top_washer / broad washer_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_0_1_top_washer / broad washer_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_0_1_top_washer / broad washer_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_0_1_top_washer / broad washer_locate"
     },
     {
       "duration_ms": 400,
@@ -27224,24 +26504,6 @@
       "id": "mount_0_1_top_washer / clearance_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_0_1_top_washer / clearance_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_0_1_top_washer / clearance_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_0_1_top_washer / clearance_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -27409,24 +26671,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_0_1_bottom_washer / broad washer_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_0_1_bottom_washer / broad washer_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_0_1_bottom_washer / broad washer_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_0_1_bottom_washer / broad washer_locate"
     },
     {
       "duration_ms": 400,
@@ -27627,24 +26871,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_0_1_bottom_washer / clearance_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_0_1_bottom_washer / clearance_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_0_1_bottom_washer / clearance_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_0_1_bottom_washer / clearance_locate"
     },
     {
       "duration_ms": 400,
@@ -28198,24 +27424,6 @@
       "id": "mount_0_1_nut / thread envelope_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_0_1_nut / thread envelope_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_0_1_nut / thread envelope_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_0_1_nut / thread envelope_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -28383,24 +27591,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_1_0_bolt / M6 x 45 shaft_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_1_0_bolt / M6 x 45 shaft_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_1_0_bolt / M6 x 45 shaft_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_1_0_bolt / M6 x 45 shaft_locate"
     },
     {
       "duration_ms": 400,
@@ -28603,24 +27793,6 @@
       "id": "mount_1_0_bolt / socket head_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_1_0_bolt / socket head_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_1_0_bolt / socket head_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_1_0_bolt / socket head_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -28788,24 +27960,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_1_0_top_washer / broad washer_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_1_0_top_washer / broad washer_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_1_0_top_washer / broad washer_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_1_0_top_washer / broad washer_locate"
     },
     {
       "duration_ms": 400,
@@ -29008,24 +28162,6 @@
       "id": "mount_1_0_top_washer / clearance_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_1_0_top_washer / clearance_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_1_0_top_washer / clearance_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_1_0_top_washer / clearance_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -29193,24 +28329,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_1_0_bottom_washer / broad washer_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_1_0_bottom_washer / broad washer_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_1_0_bottom_washer / broad washer_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_1_0_bottom_washer / broad washer_locate"
     },
     {
       "duration_ms": 400,
@@ -29411,24 +28529,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_1_0_bottom_washer / clearance_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_1_0_bottom_washer / clearance_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_1_0_bottom_washer / clearance_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_1_0_bottom_washer / clearance_locate"
     },
     {
       "duration_ms": 400,
@@ -29982,24 +29082,6 @@
       "id": "mount_1_0_nut / thread envelope_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_1_0_nut / thread envelope_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_1_0_nut / thread envelope_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_1_0_nut / thread envelope_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -30167,24 +29249,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_1_1_bolt / M6 x 45 shaft_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_1_1_bolt / M6 x 45 shaft_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_1_1_bolt / M6 x 45 shaft_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_1_1_bolt / M6 x 45 shaft_locate"
     },
     {
       "duration_ms": 400,
@@ -30387,24 +29451,6 @@
       "id": "mount_1_1_bolt / socket head_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_1_1_bolt / socket head_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_1_1_bolt / socket head_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_1_1_bolt / socket head_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -30572,24 +29618,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_1_1_top_washer / broad washer_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_1_1_top_washer / broad washer_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_1_1_top_washer / broad washer_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_1_1_top_washer / broad washer_locate"
     },
     {
       "duration_ms": 400,
@@ -30792,24 +29820,6 @@
       "id": "mount_1_1_top_washer / clearance_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_1_1_top_washer / clearance_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_1_1_top_washer / clearance_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_1_1_top_washer / clearance_locate"
-    },
-    {
       "duration_ms": 400,
       "fit": true,
       "target": "active_sketch",
@@ -30977,24 +29987,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_1_1_bottom_washer / broad washer_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_1_1_bottom_washer / broad washer_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_1_1_bottom_washer / broad washer_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_1_1_bottom_washer / broad washer_locate"
     },
     {
       "duration_ms": 400,
@@ -31195,24 +30187,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_1_1_bottom_washer / clearance_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_1_1_bottom_washer / clearance_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_1_1_bottom_washer / clearance_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_1_1_bottom_washer / clearance_locate"
     },
     {
       "duration_ms": 400,
@@ -31764,24 +30738,6 @@
         "operation": "sketch_add_circle_locked"
       },
       "id": "mount_1_1_nut / thread envelope_profile"
-    },
-    {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "mount_1_1_nut / thread envelope_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "mount_1_1_nut / thread envelope_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "mount_1_1_nut / thread envelope_locate"
     },
     {
       "duration_ms": 400,

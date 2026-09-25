@@ -212,12 +212,14 @@ pub fn has_unresolved_includes(source: &str) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     use super::*;
     use crate::{run, RunOptions};
+    use serde_json::json;
     use std::collections::BTreeMap;
 
-    fn load_map<'a>(files: BTreeMap<&'a str, &'a str>) -> impl FnMut(&str) -> Result<String, String> + use<'a> {
+    fn load_map<'a>(
+        files: BTreeMap<&'a str, &'a str>,
+    ) -> impl FnMut(&str) -> Result<String, String> + use<'a> {
         move |path: &str| {
             files
                 .get(path)

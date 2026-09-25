@@ -288,10 +288,6 @@ The recipe-library layer adds headless recipe and real-kernel preview checks
 alongside their authored sources. These do not replace the live adapter checks
 above or establish that the teaching interface has been validated on a new build.
 
-<!-- Append the following sections to docs/native-scripts.md (before or after
-     "File structure" / near the end). Parent should integrate wording so links
-     and tone match the rest of the file. -->
-
 ## Script collections
 
 Large designs can keep each part in its own JSONC fragment and compose them from

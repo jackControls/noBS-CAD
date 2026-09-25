@@ -14,8 +14,8 @@ mod thread;
 pub use dto::*;
 pub use history::{SolidDocument, SolidError};
 pub use profile::{
-    canonicalize_profile_curves, extract_closed_loops, extract_closed_loops_allow_open,
-    ProfileError, Segment2,
+    canonicalize_profile_curves, extract_bounded_faces, extract_closed_loops,
+    extract_closed_loops_allow_open, BoundedFace, ProfileError, Segment2,
 };
 pub use thread::{
     iso_metric_grade6_envelope, iso_metric_thread_envelope, rounded_thread_diameters,

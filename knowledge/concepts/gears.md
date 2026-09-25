@@ -1,12 +1,19 @@
 ---
 type: Concept
 title: Gear identification and compatible pairs
-description: Spur gear module, diametral pitch, outside diameter, pressure angle, tooth count, backlash and shaft mounting.
+description: Gear pair identity roles — module/DP, PA, tooth count, backlash, mounting. AGMA / tooth-thickness / strength charts stay on the datasheet (VERIFY; Help invents none).
 status: stable
-updated: 2026-09-11
+updated: 2026-09-20
+topics: mechanisms, gears, machine-elements
+keywords: gear, spur gear, module, diametral pitch, pressure angle, tooth count, backlash, centre distance, AGMA, tooth thickness, tooth chart, datasheet VERIFY, compatible pairs
 ---
 
 # Gear identification and compatible pairs
+
+**No AGMA / tooth-thickness / strength charts in Help** — VERIFY the manufacturer
+datasheet or cited standard; this page invents none. Taxonomy lists charts as
+planned/datasheet: [machine-design taxonomy](../machine-design/taxonomy.md).
+**Roles only** for pair identity and mounting.
 
 Use this when replacing an unknown gear, changing a ratio, or designing a printed
 gear pair through MCP. Record measurements separately from assumed specifications.
@@ -25,10 +32,10 @@ to one module:
 - `d_mm = m_mm × z` is the reference pitch diameter.
 - `OD_mm = m_mm × (z + 2)`, so `m_mm = OD_mm / (z + 2)`.
 - In inch gearing, `DP = z / d_in = (z + 2) / OD_in`.
-- Convert with `m_mm = 25.4 / DP`; do not put a millimetre OD into the inch DP formula.
+- Convert with `m_mm = 25.4 / DP`; keep millimetre OD out of the inch DP formula.
 
-These OD shortcuts do not identify profile-shifted, stub-tooth, helical, internal,
-bevel, or modified-tip gears. Treat a near-standard result as a candidate to
+These OD shortcuts leave profile-shifted, stub-tooth, helical, internal,
+bevel, or modified-tip gears unidentified. Treat a near-standard result as a candidate to
 verify against the mating gear or manufacturer drawing, not a complete identity.
 Pressure angle and tooth form cannot be established by OD and tooth count alone.
 See [KHK's dimension reference](https://khkgears.net/gear-knowledge/gear-technical-reference/calculation-gear-dimensions/)
@@ -54,7 +61,7 @@ fixed; choose integer counts together and recheck the resulting ratio.
 Small pinions require an undercut and root-strength check for their actual
 pressure angle, addendum and manufacturing method. Profile shift can help, but
 also changes tip thickness, contact and working centre-distance requirements.
-Do not apply a universal minimum tooth count or add arbitrary clearance by
+Prefer catalog/profile rules over a universal minimum tooth count or arbitrary clearance by
 scaling the entire gear. Preserve bore fit and hub/root stock, check keyways or
 set-screw holes against the tooth root, and qualify backlash with the actual
 material and print orientation. [KHK tooth-form reference](https://khkgears.net/new/gear_knowledge/gear_technical_reference/involute_gear_profile.html).
@@ -70,6 +77,7 @@ motion; it does not establish correct tooth contact, efficiency or load capacity
 See [additive workholding](additive-workholding.md) for mounting and qualification.
 For speed-increasing generator drives, also check [rotor/load matching](small-wind-generators.md)
 and [bearing supports and axial retention](bearing-stacks.md).
+Mechanism motion-class hub: [mechanisms overview](../machine-design/concepts/mechanisms-overview.md); adjacent families: [belts & pulleys](../machine-design/concepts/mechanisms-belts-pulleys.md), [chains & sprockets](../machine-design/concepts/mechanisms-chains-sprockets.md), [linkages](../machine-design/concepts/mechanisms-linkages-mobility.md), [cams](../machine-design/concepts/mechanisms-cams.md). Printed FDM teeth: [printed gears DFAM](../machine-design/concepts/am-printed-gears-dfam.md).
 
 ## Learning reference provenance
 

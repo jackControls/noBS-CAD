@@ -1839,6 +1839,8 @@
       }
     },
     {"id": "seat_front_finish_2", "call": {"group": "sketch/draw", "operation": "sketch_finish", "arguments": {}}},
+    // The face boundary splits this rectangle at y=85. Select the 69 x 57 mm in-stock notch, not the surrounding remainder or the outside strip.
+    {"id": "seat_front_profiles_2", "call": {"group": "sketch/draw", "operation": "sketch_profiles", "arguments": {}}},
     {
       "id": "seat_front_extrude_2",
       "call": {
@@ -1846,7 +1848,10 @@
         "operation": "solid_extrude",
         "arguments": {
           "sketch_name": "Front seat slat — post notches / left post clearance",
-          "profile_indices": [0],
+          "profile_indices": [{"$select": {
+            "from": {"$select": {"from": {"$ref": "seat_front_profiles_2"}, "take": "one", "where": {"/sketch_name": "Front seat slat — post notches / left post clearance"}}},
+            "path": "/profiles", "take": "one", "where": {"/area": 3933}, "pointer": "/index"
+          }}],
           "operation": "cut",
           "extent": {"type": "through_all"},
           "taper_angle_deg": 0,
@@ -1933,6 +1938,7 @@
       }
     },
     {"id": "seat_front_finish_3", "call": {"group": "sketch/draw", "operation": "sketch_finish", "arguments": {}}},
+    {"id": "seat_front_profiles_3", "call": {"group": "sketch/draw", "operation": "sketch_profiles", "arguments": {}}},
     {
       "id": "seat_front_extrude_3",
       "call": {
@@ -1940,7 +1946,10 @@
         "operation": "solid_extrude",
         "arguments": {
           "sketch_name": "Front seat slat — post notches / right post clearance",
-          "profile_indices": [0],
+          "profile_indices": [{"$select": {
+            "from": {"$select": {"from": {"$ref": "seat_front_profiles_3"}, "take": "one", "where": {"/sketch_name": "Front seat slat — post notches / right post clearance"}}},
+            "path": "/profiles", "take": "one", "where": {"/area": 3933}, "pointer": "/index"
+          }}],
           "operation": "cut",
           "extent": {"type": "through_all"},
           "taper_angle_deg": 0,
@@ -2161,6 +2170,8 @@
       }
     },
     {"id": "seat_second_finish_2", "call": {"group": "sketch/draw", "operation": "sketch_finish", "arguments": {}}},
+    // The rectangle crosses y=0. Select its 69 x 7 mm in-stock notch, not the surrounding remainder or the outside strip.
+    {"id": "seat_second_profiles_2", "call": {"group": "sketch/draw", "operation": "sketch_profiles", "arguments": {}}},
     {
       "id": "seat_second_extrude_2",
       "call": {
@@ -2168,7 +2179,10 @@
         "operation": "solid_extrude",
         "arguments": {
           "sketch_name": "Second seat slat — post relief / left post clearance",
-          "profile_indices": [0],
+          "profile_indices": [{"$select": {
+            "from": {"$select": {"from": {"$ref": "seat_second_profiles_2"}, "take": "one", "where": {"/sketch_name": "Second seat slat — post relief / left post clearance"}}},
+            "path": "/profiles", "take": "one", "where": {"/area": 483}, "pointer": "/index"
+          }}],
           "operation": "cut",
           "extent": {"type": "through_all"},
           "taper_angle_deg": 0,
@@ -2254,6 +2268,7 @@
       }
     },
     {"id": "seat_second_finish_3", "call": {"group": "sketch/draw", "operation": "sketch_finish", "arguments": {}}},
+    {"id": "seat_second_profiles_3", "call": {"group": "sketch/draw", "operation": "sketch_profiles", "arguments": {}}},
     {
       "id": "seat_second_extrude_3",
       "call": {
@@ -2261,7 +2276,10 @@
         "operation": "solid_extrude",
         "arguments": {
           "sketch_name": "Second seat slat — post relief / right post clearance",
-          "profile_indices": [0],
+          "profile_indices": [{"$select": {
+            "from": {"$select": {"from": {"$ref": "seat_second_profiles_3"}, "take": "one", "where": {"/sketch_name": "Second seat slat — post relief / right post clearance"}}},
+            "path": "/profiles", "take": "one", "where": {"/area": 483}, "pointer": "/index"
+          }}],
           "operation": "cut",
           "extent": {"type": "through_all"},
           "taper_angle_deg": 0,
@@ -2673,6 +2691,8 @@
       }
     },
     {"id": "seat_rear_finish_2", "call": {"group": "sketch/draw", "operation": "sketch_finish", "arguments": {}}},
+    // The face clips the 69 x 72 mm rectangle to a 69 x 67 mm in-stock notch. Resolve that region by geometry, not its catalog position.
+    {"id": "seat_rear_profiles_2", "call": {"group": "sketch/draw", "operation": "sketch_profiles", "arguments": {}}},
     {
       "id": "seat_rear_extrude_2",
       "call": {
@@ -2680,7 +2700,10 @@
         "operation": "solid_extrude",
         "arguments": {
           "sketch_name": "Rear seat slat — post notches / left post clearance",
-          "profile_indices": [0],
+          "profile_indices": [{"$select": {
+            "from": {"$select": {"from": {"$ref": "seat_rear_profiles_2"}, "take": "one", "where": {"/sketch_name": "Rear seat slat — post notches / left post clearance"}}},
+            "path": "/profiles", "take": "one", "where": {"/area": 4623}, "pointer": "/index"
+          }}],
           "operation": "cut",
           "extent": {"type": "through_all"},
           "taper_angle_deg": 0,
@@ -2766,6 +2789,7 @@
       }
     },
     {"id": "seat_rear_finish_3", "call": {"group": "sketch/draw", "operation": "sketch_finish", "arguments": {}}},
+    {"id": "seat_rear_profiles_3", "call": {"group": "sketch/draw", "operation": "sketch_profiles", "arguments": {}}},
     {
       "id": "seat_rear_extrude_3",
       "call": {
@@ -2773,7 +2797,10 @@
         "operation": "solid_extrude",
         "arguments": {
           "sketch_name": "Rear seat slat — post notches / right post clearance",
-          "profile_indices": [0],
+          "profile_indices": [{"$select": {
+            "from": {"$select": {"from": {"$ref": "seat_rear_profiles_3"}, "take": "one", "where": {"/sketch_name": "Rear seat slat — post notches / right post clearance"}}},
+            "path": "/profiles", "take": "one", "where": {"/area": 4623}, "pointer": "/index"
+          }}],
           "operation": "cut",
           "extent": {"type": "through_all"},
           "taper_angle_deg": 0,

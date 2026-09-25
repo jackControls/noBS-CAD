@@ -28,7 +28,10 @@ pub fn script_source(arguments: &Value) -> Result<String, String> {
     }
     let (source, root_path): (String, Option<&std::path::Path>) = match (source, path) {
         (Some(source), None) => (
-            source.as_str().ok_or("script source must be text")?.to_owned(),
+            source
+                .as_str()
+                .ok_or("script source must be text")?
+                .to_owned(),
             None,
         ),
         (None, Some(path)) => {
@@ -73,8 +76,8 @@ fn expand_includes_if_needed(
     nbcad_script::flatten_includes(source, |rel| {
         nbcad_script::validate_include_path(rel)?;
         let joined = base.join(rel);
-        let canon = std::fs::canonicalize(&joined)
-            .map_err(|e| format!("read include {rel}: {e}"))?;
+        let canon =
+            std::fs::canonicalize(&joined).map_err(|e| format!("read include {rel}: {e}"))?;
         if !canon.starts_with(&base_canon) {
             return Err(format!("include {rel} escapes script base directory"));
         }

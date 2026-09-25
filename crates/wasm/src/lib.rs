@@ -498,6 +498,10 @@ impl WasmEngine {
         host::handle(&mut self.manager, "preview_segment_locked", payload)
     }
 
+    pub fn preview_creation(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "preview_creation", payload)
+    }
+
     /// `payload`: serialized `LockedSegmentRequest`.
     pub fn add_line_locked(&mut self, payload: &str) -> String {
         host::handle(&mut self.manager, "add_line_locked", payload)

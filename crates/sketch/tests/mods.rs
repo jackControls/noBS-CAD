@@ -320,7 +320,7 @@ fn break_splits_line_and_arc() {
 }
 
 #[test]
-fn mirror_flips_arc_winding() {
+fn mirror_reflects_line_endpoints() {
     let mut s = session();
     let axis = s.add_line(v(0.0, 0.0), v(0.0, 50.0), true).unwrap(); // y-axis
     let l = s.add_line(v(10.0, 10.0), v(30.0, 10.0), true).unwrap();
@@ -391,6 +391,177 @@ fn move_and_copy_variants() {
             .count(),
         2
     );
+}
+
+#[test]
+fn signed_offsets_keep_raw_formulas_and_can_cross_the_source_when_edited() {
+    for side in [-1., 1.] {
+        for initial in [-4., 4.] {
+            let mut s = session();
+            let source = s
+                .add_line(v(30., 30.), v(50., 30.), true)
+                .unwrap()
+                .entity_id;
+            s.toggle_fix(source).unwrap();
+            let req = OffsetRequest {
+                entity: source,
+                distance_text: format!("={initial}/2*2"),
+                cursor: v(40., 30. + side * 10.),
+            };
+            let preview = s.offset_preview(&req).unwrap();
+            let result = s.offset_curve_op(&req).unwrap();
+            let target = result
+                .sketch
+                .entities
+                .iter()
+                .find(|e| matches!(e,EntityDto::Line { id,.. } if *id!=source))
+                .unwrap()
+                .id();
+            let (q, _) = line(&result.sketch, target);
+            assert!((q.y - 30. - side * initial).abs() < 1e-7);
+            let nbcad_sketch::PreviewCurve::Line { a, .. } = preview.curve else {
+                panic!()
+            };
+            assert!(a.distance(q) < 1e-7);
+            let dim = result
+                .sketch
+                .dimensions
+                .iter()
+                .find(|d| d.entities.contains(&source))
+                .unwrap();
+            assert_eq!(
+                dim.param_expression.as_deref(),
+                Some(format!("{initial}/2*2").as_str())
+            );
+            let edited = s
+                .edit_dimension(EditDimensionRequest {
+                    constraint_id: dim.constraint_id,
+                    text: format!("={}", -initial),
+                })
+                .unwrap();
+            assert!((line(&edited.sketch, target).0.y - 30. + side * initial).abs() < 1e-6);
+            let encoded = serde_json::to_string(&s.sketch().snapshot()).unwrap();
+            let mut restored = nbcad_sketch::Sketch::new();
+            restored.restore(serde_json::from_str(&encoded).unwrap());
+            assert!(restored.solve().is_ok());
+        }
+    }
+}
+
+#[test]
+fn signed_radial_offsets_preserve_formula_and_edit_direction_for_circles_and_arcs() {
+    for arc in [false, true] {
+        for side in [-1., 1.] {
+            for initial in [-2., 2.] {
+                let mut s = session();
+                let source = if arc {
+                    s.add_arc_center_locked(
+                        v(30., 30.),
+                        v(40., 30.),
+                        v(30., 40.),
+                        true,
+                        None,
+                        None,
+                        None,
+                        Some(std::f64::consts::FRAC_PI_2),
+                    )
+                    .unwrap()
+                    .entities[0]
+                } else {
+                    s.add_circle(
+                        nbcad_sketch::CircleMode::CenterDiameter,
+                        v(30., 30.),
+                        v(40., 30.),
+                    )
+                    .unwrap()
+                    .entities[0]
+                };
+                s.toggle_fix(source).unwrap();
+                let request = OffsetRequest {
+                    entity: source,
+                    distance_text: format!("={initial}/2*2"),
+                    cursor: v(40. + side * 5., 30.),
+                };
+                let result = s.offset_curve_op(&request).unwrap();
+                let target = result
+                    .sketch
+                    .entities
+                    .iter()
+                    .find(|e| {
+                        e.id() != source
+                            && matches!(e, EntityDto::Circle { .. } | EntityDto::Arc { .. })
+                    })
+                    .unwrap()
+                    .id();
+                let radius = |s: &SketchSession| match s.sketch().entity(target).unwrap() {
+                    nbcad_sketch::Entity::Circle { radius, .. }
+                    | nbcad_sketch::Entity::Arc { radius, .. } => *radius,
+                    _ => unreachable!(),
+                };
+                assert!((radius(&s) - (10. + side * initial)).abs() < 1e-6);
+                let dim = result
+                    .sketch
+                    .dimensions
+                    .iter()
+                    .find(|d| d.entities.contains(&target))
+                    .unwrap();
+                assert_eq!(
+                    dim.param_expression.as_deref(),
+                    Some(format!("{initial}/2*2").as_str())
+                );
+                s.edit_dimension(EditDimensionRequest {
+                    constraint_id: dim.constraint_id,
+                    text: format!("={}", -initial),
+                })
+                .unwrap();
+                assert!((radius(&s) - (10. - side * initial)).abs() < 1e-6);
+            }
+        }
+    }
+}
+
+#[test]
+fn deleting_signed_offsets_prunes_metadata_and_reopens_after_undo_redo() {
+    let mut m = nbcad_sketch::SketchManager::new();
+    m.begin_sketch(XY).unwrap();
+    let source = m
+        .add_line(nbcad_sketch::SegmentRequest {
+            from: v(20., 20.),
+            to_raw: v(40., 20.),
+            ctrl_held: true,
+        })
+        .unwrap()
+        .entity_id;
+    let result = m
+        .offset_curve(OffsetRequest {
+            entity: source,
+            distance_text: "=-3".into(),
+            cursor: v(30., 30.),
+        })
+        .unwrap();
+    let target = result
+        .sketch
+        .entities
+        .iter()
+        .find(|e| e.id() != source && matches!(e, EntityDto::Line { .. }))
+        .unwrap()
+        .id();
+    m.delete_entity(target).unwrap();
+    for step in 0..3 {
+        if step > 0 {
+            m.edit_sketch("Sketch1").unwrap();
+            if step == 1 {
+                m.undo().unwrap();
+            } else {
+                m.redo().unwrap();
+            }
+        }
+        m.end_sketch().unwrap();
+        let mut fresh = nbcad_sketch::SketchManager::new();
+        fresh
+            .prepare_load_project(m.export_project_model().unwrap())
+            .unwrap();
+    }
 }
 
 #[test]

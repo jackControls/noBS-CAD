@@ -243,3 +243,81 @@ export async function checkStepExportOwnership() {
     delete w.__TAURI_INTERNALS__;
   }
 }
+
+/** Open names a placeholder-titled project after its file, without dirtying it.
+ * Only the native IPC boundary is replaced; archive parsing, the engine adapter
+ * and the tab bookkeeping run unchanged. */
+export async function checkOpenedProjectNaming() {
+  const check = (condition: unknown, message: string) => { if (!condition) throw new Error(message); };
+  const original = useAppStore.getState();
+  const scene: SolidSceneDto = {bodies: [], errors: []};
+  const settings = {units: 'mm'} as DocumentDto['settings'];
+  let engineName = 'Existing part';
+  let storedName = 'Untitled';
+  const renames: string[] = [];
+  const documentDto = (): DocumentDto => ({name: engineName, settings, features: [], rollback_index: 0, browser: []});
+  const model = (name: string) => JSON.stringify({format: 'nbcad-project', schema_version: 6, document: {...documentDto(), name}});
+  const ok = (value: unknown) => JSON.stringify({ok: true, value});
+  const w = window as typeof window & {__TAURI_INTERNALS__?: {invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>}};
+  w.__TAURI_INTERNALS__ = {
+    async invoke(command, args = {}) {
+      if (command === 'read_binary_file') return Array.from(createNbcadArchive(model(storedName)));
+      if (command === 'engine_project_load') {
+        const loaded = JSON.parse(JSON.parse(args.payload as string) as string) as {document: DocumentDto};
+        engineName = loaded.document.name;
+        return ok({document: documentDto(), scene});
+      }
+      if (command === 'engine_document_set_name') {
+        engineName = JSON.parse(args.payload as string) as string;
+        renames.push(engineName);
+        return ok(documentDto());
+      }
+      if (command === 'engine_project_export_model') return ok(model(engineName));
+      if (['engine_datum_plane_definitions', 'engine_finished_sketches', 'engine_body_appearances'].includes(command)) return ok([]);
+      if (command === 'engine_drawing_document') return ok(original.drawingDocument);
+      if (command === 'engine_assembly_document') return ok(original.assemblyDocument);
+      if (command === 'engine_cam_document') return ok(original.camDocument);
+      if (command === 'engine_assembly_solution') return ok(original.assemblySolution);
+      if (command === 'engine_project_visibility') return ok(original.projectVisibility);
+      if (command === 'engine_project_session_bind') return ok(null);
+      if (command.startsWith('native_viewport_')) return null;
+      throw new Error(`Unexpected native command in project naming test: ${command}`);
+    },
+  };
+  useAppStore.setState({document: documentDto(), solidScene: scene, dirty: false,
+    activeProjectTabId: 'naming-tab', activeTab: 'solid', mode: 'solid', solidBusy: false, projectBusy: false,
+    projectTabs: [{id: 'naming-tab', name: engineName, fileName: null, dirty: false, workspaceTab: 'solid'}]});
+  const open = (path: string) => openProject({filePath: path, discardChanges: true});
+  const activeTabName = () => {
+    const state = useAppStore.getState();
+    return state.projectTabs.find(tab => tab.id === state.activeProjectTabId)?.name;
+  };
+  try {
+    check(await open('/designs/bracket-plate.nbcad'), 'Open must succeed');
+    let state = useAppStore.getState();
+    check(state.document?.name === 'bracket-plate', `A placeholder-named project takes its file name, got ${state.document?.name}`);
+    check(renames.join() === 'bracket-plate', 'The engine model is renamed exactly once');
+    check(!state.dirty, 'Adopting the file name is not an edit');
+    check(state.projectFileName === 'bracket-plate.nbcad', 'The file name itself is unchanged');
+    check(activeTabName() === 'bracket-plate', 'The tab summary carries the adopted name');
+
+    storedName = '  ';
+    check(await open('C:\\parts\\legacy-bracket.tfcad'), 'A legacy container must open');
+    check(useAppStore.getState().document?.name === 'legacy-bracket', 'A blank name and a legacy container adopt the file stem too');
+
+    storedName = 'Untitled';
+    check(await open('/designs/Untitled.nbcad'), 'A file literally named Untitled must open');
+    state = useAppStore.getState();
+    check(state.document?.name === 'Untitled' && renames.length === 2, 'A file named Untitled keeps the placeholder without a rename round-trip');
+
+    storedName = 'Named design';
+    check(await open('/designs/other-file.nbcad'), 'A named design must open');
+    state = useAppStore.getState();
+    check(state.document?.name === 'Named design' && renames.length === 2, 'An explicitly named design keeps its own name over the file name');
+    check(activeTabName() === 'Named design', 'The tab summary follows the design name');
+    return {placeholderAdoptsFileName: true, legacyContainer: true, untitledFileKept: true, namedDesignKept: true, opensClean: true};
+  } finally {
+    useAppStore.setState(original);
+    delete w.__TAURI_INTERNALS__;
+  }
+}

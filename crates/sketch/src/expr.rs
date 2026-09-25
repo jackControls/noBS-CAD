@@ -4,7 +4,7 @@
 //! ```text
 //! expr    := term (('+' | '-') term)*
 //! term    := unary (('*' | '/') unary)*
-//! unary   := '-' unary | power
+//! unary   := ('-' | '+') unary | power
 //! power   := primary ('^' unary)?            // right-assoc, binds tighter
 //!                                           // than unary minus: -2^2 = -4
 //! primary := number | ident | func '(' args ')' | '(' expr ')'
@@ -275,6 +275,10 @@ impl Parser {
     }
 
     fn parse_unary(&mut self) -> Result<Ast, ExprError> {
+        if *self.peek() == Tok::Op('+') {
+            self.next();
+            return self.parse_unary();
+        }
         if *self.peek() == Tok::Op('-') {
             self.next();
             return Ok(Ast::UnaryNeg(Box::new(self.parse_unary()?)));

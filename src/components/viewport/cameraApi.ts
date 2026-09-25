@@ -65,6 +65,8 @@ export interface ViewportCameraApi {
   bounds(): { x: number; y: number; width: number; height: number };
   /** Current camera pose (copies; safe to mutate). */
   getSnapshot(): CameraSnapshot;
+  /** Replace the pose immediately, cancelling any running animation. */
+  restore(snapshot: CameraSnapshot): void;
   /** True while the shared controller is interpolating the current pose. */
   isAnimating(): boolean;
   /** Controller completion identity; native frame presentation is asynchronous. */
@@ -98,6 +100,9 @@ export interface ViewportCameraApi {
 }
 
 let sessionCamera: ViewportCameraApi | null = null;
+/** Pose the last viewport left behind, for callers that run while Drawings
+ * has the 3D viewport unmounted. */
+let lastSessionCameraSnapshot: CameraSnapshot | null = null;
 const sessionCameraListeners = new Set<() => void>();
 /** Notify mount, unmount and actual animation completion; no polling delay. */
 export function notifySessionCameraChanged(): void {
@@ -113,11 +118,16 @@ export function registerSessionCamera(api: ViewportCameraApi): void {
 }
 export function unregisterSessionCamera(api: ViewportCameraApi): void {
   if (sessionCamera === api) {
+    lastSessionCameraSnapshot = api.getSnapshot();
     sessionCamera = null;
     notifySessionCameraChanged();
   }
 }
 export function getSessionCamera(): ViewportCameraApi | null { return sessionCamera; }
+/** The live pose, or the last one shown before the viewport unmounted. */
+export function getSessionCameraSnapshot(): CameraSnapshot | null {
+  return sessionCamera?.getSnapshot() ?? lastSessionCameraSnapshot;
+}
 
 /** easeInOutCubic — used by all camera animations. */
 export function easeInOutCubic(t: number): number {

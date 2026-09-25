@@ -23,12 +23,10 @@ pub fn session_trace_to_v1_source(calls: &[Value], name: &str) -> Result<String,
         if op == "cad_load_project_model" {
             continue;
         }
-        let group = interface::group_for(op)
-            .ok_or_else(|| format!("trace[{index}] operation {op} is not in the interface catalog"))?;
-        let arguments = call
-            .get("arguments")
-            .cloned()
-            .unwrap_or_else(|| json!({}));
+        let group = interface::group_for(op).ok_or_else(|| {
+            format!("trace[{index}] operation {op} is not in the interface catalog")
+        })?;
+        let arguments = call.get("arguments").cloned().unwrap_or_else(|| json!({}));
         if !arguments.is_object() {
             return Err(format!("trace[{index}] arguments must be an object"));
         }

@@ -1,0 +1,17 @@
+[package]
+name = "nbcad-help"
+version.workspace = true
+edition = "2021"
+license = "LGPL-2.1-or-later"
+description = "Shared help catalog and BM25 search for MCP cad_help and desktop Help"
+repository = "https://github.com/jackControls/noBS-CAD"
+
+[[bin]]
+name = "nbcad-help"
+path = "src/bin/nbcad-help.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[dev-dependencies]

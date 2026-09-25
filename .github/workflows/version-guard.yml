@@ -6,12 +6,14 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: version-guard-${{ github.ref }}
+  # Standalone and Desktop packages' preflight must not cancel each other.
+  group: version-guard-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -35,3 +37,6 @@ jobs:
 
       - name: Unit-test the version carriers
         run: node --test scripts/sync-version.test.mjs
+
+      - name: Test CI orchestration and artifact safety
+        run: node --test scripts/ci/*.test.mjs
