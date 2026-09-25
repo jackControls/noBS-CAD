@@ -342,6 +342,14 @@ try {
  });
  console.log('PASS production project-open/export recovery: '+JSON.stringify(recovery));
  await recoveryPage.close();
+ const namingPage=await browser.newPage();
+ await namingPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const naming=await namingPage.evaluate(async()=>{
+  const {checkOpenedProjectNaming}=await import('/src/files/projectFiles.browser.test.ts');
+  return checkOpenedProjectNaming();
+ });
+ console.log('PASS production Open naming: '+JSON.stringify(naming));
+ await namingPage.close();
  const openFramingPage=await browser.newPage();
  const openFramingErrors=[];
  openFramingPage.on('pageerror',error=>openFramingErrors.push(error.message));
@@ -353,6 +361,17 @@ try {
  assert.deepEqual(openFramingErrors,[],'Open framing must not leave asynchronous errors');
  console.log('PASS production Open framing: '+JSON.stringify(openFraming));
  await openFramingPage.close();
+ const tabCameraPage=await browser.newPage();
+ const tabCameraErrors=[];
+ tabCameraPage.on('pageerror',error=>tabCameraErrors.push(error.message));
+ await tabCameraPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
+ const tabCameras=await tabCameraPage.evaluate(async()=>{
+  const {checkProjectTabCameras}=await import('/src/files/projectTabCamera.browser.test.tsx');
+  return checkProjectTabCameras();
+ });
+ assert.deepEqual(tabCameraErrors,[],'Per-tab cameras must not leave asynchronous errors');
+ console.log('PASS production per-tab cameras: '+JSON.stringify(tabCameras));
+ await tabCameraPage.close();
  const stepPage=await browser.newPage();
  await stepPage.goto(server.resolvedUrls.local[0]+'mcp-contract');
  const step=await stepPage.evaluate(async()=>{

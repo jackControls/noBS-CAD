@@ -21,8 +21,8 @@ coefficient. With radius `R`, tip-speed ratio `lambda = omega * R / wind_speed`
 gives `rpm = 60 * lambda * wind_speed / (2 * pi * R)`. Running efficiency does
 not establish static starting torque. A two-stage Savonius experiment found
 improved startup with staggered stages, but its geometry, bearings, flow and
-load remain part of that result; do not transfer its starting wind speed or
-power coefficient as a rating for another rotor.
+load remain part of that result; treat its starting wind speed and
+power coefficient as tied to that specimen, not a free rating for another rotor.
 [Experimental rotor study](https://myresearchspace.uws.ac.uk/ws/portalfiles/portal/58300379/2022_12_16_Shamsuddin_et_al_Experimental_final.pdf).
 
 For a brushed permanent-magnet motor used as a generator, start with
@@ -47,9 +47,9 @@ Keep motor body diameter, case length, projecting shaft length, usable straight
 shaft engagement, terminal envelope and mounting datums separate. A total
 length including the shaft cannot determine its projection. Use replaceable
 mounts and explicit fit parameters when a supplier gives only an approximate
-envelope; do not silently invent a longer shaft or enlarge its diameter.
-Independent rotor bearings do not establish the motor's permissible gear side
-load. The [turbine design record](../../docs/vertical-axis-turbine.md) documents
+envelope; prefer staying inside measured shaft length/diameter.
+Independent rotor bearings leave the motor's permissible gear side
+load for a separate check. The [turbine design record](../../docs/vertical-axis-turbine.md) documents
 one candidate and its remaining physical checks.
 
 Begin with open-circuit speed/voltage and unloaded startup at several rotor

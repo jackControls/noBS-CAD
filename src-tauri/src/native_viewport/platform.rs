@@ -174,6 +174,17 @@ const OCCURRENCE_EDGE_LOD_MIN_RADIUS_PX: f32 = 3.0;
 /// zooms and reveal hidden edges. Cap the tie-break in model units (0.1
 /// micrometre), below modeling tolerances, regardless of zoom/display density.
 const MODEL_EDGE_MAX_LIFT_MM: f32 = 1.0e-4;
+/// Model-edge strokes are two pixels wide plus anti-aliasing, so their outer
+/// pixels sit this far from the true edge on screen.
+const MODEL_EDGE_STROKE_HALF_WIDTH_PX: f32 = 1.5;
+/// Largest camera lift a stroke may take to clear a face that rises towards
+/// the camera beside it, in pixels of depth. Beyond this the face is so
+/// grazing that the stroke would float visibly in front of anything behind.
+const MODEL_EDGE_MAX_LIFT_PX: f32 = 2.5;
+/// The same lift as a fraction of the body's bounding radius: at wide zooms a
+/// few pixels of depth are a real distance, and a lifted inside-corner edge
+/// must never pass through the body's own walls.
+const MODEL_EDGE_MAX_LIFT_BODY_FRACTION: f32 = 0.01;
 const SKETCH_DEPTH_BIAS: f32 = -0.90;
 const SKETCH_POINT_OUTLINE_WIDTH: f32 = 2.0;
 const SKETCH_POINT_OUTLINE_DEPTH_BIAS: f32 = -0.89;
@@ -4515,6 +4526,12 @@ fn draw_cad_gizmos(
                 camera.camera,
                 *viewport,
             ) || ghosted_body;
+            let side_faces = edge_side_faces(body, &body_transform);
+            let lift_ceiling = local_bounds.map_or(f32::INFINITY, |(_, radius)| {
+                radius
+                    * body_transform.scale.max_element().abs().max(1.0e-6)
+                    * MODEL_EDGE_MAX_LIFT_BODY_FRACTION
+            });
 
             if selected_body_index.is_some() || hovered_body {
                 let color = if selected_body_index == Some(0) {
@@ -4574,7 +4591,15 @@ fn draw_cad_gizmos(
                         edge,
                         rgba(color, 0.92),
                         &body_transform,
-                        Some((camera.camera, *viewport)),
+                        Some(EdgeLift {
+                            camera: camera.camera,
+                            viewport: *viewport,
+                            sides: side_faces
+                                .get(edge.key.as_str())
+                                .copied()
+                                .unwrap_or_default(),
+                            ceiling: lift_ceiling,
+                        }),
                     );
                 }
                 if selected || hovered {
@@ -5528,24 +5553,115 @@ fn draw_plane_outline<Config: GizmoConfigGroup>(
     gizmos.line(origin - v, origin + v, color.with_alpha(0.46));
 }
 
+/// One planar face beside a model edge, in world space: its outward normal and
+/// a point inside it, enough to tell whether the face rises towards the camera
+/// as it leaves the edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct EdgeSideFace {
+    normal: Vec3,
+    interior: Vec3,
+}
+
+/// The planar faces beside each edge of a body, by edge key. Curved faces are
+/// left out; an edge beside one keeps the plain tie-break lift.
+fn edge_side_faces<'a>(
+    body: &'a BodyDto,
+    transform: &Transform,
+) -> HashMap<&'a str, [Option<EdgeSideFace>; 2]> {
+    let mut sides: HashMap<&str, [Option<EdgeSideFace>; 2]> = HashMap::new();
+    for face in &body.faces {
+        let (Some(plane), Some(signature)) = (&face.plane, &face.signature) else {
+            continue;
+        };
+        let normal = (transform.rotation * basis_vector(plane.normal)).normalize_or_zero();
+        if normal == Vec3::ZERO {
+            continue;
+        }
+        let side = EdgeSideFace {
+            normal,
+            interior: transform.transform_point(Vec3::new(
+                signature.centroid.x as f32,
+                signature.centroid.y as f32,
+                signature.centroid.z as f32,
+            )),
+        };
+        for key in &face.edge_keys {
+            let entry = sides.entry(key.as_str()).or_default();
+            if entry[0].is_none() {
+                entry[0] = Some(side);
+            } else if entry[1].is_none() {
+                entry[1] = Some(side);
+            }
+        }
+    }
+    sides
+}
+
+/// How far a model-edge stroke is nudged towards the camera so it wins the
+/// depth comparison against the faces it lies on.
+#[derive(Clone, Copy)]
+struct EdgeLift {
+    camera: ViewportCamera,
+    viewport: ViewportSizeResource,
+    sides: [Option<EdgeSideFace>; 2],
+    /// Hard ceiling in model units, from the body's size.
+    ceiling: f32,
+}
+
+/// Extra depth, in pixels, that a stroke half `half_width_px` wide needs so
+/// its outer pixels are not hidden by a face beside the edge that rises
+/// towards the camera. Zero for faces that fall away, as both faces of a
+/// convex edge do; both faces of an inside corner rise, which is what turned
+/// concave edges into faint dashes while convex ones stayed solid.
+fn edge_stroke_rise_px(
+    along: Vec3,
+    middle: Vec3,
+    forward: Vec3,
+    sides: &[Option<EdgeSideFace>; 2],
+    half_width_px: f32,
+) -> f32 {
+    let mut rise = 0.0f32;
+    for side in sides.iter().flatten() {
+        let mut across = side.normal.cross(along).normalize_or_zero();
+        if across == Vec3::ZERO {
+            continue;
+        }
+        if (side.interior - middle).dot(across) < 0.0 {
+            across = -across;
+        }
+        // Depth change per screen pixel while walking across the face away
+        // from the edge; negative means the face comes towards the camera.
+        let sine = across.dot(forward);
+        if sine >= 0.0 {
+            continue;
+        }
+        let cosine = (1.0 - sine * sine).max(1.0e-4).sqrt();
+        rise = rise.max(-sine / cosine * half_width_px);
+    }
+    rise
+}
+
 fn draw_edge_segments<Config: GizmoConfigGroup>(
     gizmos: &mut Gizmos<Config>,
     edge: &nbcad_solid::EdgeDto,
     color: Color,
     transform: &Transform,
-    lift: Option<(ViewportCamera, ViewportSizeResource)>,
+    lift: Option<EdgeLift>,
 ) {
     // A model edge lies exactly on the faces that meet along it. A fixed depth
     // bias is not enough to win that tie: on a face seen at a grazing angle the
     // depth slope across one pixel is larger than the bias, so the stroke keeps
     // losing the comparison and breaks up into dashes - which is what happened
     // to a pocket floor arc while the top rim stayed solid. Nudging the stroke
-    // towards the camera resolves the exact tie. The lift must be bounded in
-    // model units: a whole pixel can exceed a wall's thickness at wide zooms.
-    let lift = lift.map(|(camera, viewport)| {
-        let position = Vec3::from_array(camera.position);
-        let forward = (Vec3::from_array(camera.target) - position).normalize_or_zero();
-        (forward, camera, viewport)
+    // towards the camera resolves the exact tie. That nudge is bounded in
+    // model units, because a whole pixel can exceed a wall's thickness at wide
+    // zooms. An inside corner needs more: its faces rise towards the camera on
+    // both sides, so the stroke is lifted by the depth its own width spans
+    // across the steeper face, bounded in pixels and by the body's size.
+    let lift = lift.map(|lift| {
+        let position = Vec3::from_array(lift.camera.position);
+        let forward = (Vec3::from_array(lift.camera.target) - position).normalize_or_zero();
+        (forward, lift)
     });
     for pair in edge.points.windows(2) {
         let mut start = transform.transform_point(Vec3::new(
@@ -5558,9 +5674,25 @@ fn draw_edge_segments<Config: GizmoConfigGroup>(
             pair[1].y as f32,
             pair[1].z as f32,
         ));
-        if let Some((forward, camera, viewport)) = lift {
-            let pixel = world_per_pixel_at(camera, viewport, (start + end) * 0.5);
-            let offset = forward * pixel.min(MODEL_EDGE_MAX_LIFT_MM);
+        if let Some((forward, lift)) = lift {
+            let middle = (start + end) * 0.5;
+            let pixel = world_per_pixel_at(lift.camera, lift.viewport, middle);
+            let mut distance = pixel.min(MODEL_EDGE_MAX_LIFT_MM);
+            let along = (end - start).normalize_or_zero();
+            if along != Vec3::ZERO {
+                let rise = edge_stroke_rise_px(
+                    along,
+                    middle,
+                    forward,
+                    &lift.sides,
+                    MODEL_EDGE_STROKE_HALF_WIDTH_PX,
+                );
+                if rise > 0.0 {
+                    distance =
+                        distance.max((rise.min(MODEL_EDGE_MAX_LIFT_PX) * pixel).min(lift.ceiling));
+                }
+            }
+            let offset = forward * distance;
             start -= offset;
             end -= offset;
         }
@@ -7663,6 +7795,118 @@ mod tests {
                 .corner_radius,
             0.0
         );
+    }
+
+    #[test]
+    fn inside_corner_faces_lift_the_stroke_and_outside_corners_do_not() {
+        // A vertical edge at the origin, seen from the front right and above.
+        let along = Vec3::Z;
+        let middle = Vec3::ZERO;
+        let forward = Vec3::new(-0.6, 0.6, -0.5).normalize();
+        let half_width = 1.5;
+        // Inside corner: material fills three quadrants, the free quadrant
+        // opens towards the camera. Both faces rise towards the camera.
+        let inside = [
+            Some(EdgeSideFace {
+                normal: Vec3::NEG_Y,
+                interior: Vec3::new(2.5, 0.0, 2.5),
+            }),
+            Some(EdgeSideFace {
+                normal: Vec3::X,
+                interior: Vec3::new(0.0, -10.0, 2.5),
+            }),
+        ];
+        let rise = edge_stroke_rise_px(along, middle, forward, &inside, half_width);
+        assert!(
+            rise > half_width * 0.5 && rise.is_finite(),
+            "inside corner rise {rise}"
+        );
+        // Front-right corner of the same plate: both faces fall away from the
+        // camera, so the stroke needs no lift beyond the tie-break.
+        let outside = [
+            Some(EdgeSideFace {
+                normal: Vec3::NEG_Y,
+                interior: Vec3::new(-10.0, 0.0, 2.5),
+            }),
+            Some(EdgeSideFace {
+                normal: Vec3::X,
+                interior: Vec3::new(0.0, 10.0, 2.5),
+            }),
+        ];
+        assert_eq!(
+            edge_stroke_rise_px(along, middle, forward, &outside, half_width),
+            0.0
+        );
+        // An edge beside a curved face has nothing to measure against.
+        assert_eq!(
+            edge_stroke_rise_px(along, middle, forward, &[None, None], half_width),
+            0.0
+        );
+    }
+
+    #[test]
+    fn edge_side_faces_follow_boundary_membership() {
+        let plane = |normal: [f64; 3]| nbcad_core::PlaneBasis {
+            origin: [0.0; 3],
+            u: [1.0, 0.0, 0.0],
+            v: [0.0, 1.0, 0.0],
+            normal,
+        };
+        let signature =
+            |centroid: [f64; 3], normal: [f64; 3]| nbcad_solid::PlanarFaceSignatureDto {
+                centroid: nbcad_solid::Point3Dto {
+                    x: centroid[0],
+                    y: centroid[1],
+                    z: centroid[2],
+                },
+                normal: nbcad_solid::Point3Dto {
+                    x: normal[0],
+                    y: normal[1],
+                    z: normal[2],
+                },
+                area: 1.0,
+                perimeter: 4.0,
+                wire_count: 1,
+                edge_count: 4,
+            };
+        let face = |id: u64, normal: [f64; 3], centroid: [f64; 3], edges: &[&str]| FaceDto {
+            id: nbcad_core::FaceId(id),
+            key: format!("face:{id}"),
+            first_index: 0,
+            index_count: 0,
+            plane: Some(plane(normal)),
+            signature: Some(signature(centroid, normal)),
+            cylinder: None,
+            edge_keys: edges.iter().map(|edge| edge.to_string()).collect(),
+            cone: None,
+        };
+        let body = BodyDto {
+            id: nbcad_core::BodyId(1),
+            topology_signature: String::new(),
+            name: "Plate".into(),
+            feature_id: nbcad_core::FeatureId(2),
+            mesh: nbcad_solid::MeshDto {
+                positions: Vec::new(),
+                normals: Vec::new(),
+                indices: Vec::new(),
+            },
+            faces: vec![
+                face(
+                    1,
+                    [0.0, -1.0, 0.0],
+                    [22.5, 20.0, 2.5],
+                    &["edge:4", "edge:9"],
+                ),
+                face(2, [1.0, 0.0, 0.0], [20.0, 10.0, 2.5], &["edge:4", "edge:7"]),
+            ],
+            edges: Vec::new(),
+        };
+        let sides = edge_side_faces(&body, &Transform::IDENTITY);
+        let corner = sides["edge:4"];
+        assert_eq!(corner[0].map(|side| side.normal), Some(Vec3::NEG_Y));
+        assert_eq!(corner[1].map(|side| side.normal), Some(Vec3::X));
+        assert_eq!(sides["edge:9"][1], None);
+        assert!(!sides.contains_key("edge:1"));
     }
 
     #[test]

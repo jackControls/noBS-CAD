@@ -494,6 +494,7 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
             | "cad_get_tool_disclosure_mode"
             | "cad_set_tool_disclosure_mode"
             | "cad_list_all_tools"
+            | "cad_help"
             | "cad_cancel_recompute"
             | "cad_list_sessions"
             | "cad_interface"
@@ -508,7 +509,7 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
     );
     if spine {
         let pack = match name {
-            "cad_document" | "cad_script" => FocusPack::Document,
+            "cad_document" | "cad_script" | "cad_help" => FocusPack::Document,
             "assembly_document" => FocusPack::Assembly,
             "solid_scene" | "solid_recompute" | "cad_compare_solids" => FocusPack::Inspect,
             _ => FocusPack::Document,
