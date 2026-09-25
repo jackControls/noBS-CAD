@@ -223,7 +223,7 @@ CAD normally, then ask your agent:
 > the stock extrusion from 12 to 18 mm, inspect the result and keep it open.
 
 The expected reference and save/reopen steps are in
-[Make your first part](#make-your-first-part). The agent should discover and
+[Make your first part](#make-your-first-part). Discover and
 attach to the intended live design; an unattached MCP server owns a separate
 headless document. Keep the application and any separate worker on the same release
 when updating.

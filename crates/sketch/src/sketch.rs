@@ -198,6 +198,75 @@ impl Sketch {
         removed
     }
 
+    /// Whether a point is a tool-owned handle rather than user-authored.
+    pub(crate) fn is_generated_point(&self, id: EntityId) -> bool {
+        self.generated_points.contains(&id)
+    }
+
+    /// Whether any entity structurally references this point (a line endpoint).
+    pub(crate) fn is_referenced_by_entity(&self, point: EntityId) -> bool {
+        self.entities
+            .iter()
+            .any(|(_, entity)| entity.referenced_entities().contains(&point))
+    }
+
+    /// Every relation that mentions this point.
+    pub(crate) fn relations_pointing_at(
+        &self,
+        point: EntityId,
+    ) -> impl Iterator<Item = &Constraint> {
+        self.constraints
+            .iter()
+            .map(|(_, constraint)| constraint)
+            .filter(move |constraint| constraint.referenced_entities().contains(&point))
+    }
+
+    /// Retire `SpanMidpoint` relations whose diagonal anchors the last delete
+    /// detached, so a half-erased center rectangle does not keep a corner no
+    /// line uses.
+    ///
+    /// Only relations touching `affected` are considered: the caller passes the
+    /// corners of the lines this delete removed, so an unrelated delete can
+    /// never retire a live relation. A corner still anchors its relation when
+    /// it is a live line endpoint, or when some relation other than a span
+    /// midpoint still holds it — which is exactly how Fillet/Chamfer retain a
+    /// trimmed corner. The center itself is left to the ordinary generated-point
+    /// reap once its relation is gone.
+    pub(crate) fn sweep_detached_span_midpoints(
+        &mut self,
+        affected: &BTreeSet<EntityId>,
+    ) -> Vec<EntityId> {
+        let anchored = |corner: EntityId| {
+            self.is_referenced_by_entity(corner)
+                || self
+                    .relations_pointing_at(corner)
+                    .any(|constraint| !matches!(constraint, Constraint::SpanMidpoint { .. }))
+        };
+        let stale: Vec<ConstraintId> = self
+            .constraints
+            .iter()
+            .filter(|(_, constraint)| match *constraint {
+                Constraint::SpanMidpoint { start, end, .. } => {
+                    (affected.contains(&start) || affected.contains(&end))
+                        && !(anchored(start) && anchored(end))
+                }
+                _ => false,
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        if stale.is_empty() {
+            return Vec::new();
+        }
+        let operands: Vec<EntityId> = self
+            .constraints
+            .iter()
+            .filter(|(id, _)| stale.contains(id))
+            .flat_map(|(_, constraint)| constraint.referenced_entities())
+            .collect();
+        self.constraints.retain(|(id, _)| !stale.contains(id));
+        self.remove_unused_generated_points(operands)
+    }
+
     /// Modify tools can detach/rebind handles without deleting the original
     /// curve. Clean up after their complete topology edit, not mid-edit, and
     /// never sweep unrelated points the user had already detached earlier.

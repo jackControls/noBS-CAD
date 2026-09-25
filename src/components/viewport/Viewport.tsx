@@ -2,7 +2,7 @@ import { drivePointer } from '../../uiPointer';
 import { registerSessionCamera, unregisterSessionCamera, notifySessionCameraChanged } from './cameraApi';
 import { presentation } from '../../operationPlayback';
 import { listenForModelKeys } from '../../modelKeyboard';
-import { consumeOpenedProjectFraming, subscribeOpenedProjectFraming } from '../../files/openProjectFraming';
+import { consumeProjectFraming, subscribeProjectFraming } from '../../files/projectFraming';
 import { hoverCamChain, pickCamChain } from '../../cam/chainPicking';
 
 /**
@@ -104,6 +104,7 @@ import {
   type ClipPolylineCandidate,
   type ScreenPick,
 } from '../../modeling/screenSpaceEntityPicker';
+import { coincidentCircleAt } from '../../modeling/sketchCenterPick';
 import {
   VIEWPORT_INTERACTION_STROKE_PX,
   viewportInteractionScale,
@@ -5148,6 +5149,7 @@ export function Viewport() {
       if (!sketch) return null;
       const tol = worldPerPixel() * tolerancePx;
       let best: { id: number; d: number } | null = null;
+      let bestPoint: { id: number; d: number } | null = null;
       const consider = (current: typeof best, id: number, d: number): typeof best =>
         d <= tol && (!current || d < current.d) ? { id, d } : current;
       for (const entity of sketch.entities) {
@@ -5155,7 +5157,7 @@ export function Viewport() {
         switch (entity.kind) {
           case 'point': {
             const d = Math.hypot(entity.position.x - p.x, entity.position.y - p.y);
-            if (d <= tol) return entity.id; // points win outright
+            bestPoint = consider(bestPoint, entity.id, d);
             break;
           }
           case 'line':
@@ -5184,6 +5186,16 @@ export function Viewport() {
             break;
           }
         }
+      }
+      if (bestPoint) {
+        // Points keep priority over curve edges, but choose the nearest point
+        // before resolving its ownership. Returning the first point in range
+        // makes an older handle steal clicks on a newer, adjacent center.
+        const shared =
+          allowedKinds && !allowedKinds.has('circle')
+            ? null
+            : coincidentCircleAt(sketch.entities, sketch.constraints, bestPoint.id);
+        return shared ?? bestPoint.id;
       }
       return best ? best.id : null;
     };
@@ -12389,6 +12401,14 @@ export function Viewport() {
         target: controls.target.toArray() as [number, number, number],
         up: camera.up.toArray() as [number, number, number],
       }),
+      restore: (snapshot) => {
+        animateCamera(
+          new CAD.Vector3(...snapshot.position),
+          new CAD.Vector3(...snapshot.target),
+          new CAD.Vector3(...snapshot.up),
+          0,
+        );
+      },
       snapToDirection: (direction, durationMs = 250) => {
         const n = new CAD.Vector3(...direction).normalize();
         const distance = camera.position.distanceTo(controls.target);
@@ -12991,8 +13011,11 @@ export function Viewport() {
     let lastDatumHidden = store.getState().hidden;
     let lastDatumDocument = store.getState().document;
     rebuildDatumPlanes();
-    const frameOpenedProject = () => {
-      if (consumeOpenedProjectFraming(store.getState())) api.home(0);
+    const applyProjectFraming = () => {
+      const request = consumeProjectFraming(store.getState());
+      if (!request) return;
+      if (request.camera) api.restore(request.camera);
+      else api.home(0);
     };
     let lastPalette = {
       points: store.getState().palette.points,
@@ -13303,8 +13326,8 @@ export function Viewport() {
         surface.domElement.style.cursor = cursors[s.navTool] ?? '';
       }
       // All loaded geometry, assembly poses and sketch transitions above must
-      // settle before an Open-only camera request can measure their bounds.
-      frameOpenedProject();
+      // settle before an Open or tab camera request can measure their bounds.
+      applyProjectFraming();
     });
 
     // --- Resize handling ---
@@ -13442,10 +13465,11 @@ export function Viewport() {
     wakeControllerFrame();
 
 
-    // Open may have arrived while Drawings had the viewport unmounted. Fit the
-    // matching model before publishing the camera or drawing its first frame.
-    const unsubscribeOpenedFraming = subscribeOpenedProjectFraming(frameOpenedProject);
-    frameOpenedProject();
+    // Open or a tab switch may have arrived while Drawings had the viewport
+    // unmounted. Pose the matching document before publishing the camera or
+    // drawing its first frame.
+    const unsubscribeProjectFraming = subscribeProjectFraming(applyProjectFraming);
+    applyProjectFraming();
     // Publish only after the mounted viewport has built its scene and handlers.
     registerSessionCamera(api);
     return () => {
@@ -13454,7 +13478,7 @@ export function Viewport() {
       cancelAnimationFrame(raf);
       resizeObserver.disconnect();
       unsub();
-      unsubscribeOpenedFraming();
+      unsubscribeProjectFraming();
       window.removeEventListener('cam-cutter-mesh-ready', onCutterMeshReady);
       surface.domElement.removeEventListener('pointerdown', onNavPointerDown);
       surface.domElement.removeEventListener('pointermove', onPointerMove);

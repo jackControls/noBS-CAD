@@ -34,4 +34,4 @@ Pinned vcpkg checkout must use `fetch-depth: 0` (versioned port trees fail on sh
 - Env: `NBCAD_SESSION_DIR` (else `%TEMP%/nbcad-sessions`)
 - Layout: `<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json}` (UUID v4 ids)
 - Tauri owns each published document session and reserves publish generations before async export
-- `cad_attach`: binds normal operations to the live owner; its snapshot read cache never writes the live model back
+- `cad_attach`: binds normal operations to the live owner; its snapshot read cache is read-only toward the live model

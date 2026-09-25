@@ -15,6 +15,7 @@ mod drawing_tools;
 mod inbox;
 mod interface;
 mod knowledge;
+mod prompts;
 mod session;
 mod stdio;
 mod summary;
@@ -522,6 +523,7 @@ impl CadServer {
                 json!({ "mode": mode.as_str() })
             }
             "cad_list_all_tools" => full_tool_catalog(),
+            "cad_help" => cad_help_call(&arguments)?,
             "cad_cancel_recompute" => {
                 if let Some(transaction_id) = self.pending_recompute_transaction.take() {
                     self.manager.cancel_solid_recompute(transaction_id);
@@ -1833,6 +1835,7 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "cad_get_tool_disclosure_mode"
             | "cad_set_tool_disclosure_mode"
             | "cad_list_all_tools"
+            | "cad_help"
             | "cad_cancel_recompute"
             | "cad_list_sessions"
             | "cad_interface"
@@ -4200,7 +4203,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                 json!({
                     "focus": {
                         "type": "string",
-                        "enum": ["document", "assembly", "sketch", "solid", "modify", "body_ops", "datums", "history", "inspect", "print"]
+                        "enum": ["document", "assembly", "sketch", "solid", "modify", "body_ops", "datums", "history", "inspect", "print", "cam"]
                     },
                     "explicit": {
                         "type": "boolean",
@@ -4242,6 +4245,41 @@ fn tool_specs() -> Vec<ToolSpec> {
             "Return every registered tool with schemas and focus tags without changing advertisement.",
             empty_schema(),
         ),
+        ToolSpec::control(
+            "cad_help",
+            "Search and read local help",
+            "One help surface over the bundled knowledge corpus (machine-design + agent doctrine). Actions: search (snippet-first, default limit 5 max 10), get (id-only allowlist, 12KiB cap), topics (page size 50). Prefer cad_help before web search. Recipe chips on pages deep-link Scripts/presentation — no Bevy-in-Help.",
+            object_schema(
+                json!({
+                    "action": {
+                        "type": "string",
+                        "enum": ["search", "get", "topics"],
+                        "description": "search | get | topics"
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Required for action=search"
+                    },
+                    "id": {
+                        "type": "string",
+                        "description": "Help page id from search hits; required for action=get. Paths rejected."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "search hit limit (default 5, max 10)"
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "topics listing offset"
+                    }
+                }),
+                &["action"],
+            ),
+        ),
+
         ToolSpec::control(
             "cad_cancel_recompute",
             "Cancel solid recompute",
@@ -4440,6 +4478,7 @@ fn records_in_script(name: &str) -> bool {
             | "cad_get_tool_disclosure_mode"
             | "cad_set_tool_disclosure_mode"
             | "cad_list_all_tools"
+            | "cad_help"
             | "cad_cancel_recompute"
             | "cad_list_sessions"
             | "cad_attach"
@@ -4598,7 +4637,8 @@ fn handle_message(server: &mut CadServer, message: Value) -> Vec<Value> {
                     "protocolVersion": protocol,
                     "capabilities": {
                         "tools": { "listChanged": true },
-                        "resources": { "subscribe": false, "listChanged": false }
+                        "resources": { "subscribe": false, "listChanged": false },
+                        "prompts": { "listChanged": false }
                     },
                     "serverInfo": {
                         "name": "nbcad",
@@ -4642,6 +4682,39 @@ fn handle_message(server: &mut CadServer, message: Value) -> Vec<Value> {
                     Some(contents) => vec![response(id, contents)],
                     None => vec![error_response(id, -32002, "knowledge resource not found")],
                 },
+            }
+        }
+        "prompts/list" => {
+            let id = id.unwrap_or(Value::Null);
+            if message
+                .get("params")
+                .is_some_and(|params| !params.is_null() && !params.is_object())
+                || message
+                    .pointer("/params/cursor")
+                    .is_some_and(|cursor| !cursor.is_null())
+            {
+                vec![error_response(
+                    id,
+                    -32602,
+                    "prompts/list has no pagination cursor",
+                )]
+            } else {
+                vec![response(id, prompts::list())]
+            }
+        }
+        "prompts/get" => {
+            let id = id.unwrap_or(Value::Null);
+            let Some(name) = message.pointer("/params/name").and_then(Value::as_str) else {
+                return vec![error_response(
+                    id,
+                    -32602,
+                    "prompts/get requires params.name",
+                )];
+            };
+            let arguments = message.pointer("/params/arguments");
+            match prompts::get(name, arguments) {
+                Ok(result) => vec![response(id, result)],
+                Err(message) => vec![error_response(id, -32602, message)],
             }
         }
         "tools/list" => vec![response(
@@ -4692,6 +4765,80 @@ fn idle_due_messages(server: &mut CadServer) -> Vec<Value> {
         outgoing.push(notification);
     }
     outgoing
+}
+
+fn help_store() -> &'static nbcad_help::HelpStore {
+    use std::sync::OnceLock;
+    static STORE: OnceLock<nbcad_help::HelpStore> = OnceLock::new();
+    STORE.get_or_init(nbcad_help::HelpStore::bundled)
+}
+
+fn cad_help_call(arguments: &Value) -> Result<Value, String> {
+    let action = arguments
+        .get("action")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "missing required argument 'action'".to_string())?;
+    let store = help_store();
+    match action {
+        "search" => {
+            let query = arguments
+                .get("query")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "search requires 'query'".to_string())?;
+            let limit = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize);
+            let hits = store.search(query, limit);
+            Ok(json!({
+                "action": "search",
+                "query": query,
+                "limit": limit.unwrap_or(nbcad_help::SEARCH_DEFAULT_LIMIT).clamp(1, nbcad_help::SEARCH_MAX_LIMIT),
+                "hits": hits.iter().map(|h| json!({
+                    "id": h.id,
+                    "title": h.title,
+                    "topics": h.topics,
+                    "snippet": h.snippet,
+                    "score": h.score,
+                    "related_recipes": h.related_recipes,
+                    "status": h.status,
+                })).collect::<Vec<_>>(),
+            }))
+        }
+        "get" => {
+            let id = arguments
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "get requires 'id'".to_string())?;
+            let page = store.get(id)?;
+            Ok(json!({
+                "action": "get",
+                "id": page.id,
+                "title": page.title,
+                "topics": page.topics,
+                "keywords": page.keywords,
+                "description": page.description,
+                "body": page.body,
+                "related_recipes": page.related_recipes,
+                "status": page.status,
+                "truncated": page.truncated,
+            }))
+        }
+        "topics" => {
+            let offset = arguments
+                .get("offset")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize);
+            let mut value = store.topics(offset);
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("action".into(), json!("topics"));
+            }
+            Ok(value)
+        }
+        other => Err(format!(
+            "unknown cad_help action '{other}' (expected search|get|topics)"
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -5784,6 +5931,229 @@ mod tests {
                 }),
             );
             assert_eq!(reply[0]["error"]["code"], -32602);
+        }
+    }
+
+    #[test]
+    fn help_search_prompt_is_advertised_listed_and_gettable() {
+        let mut server = CadServer::new().unwrap();
+        let initialized = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": { "protocolVersion": "2025-06-18" }
+            }),
+        );
+        assert_eq!(
+            initialized[0]["result"]["capabilities"]["prompts"],
+            json!({ "listChanged": false })
+        );
+        let listed = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0", "id": 2, "method": "prompts/list"
+            }),
+        );
+        let prompts = listed[0]["result"]["prompts"].as_array().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0]["name"], "help_search");
+        assert_eq!(prompts[0]["arguments"][0]["name"], "query");
+        assert_eq!(prompts[0]["arguments"][0]["required"], false);
+
+        let got = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "prompts/get",
+                "params": {
+                    "name": "help_search",
+                    "arguments": { "query": "clearance fit" }
+                }
+            }),
+        );
+        assert_eq!(got[0]["id"], 3);
+        let text = got[0]["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap();
+        assert!(text.contains("cad_help"), "{text}");
+        assert!(text.contains("Search for: clearance fit"), "{text}");
+        assert_eq!(got[0]["result"]["messages"][0]["role"], "user");
+
+        let unknown = handle_message(
+            &mut server,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "prompts/get",
+                "params": { "name": "validate-before-show" }
+            }),
+        );
+        assert_eq!(unknown[0]["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn cad_help_search_and_get_clearance_fit() {
+        assert_eq!(interface::group_for("cad_help"), Some("document/session"));
+        let mut server = CadServer::new().expect("server");
+        let search = server
+            .call_tool(
+                "cad_help",
+                json!({"action": "search", "query": "clearance fit", "limit": 5}),
+            )
+            .expect("search");
+        assert_eq!(search["action"], "search");
+        let hits = search["hits"].as_array().expect("hits");
+        assert!(!hits.is_empty());
+        assert!(hits
+            .iter()
+            .any(|h| h["id"].as_str().unwrap_or("").contains("fits")));
+        let id = hits[0]["id"].as_str().unwrap();
+        let got = server
+            .call_tool("cad_help", json!({"action": "get", "id": id}))
+            .expect("get");
+        assert_eq!(got["id"], id);
+        assert!(got["body"].as_str().unwrap().len() > 20);
+        let err = server
+            .call_tool("cad_help", json!({"action": "get", "id": "../etc/passwd"}))
+            .expect_err("path get must fail");
+        assert!(
+            err.contains("id")
+                || err.contains("invalid")
+                || err.contains("path")
+                || err.contains("allowlist")
+                || err.contains("unknown"),
+            "{err}"
+        );
+
+        // Same spine via cad_interface execute (grouped dispatch).
+        let via_interface = server
+            .call_tool(
+                "cad_interface",
+                json!({
+                    "action": "execute",
+                    "group": "document/session",
+                    "operation": "cad_help",
+                    "arguments": {
+                        "action": "search",
+                        "query": "clearance fit",
+                        "limit": 5
+                    }
+                }),
+            )
+            .expect("cad_interface cad_help search");
+        assert_eq!(via_interface["action"], "search");
+        let iface_hits = via_interface["hits"].as_array().expect("iface hits");
+        assert!(!iface_hits.is_empty());
+        assert!(iface_hits
+            .iter()
+            .any(|h| h["id"].as_str().unwrap_or("").contains("fits")));
+        let iface_id = iface_hits[0]["id"].as_str().unwrap();
+        let iface_got = server
+            .call_tool(
+                "cad_interface",
+                json!({
+                    "action": "execute",
+                    "group": "document/session",
+                    "operation": "cad_help",
+                    "arguments": {"action": "get", "id": iface_id}
+                }),
+            )
+            .expect("cad_interface cad_help get");
+        assert_eq!(iface_got["id"], iface_id);
+        assert!(iface_got["body"].as_str().unwrap().len() > 20);
+    }
+
+    #[test]
+    fn desktop_cad_help_works_before_selection_and_after_detach() {
+        let mut server = CadServer::new().unwrap();
+        server.desktop_binding = Some(DesktopBinding {
+            // No desktop owns this PID, so accidental document selection fails.
+            process_id: u32::MAX,
+            initial_selection_pending: true,
+        });
+        let before = server.manager.export_project_model().unwrap();
+        let help_group = interface::group_for("cad_help").unwrap();
+
+        for detached in [false, true] {
+            if detached {
+                server.call_tool("cad_detach", json!({})).unwrap();
+            }
+            for arguments in [
+                json!({"action":"search", "query":"clearance fit"}),
+                json!({"action":"get", "id":"machine-design.concepts.fits-clearances"}),
+                json!({"action":"topics"}),
+            ] {
+                let direct = server.call_tool("cad_help", arguments.clone()).unwrap();
+                let grouped = server
+                    .call_tool(
+                        "cad_interface",
+                        json!({
+                            "action":"execute", "group":help_group, "operation":"cad_help",
+                            "arguments":arguments
+                        }),
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("grouped help failed (detached={detached}): {error}")
+                    });
+                assert_eq!(grouped, direct);
+            }
+
+            for arguments in [
+                json!({"action":"get", "id":"../etc/passwd"}),
+                json!({"action":"search"}),
+                json!({"action":"unknown"}),
+            ] {
+                let direct = server
+                    .call_tool("cad_help", arguments.clone())
+                    .expect_err("invalid help arguments must fail");
+                let grouped = server
+                    .call_tool(
+                        "cad_interface",
+                        json!({
+                            "action":"execute", "group":help_group, "operation":"cad_help",
+                            "arguments":arguments
+                        }),
+                    )
+                    .expect_err("grouped help must preserve argument validation");
+                assert_eq!(grouped, direct);
+            }
+
+            // The help exception must not let document reads or mutations run
+            // against the independent headless manager inside a desktop server.
+            for operation in ["cad_document", "sketch_begin"] {
+                let direct = server
+                    .call_tool(operation, json!({}))
+                    .expect_err("document operations still need a selected document");
+                let grouped = server
+                    .call_tool(
+                        "cad_interface",
+                        json!({
+                            "action":"execute", "group":interface::group_for(operation).unwrap(),
+                            "operation":operation, "arguments":{}
+                        }),
+                    )
+                    .expect_err("grouped document operations still need a selected document");
+                let expected = if detached {
+                    "no selected document"
+                } else {
+                    "desktop_not_ready"
+                };
+                assert!(direct.contains(expected), "{direct}");
+                assert!(grouped.contains(expected), "{grouped}");
+            }
+
+            assert!(server.attached_document_id.is_none());
+            assert_eq!(
+                server
+                    .desktop_binding
+                    .as_ref()
+                    .unwrap()
+                    .initial_selection_pending,
+                !detached
+            );
+            assert!(server.tool_trace.is_empty());
+            assert_eq!(server.manager.export_project_model().unwrap(), before);
         }
     }
 

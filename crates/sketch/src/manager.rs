@@ -6140,6 +6140,70 @@ fn ordered_profile_curves(
 mod project_tests {
     use super::*;
 
+    /// Issue #151, review finding 6: a project saved before center handles
+    /// existed must still give its circles a selectable center on load.
+    #[test]
+    fn loading_a_sketch_saved_without_center_handles_restores_them() {
+        let plane = PlaneRef::OriginPlane {
+            plane: nbcad_core::OriginPlane::Xy,
+        };
+        let center = crate::geometry::Vec2::new(12.0, 8.0);
+        let mut session = SketchSession::new("Legacy", plane, plane.basis().unwrap(), false);
+        let circle = session
+            .add_circle(
+                crate::dto::CircleMode::CenterDiameter,
+                center,
+                crate::geometry::Vec2::new(16.0, 8.0),
+            )
+            .unwrap()
+            .entities[0];
+        // Imitate a legacy project by detaching the handle the tool just made.
+        let handle = session
+            .dto()
+            .constraints
+            .iter()
+            .find_map(|constraint| match constraint.constraint {
+                crate::constraint::Constraint::CenterCoincident { point, curve }
+                    if curve == circle =>
+                {
+                    Some(point)
+                }
+                _ => None,
+            })
+            .expect("the drawn circle owns a center handle");
+        session.delete_entities(&[handle]).unwrap();
+        assert!(!session.dto().constraints.iter().any(|constraint| matches!(
+            constraint.constraint,
+            crate::constraint::Constraint::CenterCoincident { .. }
+        )));
+
+        let reloaded =
+            SketchSession::from_project_state(session.project_state(nbcad_core::FeatureId(1)))
+                .unwrap();
+        let dto = reloaded.dto();
+        let handles: Vec<_> = dto
+            .constraints
+            .iter()
+            .filter_map(|constraint| match constraint.constraint {
+                crate::constraint::Constraint::CenterCoincident { point, curve }
+                    if curve == circle =>
+                {
+                    Some(point)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(handles.len(), 1, "the loaded circle gains a center handle");
+        assert!(
+            dto.entities.iter().any(|entity| matches!(
+                entity,
+                crate::dto::EntityDto::Point { position, .. }
+                    if position.distance(center) < 1e-6
+            )),
+            "the restored handle sits on the circle center"
+        );
+    }
+
     #[test]
     fn empty_edge_refinements_report_edges_without_mutating_the_document() {
         let mut manager = SketchManager::new();

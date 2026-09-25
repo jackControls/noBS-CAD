@@ -328,6 +328,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nbcad-help"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nbcad-mcp-mutate"
 version = "0.2.0"
 dependencies = [

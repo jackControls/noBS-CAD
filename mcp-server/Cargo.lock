@@ -544,6 +544,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nbcad-help"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nbcad-mcp"
 version = "0.2.0"
 dependencies = [
@@ -552,6 +560,7 @@ dependencies = [
  "libc",
  "nbcad-core",
  "nbcad-export",
+ "nbcad-help",
  "nbcad-mcp-mutate",
  "nbcad-occt",
  "nbcad-print",
