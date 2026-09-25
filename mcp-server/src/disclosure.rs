@@ -517,6 +517,8 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
     }
 
     let pack = match name {
+        "solid_box" => FocusPack::Solid,
+        "print_calibrate" | "print_crop" | "print_probe" | "print_symbols" => FocusPack::Inspect,
         "cad_set_document_name"
         | "cad_project_model"
         | "cad_load_project_model"

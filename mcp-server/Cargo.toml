@@ -21,6 +21,7 @@ nbcad-solid = { path = "../crates/solid" }
 nbcad-export = { path = "../crates/export" }
 nbcad-occt = { path = "../crates/occt", features = ["native-occt"] }
 nbcad-mcp-mutate = { path = "../crates/mcp-mutate" }
+nbcad-print = { path = "../crates/print" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

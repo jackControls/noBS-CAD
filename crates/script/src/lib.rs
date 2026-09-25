@@ -85,7 +85,15 @@ impl Script {
                 references(step, &mut referenced);
                 for name in referenced.keys() {
                     if !available.contains(name) {
-                        return Err(format!("Step {id} references {name} before it is defined"));
+                        let similar = similar_names(name, &available);
+                        return Err(if similar.is_empty() {
+                            format!("Step {id} references {name} before it is defined")
+                        } else {
+                            format!(
+                                "Step {id} references {name} before it is defined; similar earlier results: {}",
+                                similar.join(", ")
+                            )
+                        });
                     }
                 }
                 let mut declared = Vec::new();
@@ -223,6 +231,24 @@ impl Script {
     }
 
     /// Reject unsupported omissions before the host creates any geometry.
+    /// Names bound with `let` that no later step references: usually a face
+    /// binding an agent forgot to use, or a leftover from an edit.
+    pub fn unused_bindings(&self) -> Vec<String> {
+        let mut uses = BTreeMap::new();
+        references(&self.document, &mut uses);
+        let mut unused = Vec::new();
+        for step in self.document["steps"].as_array().into_iter().flatten() {
+            if let Some(bindings) = step.get("let").and_then(Value::as_object) {
+                for name in bindings.keys() {
+                    if uses.get(name).copied().unwrap_or(0) == 0 {
+                        unused.push(name.clone());
+                    }
+                }
+            }
+        }
+        unused
+    }
+
     pub fn validate_options(&self, options: RunOptions) -> Result<(), String> {
         if options.validate {
             return Ok(());
@@ -462,6 +488,118 @@ fn references(value: &Value, counts: &mut BTreeMap<String, usize>) {
         _ => {}
     }
 }
+/// Compact description of selector candidates: the fields an agent needs to tell
+/// geometry apart, never whole meshes.
+fn candidate_digest(found: &[&Value]) -> String {
+    const FIELDS: [&str; 9] = [
+        "/id",
+        "/kind",
+        "/name",
+        "/plane/origin",
+        "/plane/normal",
+        "/cylinder/origin",
+        "/cylinder/radius",
+        "/signature/area",
+        "/position",
+    ];
+    let digests: Vec<String> = found
+        .iter()
+        .take(4)
+        .map(|value| {
+            let mut fields = serde_json::Map::new();
+            for path in FIELDS {
+                if let Some(field) = value.pointer(path) {
+                    fields.insert(path.trim_start_matches('/').to_owned(), field.clone());
+                }
+            }
+            if fields.is_empty() {
+                let text = value.to_string();
+                text.chars().take(120).collect()
+            } else {
+                Value::Object(fields).to_string()
+            }
+        })
+        .collect();
+    let mut text = digests.join(", ");
+    if found.len() > 4 {
+        text.push_str(&format!(", and {} more", found.len() - 4));
+    }
+    text
+}
+
+/// Explain an empty selection: what each where test asked for, and which values
+/// the entries actually carry at that pointer, so the next where test is one edit.
+fn selector_no_match(select: &Value, array: &[Value], bindings: &Bindings) -> String {
+    let Some(where_tests) = select.get("where") else {
+        return format!("Selector matched no geometry among {} entries", array.len());
+    };
+    let resolved = resolve(where_tests, bindings).unwrap_or_else(|_| where_tests.clone());
+    let Some(tests) = resolved.as_object() else {
+        return format!("Selector matched no geometry among {} entries", array.len());
+    };
+    let mut wanted = Vec::new();
+    let mut present = Vec::new();
+    for (path, expected) in tests {
+        wanted.push(format!("{path} = {expected}"));
+        let mut values: Vec<String> = Vec::new();
+        for entry in array {
+            if let Some(value) = entry.pointer(path) {
+                let text = value.to_string();
+                if !values.contains(&text) {
+                    values.push(text);
+                }
+            }
+            if values.len() >= 6 {
+                break;
+            }
+        }
+        present.push(format!("{path}: [{}]", values.join(", ")));
+    }
+    format!(
+        "Selector matched no geometry among {} entries. Where tests: {}. Values present at those pointers: {}.",
+        array.len(),
+        wanted.join(", "),
+        present.join("; ")
+    )
+}
+
+/// Earlier result names an agent probably meant: a shared prefix or an edit
+/// distance of at most two.
+fn similar_names(name: &str, available: &BTreeSet<String>) -> Vec<String> {
+    let mut similar: Vec<String> = available
+        .iter()
+        .filter(|candidate| {
+            let prefix = name.len().min(candidate.len()).min(6);
+            (prefix >= 4 && candidate[..prefix] == name[..prefix])
+                || candidate.starts_with(name)
+                || name.starts_with(candidate.as_str())
+                || edit_distance(name, candidate) <= 2
+        })
+        .cloned()
+        .collect();
+    similar.truncate(3);
+    similar
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut current = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            current.push(
+                (previous[j] + cost)
+                    .min(previous[j + 1] + 1)
+                    .min(current[j] + 1),
+            );
+        }
+        previous = current;
+    }
+    previous[b.len()]
+}
+
 fn pointer<'a>(value: &'a Value, path: &str) -> Result<&'a Value, String> {
     if path.is_empty() {
         Ok(value)
@@ -576,12 +714,20 @@ fn resolve(expression: &Value, bindings: &Bindings) -> Result<Value, String> {
                 }
                 let value = match take {
                     "one" if found.len() == 1 => found[0],
-                    "first" => *found.first().ok_or("Selector matched no geometry")?,
-                    "last" => *found.last().ok_or("Selector matched no geometry")?,
+                    "first" => *found
+                        .first()
+                        .ok_or_else(|| selector_no_match(select, array, bindings))?,
+                    "last" => *found
+                        .last()
+                        .ok_or_else(|| selector_no_match(select, array, bindings))?,
+                    "one" if found.is_empty() => {
+                        return Err(selector_no_match(select, array, bindings))
+                    }
                     "one" => {
                         return Err(format!(
-                            "Selector expected exactly one match, found {}",
-                            found.len()
+                            "Selector expected exactly one match, found {}. Candidates: {}. Add a where test on a field that separates them (for a face, for example /plane/origin/2).",
+                            found.len(),
+                            candidate_digest(&found)
                         ))
                     }
                     _ => return Err(format!("Unknown selector take {take}")),
@@ -1171,5 +1317,92 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod diagnostics_tests {
+    use super::*;
+
+    fn faces_host() -> impl FnMut(&str, Value) -> Result<Value, String> {
+        |_, _| {
+            Ok(json!({"scene":{"bodies":[{"id":1,"faces":[
+                {"id":10,"plane":{"origin":[0.0,0.0,19.0],"normal":[0.0,0.0,1.0]},"signature":{"area":100.0}},
+                {"id":11,"plane":{"origin":[5.0,5.0,8.0],"normal":[0.0,0.0,1.0]},"signature":{"area":12.0}},
+                {"id":12,"plane":{"origin":[0.0,0.0,0.0],"normal":[0.0,0.0,-1.0]},"signature":{"area":100.0}}
+            ]}]}}))
+        }
+    }
+
+    fn select_script(where_tests: &str) -> Script {
+        Script::parse(&format!(
+            r#"{{"version":1,"name":"select","steps":[
+                {{"id":"build","call":{{"group":"g","operation":"make","arguments":{{}}}}}},
+                {{"let":{{"top":{{"$select":{{"from":{{"$select":{{"from":{{"$ref":"build"}},"path":"/scene/bodies","take":"first"}}}},"path":"/faces","where":{where_tests},"take":"one","pointer":"/id"}}}}}}}}
+            ]}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn ambiguous_selector_lists_candidates_with_distinguishing_fields() {
+        let error = run(
+            &select_script(r#"{"/plane/normal/2":1}"#),
+            faces_host(),
+            RunOptions::default(),
+        )
+        .unwrap_err();
+        assert!(error.contains("found 2"), "{error}");
+        assert!(error.contains("\"plane/origin\":[0.0,0.0,19.0]"), "{error}");
+        assert!(error.contains("\"plane/origin\":[5.0,5.0,8.0]"), "{error}");
+        assert!(error.contains("/plane/origin/2"), "{error}");
+    }
+
+    #[test]
+    fn empty_selector_reports_the_values_actually_present() {
+        let error = run(
+            &select_script(r#"{"/plane/normal/2":1,"/plane/origin/2":11.5}"#),
+            faces_host(),
+            RunOptions::default(),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("matched no geometry among 3 entries"),
+            "{error}"
+        );
+        assert!(error.contains("/plane/origin/2 = 11.5"), "{error}");
+        assert!(
+            error.contains("/plane/origin/2: [19.0, 8.0, 0.0]"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn unknown_reference_suggests_similar_earlier_results() {
+        let error = Script::parse(
+            r#"{"version":1,"name":"typo","steps":[
+                {"id":"plate_rect_2","call":{"group":"g","operation":"make","arguments":{}}},
+                {"id":"plate_fix","call":{"group":"g","operation":"fix","arguments":{"entity":{"$ref":"plate_rect","pointer":"/id"}}}}
+            ]}"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("plate_fix references plate_rect"), "{error}");
+        assert!(
+            error.contains("similar earlier results: plate_rect_2"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn unused_let_bindings_are_listed() {
+        let script = Script::parse(
+            r#"{"version":1,"name":"unused","steps":[
+                {"id":"build","call":{"group":"g","operation":"make","arguments":{}}},
+                {"let":{"used":{"$ref":"build","pointer":"/id"},"forgotten":{"$ref":"build","pointer":"/id"}}},
+                {"call":{"group":"g","operation":"edit","arguments":{"body":{"$ref":"used"}}}}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(script.unused_bindings(), vec!["forgotten".to_string()]);
     }
 }
