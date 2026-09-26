@@ -1,54 +1,81 @@
 ---
 type: Concept
-title: Manufacturing process checks
-description: Questions to resolve about tool access, mold release, print orientation and qualification before detailing a part.
-status: stable
-updated: 2026-09-13
+title: DFM process guidelines
+description: Starting manufacturability heuristics by process family; confirm with your shop.
+status: draft
+updated: 2026-09-20
 topics: dfm, cnc, sheet-metal, casting, injection-molding, welding, edm, additive
-keywords: draft angle, wall thickness, bend radius, tool access, fillet, pocket depth, print orientation
-related_recipes: mounting-plate, angle-bracket, fillet-basics, turbine-fit-coupons, d-screw-vise-fit
+keywords: draft angle, wall thickness, bend radius, tool access, fillet, pocket depth, additive, FDM, anisotropy, manufacturability heuristics
+related_recipes: mounting-plate, angle-bracket, fillet-basics, revolved-spacer
 sources: nwtc-guns-processes
 ---
 
-# Manufacturing process checks
+# DFM process guidelines
 
-Use these questions to choose geometry your intended process can produce. Obtain
-actual limits from the material, equipment and shop; a generic wall thickness or
-draft angle cannot qualify every process.
+**Attribution:** heuristics adapted from Guns / NWTC LibreTexts
+*[Ch. 2 — DFM Guidelines for Specific Manufacturing Processes](https://eng.libretexts.org/Courses/Northeast_Wisconsin_Technical_College/Design_for_Various_Manufacturing_Methods/02%3A_DFM_Guidelines_for_Specific_Manufacturing_Processes)*,
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+Numbers below are **starting guidance**, not shop standards — confirm with
+your process, material, and vendor.
 
-- **Milling:** Can the cutter and holder reach each surface? Internal corners
-  need a realizable tool radius. Check pocket depth, workholding and each setup.
-- **Injection molding:** Can the part leave the mold? Identify pull directions,
-  draft, parting lines and undercuts. Prefer reasonably uniform walls and
-  supported ribs/bosses over isolated thick sections.
-- **Casting:** Check draft, section transitions, parting and shrinkage. Identify
-  the surfaces that require machining allowance and later access.
-- **Sheet metal:** Use the shop's material, thickness, tooling and bend rules.
-  Check flange lengths, reliefs and the distance of holes from bends.
-- **Welding:** Provide fixture and torch access; allow for distortion. Confirm
-  joint preparation and the order in which the assembly can be welded.
-- **EDM:** The material must be electrically conductive. Account for wire or
-  electrode access and the resulting internal corner limits.
+## Injection molding
 
-Adapted and condensed from Bryan Guns, NWTC,
-[DFM Guidelines for Specific Manufacturing Processes](https://eng.libretexts.org/Courses/Northeast_Wisconsin_Technical_College/Design_for_Various_Manufacturing_Methods/02%3A_DFM_Guidelines_for_Specific_Manufacturing_Processes),
-[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Numerical heuristics,
-figures and cost examples from the source are not reproduced.
+Aim for even walls; avoid sudden thick-to-thin jumps. Add **draft** on walls
+parallel to pull. Prefer ribs and supported bosses over massive sections.
+Round sharp corners; put gates and parting lines where cosmetics matter least.
 
-## Additive manufacturing in the examples
+## Casting
 
-For the vise and turbine, use [export and print guidance](../../concepts/export-print.md)
-and [additive workholding](../../concepts/additive-workholding.md) to review the
-actual print orientation, supported regions, bridge spans and mating clearances.
-A clean CAD body or watertight export does not prove that a slicer will produce
-supported toolpaths.
+Draft and even sections help fill and shrink predictably. Generous fillets;
+simple parting lines. Leave machining stock only where you will really cut.
 
-Review the exported part layout and the resulting sliced paths. Print the
-`turbine-fit-coupons` or `d-screw-vise-fit` specimens with the intended settings;
-record fit measurements before printing the complete assembly. Preserve the
-chosen settings with the evidence, then update the editable dimensions when the
-results require a change.
+## Sheet metal
 
-A drawing should make the selected process and critical relationships clear.
-Use [GD&T](gdt-intro.md) where geometric controls serve function and inspection,
-and [fit limits](fits-clearances.md) for mating sizes.
+Keep bend radii consistent (often on the order of sheet thickness). Keep
+holes and slots well clear of bend lines. Give flanges enough length; add
+relief where bends meet. Prefer features that fit standard punches/dies.
+
+## Welding
+
+Fewer welds usually beat many tiny ones. Give the torch or robot access.
+Match thicknesses at the joint when you can; allow for shrinkage in locators.
+
+## EDM
+
+Conductive materials only. Internal corners follow wire/electrode limits —
+plan a small radius. Deep narrow cavities and ultra-fine finish cost time.
+
+## CNC machining
+
+Internal corners need real end-mill radii. Deep pockets need reachable tools
+and sensible depth-to-diameter. Minimize setups; loosen non-critical
+tolerances; prefer near-net blanks over hogging air.
+
+## Additive (bridge)
+
+Orientation, supports, anisotropy, and hole shrinkage dominate. Use
+[fit coupons](fits-clearances.md) before locking mating geometry
+(`turbine-fit-coupons`, `d-screw-vise-fit`). Deepen with
+[AM thin walls and print orientation](am-thin-walls.md),
+[AM snap-fits](am-snap-fit.md),
+[ribs / gussets / draft](am-ribs-gussets-draft.md),
+[supports / overhangs](am-supports-overhangs.md).
+Edge breaks: [fillet vs chamfer](fillet-chamfer.md).
+
+## Cross-process checklist
+
+1. **Draft / pull / layer normal** named for the process.
+2. **Internal corners** have a real tool or print radius.
+3. **Walls** even enough for the process (mold shrink / FDM beads).
+4. **Tool / support access** sketched before detail.
+5. **Secondary ops** listed (tap, ream, face, coat) — or designed out.
+6. **Critical fits** couponed ([fit coupons map](fit-coupons-recipes-map.md)).
+
+## Preferred search
+
+Query **draft angle**, **bend radius**, or **pocket depth** here first;
+use DFAM pages when the answer is print-orientation-specific.
+
+Related: [DFM overview](dfm-overview.md), [taxonomy](../taxonomy.md).
+
+Molding draft vs FDM orientation: [AM ribs, gussets, and draft](am-ribs-gussets-draft.md).

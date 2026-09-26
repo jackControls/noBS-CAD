@@ -6,6 +6,7 @@ on:
       - "knowledge/**"
       - "docs/knowledge-wiki.md"
       - "scripts/check-knowledge*"
+      - "scripts/build-help-index.mjs"
       - "scripts/stage-showcase-media*"
       - ".github/workflows/pages-knowledge.yml"
   push:
@@ -14,6 +15,7 @@ on:
       - "knowledge/**"
       - "docs/knowledge-wiki.md"
       - "scripts/check-knowledge*"
+      - "scripts/build-help-index.mjs"
       - "scripts/stage-showcase-media*"
       - ".github/workflows/pages-knowledge.yml"
   workflow_dispatch:
@@ -39,6 +41,12 @@ jobs:
         run: |
           node --test scripts/check-knowledge.test.mjs
           node scripts/check-knowledge.mjs
+      # The committed help search index is generated from the same articles;
+      # a stale copy fails here rather than drifting on Pages.
+      - name: Verify the committed help search index is fresh
+        run: |
+          node scripts/build-help-index.mjs
+          git diff --exit-code -- knowledge/machine-design/search-index.json
       # Runs for pull requests too: `knowledge/**` may only pin a release that is
       # already public, otherwise the deploy below fails later on main instead.
       - name: Verify the pinned showcase release is public

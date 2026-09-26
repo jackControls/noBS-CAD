@@ -341,6 +341,9 @@
       "autoConstrain": "Automatische Randbedingungen",
       "horizontalVertical": "Horizontal/Vertikal",
       "coincident": "Koinzident",
+      "originCoincident": "Koinzident (Ursprung)",
+      "centerCoincident": "Koinzident (Mittelpunkt)",
+      "arcEndpointCoincident": "Koinzident (Bogenende)",
       "tangent": "Tangent",
       "equal": "Gleich",
       "parallel": "Parallel",
@@ -876,7 +879,7 @@
       "perpendicular": "Senkrecht benötigt zwei Linien.",
       "fixUnfix": "Fixieren/Lösen benötigt eine oder mehrere Entitäten.",
       "midpoint": "Mittelpunkt benötigt einen Punkt und eine Linie.",
-      "concentric": "Konzentrisch benötigt zwei Kreise/Bögen.",
+      "concentric": "Konzentrisch benötigt zwei Kreise/Bögen oder einen Punkt und einen Kreis/Bogen.",
       "collinear": "Kollinear benötigt zwei Linien.",
       "symmetry": "Symmetrie benötigt zwei Entitäten und eine Achslinie (Achse zuletzt auswählen)."
     }

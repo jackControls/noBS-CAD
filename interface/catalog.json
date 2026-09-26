@@ -2183,6 +2183,16 @@
   "groups": [
     {"id":"assembly/motion","labelKey":"assembly.browser.motionStudy","operations":["assembly_create_position","assembly_update_position","assembly_delete_position","assembly_apply_position","assembly_create_motion_study","assembly_update_motion_study","assembly_delete_motion_study","assembly_evaluate_motion_study","assembly_sample_motion_study","assembly_export_motion_path_csv"]},
     {
+      "id": "solid/primitives",
+      "labelKey": "solid/primitives",
+      "operations": ["solid_box"]
+    },
+    {
+      "id": "print/read",
+      "labelKey": "print/read",
+      "operations": ["print_calibrate", "print_crop", "print_probe", "print_symbols"]
+    },
+    {
       "id": "document/scripts",
       "labelKey": "document/scripts",
       "operations": ["cad_script"]
@@ -2218,6 +2228,7 @@
         "cad_get_tool_disclosure_mode",
         "cad_set_tool_disclosure_mode",
         "cad_list_all_tools",
+        "cad_help",
         "cad_cancel_recompute",
         "cad_list_sessions",
         "cad_interface",

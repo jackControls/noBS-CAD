@@ -25,6 +25,7 @@ pub fn is_live_engine_query(method: &str) -> bool {
             | "eval_expression"
             | "preview_segment"
             | "preview_segment_locked"
+            | "preview_creation"
             | "fillet_preview"
             | "offset_preview"
             | "trim_preview"

@@ -38,7 +38,7 @@ export const CONSTRAINT_EXISTENCE_GLYPH: Readonly<
   vertical_points: 'V',
   coincident: '●',
   origin_coincident: '●',
-  center_coincident: '●',
+  center_coincident: '⊙',
   tangent: 'Tg',
   equal: '=',
   parallel: '∥',
@@ -46,11 +46,12 @@ export const CONSTRAINT_EXISTENCE_GLYPH: Readonly<
   fix: 'Fix',
   midpoint: '△',
   reference_midpoint: '△',
+  reference_on_edge: '●',
   span_midpoint: '△',
   concentric: '◎',
   collinear: 'Col',
   symmetry: 'Sym',
-  arc_endpoint_coincident: '●',
+  arc_endpoint_coincident: 'End',
   equal_distance: '=',
 });
 
@@ -67,6 +68,7 @@ export const SINGLE_POINT_RELATION_TYPES = new Set([
   'perpendicular',
   'concentric',
   'reference_midpoint',
+  'reference_on_edge',
   'span_midpoint',
   'arc_endpoint_coincident',
 ]);
@@ -79,6 +81,7 @@ export const SINGLE_POINT_RELATION_GLYPH: Record<string, string> = {
   perpendicular: CONSTRAINT_EXISTENCE_GLYPH.perpendicular,
   concentric: CONSTRAINT_EXISTENCE_GLYPH.concentric,
   reference_midpoint: CONSTRAINT_EXISTENCE_GLYPH.reference_midpoint,
+  reference_on_edge: CONSTRAINT_EXISTENCE_GLYPH.reference_on_edge,
   span_midpoint: CONSTRAINT_EXISTENCE_GLYPH.span_midpoint,
   arc_endpoint_coincident: CONSTRAINT_EXISTENCE_GLYPH.arc_endpoint_coincident,
 };
@@ -220,12 +223,14 @@ export function singlePointRelationAnchor(
   }
   if (
     constraint.type === 'reference_midpoint'
+    || constraint.type === 'reference_on_edge'
     || constraint.type === 'span_midpoint'
     || constraint.type === 'arc_endpoint_coincident'
   ) {
     const point = constraint.point == null ? null : byId.get(constraint.point);
     if (point?.kind === 'point') return point.position;
     if (constraint.type === 'reference_midpoint') return constraint.position ?? null;
+    if (constraint.type === 'reference_on_edge' && (point?.kind === 'circle' || point?.kind === 'arc')) return point.center;
     if (constraint.type === 'arc_endpoint_coincident' && constraint.arc != null) {
       const arc = byId.get(constraint.arc);
       if (arc?.kind === 'arc') {

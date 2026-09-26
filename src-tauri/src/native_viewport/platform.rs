@@ -171,6 +171,21 @@ const VIEWPORT_LINE_SCALE_MAX: f32 = 1.6;
 /// than the outline information they can convey. Bevy still renders the
 /// retained shaded mesh and selected/hovered geometry always bypasses LOD.
 const OCCURRENCE_EDGE_LOD_MIN_RADIUS_PX: f32 = 3.0;
+/// A screen-sized or depth-range-relative lift can exceed a thin wall at wide
+/// zooms and reveal hidden edges. Cap the tie-break in model units (0.1
+/// micrometre), below modeling tolerances, regardless of zoom/display density.
+const MODEL_EDGE_MAX_LIFT_MM: f32 = 1.0e-4;
+/// Model-edge strokes are two pixels wide plus anti-aliasing, so their outer
+/// pixels sit this far from the true edge on screen.
+const MODEL_EDGE_STROKE_HALF_WIDTH_PX: f32 = 1.5;
+/// Largest camera lift a stroke may take to clear a face that rises towards
+/// the camera beside it, in pixels of depth. Beyond this the face is so
+/// grazing that the stroke would float visibly in front of anything behind.
+const MODEL_EDGE_MAX_LIFT_PX: f32 = 2.5;
+/// The same lift as a fraction of the body's bounding radius: at wide zooms a
+/// few pixels of depth are a real distance, and a lifted inside-corner edge
+/// must never pass through the body's own walls.
+const MODEL_EDGE_MAX_LIFT_BODY_FRACTION: f32 = 0.01;
 const SKETCH_DEPTH_BIAS: f32 = -0.90;
 const SKETCH_POINT_OUTLINE_WIDTH: f32 = 2.0;
 const SKETCH_POINT_OUTLINE_DEPTH_BIAS: f32 = -0.89;
@@ -2634,6 +2649,9 @@ fn setup_scene(
         .config_mut::<CamCompletedPathGizmos>()
         .0
         .depth_bias = -0.995;
+    // Keep the default model/grid group depth-correct. Model-edge ties use a
+    // bounded world-space epsilon below; a global reverse-Z bias leaks hidden
+    // edges through thin walls as view distance increases.
     let (sketch_config, _) = gizmo_config.config_mut::<CadSketchGizmos>();
     // Visible sketches are reference graphics, not occluded model edges.
     // Match the browser renderer's depthTest:false contract so a sketch on a
@@ -4504,10 +4522,29 @@ fn draw_cad_gizmos(
             .as_ref()
             .filter(|_| !state.hide_sketch_grid)
         {
-            draw_grid_on_basis(&mut gizmos, &sketch.basis, fine, major);
+            let layout = grid_layout(camera.camera, *viewport, &sketch.basis);
+            draw_grid_on_basis(
+                &mut gizmos,
+                &sketch.basis,
+                layout,
+                camera.camera,
+                *viewport,
+                fine,
+                major,
+            );
         }
     } else {
-        draw_grid_on_basis(&mut gizmos, &origin_plane_bases()[0].1, fine, major);
+        let [(_, ground, _), ..] = origin_plane_bases();
+        let layout = grid_layout(camera.camera, *viewport, &ground);
+        draw_grid_on_basis(
+            &mut gizmos,
+            &ground,
+            layout,
+            camera.camera,
+            *viewport,
+            fine,
+            major,
+        );
     }
 
     if state.mode == ViewportMode::PickPlane {
@@ -4636,6 +4673,12 @@ fn draw_cad_gizmos(
                 camera.camera,
                 *viewport,
             ) || ghosted_body;
+            let side_faces = edge_side_faces(body, &body_transform);
+            let lift_ceiling = local_bounds.map_or(f32::INFINITY, |(_, radius)| {
+                radius
+                    * body_transform.scale.max_element().abs().max(1.0e-6)
+                    * MODEL_EDGE_MAX_LIFT_BODY_FRACTION
+            });
 
             if selected_body_index.is_some() || hovered_body {
                 let color = if selected_body_index == Some(0) {
@@ -4651,8 +4694,9 @@ fn draw_cad_gizmos(
                         edge,
                         rgb(palette.0.pick_halo),
                         &body_transform,
+                        None,
                     );
-                    draw_edge_segments(&mut pick_feedback, edge, color, &body_transform);
+                    draw_edge_segments(&mut pick_feedback, edge, color, &body_transform, None);
                 }
             }
 
@@ -4687,9 +4731,23 @@ fn draw_cad_gizmos(
                 };
                 if ghosted_body && !selected && !hovered && selected_body_index.is_none() {
                     // Through-geometry wireframe for the ghosted part.
-                    draw_edge_segments(&mut highlights, edge, rgb(color), &body_transform);
+                    draw_edge_segments(&mut highlights, edge, rgb(color), &body_transform, None);
                 } else {
-                    draw_edge_segments(&mut model_edges, edge, rgba(color, 0.92), &body_transform);
+                    draw_edge_segments(
+                        &mut model_edges,
+                        edge,
+                        rgba(color, 0.92),
+                        &body_transform,
+                        Some(EdgeLift {
+                            camera: camera.camera,
+                            viewport: *viewport,
+                            sides: side_faces
+                                .get(edge.key.as_str())
+                                .copied()
+                                .unwrap_or_default(),
+                            ceiling: lift_ceiling,
+                        }),
+                    );
                 }
                 if selected || hovered {
                     draw_edge_segments(
@@ -4697,6 +4755,7 @@ fn draw_cad_gizmos(
                         edge,
                         rgb(palette.0.pick_halo),
                         &body_transform,
+                        None,
                     );
                     draw_edge_segments(
                         &mut pick_feedback,
@@ -4707,6 +4766,7 @@ fn draw_cad_gizmos(
                             palette.0.edge_hover
                         }),
                         &body_transform,
+                        None,
                     );
                 }
             }
@@ -5053,6 +5113,12 @@ fn draw_cad_gizmos(
     }
 
     if let Some(sketch) = &model.active_sketch {
+        // Reference geometry first: both passes share the sketch gizmo group
+        // and offset, so submission order decides what a coincident authored
+        // curve covers.
+        if !state.hide_projected_geometry {
+            draw_projected_edges(&mut sketch_gizmos, sketch, rgb(palette.0.projected));
+        }
         draw_sketch(
             &mut sketch_gizmos,
             sketch,
@@ -5364,33 +5430,254 @@ fn draw_marker_loop(gizmos: &mut Gizmos<CadHighlightGizmos>, points: &[Vec3], co
     }
 }
 
-fn draw_grid_on_basis(gizmos: &mut Gizmos, basis: &PlaneBasis, fine: Color, major: Color) {
-    let origin = basis_vector(basis.origin) - basis_vector(basis.normal) * 0.03;
+/// Screen spacing the engine's sketch snap interval is chosen for. Shared with
+/// the browser sketch grid (`TARGET_SKETCH_GRID_PX`) so the snap step is always
+/// one of the fully drawn lattices below.
+const GRID_TARGET_PX: f32 = 24.0;
+/// Finest and coarsest intervals, in model millimetres.
+const GRID_MIN_STEP: f32 = 0.001;
+const GRID_MAX_STEP: f32 = 1_000_000.0;
+/// A line fades in as the lattice it belongs to spreads from the first to the
+/// second spacing on screen, and reads as a major line from the third to the
+/// fourth. Brightness therefore follows the zoom continuously: nothing pops
+/// when the finest drawn interval moves along the 1-2-5 sequence.
+const GRID_LINE_FADE_IN_PX: [f32; 2] = [6.0, 20.0];
+const GRID_MAJOR_FADE_PX: [f32; 2] = [120.0, 300.0];
+/// Radius of the drawn sheet around the view centre, in viewport heights at
+/// the target depth, so its edge fade stays put on screen while zooming.
+const GRID_SHEET_RADIUS_HEIGHTS: f32 = 2.5;
+/// Hard cap on lines drawn on each side of the centre per axis.
+const GRID_MAX_HALF_LINES: i64 = 600;
+/// How far below its plane the sheet sits, as a fraction of the finest drawn
+/// interval, so it neither fights faces on the plane nor floats visibly under
+/// sketch geometry when zoomed far in.
+const GRID_PLANE_OFFSET_CELLS: f32 = 0.006;
+
+fn one_two_five_mantissa(normalized: f64) -> f64 {
+    // Geometric midpoints keep the choice symmetric on a logarithmic zoom.
+    if normalized < 2f64.sqrt() {
+        1.0
+    } else if normalized < 10f64.sqrt() {
+        2.0
+    } else if normalized < 50f64.sqrt() {
+        5.0
+    } else {
+        10.0
+    }
+}
+
+/// Nearest member of the 1-2-5 engineering sequence to the interval that
+/// covers `GRID_TARGET_PX` at the view center, like `adaptiveSketchGridStep`
+/// in the browser viewport.
+fn adaptive_grid_step(world_per_pixel: f32) -> f32 {
+    if !world_per_pixel.is_finite() || world_per_pixel <= 0.0 {
+        return 10.0;
+    }
+    let desired =
+        (f64::from(world_per_pixel) * f64::from(GRID_TARGET_PX)).max(f64::from(GRID_MIN_STEP));
+    let decade = 10f64.powi(desired.log10().floor() as i32);
+    ((one_two_five_mantissa(desired / decade) * decade) as f32).clamp(GRID_MIN_STEP, GRID_MAX_STEP)
+}
+
+/// Smallest member of the 1-2-5 sequence that is at least `value`.
+fn one_two_five_ceiling(value: f32) -> f32 {
+    if !value.is_finite() || value <= 0.0 {
+        return GRID_MIN_STEP;
+    }
+    let value = f64::from(value.max(GRID_MIN_STEP));
+    let decade = 10f64.powi(value.log10().floor() as i32);
+    let normalized = value / decade;
+    let mantissa = if normalized <= 1.0 + 1.0e-9 {
+        1.0
+    } else if normalized <= 2.0 + 1.0e-9 {
+        2.0
+    } else if normalized <= 5.0 + 1.0e-9 {
+        5.0
+    } else {
+        10.0
+    };
+    ((mantissa * decade) as f32).clamp(GRID_MIN_STEP, GRID_MAX_STEP)
+}
+
+/// The coarsest 1-2-5 lattice a line belongs to, as a multiple of the finest
+/// drawn interval, from the line's index in that finest lattice. The origin
+/// line belongs to every lattice.
+fn coarsest_lattice_ratio(index: i64, finest_mantissa: u8) -> f64 {
+    if index == 0 {
+        return f64::INFINITY;
+    }
+    // Work in tenths of the finest interval so every coarser member is an
+    // integer: the finest is 10, 20 or 50 tenths.
+    let finest = 10 * i64::from(finest_mantissa);
+    let coordinate = index.unsigned_abs().saturating_mul(finest as u64);
+    let mut best = finest as u64;
+    let mut decade: u64 = 1;
+    while decade <= coordinate {
+        for mantissa in [1u64, 2, 5] {
+            let Some(step) = mantissa.checked_mul(decade) else {
+                break;
+            };
+            if step >= finest as u64 && step > best && coordinate % step == 0 {
+                best = step;
+            }
+        }
+        let Some(next) = decade.checked_mul(10) else {
+            break;
+        };
+        decade = next;
+    }
+    best as f64 / finest as f64
+}
+
+fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
+    let t = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Colour of a grid line whose coarsest lattice spreads `pixel_spacing` on
+/// screen: faint as it appears, minor while comfortably visible, major once
+/// its lattice is wide enough to structure the sheet.
+fn grid_line_color(pixel_spacing: f32, fine: Color, major: Color) -> Color {
+    let presence = smoothstep(
+        GRID_LINE_FADE_IN_PX[0],
+        GRID_LINE_FADE_IN_PX[1],
+        pixel_spacing,
+    );
+    let weight = smoothstep(GRID_MAJOR_FADE_PX[0], GRID_MAJOR_FADE_PX[1], pixel_spacing);
+    let (fine, major) = (fine.to_srgba(), major.to_srgba());
+    let mix = |a: f32, b: f32| a + (b - a) * weight;
+    Color::srgba(
+        mix(fine.red, major.red),
+        mix(fine.green, major.green),
+        mix(fine.blue, major.blue),
+        mix(fine.alpha, major.alpha) * presence,
+    )
+}
+
+/// Where and how densely the grid sheet is drawn for the current view.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct GridLayout {
+    /// Finest lattice interval drawn, a 1-2-5 member; its lines are the
+    /// faintest and every coarser lattice is a subset of some finer one.
+    finest: f32,
+    /// Mantissa of `finest`: 1, 2 or 5.
+    finest_mantissa: u8,
+    /// Plane coordinates of the camera target: the sheet's fade is centred
+    /// here and moves continuously with the view.
+    center: Vec2,
+    /// Sheet radius in model units, a fixed number of screen heights.
+    radius: f32,
+}
+
+fn grid_layout(
+    camera: ViewportCamera,
+    viewport: ViewportSizeResource,
+    basis: &PlaneBasis,
+) -> GridLayout {
+    let target = Vec3::from_array(camera.target);
+    let world_per_pixel = world_per_pixel_at(camera, viewport, target);
+    let finest = one_two_five_ceiling(world_per_pixel * GRID_LINE_FADE_IN_PX[0]);
+    let decade = 10f64.powi(f64::from(finest).log10().floor() as i32);
+    let finest_mantissa = (f64::from(finest) / decade).round() as u8;
+    let local = target - basis_vector(basis.origin);
+    GridLayout {
+        finest,
+        finest_mantissa: if [1, 2, 5].contains(&finest_mantissa) {
+            finest_mantissa
+        } else {
+            1
+        },
+        center: Vec2::new(
+            local.dot(basis_vector(basis.u)),
+            local.dot(basis_vector(basis.v)),
+        ),
+        radius: world_per_pixel * viewport.logical_height.max(1.0) * GRID_SHEET_RADIUS_HEIGHTS,
+    }
+}
+
+fn draw_grid_on_basis(
+    gizmos: &mut Gizmos,
+    basis: &PlaneBasis,
+    layout: GridLayout,
+    camera: ViewportCamera,
+    viewport: ViewportSizeResource,
+    fine: Color,
+    major: Color,
+) {
+    let GridLayout {
+        finest,
+        finest_mantissa,
+        center,
+        radius,
+    } = layout;
+    let origin = basis_vector(basis.origin)
+        - basis_vector(basis.normal) * (finest * GRID_PLANE_OFFSET_CELLS);
     let u = basis_vector(basis.u);
     let v = basis_vector(basis.v);
-    for index in -30..=30 {
-        let coordinate = index as f32 * 5.0;
-        let color = if index % 5 == 0 { major } else { fine };
-        gizmos.line(
-            origin + u * coordinate - v * 150.0,
-            origin + u * coordinate + v * 150.0,
-            color,
-        );
-        gizmos.line(
-            origin - u * 150.0 + v * coordinate,
-            origin + u * 150.0 + v * coordinate,
-            color,
+    // Lines thin out toward the sheet edge instead of stopping at a visible
+    // border, so the finite patch reads as an unbounded plane.
+    let fade = |offset: f32| (1.0 - (offset / radius).powi(2)).clamp(0.0, 1.0);
+    let mut faded_line = |start: Vec3, end: Vec3, color: Color, weight: f32| {
+        let middle = (start + end) * 0.5;
+        let strong = color.with_alpha(color.alpha() * weight);
+        let clear = color.with_alpha(0.0);
+        gizmos.line_gradient(middle, start, strong, clear);
+        gizmos.line_gradient(middle, end, strong, clear);
+    };
+    // Each line takes the spacing of its coarsest lattice as seen at its own
+    // depth, so far lines dim before they alias instead of shimmering.
+    let mut lattice_line = |index: i64, middle: Vec3, start: Vec3, end: Vec3, lateral: f32| {
+        let ratio = coarsest_lattice_ratio(index, finest_mantissa);
+        let spacing = if ratio.is_finite() {
+            (ratio as f32) * finest / world_per_pixel_at(camera, viewport, middle)
+        } else {
+            f32::INFINITY
+        };
+        let color = grid_line_color(spacing, fine, major);
+        if color.alpha() > 0.002 {
+            faded_line(start, end, color, fade(lateral));
+        }
+    };
+    let range = |coordinate: f32| {
+        let centre_index = (coordinate / finest).round() as i64;
+        let span = ((radius / finest).ceil() as i64).min(GRID_MAX_HALF_LINES);
+        (centre_index - span)..=(centre_index + span)
+    };
+    for index in range(center.x) {
+        let coordinate = index as f32 * finest;
+        let along_v = origin + u * coordinate;
+        lattice_line(
+            index,
+            along_v + v * center.y,
+            along_v + v * (center.y - radius),
+            along_v + v * (center.y + radius),
+            coordinate - center.x,
         );
     }
-    gizmos.line(
-        origin - u * 150.0,
-        origin + u * 150.0,
+    for index in range(center.y) {
+        let coordinate = index as f32 * finest;
+        let along_u = origin + v * coordinate;
+        lattice_line(
+            index,
+            along_u + u * center.x,
+            along_u + u * (center.x - radius),
+            along_u + u * (center.x + radius),
+            coordinate - center.y,
+        );
+    }
+    // The plane's own axes stay anchored at its origin, however far the view
+    // has panned from it.
+    faded_line(
+        origin + u * (center.x - radius),
+        origin + u * (center.x + radius),
         Color::srgba(0.80, 0.25, 0.30, 0.62),
+        fade(center.y),
     );
-    gizmos.line(
-        origin - v * 150.0,
-        origin + v * 150.0,
+    faded_line(
+        origin + v * (center.y - radius),
+        origin + v * (center.y + radius),
         Color::srgba(0.25, 0.65, 0.38, 0.62),
+        fade(center.x),
     );
 }
 
@@ -5416,26 +5703,150 @@ fn draw_plane_outline<Config: GizmoConfigGroup>(
     gizmos.line(origin - v, origin + v, color.with_alpha(0.46));
 }
 
+/// One planar face beside a model edge, in world space: its outward normal and
+/// a point inside it, enough to tell whether the face rises towards the camera
+/// as it leaves the edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct EdgeSideFace {
+    normal: Vec3,
+    interior: Vec3,
+}
+
+/// The planar faces beside each edge of a body, by edge key. Curved faces are
+/// left out; an edge beside one keeps the plain tie-break lift.
+fn edge_side_faces<'a>(
+    body: &'a BodyDto,
+    transform: &Transform,
+) -> HashMap<&'a str, [Option<EdgeSideFace>; 2]> {
+    let mut sides: HashMap<&str, [Option<EdgeSideFace>; 2]> = HashMap::new();
+    for face in &body.faces {
+        let (Some(plane), Some(signature)) = (&face.plane, &face.signature) else {
+            continue;
+        };
+        let normal = (transform.rotation * basis_vector(plane.normal)).normalize_or_zero();
+        if normal == Vec3::ZERO {
+            continue;
+        }
+        let side = EdgeSideFace {
+            normal,
+            interior: transform.transform_point(Vec3::new(
+                signature.centroid.x as f32,
+                signature.centroid.y as f32,
+                signature.centroid.z as f32,
+            )),
+        };
+        for key in &face.edge_keys {
+            let entry = sides.entry(key.as_str()).or_default();
+            if entry[0].is_none() {
+                entry[0] = Some(side);
+            } else if entry[1].is_none() {
+                entry[1] = Some(side);
+            }
+        }
+    }
+    sides
+}
+
+/// How far a model-edge stroke is nudged towards the camera so it wins the
+/// depth comparison against the faces it lies on.
+#[derive(Clone, Copy)]
+struct EdgeLift {
+    camera: ViewportCamera,
+    viewport: ViewportSizeResource,
+    sides: [Option<EdgeSideFace>; 2],
+    /// Hard ceiling in model units, from the body's size.
+    ceiling: f32,
+}
+
+/// Extra depth, in pixels, that a stroke half `half_width_px` wide needs so
+/// its outer pixels are not hidden by a face beside the edge that rises
+/// towards the camera. Zero for faces that fall away, as both faces of a
+/// convex edge do; both faces of an inside corner rise, which is what turned
+/// concave edges into faint dashes while convex ones stayed solid.
+fn edge_stroke_rise_px(
+    along: Vec3,
+    middle: Vec3,
+    forward: Vec3,
+    sides: &[Option<EdgeSideFace>; 2],
+    half_width_px: f32,
+) -> f32 {
+    let mut rise = 0.0f32;
+    for side in sides.iter().flatten() {
+        let mut across = side.normal.cross(along).normalize_or_zero();
+        if across == Vec3::ZERO {
+            continue;
+        }
+        if (side.interior - middle).dot(across) < 0.0 {
+            across = -across;
+        }
+        // Depth change per screen pixel while walking across the face away
+        // from the edge; negative means the face comes towards the camera.
+        let sine = across.dot(forward);
+        if sine >= 0.0 {
+            continue;
+        }
+        let cosine = (1.0 - sine * sine).max(1.0e-4).sqrt();
+        rise = rise.max(-sine / cosine * half_width_px);
+    }
+    rise
+}
+
 fn draw_edge_segments<Config: GizmoConfigGroup>(
     gizmos: &mut Gizmos<Config>,
     edge: &nbcad_solid::EdgeDto,
     color: Color,
     transform: &Transform,
+    lift: Option<EdgeLift>,
 ) {
+    // A model edge lies exactly on the faces that meet along it. A fixed depth
+    // bias is not enough to win that tie: on a face seen at a grazing angle the
+    // depth slope across one pixel is larger than the bias, so the stroke keeps
+    // losing the comparison and breaks up into dashes - which is what happened
+    // to a pocket floor arc while the top rim stayed solid. Nudging the stroke
+    // towards the camera resolves the exact tie. That nudge is bounded in
+    // model units, because a whole pixel can exceed a wall's thickness at wide
+    // zooms. An inside corner needs more: its faces rise towards the camera on
+    // both sides, so the stroke is lifted by the depth its own width spans
+    // across the steeper face, bounded in pixels and by the body's size.
+    let lift = lift.map(|lift| {
+        let position = Vec3::from_array(lift.camera.position);
+        let forward = (Vec3::from_array(lift.camera.target) - position).normalize_or_zero();
+        (forward, lift)
+    });
     for pair in edge.points.windows(2) {
-        gizmos.line(
-            transform.transform_point(Vec3::new(
-                pair[0].x as f32,
-                pair[0].y as f32,
-                pair[0].z as f32,
-            )),
-            transform.transform_point(Vec3::new(
-                pair[1].x as f32,
-                pair[1].y as f32,
-                pair[1].z as f32,
-            )),
-            color,
-        );
+        let mut start = transform.transform_point(Vec3::new(
+            pair[0].x as f32,
+            pair[0].y as f32,
+            pair[0].z as f32,
+        ));
+        let mut end = transform.transform_point(Vec3::new(
+            pair[1].x as f32,
+            pair[1].y as f32,
+            pair[1].z as f32,
+        ));
+        if let Some((forward, lift)) = lift {
+            let middle = (start + end) * 0.5;
+            let pixel = world_per_pixel_at(lift.camera, lift.viewport, middle);
+            let mut distance = pixel.min(MODEL_EDGE_MAX_LIFT_MM);
+            let along = (end - start).normalize_or_zero();
+            if along != Vec3::ZERO {
+                let rise = edge_stroke_rise_px(
+                    along,
+                    middle,
+                    forward,
+                    &lift.sides,
+                    MODEL_EDGE_STROKE_HALF_WIDTH_PX,
+                );
+                if rise > 0.0 {
+                    distance =
+                        distance.max((rise.min(MODEL_EDGE_MAX_LIFT_PX) * pixel).min(lift.ceiling));
+                }
+            }
+            let offset = forward * distance;
+            start -= offset;
+            end -= offset;
+        }
+        gizmos.line(start, end, color);
     }
 }
 
@@ -5554,6 +5965,30 @@ fn draw_sketch<Config, ColorFor>(
                 point_radius_px,
                 color,
                 !sketch_entity_style(entity).1,
+            );
+        }
+    }
+}
+
+/// Draw the support-face boundary projected into the active sketch.
+///
+/// This is reference geometry the user cannot pick, hover, grip or constrain,
+/// so it gets its own color and sits just under the authored sketch strokes
+/// (`FINISHED_SKETCH_OFFSET`). Use the same directed tessellation as browser
+/// drawing and snapping. Endpoint angles alone cannot distinguish a clockwise
+/// partial edge from its complementary arc on a reversed face basis. The exact
+/// circular carrier remains available to profile extraction and the kernel.
+fn draw_projected_edges<Config: GizmoConfigGroup>(
+    gizmos: &mut Gizmos<Config>,
+    sketch: &SketchDto,
+    color: Color,
+) {
+    for edge in &sketch.projected_edges {
+        for pair in edge.points.windows(2) {
+            gizmos.line(
+                sketch_world(&sketch.basis, pair[0].x, pair[0].y, FINISHED_SKETCH_OFFSET),
+                sketch_world(&sketch.basis, pair[1].x, pair[1].y, FINISHED_SKETCH_OFFSET),
+                color,
             );
         }
     }
@@ -6299,7 +6734,11 @@ pub(super) fn install_native_scene(app: &mut bevy::app::App) {
 pub(crate) fn interface_scene_fixture() -> bevy::app::App {
     let mut app = bevy::app::App::new();
     #[cfg(feature = "dev-bevy-host")]
-    app.add_plugins((bevy::app::TaskPoolPlugin::default(), bevy::asset::AssetPlugin::default(), bevy::scene::ScenePlugin));
+    app.add_plugins((
+        bevy::app::TaskPoolPlugin::default(),
+        bevy::asset::AssetPlugin::default(),
+        bevy::scene::ScenePlugin,
+    ));
     install_native_scene(&mut app);
     app
 }
@@ -6504,7 +6943,10 @@ pub(crate) fn apply_interface_model(world: &mut World, next: ViewportModel) -> R
 
 /// A real pre-feature model prepared in an isolated kernel. Its local geometry
 /// counter cannot authorize reuse of meshes from the live document (or vice versa).
-pub(crate) fn apply_interface_edit_model(world: &mut World, next: ViewportModel) -> Result<(), String> {
+pub(crate) fn apply_interface_edit_model(
+    world: &mut World,
+    next: ViewportModel,
+) -> Result<(), String> {
     apply_interface_model(world, next)?;
     let mut model = world.resource_mut::<ModelResource>();
     model.instance_revision = model.instance_revision.wrapping_add(1);
@@ -6526,7 +6968,10 @@ pub(crate) fn interface_view_snapshot(
 
 /// Camera motion samples never clone selection or assembly-pose vectors.
 pub(crate) fn interface_camera_snapshot(world: &World) -> (String, ViewportCamera) {
-    (world.resource::<ModelResource>().session_id.clone(), world.resource::<CameraResource>().camera)
+    (
+        world.resource::<ModelResource>().session_id.clone(),
+        world.resource::<CameraResource>().camera,
+    )
 }
 
 pub(crate) fn interface_model_revision(world: &World) -> u64 {
@@ -6535,7 +6980,12 @@ pub(crate) fn interface_model_revision(world: &World) -> u64 {
 
 pub(crate) fn interface_geometry(world: &World) -> super::ViewportGeometry<'_> {
     let model = world.resource::<ModelResource>();
-    super::ViewportGeometry { scene:&model.scene, active_sketch:model.active_sketch.as_ref(), finished_sketches:&model.finished_sketches, instance_body_poses:&model.instance_body_poses }
+    super::ViewportGeometry {
+        scene: &model.scene,
+        active_sketch: model.active_sketch.as_ref(),
+        finished_sketches: &model.finished_sketches,
+        instance_body_poses: &model.instance_body_poses,
+    }
 }
 
 pub(crate) fn interface_body_transform(
@@ -7023,8 +7473,23 @@ fn pick_occt_scene(
     instance_body_poses: &[InstanceBodyPoseDto],
     purpose: NativePickPurpose,
 ) -> Option<NativePick> {
-    if matches!(purpose, NativePickPurpose::RefinableEdge | NativePickPurpose::Edge | NativePickPurpose::StraightEdge | NativePickPurpose::Vertex) {
-        return edge_picking::pick_edges(scene,camera,viewport,[x,y],hidden_body_ids,body_poses,instance_body_poses,purpose);
+    if matches!(
+        purpose,
+        NativePickPurpose::RefinableEdge
+            | NativePickPurpose::Edge
+            | NativePickPurpose::StraightEdge
+            | NativePickPurpose::Vertex
+    ) {
+        return edge_picking::pick_edges(
+            scene,
+            camera,
+            viewport,
+            [x, y],
+            hidden_body_ids,
+            body_poses,
+            instance_body_poses,
+            purpose,
+        );
     }
     let (origin, direction, world_per_pixel_factor) = camera_pick_ray(camera, viewport, x, y)?;
     let mut best: Option<NativePick> = None;
@@ -8139,6 +8604,238 @@ mod tests {
     }
 
     #[test]
+    fn inside_corner_faces_lift_the_stroke_and_outside_corners_do_not() {
+        // A vertical edge at the origin, seen from the front right and above.
+        let along = Vec3::Z;
+        let middle = Vec3::ZERO;
+        let forward = Vec3::new(-0.6, 0.6, -0.5).normalize();
+        let half_width = 1.5;
+        // Inside corner: material fills three quadrants, the free quadrant
+        // opens towards the camera. Both faces rise towards the camera.
+        let inside = [
+            Some(EdgeSideFace {
+                normal: Vec3::NEG_Y,
+                interior: Vec3::new(2.5, 0.0, 2.5),
+            }),
+            Some(EdgeSideFace {
+                normal: Vec3::X,
+                interior: Vec3::new(0.0, -10.0, 2.5),
+            }),
+        ];
+        let rise = edge_stroke_rise_px(along, middle, forward, &inside, half_width);
+        assert!(
+            rise > half_width * 0.5 && rise.is_finite(),
+            "inside corner rise {rise}"
+        );
+        // Front-right corner of the same plate: both faces fall away from the
+        // camera, so the stroke needs no lift beyond the tie-break.
+        let outside = [
+            Some(EdgeSideFace {
+                normal: Vec3::NEG_Y,
+                interior: Vec3::new(-10.0, 0.0, 2.5),
+            }),
+            Some(EdgeSideFace {
+                normal: Vec3::X,
+                interior: Vec3::new(0.0, 10.0, 2.5),
+            }),
+        ];
+        assert_eq!(
+            edge_stroke_rise_px(along, middle, forward, &outside, half_width),
+            0.0
+        );
+        // An edge beside a curved face has nothing to measure against.
+        assert_eq!(
+            edge_stroke_rise_px(along, middle, forward, &[None, None], half_width),
+            0.0
+        );
+    }
+
+    #[test]
+    fn edge_side_faces_follow_boundary_membership() {
+        let plane = |normal: [f64; 3]| nbcad_core::PlaneBasis {
+            origin: [0.0; 3],
+            u: [1.0, 0.0, 0.0],
+            v: [0.0, 1.0, 0.0],
+            normal,
+        };
+        let signature =
+            |centroid: [f64; 3], normal: [f64; 3]| nbcad_solid::PlanarFaceSignatureDto {
+                centroid: nbcad_solid::Point3Dto {
+                    x: centroid[0],
+                    y: centroid[1],
+                    z: centroid[2],
+                },
+                normal: nbcad_solid::Point3Dto {
+                    x: normal[0],
+                    y: normal[1],
+                    z: normal[2],
+                },
+                area: 1.0,
+                perimeter: 4.0,
+                wire_count: 1,
+                edge_count: 4,
+            };
+        let face = |id: u64, normal: [f64; 3], centroid: [f64; 3], edges: &[&str]| FaceDto {
+            id: nbcad_core::FaceId(id),
+            key: format!("face:{id}"),
+            first_index: 0,
+            index_count: 0,
+            plane: Some(plane(normal)),
+            signature: Some(signature(centroid, normal)),
+            cylinder: None,
+            edge_keys: edges.iter().map(|edge| edge.to_string()).collect(),
+            cone: None,
+        };
+        let body = BodyDto {
+            id: nbcad_core::BodyId(1),
+            topology_signature: String::new(),
+            name: "Plate".into(),
+            feature_id: nbcad_core::FeatureId(2),
+            mesh: nbcad_solid::MeshDto {
+                positions: Vec::new(),
+                normals: Vec::new(),
+                indices: Vec::new(),
+            },
+            faces: vec![
+                face(
+                    1,
+                    [0.0, -1.0, 0.0],
+                    [22.5, 20.0, 2.5],
+                    &["edge:4", "edge:9"],
+                ),
+                face(2, [1.0, 0.0, 0.0], [20.0, 10.0, 2.5], &["edge:4", "edge:7"]),
+            ],
+            edges: Vec::new(),
+        };
+        let sides = edge_side_faces(&body, &Transform::IDENTITY);
+        let corner = sides["edge:4"];
+        assert_eq!(corner[0].map(|side| side.normal), Some(Vec3::NEG_Y));
+        assert_eq!(corner[1].map(|side| side.normal), Some(Vec3::X));
+        assert_eq!(sides["edge:9"][1], None);
+        assert!(!sides.contains_key("edge:1"));
+    }
+
+    #[test]
+    fn grid_step_follows_the_1_2_5_sequence_and_clamps() {
+        let close = |actual: f32, expected: f32| (actual - expected).abs() <= expected * 1.0e-5;
+        // 24 px at the view center: 0.1 mm/px asks for 2.4 mm and gets 2 mm.
+        assert!(close(adaptive_grid_step(0.1), 2.0));
+        assert!(close(adaptive_grid_step(0.3), 10.0));
+        assert!(close(adaptive_grid_step(1.0), 20.0));
+        assert!(close(adaptive_grid_step(2.0), 50.0));
+        assert!(close(adaptive_grid_step(1.0e-9), GRID_MIN_STEP));
+        assert!(close(adaptive_grid_step(1.0e9), GRID_MAX_STEP));
+        assert!(close(adaptive_grid_step(f32::NAN), 10.0));
+    }
+
+    #[test]
+    fn grid_lattices_nest_along_the_sequence() {
+        assert_eq!(one_two_five_ceiling(0.3), 0.5);
+        assert_eq!(one_two_five_ceiling(2.0), 2.0);
+        assert_eq!(one_two_five_ceiling(2.1), 5.0);
+        assert_eq!(one_two_five_ceiling(60.0), 100.0);
+        assert_eq!(one_two_five_ceiling(-1.0), GRID_MIN_STEP);
+        // Finest lattice 2 mm: 6 mm is only a 2 mm line, 10 mm belongs to the
+        // 10 mm lattice, 50 mm to the 50 mm one, the origin to all of them.
+        assert_eq!(coarsest_lattice_ratio(3, 2), 1.0);
+        assert_eq!(coarsest_lattice_ratio(5, 2), 5.0);
+        assert_eq!(coarsest_lattice_ratio(25, 2), 25.0);
+        assert_eq!(coarsest_lattice_ratio(-25, 2), 25.0);
+        assert!(coarsest_lattice_ratio(0, 2).is_infinite());
+        // Finest lattice 5 mm: 10 mm is a 10 mm line, 15 mm only a 5 mm line.
+        assert_eq!(coarsest_lattice_ratio(2, 5), 2.0);
+        assert_eq!(coarsest_lattice_ratio(3, 5), 1.0);
+        assert_eq!(coarsest_lattice_ratio(20, 5), 20.0);
+    }
+
+    #[test]
+    fn grid_lines_brighten_continuously_with_their_spacing() {
+        let fine = Color::srgba(0.2, 0.2, 0.2, 0.3);
+        let major = Color::srgba(0.4, 0.4, 0.4, 0.5);
+        let alpha = |spacing: f32| grid_line_color(spacing, fine, major).alpha();
+        assert_eq!(alpha(4.0), 0.0);
+        assert!((alpha(20.0) - 0.3).abs() < 1.0e-6);
+        assert!((alpha(300.0) - 0.5).abs() < 1.0e-6);
+        let mut previous = alpha(1.0);
+        let mut spacing = 1.0f32;
+        while spacing < 1000.0 {
+            spacing *= 1.02;
+            let next = alpha(spacing);
+            assert!(
+                next >= previous - 1.0e-6,
+                "brightness never drops as a lattice spreads"
+            );
+            assert!(next - previous < 0.02, "no visible jump at {spacing} px");
+            previous = next;
+        }
+    }
+
+    #[test]
+    fn grid_sheet_follows_zoom_and_pan_without_jumps() {
+        let viewport = ViewportSizeResource {
+            logical_width: 1_200.0,
+            logical_height: 800.0,
+        };
+        let [(_, ground, _), ..] = origin_plane_bases();
+        let fine = rgba([0.2, 0.2, 0.2], 0.28);
+        let major = rgba([0.4, 0.4, 0.4], 0.48);
+        // Brightness of the world line at x = 20 mm while zooming out two
+        // decades in 1 % steps: it is a 20 mm line however the finest drawn
+        // lattice moves, so its colour must never jump between frames.
+        let mut previous: Option<f32> = None;
+        let mut distance = 40.0f32;
+        while distance < 4_000.0 {
+            let camera = ViewportCamera {
+                position: [0.0, 0.0, distance],
+                target: [0.0, 0.0, 0.0],
+                up: [0.0, 1.0, 0.0],
+                vertical_fov_degrees: 45.0,
+            };
+            let layout = grid_layout(camera, viewport, &ground);
+            assert!([1, 2, 5].contains(&layout.finest_mantissa));
+            let pixel = world_per_pixel_at(camera, viewport, Vec3::ZERO);
+            assert!(
+                layout.finest / pixel >= GRID_LINE_FADE_IN_PX[0] - 1.0e-3,
+                "the finest lattice is never drawn denser than its fade-in spacing"
+            );
+            assert!(
+                layout.finest / pixel < GRID_LINE_FADE_IN_PX[0] * 2.5 + 1.0e-3,
+                "the finest lattice is never coarser than the next member down would allow"
+            );
+            assert!((layout.radius - pixel * 800.0 * GRID_SHEET_RADIUS_HEIGHTS).abs() < 1.0e-3);
+            // Once the finest drawn lattice is coarser than 20 mm the line is
+            // simply absent, which must coincide with it having faded out.
+            let index = (20.0 / layout.finest).round() as i64;
+            let alpha = if (index as f32 * layout.finest - 20.0).abs() < 1.0e-4 {
+                let spacing = coarsest_lattice_ratio(index, layout.finest_mantissa) as f32
+                    * layout.finest
+                    / pixel;
+                grid_line_color(spacing, fine, major).alpha()
+            } else {
+                0.0
+            };
+            if let Some(previous) = previous {
+                assert!(
+                    (alpha - previous).abs() < 0.02,
+                    "20 mm line alpha jumped {previous} -> {alpha} at distance {distance}"
+                );
+            }
+            previous = Some(alpha);
+            distance *= 1.01;
+        }
+        // Panning keeps the sheet centred on the target itself, on no grid multiple.
+        let panned = ViewportCamera {
+            position: [12_345.6, -678.9, 200.0],
+            target: [12_345.6, -678.9, 0.0],
+            up: [0.0, 1.0, 0.0],
+            vertical_fov_degrees: 45.0,
+        };
+        let layout = grid_layout(panned, viewport, &ground);
+        assert!((layout.center.x - 12_345.6).abs() < 1.0e-2);
+        assert!((layout.center.y + 678.9).abs() < 1.0e-2);
+    }
+
+    #[test]
     fn reference_planes_scale_with_camera_depth() {
         let viewport = ViewportSizeResource {
             logical_width: 1_200.0,
@@ -8247,13 +8944,20 @@ mod tests {
     #[cfg(feature = "dev-bevy-host")]
     #[test]
     fn support_picking_uses_finite_visible_quads_and_forward_rays() {
-        let xy=nbcad_core::PlaneRef::ORIGIN_PLANES[0].origin_basis().unwrap();
-        assert_eq!(ray_reference_quad(Vec3::new(3.,4.,20.),Vec3::NEG_Z,xy,10.),Some(20.));
-        assert!(ray_reference_quad(Vec3::new(11.,4.,20.),Vec3::NEG_Z,xy,10.).is_none());
-        assert!(ray_reference_quad(Vec3::new(3.,4.,20.),Vec3::X,xy,10.).is_none());
-        assert!(ray_reference_quad(Vec3::new(3.,4.,20.),Vec3::Z,xy,10.).is_none());
-        assert!(ray_reference_quad(Vec3::NAN,Vec3::NEG_Z,xy,10.).is_none());
-        assert!(ray_reference_quad(Vec3::new(3.,4.,20.),Vec3::NEG_Z,xy,f32::INFINITY).is_none());
+        let xy = nbcad_core::PlaneRef::ORIGIN_PLANES[0]
+            .origin_basis()
+            .unwrap();
+        assert_eq!(
+            ray_reference_quad(Vec3::new(3., 4., 20.), Vec3::NEG_Z, xy, 10.),
+            Some(20.)
+        );
+        assert!(ray_reference_quad(Vec3::new(11., 4., 20.), Vec3::NEG_Z, xy, 10.).is_none());
+        assert!(ray_reference_quad(Vec3::new(3., 4., 20.), Vec3::X, xy, 10.).is_none());
+        assert!(ray_reference_quad(Vec3::new(3., 4., 20.), Vec3::Z, xy, 10.).is_none());
+        assert!(ray_reference_quad(Vec3::NAN, Vec3::NEG_Z, xy, 10.).is_none());
+        assert!(
+            ray_reference_quad(Vec3::new(3., 4., 20.), Vec3::NEG_Z, xy, f32::INFINITY).is_none()
+        );
     }
 
     #[test]
@@ -8876,7 +9580,8 @@ mod tests {
     #[test]
     fn isolated_edit_model_cannot_reuse_live_meshes_with_the_same_geometry_counter() {
         let mut app = interface_scene_fixture();
-        let snapshot = crate::session_bridge::native_interface::model_snapshot(&crate::state::AppState::new());
+        let snapshot =
+            crate::session_bridge::native_interface::model_snapshot(&crate::state::AppState::new());
         apply_interface_model(app.world_mut(), snapshot.clone()).unwrap();
         let before = app.world().resource::<ModelResource>().instance_revision;
         apply_interface_edit_model(app.world_mut(), snapshot.clone()).unwrap();
@@ -8884,7 +9589,10 @@ mod tests {
         assert_ne!(staged, before);
         assert!(app.world().resource::<ModelResource>().transient_model);
         apply_interface_model(app.world_mut(), snapshot).unwrap();
-        assert_ne!(app.world().resource::<ModelResource>().instance_revision, staged);
+        assert_ne!(
+            app.world().resource::<ModelResource>().instance_revision,
+            staged
+        );
         assert!(!app.world().resource::<ModelResource>().transient_model);
     }
 

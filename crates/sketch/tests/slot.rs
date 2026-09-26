@@ -21,6 +21,7 @@ fn session() -> SketchSession {
 
 fn req(mode: SlotMode, p1: Vec2, p2: Vec2, cursor: Vec2, width_text: Option<&str>) -> SlotRequest {
     SlotRequest {
+        ctrl_held: false,
         mode,
         p1,
         p2,

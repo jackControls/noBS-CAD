@@ -103,6 +103,12 @@ pub enum Constraint {
         edge: EdgeId,
         position: Vec2,
     },
+    /// A sliding relation to a finite support-face edge. The history-stage
+    /// carrier is cached in the sketch snapshot and refreshed by stable id.
+    ReferenceOnEdge {
+        point: EntityId,
+        edge: EdgeId,
+    },
     /// Midpoint of an edge's original corner-to-corner span after a corner
     /// modifier trims one or both finite endpoints. `start` and `end` are
     /// the persistent corner reference points retained by Fillet/Chamfer.
@@ -168,6 +174,14 @@ pub enum Constraint {
         b: EntityId,
         value: f64,
     },
+    /// Included angle of an arc, in degrees. A center-point arc stores its own
+    /// start and end angles, so its sweep is a real degree of freedom and can be
+    /// dimensioned in its own right - which is what a typed sweep angle needs in
+    /// order to stay editable afterwards.
+    ArcAngle {
+        entity: EntityId,
+        value: f64,
+    },
 }
 
 impl Constraint {
@@ -210,6 +224,9 @@ impl Constraint {
             | (Constraint::Angle { a, b, .. }, Constraint::Angle { a: c, b: d, .. }) => {
                 unordered_pair_eq(a, b, c, d)
             }
+            (Constraint::ArcAngle { entity: a, .. }, Constraint::ArcAngle { entity: b, .. }) => {
+                a == b
+            }
             (
                 Constraint::Symmetry { a, b, axis },
                 Constraint::Symmetry {
@@ -239,6 +256,13 @@ impl Constraint {
                     point: other_point,
                     edge: other_edge,
                     ..
+                },
+            ) => point == other_point && edge == other_edge,
+            (
+                Constraint::ReferenceOnEdge { point, edge },
+                Constraint::ReferenceOnEdge {
+                    point: other_point,
+                    edge: other_edge,
                 },
             ) => point == other_point && edge == other_edge,
             (
@@ -309,7 +333,8 @@ impl Constraint {
             Constraint::Distance { value, .. }
             | Constraint::Radius { value, .. }
             | Constraint::Diameter { value, .. }
-            | Constraint::Angle { value, .. } => *value = target,
+            | Constraint::Angle { value, .. }
+            | Constraint::ArcAngle { value, .. } => *value = target,
             _ => {}
         }
     }
@@ -331,11 +356,15 @@ impl Constraint {
             Constraint::Fix { .. } => "fix",
             Constraint::Midpoint { .. } => "midpoint",
             Constraint::ReferenceMidpoint { .. } => "reference_midpoint",
+            Constraint::ReferenceOnEdge { .. } => "reference_on_edge",
             Constraint::SpanMidpoint { .. } => "span_midpoint",
             Constraint::Concentric { .. } => "concentric",
             Constraint::Collinear { .. } => "collinear",
             Constraint::Symmetry { .. } => "symmetry",
             Constraint::ArcEndpointCoincident { .. } => "arc_endpoint_coincident",
+            // Surfaced as an angle dimension: the viewport anchors it at the
+            // arc's centre when the dimension names a single arc.
+            Constraint::ArcAngle { .. } => "angle",
             Constraint::EqualDistance { .. } => "equal_distance",
             Constraint::Distance { .. } => "distance",
             Constraint::Radius { .. } => "radius",
@@ -349,7 +378,8 @@ impl Constraint {
             Constraint::Distance { .. }
             | Constraint::Radius { .. }
             | Constraint::Diameter { .. }
-            | Constraint::Angle { .. } => ConstraintKind::Dimensional,
+            | Constraint::Angle { .. }
+            | Constraint::ArcAngle { .. } => ConstraintKind::Dimensional,
             _ => ConstraintKind::Geometric,
         }
     }
@@ -364,6 +394,7 @@ impl Constraint {
             | Constraint::Radius { entity, .. }
             | Constraint::Diameter { entity, .. } => vec![entity],
             Constraint::ReferenceMidpoint { point, .. } => vec![point],
+            Constraint::ReferenceOnEdge { point, .. } => vec![point],
             Constraint::CenterCoincident { point, curve } => vec![point, curve],
             Constraint::Coincident { a, b }
             | Constraint::HorizontalPoints { a, b }
@@ -376,6 +407,7 @@ impl Constraint {
             | Constraint::Concentric { a, b }
             | Constraint::Collinear { a, b }
             | Constraint::Angle { a, b, .. } => vec![a, b],
+            Constraint::ArcAngle { entity, .. } => vec![entity],
             Constraint::ArcEndpointCoincident { point, arc, .. } => vec![point, arc],
             Constraint::SpanMidpoint { point, start, end } => vec![point, start, end],
             Constraint::EqualDistance { origin, a, b } => vec![origin, a, b],

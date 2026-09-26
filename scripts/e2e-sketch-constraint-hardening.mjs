@@ -7,18 +7,31 @@
  * - duplicate relations are rejected without polluting the graph;
  * - deliberate shallow diagonals survive while near-axis intent is inferred;
  * - all direction-only ribbon paths retain authored finite lengths;
- * - Equal changes only target size, preserving both authored bearings.
+ * - Equal changes only target size, preserving both authored bearings;
+ * - point/curve Concentric solves through the ribbon and restores geometry
+ *   and constraints with one Undo/Redo, in both pick orders and all entry flows.
  */
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 
-const BASE = 'http://localhost:7199';
+const BASE = process.env.NBCAD_E2E_BASE_URL ?? 'http://localhost:7199';
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const pageErrors = [];
 page.on('pageerror', (error) => pageErrors.push(String(error)));
 
 const state = () => page.evaluate(() => window.__appStore.getState());
+const applyConstraint = async (id) => {
+  const button = page.locator(`[data-ribbon-button="${id}"]`);
+  if (await button.isVisible()) {
+    await button.click();
+  } else {
+    // Concentric is menu-only; responsive layouts also move Equal here.
+    await page.locator('[data-ribbon-panel="constrain"]')
+      .getByRole('button', { name: 'CONSTRAIN', exact: true }).click();
+    await page.locator(`[data-ribbon-menu-id="${id}"]`).click();
+  }
+};
 const applyHorizontalVertical = async () => {
   await page.locator('[data-ribbon-button="horizontalVertical"]').click();
 };
@@ -272,7 +285,7 @@ try {
     new Set((await state()).selectedEntities),
     new Set(selectionOrderFixture.bothFirst),
   );
-  await page.locator('[data-ribbon-button="equal"]').click();
+  await applyConstraint('equal');
   await page.waitForFunction(
     ({ ids }) => window.__appStore.getState().activeSketch?.constraints.some(
       (constraint) => constraint.type === 'equal'
@@ -585,7 +598,7 @@ try {
       targetDirection: [goal.end.x - goal.start.x, goal.end.y - goal.start.y],
     };
   });
-  await page.locator('[data-ribbon-button="equal"]').click();
+  await applyConstraint('equal');
   await page.waitForFunction(
     ({ reference, target }) => window.__appStore.getState().activeSketch?.constraints.some(
       (constraint) => constraint.type === 'equal'
@@ -606,6 +619,155 @@ try {
   };
   assert.ok(sameBearing(equalFixture.referenceDirection, equalReference));
   assert.ok(sameBearing(equalFixture.targetDirection, equalTarget));
+
+  console.log('7. Point/curve Concentric applies and undoes through the real UI and engine');
+  for (const kind of ['circle', 'arc']) {
+    for (const pointFirst of [true, false]) {
+      for (const flow of ['both-first', 'one-first', 'button-first']) {
+        const label = `${kind}, ${pointFirst ? 'point first' : 'curve first'}, ${flow}`;
+        const fixture = await page.evaluate(async (kind) => {
+          const engine = window.__engine;
+          const store = window.__appStore.getState();
+          store.setActiveTool(null);
+          store.setPendingConstraintTool(null);
+          store.setSelectedEntities([]);
+          store.setSelectedEntity(null);
+          store.setSelectedConstraint(null);
+          store.setSelectedDimension(null);
+          store.setConstraintDialog(null);
+          store.applySolidUpdate(await engine.newProject());
+          await engine.beginSketch({ type: 'origin_plane', plane: 'xy' });
+          await engine.setGridSnap(false);
+
+          // A fixed, distant datum ensures the new relation must move the
+          // curve center, rather than pass because of creation-time snapping.
+          const pointResult = await engine.addPoint({
+            position: { x: -30, y: -12 },
+            ctrl_held: true,
+          });
+          const pointId = pointResult.entities[0];
+          await engine.toggleFixEntities([pointId]);
+          const center = { x: 24, y: 21 };
+          const curveResult = kind === 'circle'
+            ? await engine.addCircle({
+                mode: 'center_diameter', p1: center, p2: { x: 34, y: 21 }, ctrl_held: true,
+              })
+            : await engine.addArcCenter({
+                center, start: { x: 34, y: 21 }, sweep: { x: 24, y: 31 }, ctrl_held: true,
+              });
+          const before = curveResult.sketch;
+          const curve = before.entities.find((entity) => entity.kind === kind);
+          const point = before.entities.find((entity) => entity.id === pointId);
+          store.setActiveSketch(before);
+          store.setMode('sketch');
+          return { pointId, curveId: curve.id, point: point.position, before };
+        }, kind);
+        assert.ok(!fixture.before.constraints.some((constraint) =>
+          constraint.type === 'center_coincident' && constraint.curve === fixture.curveId,
+        ), `${label}: no pre-existing center relation`);
+        const beforeCurve = fixture.before.entities.find((entity) => entity.id === fixture.curveId);
+        assert.ok(Math.hypot(
+          beforeCurve.center.x - fixture.point.x,
+          beforeCurve.center.y - fixture.point.y,
+        ) > 10, `${label}: center starts away from the fixed point`);
+
+        await page.evaluate(() => window.__cameraApi.fit());
+        await page.waitForFunction(() => !window.__cameraApi.isAnimating());
+        const pick = async (entityId, additive = false) => {
+          const position = entityId === fixture.pointId
+            ? fixture.point
+            : {
+                x: beforeCurve.center.x + beforeCurve.radius / Math.sqrt(2),
+                y: beforeCurve.center.y + beforeCurve.radius / Math.sqrt(2),
+              };
+          const screen = await page.evaluate(
+            ({ x, y }) => window.__sketchToScreen(x, y), position,
+          );
+          if (additive) await page.keyboard.down('Shift');
+          try {
+            await page.mouse.click(screen.x, screen.y);
+          } finally {
+            if (additive) await page.keyboard.up('Shift');
+          }
+        };
+        const ids = pointFirst
+          ? [fixture.pointId, fixture.curveId]
+          : [fixture.curveId, fixture.pointId];
+        if (flow === 'both-first') {
+          await pick(ids[0]);
+          await pick(ids[1], true);
+          assert.deepEqual((await state()).selectedEntities, ids, `${label}: ordered preselection`);
+          await applyConstraint('concentric');
+        } else {
+          if (flow === 'one-first') await pick(ids[0]);
+          await applyConstraint('concentric');
+          assert.equal((await state()).pendingConstraintTool, 'concentric', `${label}: command arms`);
+          if (flow === 'button-first') await pick(ids[0]);
+          const pending = await state();
+          assert.equal(pending.pendingConstraintTool, 'concentric', `${label}: accepts first pick`);
+          assert.deepEqual(pending.selectedEntities, [ids[0]], `${label}: retains first pick`);
+          await pick(ids[1]);
+        }
+        await page.waitForFunction(
+          ({ pointId, curveId }) => {
+            const current = window.__appStore.getState();
+            return current.constraintDialog !== null || current.activeSketch.constraints.some(
+              (constraint) => constraint.type === 'center_coincident'
+                && constraint.point === pointId && constraint.curve === curveId,
+            );
+          }, fixture,
+        );
+        const applied = await state();
+        assert.equal(applied.constraintDialog, null, `${label}: no constraint error`);
+        assert.equal(applied.pendingConstraintTool, null, `${label}: command completes`);
+        assert.deepEqual(applied.selectedEntities, [], `${label}: consumed selection clears`);
+        assert.equal(applied.selectedEntity, null, `${label}: primary selection clears`);
+        const solved = applied.activeSketch;
+        const solvedCurve = solved.entities.find((entity) => entity.id === fixture.curveId);
+        const solvedPoint = solved.entities.find((entity) => entity.id === fixture.pointId);
+        assert.ok(Math.hypot(
+          solvedCurve.center.x - fixture.point.x,
+          solvedCurve.center.y - fixture.point.y,
+        ) < 1e-6, `${label}: real solver moves curve center to the datum`);
+        assert.ok(Math.hypot(
+          solvedPoint.position.x - fixture.point.x,
+          solvedPoint.position.y - fixture.point.y,
+        ) < 1e-6, `${label}: fixed point stays put within solver tolerance`);
+        assert.equal(solved.constraints.length, fixture.before.constraints.length + 1,
+          `${label}: exactly one relation is added`);
+        assert.equal(solved.can_undo, true, `${label}: application is undoable`);
+
+        await page.locator('[data-native-nav-id="undo"]').click();
+        await page.waitForFunction(
+          ({ pointId, curveId }) => {
+            const sketch = window.__appStore.getState().activeSketch;
+            return sketch.can_redo && !sketch.constraints.some((constraint) =>
+              constraint.type === 'center_coincident'
+                && constraint.point === pointId && constraint.curve === curveId,
+            );
+          }, fixture,
+        );
+        const undone = (await state()).activeSketch;
+        assert.deepEqual(undone.entities, fixture.before.entities,
+          `${label}: one Undo restores every entity, including arc endpoints`);
+        assert.deepEqual(undone.constraints, fixture.before.constraints,
+          `${label}: Undo removes only the new relation`);
+        assert.deepEqual(undone.dof, fixture.before.dof, `${label}: Undo restores degrees of freedom`);
+
+        await page.locator('[data-native-nav-id="redo"]').click();
+        await page.waitForFunction(
+          ({ pointId, curveId }) => window.__appStore.getState().activeSketch.constraints.some(
+            (constraint) => constraint.type === 'center_coincident'
+              && constraint.point === pointId && constraint.curve === curveId,
+          ), fixture,
+        );
+        const redone = (await state()).activeSketch;
+        assert.deepEqual(redone.entities, solved.entities, `${label}: Redo restores solved geometry`);
+        assert.deepEqual(redone.constraints, solved.constraints, `${label}: Redo restores relation`);
+        console.log(`  [ok] ${label}: apply, Undo, Redo`);
+      }
+    }
+  }
 
   assert.deepEqual(pageErrors, []);
   console.log('  [ok] sketch constraint audit hardening stays integrated through the UI');

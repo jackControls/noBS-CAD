@@ -870,4 +870,780 @@ mod tests {
             }
         }
     }
+
+    /// Real production GPU path for model-edge strokes on an inside corner: the
+    /// two faces beside a concave edge both rise towards the camera, so a stroke
+    /// that only wins exact depth ties loses most of its width to them. The
+    /// probe compares renders with and without edges along a concave edge and a
+    /// convex one of the same plate. Kept opt-in for GPU-less hosts; set
+    /// `NBCAD_PREVIEW_PROOF_DIR` to retain the rendered evidence.
+    #[test]
+    #[ignore = "requires a GPU; set NBCAD_PREVIEW_PROOF_DIR to retain visual evidence"]
+    fn native_concave_edge_strokes_read_like_convex_ones() {
+        use nbcad_core::{OriginPlane, PlaneRef};
+        use nbcad_sketch::{
+            RectangleMode, RectangleRequest, SegmentRequest, SetGridSnapRequest, SketchManager,
+            Vec2 as P,
+        };
+        use nbcad_solid::{CommitKernelRequest, ExtrudeExtent, ExtrudeOperation, ExtrudeRequest};
+        let extrude = |manager: &mut SketchManager,
+                       kernel: &mut nbcad_occt::OcctKernel,
+                       sketch: &str,
+                       operation: ExtrudeOperation,
+                       distance: f64,
+                       flip: bool| {
+            let targets = manager
+                .solid_scene()
+                .bodies
+                .iter()
+                .map(|body| body.id)
+                .collect::<Vec<_>>();
+            let plan = manager
+                .prepare_extrude(ExtrudeRequest {
+                    source_face: None,
+                    sketch_name: sketch.into(),
+                    profile_indices: vec![0],
+                    operation,
+                    extent: ExtrudeExtent::Distance { distance },
+                    taper_angle_deg: 0.0,
+                    flip,
+                    target_body_ids: if operation == ExtrudeOperation::NewBody {
+                        vec![]
+                    } else {
+                        targets
+                    },
+                })
+                .unwrap();
+            let scene = kernel.recompute(&plan).unwrap();
+            manager
+                .commit_solid(CommitKernelRequest {
+                    transaction_id: plan.transaction_id,
+                    scene,
+                })
+                .unwrap();
+        };
+        let begin = |manager: &mut SketchManager| {
+            manager
+                .begin_sketch(PlaneRef::OriginPlane {
+                    plane: OriginPlane::Xy,
+                })
+                .unwrap();
+            manager
+                .set_grid_snap(SetGridSnapRequest { enabled: false })
+                .unwrap();
+        };
+        let rectangle = |manager: &mut SketchManager, p1: P, p2: P| {
+            manager
+                .add_rectangle(RectangleRequest {
+                    mode: RectangleMode::TwoPoint,
+                    p1,
+                    p2,
+                    ctrl_held: true,
+                })
+                .unwrap();
+        };
+
+        // The reported part: a 25 mm square plate with a 5 x 20 mm strip
+        // removed, leaving a 5 mm arm along the back and an inside corner at
+        // (20, 20). Five millimetres thick.
+        let mut manager = SketchManager::new();
+        let mut kernel = nbcad_occt::OcctKernel::new().unwrap();
+        begin(&mut manager);
+        let outline = [
+            P::new(0.0, 0.0),
+            P::new(0.0, 25.0),
+            P::new(25.0, 25.0),
+            P::new(25.0, 20.0),
+            P::new(20.0, 20.0),
+            P::new(20.0, 0.0),
+        ];
+        for index in 0..outline.len() {
+            manager
+                .add_line(SegmentRequest {
+                    from: outline[index],
+                    to_raw: outline[(index + 1) % outline.len()],
+                    ctrl_held: true,
+                })
+                .unwrap();
+        }
+        manager.end_sketch().unwrap();
+        extrude(
+            &mut manager,
+            &mut kernel,
+            "Sketch1",
+            ExtrudeOperation::NewBody,
+            5.0,
+            false,
+        );
+        let plate = manager.solid_scene();
+
+        // A 30 mm square block, 8 mm thick, with a 16 mm square pocket 4 mm
+        // deep cut from its top face: every floor edge is an inside corner
+        // between the floor and a wall. The face sketch's cut direction is
+        // found by trying both, since only one removes material.
+        let pocket = [false, true]
+            .into_iter()
+            .find_map(|flip| {
+                let mut manager = SketchManager::new();
+                let mut kernel = nbcad_occt::OcctKernel::new().unwrap();
+                begin(&mut manager);
+                rectangle(&mut manager, P::new(0.0, 0.0), P::new(30.0, 30.0));
+                manager.end_sketch().unwrap();
+                extrude(
+                    &mut manager,
+                    &mut kernel,
+                    "Sketch1",
+                    ExtrudeOperation::NewBody,
+                    8.0,
+                    false,
+                );
+                let top = manager.solid_scene().bodies[0]
+                    .faces
+                    .iter()
+                    .find(|face| face.plane.is_some_and(|plane| plane.normal[2] > 0.9))
+                    .map(|face| face.id)
+                    .expect("the block has a top face");
+                manager
+                    .begin_sketch(PlaneRef::PlanarFace { face_id: top })
+                    .unwrap();
+                manager
+                    .set_grid_snap(SetGridSnapRequest { enabled: false })
+                    .unwrap();
+                rectangle(&mut manager, P::new(-8.0, -8.0), P::new(8.0, 8.0));
+                manager.end_sketch().unwrap();
+                extrude(
+                    &mut manager,
+                    &mut kernel,
+                    "Sketch2",
+                    ExtrudeOperation::Cut,
+                    4.0,
+                    flip,
+                );
+                let scene = manager.solid_scene();
+                (scene.bodies.len() == 1 && scene.bodies[0].faces.len() == 11).then_some(scene)
+            })
+            .expect("one cut direction hollows the pocket: 6 block faces, 4 walls, 1 floor");
+
+        let mut renderer = PreviewRenderer::new().unwrap();
+        let cancelled = AtomicBool::new(false);
+        let output = std::env::var_os("NBCAD_PREVIEW_PROOF_DIR");
+        if let Some(path) = &output {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        // Seen from the front right and above, like the report: both faces of
+        // each inside corner and of its convex reference edge are visible.
+        let cases = [
+            (
+                "inside-corner",
+                plate,
+                [20.0, 20.0, 0.0, 5.0],
+                [20.0, 0.0, 0.0, 5.0],
+            ),
+            // Far floor edge of the pocket against the back top rim above it.
+            (
+                "pocket-floor",
+                pocket,
+                [7.0, 23.0, 4.0, 23.0],
+                [0.0, 30.0, 8.0, 30.0],
+            ),
+        ];
+        for (label, scene, concave_edge, convex_edge) in cases {
+            let mut without_edges = scene.clone();
+            without_edges.bodies[0].edges.clear();
+            let document = PreviewDocument::new(vec![
+                Frame {
+                    caption: format!("{label} with edges"),
+                    scene,
+                },
+                Frame {
+                    caption: format!("{label} without edges"),
+                    scene: without_edges,
+                },
+            ])
+            .unwrap();
+            let mut request = request(label.into(), String::new(), 1);
+            request.width = 800;
+            request.height = 600;
+            request.yaw = std::f32::consts::FRAC_PI_4 * 0.75;
+            request.pitch = 0.55;
+            let mut renders = Vec::new();
+            for frame_index in 0..2 {
+                request.frame_index = frame_index;
+                let png = renderer
+                    .render(
+                        &document,
+                        &request,
+                        &cancelled,
+                        Instant::now() + Duration::from_secs(60),
+                    )
+                    .unwrap();
+                if let Some(path) = &output {
+                    std::fs::write(
+                        std::path::Path::new(path).join(format!(
+                            "{label}-{}.png",
+                            if frame_index == 0 { "with" } else { "without" }
+                        )),
+                        &png,
+                    )
+                    .unwrap();
+                }
+                renders.push(decode_rgba(&png));
+            }
+            let (width, height, with_edges) = &renders[0];
+            let (_, _, without_edges) = &renders[1];
+            let camera = document.camera(&request);
+            let view = camera_transform(camera).to_matrix().inverse();
+            let projection = Mat4::perspective_infinite_reverse_rh(
+                camera.vertical_fov_degrees.to_radians(),
+                *width as f32 / *height as f32,
+                0.1,
+            );
+            let to_pixel = |point: Vec3| {
+                let clip = projection * view * point.extend(1.0);
+                let ndc = clip.truncate() / clip.w;
+                (
+                    (ndc.x + 1.0) * 0.5 * *width as f32,
+                    (1.0 - ndc.y) * 0.5 * *height as f32,
+                )
+            };
+            // Strongest change any pixel within two pixels of the true edge shows
+            // once strokes are drawn, averaged along the edge.
+            let stroke_strength = |from: Vec3, to: Vec3| {
+                let samples = 9;
+                (1..=samples)
+                    .map(|index| {
+                        let (x, y) = to_pixel(from.lerp(to, index as f32 / (samples + 1) as f32));
+                        let mut strongest = 0i32;
+                        for dy in -2..=2 {
+                            for dx in -2..=2 {
+                                let (px, py) = (x.round() as i32 + dx, y.round() as i32 + dy);
+                                if px < 0 || py < 0 || px >= *width as i32 || py >= *height as i32 {
+                                    continue;
+                                }
+                                let offset = ((py as u32 * width + px as u32) * 4) as usize;
+                                let change = (0..3)
+                                    .map(|channel| {
+                                        (i32::from(with_edges[offset + channel])
+                                            - i32::from(without_edges[offset + channel]))
+                                        .abs()
+                                    })
+                                    .max()
+                                    .unwrap_or(0);
+                                strongest = strongest.max(change);
+                            }
+                        }
+                        strongest as f32
+                    })
+                    .sum::<f32>()
+                    / samples as f32
+            };
+            // Edges run along one axis between the given coordinates: an axis
+            // pair plus a fixed pair, the varying axis being the one that differs.
+            let segment = |edge: [f32; 4]| {
+                let (a, b) = if label == "inside-corner" {
+                    (
+                        Vec3::new(edge[0], edge[1], edge[2]),
+                        Vec3::new(edge[0], edge[1], edge[3]),
+                    )
+                } else {
+                    (
+                        Vec3::new(edge[0], edge[1], edge[2]),
+                        Vec3::new(edge[3], edge[1], edge[2]),
+                    )
+                };
+                (a, b)
+            };
+            let (concave_from, concave_to) = segment(concave_edge);
+            let (convex_from, convex_to) = segment(convex_edge);
+            let concave = stroke_strength(concave_from, concave_to);
+            let convex = stroke_strength(convex_from, convex_to);
+            eprintln!("{label} stroke strength: concave {concave:.1}, convex {convex:.1}");
+            assert!(
+                convex > 40.0,
+                "{label}: the convex reference edge must be a clear stroke ({convex:.1})"
+            );
+            assert!(
+                concave >= convex * 0.8,
+                "{label}: the inside-corner stroke ({concave:.1}) must read like the convex one ({convex:.1})"
+            );
+        }
+    }
+
+    fn decode_rgba(png: &[u8]) -> (u32, u32, Vec<u8>) {
+        use bevy::asset::RenderAssetUsages;
+        use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
+        let image = Image::from_buffer(
+            png,
+            ImageType::Extension("png"),
+            CompressedImageFormats::NONE,
+            true,
+            ImageSampler::Default,
+            RenderAssetUsages::MAIN_WORLD,
+        )
+        .unwrap();
+        let size = image.texture_descriptor.size;
+        let data = image.data.expect("decoded screenshot has pixels");
+        assert_eq!(
+            data.len(),
+            (size.width * size.height * 4) as usize,
+            "RGBA8 screenshot"
+        );
+        (size.width, size.height, data)
+    }
+
+    /// Real production GPU path for grid stability: zoom out two decades in
+    /// 6 % steps over an empty sheet and follow the brightness of two fixed
+    /// world lines. Every line's colour must move smoothly as the drawn
+    /// lattices change, where the earlier sheet swapped its major lines at
+    /// each 1-2-5 step. Kept opt-in for GPU-less hosts; set
+    /// `NBCAD_PREVIEW_PROOF_DIR` to retain every frame.
+    #[test]
+    #[ignore = "requires a GPU; set NBCAD_PREVIEW_PROOF_DIR to retain visual evidence"]
+    fn native_ground_grid_zoom_is_continuous() {
+        // A speck of a body so the grid is the only thing that moves.
+        let speck: Frame = serde_json::from_value(serde_json::json!({
+            "caption": "speck",
+            "scene": {"bodies": [{"id": 1, "name": "Speck", "feature_id": 2, "faces": [],
+                "edges": [], "mesh": {"positions": [0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001, 0.0],
+                "normals": [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0], "indices": [0, 1, 2]}}],
+                "errors": []}
+        }))
+        .unwrap();
+        let mut document = PreviewDocument::new(vec![speck]).unwrap();
+        document.center = Vec3::ZERO;
+        let mut renderer = PreviewRenderer::new().unwrap();
+        let cancelled = AtomicBool::new(false);
+        let output = std::env::var_os("NBCAD_PREVIEW_PROOF_DIR");
+        if let Some(path) = &output {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        let mut request = request("grid-zoom".into(), String::new(), 1);
+        request.width = 640;
+        request.height = 400;
+        request.pitch = 0.6;
+        let viewport = ViewportSizeResource {
+            logical_width: 640.0,
+            logical_height: 400.0,
+        };
+        let [(_, ground, _), ..] = origin_plane_bases();
+        // Brightest pixel within a pixel of each sample along a world line,
+        // averaged: the line's brightness in this frame.
+        let line_brightness = |pixels: &[u8], camera: ViewportCamera, x: f32| {
+            let view = camera_transform(camera).to_matrix().inverse();
+            let projection = Mat4::perspective_infinite_reverse_rh(
+                camera.vertical_fov_degrees.to_radians(),
+                640.0 / 400.0,
+                0.1,
+            );
+            let samples = 9;
+            (0..samples)
+                .map(|sample| {
+                    let y = (sample as f32 / (samples - 1) as f32 - 0.5) * 12.0;
+                    let clip = projection * view * Vec3::new(x, y, 0.0).extend(1.0);
+                    let ndc = clip.truncate() / clip.w;
+                    let (px, py) = (
+                        ((ndc.x + 1.0) * 0.5 * 640.0).round() as i32,
+                        ((1.0 - ndc.y) * 0.5 * 400.0).round() as i32,
+                    );
+                    let mut brightest = 0u8;
+                    for dy in -1..=1 {
+                        for dx in -1..=1 {
+                            let (sx, sy) = (px + dx, py + dy);
+                            if sx < 0 || sy < 0 || sx >= 640 || sy >= 400 {
+                                continue;
+                            }
+                            let offset = ((sy * 640 + sx) * 4) as usize;
+                            brightest = brightest
+                                .max(pixels[offset..offset + 3].iter().copied().max().unwrap());
+                        }
+                    }
+                    f32::from(brightest)
+                })
+                .sum::<f32>()
+                / samples as f32
+        };
+        let mut previous: Option<[f32; 2]> = None;
+        let mut largest_jump = 0.0f32;
+        let mut finest_changes = 0;
+        let mut last_finest = None;
+        for step in 0..80 {
+            document.radius = 30.0 * 1.06f32.powi(step);
+            let camera = document.camera(&request);
+            let layout = grid_layout(camera, viewport, &ground);
+            let png = renderer
+                .render(
+                    &document,
+                    &request,
+                    &cancelled,
+                    Instant::now() + Duration::from_secs(60),
+                )
+                .unwrap();
+            if let Some(path) = &output {
+                std::fs::write(
+                    std::path::Path::new(path)
+                        .join(format!("grid-zoom-{step:03}-finest{}.png", layout.finest)),
+                    &png,
+                )
+                .unwrap();
+            }
+            let (_, _, pixels) = decode_rgba(&png);
+            let brightness = [
+                line_brightness(&pixels, camera, 20.0),
+                line_brightness(&pixels, camera, 50.0),
+            ];
+            if last_finest.is_some_and(|finest| finest != layout.finest) {
+                finest_changes += 1;
+            }
+            last_finest = Some(layout.finest);
+            if let Some(previous) = previous {
+                for (line, (now, before)) in brightness.iter().zip(previous).enumerate() {
+                    let jump = (now - before).abs();
+                    largest_jump = largest_jump.max(jump);
+                    assert!(
+                        jump <= 10.0,
+                        "line {} jumped {before:.1} -> {now:.1} at step {step} (finest {} mm)",
+                        [20, 50][line],
+                        layout.finest
+                    );
+                }
+            }
+            eprintln!(
+                "grid zoom step {step:>2} radius {:>7.1} finest {:>5} mm: 20 mm line {:>5.1}, 50 mm line {:>5.1}",
+                document.radius, layout.finest, brightness[0], brightness[1]
+            );
+            previous = Some(brightness);
+        }
+        assert!(
+            finest_changes >= 5,
+            "the sweep must cross several lattice changes, crossed {finest_changes}"
+        );
+        eprintln!("largest frame-to-frame line brightness change: {largest_jump:.1}");
+    }
+
+    /// Real production GPU path for the ground grid: a small part and one two
+    /// hundred times larger must both sit on a legible sheet that follows the
+    /// zoom. Kept opt-in for GPU-less hosts; set `NBCAD_PREVIEW_PROOF_DIR` to
+    /// retain the rendered evidence.
+    #[test]
+    #[ignore = "requires a GPU; set NBCAD_PREVIEW_PROOF_DIR to retain visual evidence"]
+    fn native_ground_grid_visual_matrix() {
+        let block = |size: f32| -> Frame {
+            let (x, y, z) = (size, size * 0.6, size * 0.2);
+            let corners: [[f32; 3]; 8] = [
+                [0.0, 0.0, 0.0],
+                [x, 0.0, 0.0],
+                [x, y, 0.0],
+                [0.0, y, 0.0],
+                [0.0, 0.0, z],
+                [x, 0.0, z],
+                [x, y, z],
+                [0.0, y, z],
+            ];
+            let positions: Vec<f32> = corners.iter().flatten().copied().collect();
+            let normals: Vec<f32> = corners.iter().flat_map(|_| [0.0, 0.0, 1.0]).collect();
+            let indices: Vec<u32> = vec![
+                0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 1, 2, 6, 1, 6, 5, 2, 3, 7, 2,
+                7, 6, 3, 0, 4, 3, 4, 7,
+            ];
+            serde_json::from_value(serde_json::json!({
+                "caption": format!("{size} mm block"),
+                "scene": {"bodies": [{"id": 1, "name": "Block", "feature_id": 2, "faces": [],
+                    "edges": [], "mesh": {"positions": positions, "normals": normals,
+                    "indices": indices}}], "errors": []}
+            }))
+            .unwrap()
+        };
+        let mut renderer = PreviewRenderer::new().unwrap();
+        let cancelled = AtomicBool::new(false);
+        let output = std::env::var_os("NBCAD_PREVIEW_PROOF_DIR");
+        if let Some(path) = &output {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        for (label, size) in [("small", 20.0), ("large", 4_000.0)] {
+            let mut document = PreviewDocument::new(vec![block(size)]).unwrap();
+            let base_radius = document.radius;
+            let mut request = request(format!("grid-{label}"), String::new(), 1);
+            request.width = 800;
+            request.height = 600;
+            for (zoom_label, zoom, pitch) in [
+                ("fit", 1.0, 0.6),
+                ("far", 4.0, 0.6),
+                ("close", 0.25, 0.6),
+                ("grazing", 1.0, 0.12),
+            ] {
+                document.radius = base_radius * zoom;
+                request.pitch = pitch;
+                let png = renderer
+                    .render(
+                        &document,
+                        &request,
+                        &cancelled,
+                        Instant::now() + Duration::from_secs(60),
+                    )
+                    .unwrap();
+                assert!(
+                    png.len() > 5_000,
+                    "a scene must be rendered, not an empty target"
+                );
+                if let Some(path) = &output {
+                    std::fs::write(
+                        std::path::Path::new(path).join(format!("grid-{label}-{zoom_label}.png")),
+                        png,
+                    )
+                    .unwrap();
+                }
+            }
+        }
+    }
+
+    /// Real production GPU path: projected partial arcs on both face normals,
+    /// thin solids, multiple zooms and palettes. Kept opt-in for GPU-less hosts.
+    #[test]
+    #[ignore = "requires a GPU; set NBCAD_PREVIEW_PROOF_DIR to retain visual evidence"]
+    fn native_sketch_boundary_visual_matrix() {
+        use nbcad_core::{OriginPlane, PlaneRef};
+        use nbcad_sketch::{
+            ArcCenterRequest, SegmentRequest, SetGridSnapRequest, SketchManager, Vec2 as P,
+        };
+        use nbcad_solid::{CommitKernelRequest, ExtrudeExtent, ExtrudeOperation, ExtrudeRequest};
+        let mut manager = SketchManager::new();
+        manager
+            .begin_sketch(PlaneRef::OriginPlane {
+                plane: OriginPlane::Xy,
+            })
+            .unwrap();
+        manager
+            .set_grid_snap(SetGridSnapRequest { enabled: false })
+            .unwrap();
+        manager
+            .add_arc_center(ArcCenterRequest {
+                center: P::ZERO,
+                start: P::new(25.0, 0.0),
+                sweep: P::new(0.0, -25.0),
+                sweep_rad: Some(1.5 * std::f64::consts::PI),
+                ctrl_held: true,
+                radius_mm: None,
+                radius_text: None,
+                angle_text: None,
+            })
+            .unwrap();
+        manager
+            .add_line(SegmentRequest {
+                from: P::new(0.0, -25.0),
+                to_raw: P::new(25.0, 0.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        manager.end_sketch().unwrap();
+        let plan = manager
+            .prepare_extrude(ExtrudeRequest {
+                source_face: None,
+                sketch_name: "Sketch1".into(),
+                profile_indices: vec![0],
+                operation: ExtrudeOperation::NewBody,
+                extent: ExtrudeExtent::Distance { distance: 0.15 },
+                taper_angle_deg: 0.0,
+                flip: false,
+                target_body_ids: vec![],
+            })
+            .unwrap();
+        let mut kernel = nbcad_occt::OcctKernel::new().unwrap();
+        let scene = kernel.recompute(&plan).unwrap();
+        manager
+            .commit_solid(CommitKernelRequest {
+                transaction_id: plan.transaction_id,
+                scene,
+            })
+            .unwrap();
+        // A second, smaller solid lies fully behind the thin plate. Its edges
+        // are a deterministic occlusion probe, not just a visual impression.
+        manager
+            .begin_sketch(PlaneRef::OriginPlane {
+                plane: OriginPlane::Xy,
+            })
+            .unwrap();
+        manager
+            .add_rectangle(nbcad_sketch::RectangleRequest {
+                mode: nbcad_sketch::RectangleMode::TwoPoint,
+                p1: P::new(-8.0, 2.0),
+                p2: P::new(-2.0, 8.0),
+                ctrl_held: true,
+            })
+            .unwrap();
+        manager.end_sketch().unwrap();
+        let plan = manager
+            .prepare_extrude(ExtrudeRequest {
+                source_face: None,
+                sketch_name: "Sketch2".into(),
+                profile_indices: vec![0],
+                operation: ExtrudeOperation::NewBody,
+                extent: ExtrudeExtent::Distance { distance: 0.01 },
+                taper_angle_deg: 0.0,
+                flip: false,
+                target_body_ids: vec![],
+            })
+            .unwrap();
+        let scene = kernel.recompute(&plan).unwrap();
+        manager
+            .commit_solid(CommitKernelRequest {
+                transaction_id: plan.transaction_id,
+                scene,
+            })
+            .unwrap();
+        let scene = manager.solid_scene();
+        let mut renderer = PreviewRenderer::new().unwrap();
+        let cancelled = AtomicBool::new(false);
+        let output = std::env::var_os("NBCAD_PREVIEW_PROOF_DIR");
+        if let Some(path) = &output {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        for bottom in [false, true] {
+            let face = scene.bodies[0]
+                .faces
+                .iter()
+                .find(|f| {
+                    f.plane.is_some_and(|p| {
+                        if bottom {
+                            p.normal[2] < -0.9
+                        } else {
+                            p.normal[2] > 0.9
+                        }
+                    })
+                })
+                .unwrap();
+            let sketch = manager
+                .begin_sketch(PlaneRef::PlanarFace { face_id: face.id })
+                .unwrap();
+            assert!(sketch
+                .projected_edges
+                .iter()
+                .any(|edge| edge.circle.is_some() && edge.points.len() > 3));
+            let mut document = PreviewDocument::new(vec![Frame {
+                caption: "Thin partial circular plate".into(),
+                scene: scene.clone(),
+            }])
+            .unwrap();
+            let base_radius = document.radius;
+            let mut request = request(format!("boundary-{bottom}"), String::new(), 1);
+            request.width = 800;
+            request.height = 600;
+            request.pitch = if bottom { -1.15 } else { 1.15 };
+            renderer
+                .render(
+                    &document,
+                    &request,
+                    &cancelled,
+                    Instant::now() + Duration::from_secs(60),
+                )
+                .unwrap();
+            {
+                let world = renderer.app.world_mut();
+                let mut model = world.resource_mut::<ModelResource>();
+                model.active_sketch = Some(sketch);
+                model.geometry_revision += 1;
+                model.revision += 1;
+                world.resource_mut::<PresentationResource>().0.mode = ViewportMode::Sketch;
+            }
+            for light in [false, true] {
+                let mut palette = ViewportPalette::default();
+                if light {
+                    palette.background = [0.95, 0.96, 0.98];
+                    palette.grid_fine = [0.82, 0.83, 0.85];
+                    palette.grid_major = [0.70, 0.71, 0.73];
+                    palette.projected = [0.47, 0.19, 0.72];
+                }
+                renderer.app.world_mut().resource_mut::<PaletteResource>().0 = palette;
+                *renderer.app.world_mut().resource_mut::<ClearColor>() =
+                    ClearColor(rgb(palette.background));
+                for (label, zoom, pitch) in [
+                    ("face", 1.0, 1.15),
+                    ("close", 0.7, 1.15),
+                    ("grazing", 1.0, 0.08),
+                ] {
+                    document.radius = base_radius * zoom;
+                    request.pitch = if bottom { -pitch } else { pitch };
+                    let png = renderer
+                        .render(
+                            &document,
+                            &request,
+                            &cancelled,
+                            Instant::now() + Duration::from_secs(60),
+                        )
+                        .unwrap();
+                    assert!(
+                        png.len() > 5_000,
+                        "a scene must be rendered, not an empty target"
+                    );
+                    let name = format!(
+                        "boundary-{}-{}-{label}.png",
+                        if bottom { "bottom" } else { "top" },
+                        if light { "light" } else { "dark" }
+                    );
+                    if let Some(path) = &output {
+                        std::fs::write(std::path::Path::new(path).join(name), png).unwrap();
+                    }
+                }
+            }
+            manager.end_sketch().unwrap();
+        }
+        *renderer
+            .app
+            .world_mut()
+            .resource_mut::<PresentationResource>() = PresentationResource::default();
+        let mut without_hidden_edges = scene.clone();
+        without_hidden_edges.bodies[1].edges.clear();
+        let mut document = PreviewDocument::new(vec![
+            Frame {
+                caption: "Hidden edges present".into(),
+                scene,
+            },
+            Frame {
+                caption: "Hidden edges removed".into(),
+                scene: without_hidden_edges,
+            },
+        ])
+        .unwrap();
+        let radius = document.radius;
+        let mut request = request("occlusion".into(), String::new(), 1);
+        request.width = 800;
+        request.height = 600;
+        request.pitch = 1.3;
+        for zoom in [0.7, 1.0, 2.5] {
+            document.radius = radius * zoom;
+            request.frame_index = 0;
+            let with_edges = renderer
+                .render(
+                    &document,
+                    &request,
+                    &cancelled,
+                    Instant::now() + Duration::from_secs(60),
+                )
+                .unwrap();
+            request.frame_index = 1;
+            let without_edges = renderer
+                .render(
+                    &document,
+                    &request,
+                    &cancelled,
+                    Instant::now() + Duration::from_secs(60),
+                )
+                .unwrap();
+            if let Some(path) = &output {
+                std::fs::write(
+                    std::path::Path::new(path).join(format!("occlusion-{zoom}-with.png")),
+                    &with_edges,
+                )
+                .unwrap();
+                std::fs::write(
+                    std::path::Path::new(path).join(format!("occlusion-{zoom}-without.png")),
+                    &without_edges,
+                )
+                .unwrap();
+            }
+            assert!(
+                with_edges == without_edges,
+                "hidden body edges leaked through the 0.15 mm plate at zoom {zoom}"
+            );
+        }
+    }
 }

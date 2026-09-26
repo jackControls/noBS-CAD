@@ -91,7 +91,10 @@ algebraic family:
 Internal construction relations such as trimmed arc endpoint coincidence,
 span midpoint, and equal-distance chamfer support are created by their owning
 tools rather than the Constraints panel. Their topology-specific combinations
-remain covered by the modifier, fillet, slot, and spline suites.
+remain covered by the modifier, fillet, slot, and spline suites. Two of them
+carry authored geometry as well: center coincidence owns a drawn circle's
+selectable center point, and a span midpoint binds a center rectangle's center
+to a diagonal so the shape stays symmetric when a corner is dragged.
 
 ## Admission algorithm
 

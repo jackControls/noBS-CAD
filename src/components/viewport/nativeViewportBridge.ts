@@ -109,6 +109,7 @@ interface NativePalette {
   finishedSketchPoint: [number, number, number];
   finishedSketchPointOutline: [number, number, number];
   preview: [number, number, number];
+  projected: [number, number, number];
 }
 
 interface NativeHudSelection {
@@ -150,6 +151,9 @@ interface NativePresentation {
   hoveredEdgeId: number | null;
   pickRefinableEdges: boolean;
   pickStraightEdges: boolean;
+  /** Sketch-palette "Projected Geometries" visibility toggle. Inverted so an
+   *  older payload keeps projected reference geometry visible. */
+  hideProjectedGeometry: boolean;
   selectedSketchEntityIds: number[];
   /** Entities owned by the selected geometric constraint (not true selection). */
   constraintRelatedSketchEntityIds: number[];
@@ -318,6 +322,7 @@ let cameraInFlight = false;
 let lastCameraKey = '';
 let lastPreviewKey = '';
 let pendingPreview: NativeViewportTransient | null = null;
+let previewFailureReported = false;
 let previewInFlight = false;
 let lastLayoutKey = '';
 let layoutRevision = Date.now() * 1000;
@@ -583,6 +588,7 @@ function collectPalette(): NativePalette {
       '#15191f',
     ),
     preview: cssRgb('--cad-preview', '#8fc4ff'),
+    projected: cssRgb('--cad-projected', '#c08cf5'),
   };
 }
 
@@ -937,6 +943,7 @@ export function collectNativeViewportPresentation(): NativePresentation {
     hoveredEdgeId: pickerFeedback.hoveredEdgeId,
     pickRefinableEdges: edgePickMode === 'refinable',
     pickStraightEdges: edgePickMode === 'straight',
+    hideProjectedGeometry: !state.palette.projectedGeometries,
     selectedSketchEntityIds,
     constraintRelatedSketchEntityIds,
     hoveredSketchEntityId: state.hoveredEntity,
@@ -1831,7 +1838,15 @@ function pumpPreview(): void {
   pendingPreview = null;
   previewInFlight = true;
   void invoke('native_viewport_set_preview', { preview })
-    .catch(() => undefined)
+    .catch((error) => {
+      // A payload the native decoder rejects freezes the cursor HUD on screen
+      // with nothing else to show for it, so report the first failure rather
+      // than dropping it on the floor.
+      if (!previewFailureReported) {
+        previewFailureReported = true;
+        console.error('native viewport rejected a preview payload', error);
+      }
+    })
     .finally(() => {
       previewInFlight = false;
       pumpPreview();

@@ -3847,6 +3847,203 @@ mod tests {
         }
     }
 
+    /// A 25 mm square plate, 5 mm thick, with a 5 x 20 mm strip taken out of
+    /// its right side so a 5 mm wide arm remains along the back. The vertical
+    /// edge at (20, 20) is concave and the arm's underside beside it is
+    /// exactly 5 mm wide, so a 5 mm blend consumes that wall whole; the
+    /// vertical edge at (25, 25) is convex with the arm's 5 mm end face.
+    fn notched_plate_job() -> KernelJobDto {
+        let corner = |x: f64, y: f64| Point3Dto { x, y, z: 0.0 };
+        KernelJobDto::Extrude(KernelExtrudeJobDto {
+            feature_id: FeatureId(2),
+            operation: ExtrudeOperation::NewBody,
+            source_face: None,
+            profiles: vec![KernelProfileDto {
+                profile_index: 0,
+                points: vec![
+                    corner(0.0, 0.0),
+                    corner(0.0, 25.0),
+                    corner(25.0, 25.0),
+                    corner(25.0, 20.0),
+                    corner(20.0, 20.0),
+                    corner(20.0, 0.0),
+                ],
+                curves: Vec::new(),
+                holes: Vec::new(),
+            }],
+            normal: Point3Dto {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
+            start_offset: 0.0,
+            end_offset: 5.0,
+            taper_angle_deg: 0.0,
+            target_body_ids: Vec::new(),
+            result_body_ids: vec![BodyId(1)],
+        })
+    }
+
+    fn vertical_edge_key(scene: &KernelSceneDto, x: f64, y: f64) -> String {
+        scene.bodies[0]
+            .edges
+            .iter()
+            .find(|edge| {
+                edge.points.len() >= 2
+                    && edge
+                        .points
+                        .iter()
+                        .all(|point| (point.x - x).abs() < 1e-6 && (point.y - y).abs() < 1e-6)
+            })
+            .map(|edge| edge.key.clone())
+            .unwrap_or_else(|| panic!("no vertical edge at ({x}, {y})"))
+    }
+
+    /// Signed tetrahedron sum over the closed tessellation.
+    fn mesh_volume(body: &KernelBodyDto) -> f64 {
+        let point = |index: u32| {
+            let index = index as usize * 3;
+            [
+                f64::from(body.positions[index]),
+                f64::from(body.positions[index + 1]),
+                f64::from(body.positions[index + 2]),
+            ]
+        };
+        body.indices
+            .chunks_exact(3)
+            .map(|triangle| {
+                let (a, b, c) = (point(triangle[0]), point(triangle[1]), point(triangle[2]));
+                (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+                    + a[2] * (b[0] * c[1] - b[1] * c[0]))
+                    / 6.0
+            })
+            .sum::<f64>()
+            .abs()
+    }
+
+    fn blend_notched_plate(job: KernelJobDto) -> KernelSceneDto {
+        let mut kernel = OcctKernel::new().unwrap();
+        kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 3,
+                errors: Vec::new(),
+                jobs: vec![notched_plate_job(), job],
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn occt_blends_an_edge_whose_size_consumes_its_walls() {
+        let mut kernel = OcctKernel::new().unwrap();
+        let base = kernel
+            .recompute(&RecomputePlanDto {
+                transaction_id: 2,
+                errors: Vec::new(),
+                jobs: vec![notched_plate_job()],
+            })
+            .unwrap();
+        assert!(base.errors.is_empty(), "{:?}", base.errors);
+        let plate_volume = 2625.0;
+        let base_volume = mesh_volume(&base.bodies[0]);
+        assert!(
+            (base_volume - plate_volume).abs() < 1e-3,
+            "notched plate volume {base_volume} with {} faces and {} edges",
+            base.bodies[0].faces.len(),
+            base.bodies[0].edges.len()
+        );
+        assert_eq!(base.bodies[0].faces.len(), 8);
+        let concave = vertical_edge_key(&base, 20.0, 20.0);
+        let convex = vertical_edge_key(&base, 25.0, 25.0);
+        let fillet = |edge: &str, radius: f64| {
+            KernelJobDto::Fillet(KernelFilletJobDto {
+                feature_id: FeatureId(3),
+                target_body_id: BodyId(1),
+                edge_keys: vec![edge.to_string()],
+                radius,
+                tangent_chain: false,
+            })
+        };
+        let chamfer = |edge: &str, distance: f64| {
+            KernelJobDto::Chamfer(KernelChamferJobDto {
+                feature_id: FeatureId(3),
+                target_body_id: BodyId(1),
+                edge_keys: vec![edge.to_string()],
+                distance,
+                tangent_chain: false,
+            })
+        };
+        // Material a concave fillet adds, or a convex one removes, per mm of edge.
+        let fillet_fill = |radius: f64| radius * radius * (1.0 - std::f64::consts::FRAC_PI_4);
+        let curved_faces = |scene: &KernelSceneDto| {
+            scene.bodies[0]
+                .faces
+                .iter()
+                .filter(|face| face.plane.is_none())
+                .count()
+        };
+
+        // A radius inside the wall is still OCCT's own fillet.
+        let inside = blend_notched_plate(fillet(&concave, 4.0));
+        assert!(inside.errors.is_empty(), "{:?}", inside.errors);
+        assert_eq!(inside.bodies[0].faces.len(), 9);
+        assert_eq!(curved_faces(&inside), 1);
+        assert!(
+            (mesh_volume(&inside.bodies[0]) - (plate_volume + fillet_fill(4.0) * 5.0)).abs() < 1.0
+        );
+
+        // A 5 mm radius reaches the far edge of the 5 mm wall and replaces it.
+        let consumed = blend_notched_plate(fillet(&concave, 5.0));
+        assert!(
+            consumed.errors.is_empty(),
+            "R5 on a 5 mm step must build: {:?}",
+            consumed.errors
+        );
+        assert_eq!(consumed.bodies.len(), 1);
+        assert_eq!(
+            consumed.bodies[0].faces.len(),
+            8,
+            "the 5 mm wall becomes the cylinder"
+        );
+        assert_eq!(curved_faces(&consumed), 1);
+        assert!(
+            (mesh_volume(&consumed.bodies[0]) - (plate_volume + fillet_fill(5.0) * 5.0)).abs()
+                < 1.5
+        );
+
+        // The same on a convex edge removes material and one wall.
+        let outer = blend_notched_plate(fillet(&convex, 5.0));
+        assert!(
+            outer.errors.is_empty(),
+            "R5 on a convex 5 mm wall must build: {:?}",
+            outer.errors
+        );
+        assert_eq!(outer.bodies[0].faces.len(), 8);
+        assert_eq!(curved_faces(&outer), 1);
+        assert!(
+            (mesh_volume(&outer.bodies[0]) - (plate_volume - fillet_fill(5.0) * 5.0)).abs() < 1.5
+        );
+
+        // A chamfer that spans the 5 mm wall turns it into one flat.
+        let flat = blend_notched_plate(chamfer(&concave, 5.0));
+        assert!(
+            flat.errors.is_empty(),
+            "C5 on a 5 mm step must build: {:?}",
+            flat.errors
+        );
+        assert_eq!(flat.bodies[0].faces.len(), 8);
+        assert_eq!(curved_faces(&flat), 0);
+        assert!((mesh_volume(&flat.bodies[0]) - (plate_volume + 12.5 * 5.0)).abs() < 1e-2);
+
+        // Past the wall there is nothing left to blend against.
+        let beyond = blend_notched_plate(fillet(&concave, 6.0));
+        assert_eq!(beyond.errors.len(), 1, "{:?}", beyond.errors);
+        assert!(
+            beyond.errors[0].message.contains("5 mm"),
+            "the failure must name the wall width: {}",
+            beyond.errors[0].message
+        );
+    }
+
     #[test]
     fn occt_revolves_and_meshes_a_profile() {
         let mut kernel = OcctKernel::new().unwrap();

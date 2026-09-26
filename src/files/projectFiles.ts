@@ -37,7 +37,7 @@ import { runExport } from './exportFlow';
 import { projectTransitions } from './projectTransitions';
 import type { EngineOperationOwner } from '../engine/activity';
 import { captureProjectOwner } from './projectOwnership';
-import { requestOpenedProjectFraming, type OpenedProjectOwner } from './openProjectFraming';
+import { requestProjectFraming, type ProjectFramingOwner } from './projectFraming';
 
 const PROJECT_TYPE: SaveType = {
   description: 'noBS CAD Project',
@@ -93,6 +93,15 @@ function clearProjectRecovery() {
 
 function withoutExtension(name: string): string {
   return name.replace(/\.[^.]+$/, '') || 'Untitled';
+}
+
+/** The engine's default design name. Projects written by MCP or scripts keep
+ * it, so their tab would otherwise read "Untitled" beside a named file. */
+const PLACEHOLDER_PROJECT_NAME = 'Untitled';
+
+export function isPlaceholderProjectName(name: string | null | undefined): boolean {
+  const trimmed = name?.trim() ?? '';
+  return trimmed === '' || trimmed.toLowerCase() === PLACEHOLDER_PROJECT_NAME.toLowerCase();
 }
 
 function currentSuggestedName(): string {
@@ -288,12 +297,12 @@ export async function openProject(options?: { filePath: string; discardChanges?:
   const releaseTransition = projectTransitions.begin();
   let changed = false;
   let published = false;
-  let openedOwner: OpenedProjectOwner;
+  let openedOwner: ProjectFramingOwner;
   try {
     await releaseTransition.waitForSnapshots();
     const engine = await getEngine();
     changed = true;
-    const update = await engine.loadProjectModel(modelJson).catch((error: unknown) => {
+    let update = await engine.loadProjectModel(modelJson).catch((error: unknown) => {
       // Only an explicit pre-mutation rejection proves the prior native model
       // and geometry are intact. IPC, recompute and post-load repair failures
       // remain unverified, even when the frontend still shows the old document.
@@ -310,6 +319,20 @@ export async function openProject(options?: { filePath: string; discardChanges?:
       engine.projectVisibility(),
       engine.camDocument(),
     ]);
+    // A project written by MCP or a script still carries the engine's
+    // placeholder name. Present it the way a first Save would: named after
+    // its file. Adopting the name is not an edit, so the tab opens clean.
+    let tabModelJson = modelJson;
+    const adoptedName = withoutExtension(opened.name);
+    if (isPlaceholderProjectName(update.document.name) && !isPlaceholderProjectName(adoptedName)) {
+      try {
+        const document = await engine.setDocumentName(adoptedName);
+        tabModelJson = await engine.exportProjectModel();
+        update = { ...update, document };
+      } catch {
+        // The loaded model is intact; only its display name stays generic.
+      }
+    }
     // A legacy project is readable, but the next Save must choose a new
     // `.nbcad` destination instead of silently overwriting the old container.
     const reusableTarget = opened.name.toLowerCase().endsWith(NBCAD_EXTENSION)
@@ -330,13 +353,13 @@ export async function openProject(options?: { filePath: string; discardChanges?:
         camDocument,
       );
     published = true;
-    await recordActiveProjectOpen(modelJson, reusableTarget);
+    await recordActiveProjectOpen(tabModelJson, reusableTarget);
     if (!hasUnsavedProjects()) clearProjectRecovery();
     openedOwner = useAppStore.getState();
   } finally {
     releaseTransition(changed, published);
   }
-  requestOpenedProjectFraming(openedOwner);
+  requestProjectFraming(openedOwner);
   return true;
 }
 

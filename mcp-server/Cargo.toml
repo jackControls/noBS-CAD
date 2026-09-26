@@ -17,12 +17,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 nbcad-script = { path = "../crates/script" }
 nbcad-recipes = { path = "../crates/recipes" }
+nbcad-help = { path = "../crates/help" }
 nbcad-core = { path = "../crates/core" }
 nbcad-sketch = { path = "../crates/sketch" }
 nbcad-solid = { path = "../crates/solid" }
 nbcad-export = { path = "../crates/export" }
 nbcad-occt = { path = "../crates/occt", features = ["native-occt"] }
 nbcad-mcp-mutate = { path = "../crates/mcp-mutate" }
+nbcad-print = { path = "../crates/print" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

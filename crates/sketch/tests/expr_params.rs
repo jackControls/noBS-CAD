@@ -31,6 +31,9 @@ fn arithmetic_and_precedence() {
     assert_eq!(eval_ok("10/4"), 2.5);
     assert_eq!(eval_ok("2^3^2"), 512.0); // right-assoc
     assert_eq!(eval_ok("-2^2"), -4.0); // unary minus looser than ^
+    assert_eq!(eval_ok("+45"), 45.0);
+    assert_eq!(eval_ok("=+2^2"), 4.0);
+    assert_eq!(eval_ok("2*-+3"), -6.0);
     assert_eq!(eval_ok("-(2+3)"), -5.0);
     assert_eq!(eval_ok("=50/2"), 25.0); // leading = accepted
     assert_eq!(eval_ok("1 - -3"), 4.0);

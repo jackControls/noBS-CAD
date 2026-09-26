@@ -18,9 +18,9 @@ use crate::dto::{
     AddConstraintResult, AddLineResult, CircleMode, ConstraintDesc, ConstraintDto,
     CurveCrossingRequest, DeleteEntityResult, DofDto, DragPhase, EntityDesc, EntityDto, Inference,
     LineIntersectionRequest, LineTrackingRequest, LockedCircleRequest, LockedRectangleRequest,
-    LockedSegmentRequest, MovePointRequest, MovePointResult, PreviewDto, RectangleMode,
-    ReferenceMidpointDto, SketchDto, SlotMode, SlotRequest, SnapTarget, SplineRequest, ToolResult,
-    TrackingAxis, TrackingGuideDto, UndoResult,
+    LockedSegmentRequest, MovePointRequest, MovePointResult, PreviewDto, ProjectedEdgeDto,
+    RectangleMode, ReferenceMidpointDto, SketchDto, SlotMode, SlotRequest, SnapTarget,
+    SplineRequest, ToolResult, TrackingAxis, TrackingGuideDto, UndoResult,
 };
 use crate::entity::{Entity, EntityId};
 use crate::geometry::Vec2;
@@ -29,6 +29,7 @@ use crate::project::ProjectSketchV2;
 use crate::sketch::{Sketch, SketchSnapshot};
 use crate::solver::{self, Analysis};
 
+mod creation;
 mod dims;
 mod mods;
 
@@ -58,6 +59,9 @@ pub const INFERENCE_ANGLE_TOL_DEG: f64 = 3.0;
 pub const MIN_LINE_LENGTH_MM: f64 = 1e-6;
 /// Distance below which two points are considered the same location.
 const MERGE_EPS: f64 = 1e-6;
+/// Angular travel below which a center-arc sweep counts as "the pointer never
+/// moved": the picks sit on one ray and there is no arc to build.
+pub const MIN_ARC_TRAVEL_RAD: f64 = 1e-6;
 /// Residual above which a fresh constraint counts as inconsistent (D4.2).
 const INCONSISTENT_EPS: f64 = 1e-6;
 
@@ -282,6 +286,13 @@ pub struct SketchSession {
     /// Runtime external references derived from the support face. These are
     /// rebuilt from stable edge ids when a face-hosted sketch is opened.
     reference_midpoints: Vec<(EdgeId, Vec2)>,
+    /// Support-face boundary in sketch coordinates at this history stage.
+    /// Persisted so dependent profiles exist before solid replay on load.
+    projected_edges: Vec<ProjectedEdgeDto>,
+    /// Legacy sketches keep authored-only profiles; silently enabling boundary
+    /// regions would change the numeric profile indices in saved features.
+    projects_support_boundary: bool,
+    profile_identities: crate::profile_identity::ProfileIdentities,
     undo: Vec<Command>,
     redo: Vec<Command>,
     /// Pre-drag snapshot captured on `DragPhase::Begin`; committed as one
@@ -334,6 +345,9 @@ impl SketchSession {
             grid_step: GRID_STEP_MM,
             snap_tolerance: SNAP_TOLERANCE_MM,
             reference_midpoints: Vec::new(),
+            projected_edges: Vec::new(),
+            projects_support_boundary: matches!(plane, PlaneRef::PlanarFace { .. }),
+            profile_identities: Default::default(),
             undo: Vec::new(),
             redo: Vec::new(),
             pending_drag: None,
@@ -387,6 +401,64 @@ impl SketchSession {
         }
     }
 
+    /// Refresh only when the solid scene represents this sketch's history
+    /// stage, never from a downstream cut that has already consumed it.
+    pub fn set_projected_edges(&mut self, projected: Vec<ProjectedEdgeDto>) {
+        if self.projects_support_boundary {
+            let previous: std::collections::HashSet<_> = self
+                .projected_edges
+                .iter()
+                .map(|edge| edge.edge_id)
+                .collect();
+            self.reference_midpoints
+                .retain(|(edge, _)| !previous.contains(edge));
+            self.projected_edges = projected;
+            self.refresh_reference_edges();
+            self.restore_projected_midpoints();
+            self.refresh_profile_identities();
+        }
+    }
+
+    fn restore_projected_midpoints(&mut self) {
+        // The manager may also supply other valid coplanar snap references.
+        // Refresh matching ids without throwing those independent targets away.
+        let mut midpoints = self.reference_midpoints.clone();
+        for edge in &self.projected_edges {
+            if let Some(point) = edge.midpoint() {
+                if let Some((_, target)) = midpoints.iter_mut().find(|(id, _)| *id == edge.edge_id)
+                {
+                    *target = point;
+                } else {
+                    midpoints.push((edge.edge_id, point));
+                }
+            }
+        }
+        self.set_reference_midpoints(midpoints);
+    }
+
+    fn refresh_reference_edges(&mut self) {
+        self.sketch.set_reference_edges(&self.projected_edges);
+        for command in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            command.before.set_reference_edges(&self.projected_edges);
+            command.after.set_reference_edges(&self.projected_edges);
+        }
+        if let Some(snapshot) = &mut self.pending_drag {
+            snapshot.set_reference_edges(&self.projected_edges);
+        }
+        if let Some(snapshot) = &mut self.last_good_drag {
+            snapshot.set_reference_edges(&self.projected_edges);
+        }
+        self.recompute();
+    }
+
+    pub(crate) fn projects_support_boundary(&self) -> bool {
+        self.projects_support_boundary
+    }
+
+    pub fn projected_edges(&self) -> &[ProjectedEdgeDto] {
+        &self.projected_edges
+    }
+
     /// Convert a midpoint snap into the durable relation committed with the
     /// new point. Support-face midpoints use the stable OCCT edge id rather
     /// than a one-time coordinate sample.
@@ -396,6 +468,9 @@ impl SketchSession {
         target: SnapTarget,
     ) -> Option<Constraint> {
         match target {
+            SnapTarget::ProjectedEdge { edge, .. } => {
+                Some(Constraint::ReferenceOnEdge { point, edge })
+            }
             SnapTarget::Midpoint { entity } => Some(Constraint::Midpoint {
                 a: point,
                 b: entity,
@@ -443,6 +518,11 @@ impl SketchSession {
             dimension_style: self.dimension_style,
             grid_snap: self.grid_snap,
             snapshot: self.sketch.snapshot(),
+            entity_id_high_water: self.sketch.entity_id_high_water(),
+            profile_identities: self.profile_identities.clone(),
+            support_boundary: self
+                .projects_support_boundary
+                .then(|| self.projected_edges.clone()),
         }
     }
 
@@ -453,6 +533,7 @@ impl SketchSession {
             .map_err(|error| SessionError::Solid(format!("invalid saved sketch: {error}")))?;
         let mut sketch = Sketch::new();
         sketch.restore(state.snapshot);
+        sketch.reserve_entity_ids(state.entity_id_high_water);
         let mut session = Self {
             name: state.name,
             plane: state.plane,
@@ -463,6 +544,9 @@ impl SketchSession {
             grid_step: GRID_STEP_MM,
             snap_tolerance: SNAP_TOLERANCE_MM,
             reference_midpoints: Vec::new(),
+            projects_support_boundary: state.support_boundary.is_some(),
+            profile_identities: state.profile_identities,
+            projected_edges: state.support_boundary.unwrap_or_default(),
             undo: Vec::new(),
             redo: Vec::new(),
             pending_drag: None,
@@ -470,8 +554,46 @@ impl SketchSession {
             analysis: None,
             dimension_style: state.dimension_style,
         };
+        if session.projects_support_boundary {
+            session.refresh_reference_edges();
+            session.restore_projected_midpoints();
+        }
+        // A project saved before center handles existed has circles whose center
+        // cannot be picked or constrained. Give those the same handle the circle
+        // tool creates, so issue #151 is fixed for existing projects too.
+        session.attach_missing_circle_centers();
         session.recompute();
+        session.refresh_profile_identities();
         Ok(session)
+    }
+
+    pub(crate) fn refresh_profile_identities(&mut self) {
+        let sketch = self.dto();
+        let mut catalog = crate::manager::profile_catalog_item(&sketch, nbcad_core::FeatureId(0));
+        self.profile_identities
+            .assign(&sketch, &mut catalog.profiles);
+    }
+
+    pub(crate) fn profile_catalog(
+        &self,
+        feature_id: nbcad_core::FeatureId,
+    ) -> nbcad_solid::ProfileCatalogItemDto {
+        let sketch = self.dto();
+        let mut catalog = crate::manager::profile_catalog_item(&sketch, feature_id);
+        self.profile_identities
+            .clone()
+            .assign(&sketch, &mut catalog.profiles);
+        if self.sketch.constraints().any(|(id, c)| {
+            matches!(c, Constraint::ReferenceOnEdge { edge, .. }
+            if self.sketch.reference_edge(*edge).is_none()
+                || solver::constraint_residual(&self.sketch, id) > INCONSISTENT_EPS)
+        }) {
+            catalog.profiles.clear();
+            catalog.profile_error = Some(
+                "Broken support-edge reference; repair or remove the affected relation".into(),
+            );
+        }
+        catalog
     }
 
     /// Wrapper so the sibling `mods` module can create dimension params.
@@ -562,6 +684,13 @@ impl SketchSession {
                 {
                     return (midpoint, SnapTarget::ReferenceMidpoint { edge });
                 }
+                if let Some((edge, position)) = self.nearest_projected_edge_point(raw) {
+                    if !exclude_position
+                        .is_some_and(|excluded| position.distance(excluded) <= MERGE_EPS)
+                    {
+                        return (position, SnapTarget::ProjectedEdge { edge, position });
+                    }
+                }
             }
         }
 
@@ -582,11 +711,50 @@ impl SketchSession {
         self.snap_inner(raw, true, false, None)
     }
 
+    /// Nearest point on the projected support-face boundary within snap range.
+    ///
+    /// This is what lets a line or arc endpoint land exactly on the face edge
+    /// the sketch was created from: the projection is reference geometry, so
+    /// creation tools persist the acquired edge as a sliding reference.
+    fn nearest_projected_edge_point(&self, raw: Vec2) -> Option<(EdgeId, Vec2)> {
+        self.projected_edges
+            .iter()
+            .filter_map(|edge| {
+                let position = edge.closest_point(raw)?;
+                let distance = position.distance(raw);
+                (distance <= self.snap_tolerance).then_some((edge.edge_id, position, distance))
+            })
+            .min_by(|left, right| left.2.total_cmp(&right.2))
+            .map(|(edge_id, position, _)| (edge_id, position))
+    }
+
     /// Creation-tool snap with a temporary inference override. Ctrl/Cmd
     /// suppresses object/datum acquisition while leaving the independently
     /// configured engineering grid available.
+    /// The one creation snap every curve/rectangle create tool uses: points,
+    /// origin, curve crossings, line midpoints, support-face edge midpoints and
+    /// the projected face boundary. Keeping a single implementation means the
+    /// cursor, the preview and the commit agree about what a pick acquired.
+    /// Holding Ctrl suppresses the whole acquisition.
     fn snap_creation(&self, raw: Vec2, ctrl_held: bool) -> (Vec2, SnapTarget) {
-        self.snap_inner(raw, !ctrl_held, false, None)
+        self.snap_inner(raw, !ctrl_held, !ctrl_held, None)
+    }
+
+    /// Creation snap without midpoint-class references. The Point tool is the
+    /// only caller: it resolves curve interiors, virtual line extensions and
+    /// carrier coincidences itself, and a midpoint reference would override
+    /// that choice.
+    fn snap_creation_carrier_only(&self, raw: Vec2, ctrl_held: bool) -> (Vec2, SnapTarget) {
+        let snapped = self.snap_inner(raw, !ctrl_held, false, None);
+        if !ctrl_held
+            && self.point_snap
+            && !matches!(snapped.1, SnapTarget::Point { .. } | SnapTarget::Origin)
+        {
+            if let Some((edge, position)) = self.nearest_projected_edge_point(raw) {
+                return (position, SnapTarget::ProjectedEdge { edge, position });
+            }
+        }
+        snapped
     }
 
     /// Line-flow snap (M1d): midpoint snapping is enabled here only, because
@@ -618,12 +786,14 @@ impl SketchSession {
             }
             SnapTarget::Midpoint { .. }
             | SnapTarget::ReferenceMidpoint { .. }
+            | SnapTarget::ProjectedEdge { .. }
             | SnapTarget::Curve { .. }
             | SnapTarget::Intersection { .. } => {
                 // Exact geometric acquisition wins over directional
                 // inference. Commit persists the corresponding midpoint or
                 // point-on-carrier relation instead of only storing this
-                // sampled coordinate.
+                // sampled coordinate. A projected support-face edge is
+                // runtime reference geometry, so it adds no relation.
             }
             SnapTarget::Grid | SnapTarget::None => {
                 if !ctrl_held {
@@ -697,7 +867,18 @@ impl SketchSession {
             .and_then(|request| self.curve_crossing_point(request, from))
             .unwrap_or(from);
         if !ctrl_held {
-            if let Some(preview) = self.curve_crossing_preview(to_hint, to_crossing) {
+            if let Some(preview) = self
+                .curve_crossing_preview(to_hint, to_crossing)
+                .filter(|p| {
+                    let delta = p.snapped_to - from;
+                    length_mm.is_none_or(|l| (delta.length() - l).abs() <= MERGE_EPS)
+                        && angle_deg.is_none_or(|a| {
+                            let direction = Vec2::new(a.to_radians().cos(), a.to_radians().sin());
+                            delta.dot(direction) >= 0.0
+                                && delta.dot(direction.perp()).abs() <= MERGE_EPS
+                        })
+                })
+            {
                 return preview;
             }
         }
@@ -726,12 +907,15 @@ impl SketchSession {
         // Both locked → exact point; only coincident merging still applies.
         if let (Some(l), Some(a)) = (length_mm, angle) {
             let exact = from + Vec2::new(a.cos() * l, a.sin() * l);
-            return self.coincident_or_exact(from, exact, inferences);
+            return self.coincident_or_exact(from, exact, inferences, ctrl_held);
         }
 
         let endpoint = if let Some(l) = length_mm {
             // 1. Snap onto an existing point lying on the locked circle.
-            if let Some((id, pos)) = self.point_on_circle_locus(from, l, to_hint) {
+            if let Some((id, pos)) = (!ctrl_held)
+                .then(|| self.point_on_circle_locus(from, l, to_hint))
+                .flatten()
+            {
                 inferences.push(Inference::Coincident);
                 return PreviewDto {
                     snapped_to: pos,
@@ -777,7 +961,10 @@ impl SketchSession {
         } else if let Some(a) = angle {
             let dir = Vec2::new(a.cos(), a.sin());
             // 1. Snap onto an existing point lying on the locked ray.
-            if let Some((id, pos)) = self.point_on_ray_locus(from, dir, to_hint) {
+            if let Some((id, pos)) = (!ctrl_held)
+                .then(|| self.point_on_ray_locus(from, dir, to_hint))
+                .flatten()
+            {
                 inferences.push(Inference::Coincident);
                 return PreviewDto {
                     snapped_to: pos,
@@ -808,7 +995,7 @@ impl SketchSession {
             unreachable!()
         };
 
-        self.coincident_or_exact(from, endpoint, inferences)
+        self.coincident_or_exact(from, endpoint, inferences, ctrl_held)
     }
 
     /// Analytic intersections of two finite sketch curves. Screen-space
@@ -1272,11 +1459,12 @@ impl SketchSession {
         from: Vec2,
         exact: Vec2,
         mut inferences: Vec<Inference>,
+        ctrl_held: bool,
     ) -> PreviewDto {
         // A typed length/angle is still subject to the Sketch Palette Snap
         // setting. Otherwise a narrow slot near the origin can silently move
         // its endpoint and attach an origin relation despite Snap being off.
-        if !self.point_snap {
+        if !self.point_snap || ctrl_held {
             return PreviewDto {
                 snapped_to: exact,
                 snap: SnapTarget::None,
@@ -1295,7 +1483,7 @@ impl SketchSession {
                     return None;
                 }
                 let distance = position.distance(exact);
-                (distance <= self.snap_tolerance).then_some((id, distance))
+                (distance <= MERGE_EPS).then_some((id, distance))
             })
             .min_by(|a, b| a.1.total_cmp(&b.1))
         {
@@ -1307,9 +1495,7 @@ impl SketchSession {
                 tracking: None,
             };
         }
-        if exact.distance(Vec2::ZERO) <= self.snap_tolerance
-            && from.distance(Vec2::ZERO) > MERGE_EPS
-        {
+        if exact.distance(Vec2::ZERO) <= MERGE_EPS && from.distance(Vec2::ZERO) > MERGE_EPS {
             inferences.push(Inference::Coincident);
             return PreviewDto {
                 snapped_to: Vec2::ZERO,
@@ -1340,7 +1526,7 @@ impl SketchSession {
             if position.distance(from) <= MERGE_EPS {
                 continue;
             }
-            if (position.distance(from) - l).abs() > self.snap_tolerance {
+            if (position.distance(from) - l).abs() > MERGE_EPS {
                 continue;
             }
             let dc = position.distance(cursor);
@@ -1369,7 +1555,7 @@ impl SketchSession {
                 continue;
             }
             let rel = *position - from;
-            if (rel.x * dir.y - rel.y * dir.x).abs() > self.snap_tolerance {
+            if (rel.x * dir.y - rel.y * dir.x).abs() > MERGE_EPS {
                 continue;
             }
             if rel.dot(dir) < -MERGE_EPS {
@@ -1409,6 +1595,7 @@ impl SketchSession {
             }
             SnapTarget::Midpoint { .. }
             | SnapTarget::ReferenceMidpoint { .. }
+            | SnapTarget::ProjectedEdge { .. }
             | SnapTarget::Curve { .. } => EndpointResolution::New(coords),
             SnapTarget::Intersection { .. } => match self.sketch.nearest_point(coords, MERGE_EPS) {
                 Some((id, _)) => EndpointResolution::Existing(id),
@@ -1487,9 +1674,98 @@ impl SketchSession {
         let constraint = match target {
             SnapTarget::Origin => Constraint::OriginCoincident { entity: curve },
             SnapTarget::Point { entity: point } => Constraint::CenterCoincident { point, curve },
+            SnapTarget::ProjectedEdge { edge, .. } => {
+                Constraint::ReferenceOnEdge { point: curve, edge }
+            }
             _ => return None,
         };
         self.try_add_independent_auto_constraint(constraint)
+    }
+
+    /// Give a curve a generated center handle bound by `CenterCoincident`.
+    /// `CenterCoincident` determines the two handle coordinates from the curve
+    /// center, so the handle adds no degree of freedom.
+    fn attach_owned_center(&mut self, curve: EntityId, center: Vec2) -> EntityId {
+        let point = self.sketch.add_generated_point(center);
+        self.sketch
+            .add_constraint(Constraint::CenterCoincident { point, curve });
+        point
+    }
+
+    /// Bind a selectable, constrainable center point to a freshly drawn circle
+    /// (issue #151). A circle's center is implicit — stored inline on
+    /// `Entity::Circle` — so without this link it can be neither picked nor
+    /// constrained.
+    ///
+    /// A free pick gets its own handle. An intentional acquisition keeps the
+    /// acquired point, and a pick that lands exactly on an existing point
+    /// reuses it, so no second vertex is manufactured at the same coordinate
+    /// (`resolve_endpoint` does the same for line endpoints). Origin and edge
+    /// acquisitions keep the curve as their datum carrier, exactly as before.
+    ///
+    /// The center relation is added directly rather than through the
+    /// opportunistic gate: a freshly drawn circle's center is always
+    /// independent, and a gate that measures rank would call it redundant
+    /// whenever the handle aliases the circle's own center variables.
+    fn attach_circle_center(
+        &mut self,
+        circle: EntityId,
+        center: Vec2,
+        mode: CircleMode,
+        center_target: SnapTarget,
+    ) -> EntityId {
+        // 2-Point circles derive their center from the two diameter picks, so
+        // only Center-Diameter has a picked center that can acquire anything.
+        let target = if mode == CircleMode::CenterDiameter {
+            center_target
+        } else {
+            SnapTarget::None
+        };
+        if !matches!(target, SnapTarget::Point { .. }) {
+            self.attach_curve_center_if_acquired(circle, target);
+        }
+        let point = match target {
+            SnapTarget::Point { entity } => entity,
+            // `center` is already the snapped position, so a nearest match also
+            // covers an origin pick and a suppressed (Ctrl) one.
+            _ => match self.sketch.nearest_point(center, MERGE_EPS) {
+                Some((point, _)) => point,
+                None => return self.attach_owned_center(circle, center),
+            },
+        };
+        self.sketch.add_constraint(Constraint::CenterCoincident {
+            point,
+            curve: circle,
+        });
+        point
+    }
+
+    /// Every circle that predates center handles gains one, so issue #151 is
+    /// fixed for projects saved before the handle existed as well as for circles
+    /// the offset tool derives. Idempotent: a circle that already has a center
+    /// relation is left alone, so a user who detached a handle deliberately is
+    /// not overruled until the project is reopened.
+    fn attach_missing_circle_centers(&mut self) {
+        let circles: Vec<(EntityId, Vec2)> = self
+            .sketch
+            .entities()
+            .filter_map(|(id, entity)| match entity {
+                Entity::Circle { center, .. } => Some((id, *center)),
+                _ => None,
+            })
+            .collect();
+        for (circle, center) in circles {
+            let bound = self
+                .sketch
+                .constraints()
+                .any(|(_, constraint)| match *constraint {
+                    Constraint::CenterCoincident { curve, .. } => curve == circle,
+                    _ => false,
+                });
+            if !bound {
+                self.attach_owned_center(circle, center);
+            }
+        }
     }
 
     fn has_relation(&self, relation: &Constraint) -> bool {
@@ -1502,21 +1778,23 @@ impl SketchSession {
     /// Grid/raw picks are geometry only; point/origin picks become durable.
     fn materialize_acquired_point(
         &mut self,
-        _position: Vec2,
+        position: Vec2,
         target: SnapTarget,
     ) -> Option<EntityId> {
         match target {
             SnapTarget::Point { entity } => Some(entity),
+            SnapTarget::ProjectedEdge { edge, .. } => {
+                let point = self.sketch.add_generated_point(position);
+                self.sketch
+                    .add_constraint(Constraint::ReferenceOnEdge { point, edge });
+                Some(point)
+            }
             SnapTarget::Origin => {
                 let point = self
                     .sketch
                     .nearest_point(Vec2::ZERO, MERGE_EPS)
                     .map(|(entity, _)| entity)
-                    .unwrap_or_else(|| {
-                        self.sketch.add_entity(Entity::Point {
-                            position: Vec2::ZERO,
-                        })
-                    });
+                    .unwrap_or_else(|| self.sketch.add_generated_point(Vec2::ZERO));
                 self.attach_origin_if_acquired(point, target);
                 Some(point)
             }
@@ -1535,7 +1813,7 @@ impl SketchSession {
         target: SnapTarget,
     ) -> Result<EntityId, SessionError> {
         let Some(point) = self.materialize_acquired_point(position, target) else {
-            let point = self.sketch.add_entity(Entity::Point { position });
+            let point = self.sketch.add_generated_point(position);
             // The two new point variables are determined by these two
             // equations. This adds a handle without changing the arc's DOF.
             self.sketch
@@ -1762,10 +2040,7 @@ impl SketchSession {
     ) -> Result<AddLineResult, SessionError> {
         // Formulas evaluate against the CURRENT sketch parameters (before
         // any new geometry/parameter exists).
-        let length_mm = match &request.length_text {
-            Some(t) => Some(self.eval_text(t)?),
-            None => request.length_mm,
-        };
+        let length_mm = self.positive_input(request.length_text.as_deref(), request.length_mm)?;
         let angle_deg = match &request.angle_text {
             Some(t) => Some(self.eval_text(t)?),
             None => request.angle_deg,
@@ -1839,6 +2114,7 @@ impl SketchSession {
             | SnapTarget::None
             | SnapTarget::Midpoint { .. }
             | SnapTarget::ReferenceMidpoint { .. }
+            | SnapTarget::ProjectedEdge { .. }
             | SnapTarget::Curve { .. } => EndpointResolution::New(preview.snapped_to),
             SnapTarget::Intersection { .. } => {
                 self.resolve_endpoint(preview.snapped_to, preview.snap)
@@ -1871,11 +2147,11 @@ impl SketchSession {
         let before = self.sketch.snapshot();
         let start_point_id = match start {
             EndpointResolution::Existing(id) => id,
-            EndpointResolution::New(p) => self.sketch.add_entity(Entity::Point { position: p }),
+            EndpointResolution::New(p) => self.sketch.add_generated_point(p),
         };
         let end_point_id = match end {
             EndpointResolution::Existing(id) => id,
-            EndpointResolution::New(p) => self.sketch.add_entity(Entity::Point { position: p }),
+            EndpointResolution::New(p) => self.sketch.add_generated_point(p),
         };
         let line_id = self
             .sketch
@@ -2021,6 +2297,10 @@ impl SketchSession {
         if let Some(carrier) = coincident_with.filter(|_| !ctrl_held) {
             let position = self.point_projected_to_curve(carrier, raw)?;
             if let Some((id, _)) = self.sketch.nearest_point(position, MERGE_EPS) {
+                let before = self.sketch.snapshot();
+                if self.sketch.retain_point(id) {
+                    self.push_command(before);
+                }
                 return Ok(ToolResult {
                     entities: vec![id],
                     sketch: self.dto(),
@@ -2049,13 +2329,15 @@ impl SketchSession {
             });
         }
 
-        let (coords, target) = self.snap_creation(raw, ctrl_held);
+        // Point keeps carrier semantics: no midpoint-class acquisition.
+        let (coords, target) = self.snap_creation_carrier_only(raw, ctrl_held);
         let resolution = self.resolve_endpoint(coords, target);
         if let EndpointResolution::Existing(id) = resolution {
             // Snapped onto an existing point: normally nothing to add. An
             // origin acquisition still needs its explicit datum relation.
             let before = self.sketch.snapshot();
-            if self.attach_origin_if_acquired(id, target).is_some() {
+            let adopted = self.sketch.retain_point(id);
+            if self.attach_origin_if_acquired(id, target).is_some() || adopted {
                 self.recompute();
                 self.push_command(before);
             }
@@ -2070,6 +2352,9 @@ impl SketchSession {
         };
         let id = self.sketch.add_entity(Entity::Point { position: p });
         self.attach_origin_if_acquired(id, target);
+        if let Some(relation) = self.midpoint_constraint_for_target(id, target) {
+            self.try_add_independent_auto_constraint(relation);
+        }
         self.recompute();
         self.push_command(before);
         Ok(ToolResult {
@@ -2189,7 +2474,7 @@ impl SketchSession {
         let before = self.sketch.snapshot();
         let mut materialize = |resolution: EndpointResolution| match resolution {
             EndpointResolution::Existing(id) => id,
-            EndpointResolution::New(position) => self.sketch.add_entity(Entity::Point { position }),
+            EndpointResolution::New(position) => self.sketch.add_generated_point(position),
         };
         let mid_id = materialize(mid_resolution);
         let a_id = materialize(other_resolution);
@@ -2264,7 +2549,7 @@ impl SketchSession {
     ) -> Result<ToolResult, SessionError> {
         let (a, a_target) = self.snap_creation(p1, ctrl_held);
         let (b, b_target) = self.snap_creation(p2, ctrl_held);
-        self.build_rectangle(mode, a, b, [(a, a_target), (b, b_target)])
+        self.build_rectangle(mode, a, b, [(a, a_target), (b, b_target)], !ctrl_held)
     }
 
     /// Rectangle honoring locked width/height dynamic-input fields.
@@ -2275,27 +2560,32 @@ impl SketchSession {
         request: &LockedRectangleRequest,
     ) -> Result<ToolResult, SessionError> {
         let mode = request.mode;
-        let (anchor, corner, anchor_target, hint_target) =
-            self.resolve_rectangle_locked(request)?;
+        let creation::ResolvedRectangle {
+            anchor,
+            anchor_target,
+            corner,
+            corner_target: hint_target,
+            width: width_mm,
+            height: height_mm,
+        } = self.resolve_rectangle(request)?;
+
         let before = self.sketch.snapshot();
-        let entities = self.create_rectangle(mode, anchor, corner)?;
-        for (position, target) in [(anchor, anchor_target), (corner, hint_target)] {
-            if target != SnapTarget::Origin {
-                continue;
-            }
-            if let Some((point, _)) = self.sketch.nearest_point(position, MERGE_EPS) {
-                self.attach_origin_if_acquired(point, target);
-            }
-        }
+        let entities = self.create_rectangle(mode, anchor, corner, !request.ctrl_held)?;
+        self.attach_rectangle_acquisitions(
+            &entities,
+            [(anchor, anchor_target), (corner, hint_target)],
+        );
+        // Corner points drive the rectangle: dims span corner-to-corner so
+        // later corner ops keep their reference (2026-07-19 PM, D9).
         let (bl, br, tl) = (entities[0], entities[1], entities[3]);
         let w_text = request
             .width_text
             .clone()
-            .or_else(|| request.width_mm.map(format_number));
+            .or_else(|| width_mm.map(format_number));
         let h_text = request
             .height_text
             .clone()
-            .or_else(|| request.height_mm.map(format_number));
+            .or_else(|| height_mm.map(format_number));
         self.auto_dim_rect(bl, br, tl, w_text.as_deref(), h_text.as_deref());
         self.recompute();
         self.push_command(before);
@@ -2305,50 +2595,13 @@ impl SketchSession {
         })
     }
 
-    /// The renderer and commit share snapping and locked-axis resolution.
+    /// Native preview uses the same locked-axis resolution as commit.
     pub fn preview_rectangle_locked(
         &self,
         request: &LockedRectangleRequest,
     ) -> Result<[Vec2; 2], SessionError> {
-        let (anchor, corner, _, _) = self.resolve_rectangle_locked(request)?;
-        Ok([anchor, corner])
-    }
-
-    fn resolve_rectangle_locked(
-        &self,
-        request: &LockedRectangleRequest,
-    ) -> Result<(Vec2, Vec2, SnapTarget, SnapTarget), SessionError> {
-        let mode = request.mode;
-        let width_mm = match &request.width_text {
-            Some(t) => Some(self.eval_text(t)?),
-            None => request.width_mm,
-        };
-        let height_mm = match &request.height_text {
-            Some(t) => Some(self.eval_text(t)?),
-            None => request.height_mm,
-        };
-        let (anchor, anchor_target) = self.snap_creation(request.anchor, request.ctrl_held);
-        let (hint, hint_target) = self.snap_creation(request.corner_hint, request.ctrl_held);
-        let sx = if hint.x >= anchor.x { 1.0 } else { -1.0 };
-        let sy = if hint.y >= anchor.y { 1.0 } else { -1.0 };
-        let extent = |full: f64| match mode {
-            RectangleMode::TwoPoint => full,
-            RectangleMode::Center => full / 2.0,
-        };
-        let corner_x = width_mm
-            .map(|w| anchor.x + sx * extent(w))
-            .unwrap_or_else(|| self.snap_1d(hint.x));
-        let corner_y = height_mm
-            .map(|h| anchor.y + sy * extent(h))
-            .unwrap_or_else(|| self.snap_1d(hint.y));
-        // Coincident corner snap respecting the locked axes.
-        let corner = self.corner_snap(
-            Vec2::new(corner_x, corner_y),
-            width_mm.is_some(),
-            height_mm.is_some(),
-        );
-
-        Ok((anchor, corner, anchor_target, hint_target))
+        let resolved = self.resolve_rectangle(request)?;
+        Ok([resolved.anchor, resolved.corner])
     }
 
     fn build_rectangle(
@@ -2357,17 +2610,11 @@ impl SketchSession {
         p1: Vec2,
         p2: Vec2,
         acquisitions: [(Vec2, SnapTarget); 2],
+        allow_merge: bool,
     ) -> Result<ToolResult, SessionError> {
         let before = self.sketch.snapshot();
-        let entities = self.create_rectangle(mode, p1, p2)?;
-        for (position, target) in acquisitions {
-            if target != SnapTarget::Origin {
-                continue;
-            }
-            if let Some((point, _)) = self.sketch.nearest_point(position, MERGE_EPS) {
-                self.attach_origin_if_acquired(point, target);
-            }
-        }
+        let entities = self.create_rectangle(mode, p1, p2, allow_merge)?;
+        self.attach_rectangle_acquisitions(&entities, acquisitions);
         self.recompute();
         self.push_command(before);
         Ok(ToolResult {
@@ -2376,48 +2623,55 @@ impl SketchSession {
         })
     }
 
+    fn attach_rectangle_acquisitions(
+        &mut self,
+        entities: &[EntityId],
+        acquisitions: [(Vec2, SnapTarget); 2],
+    ) {
+        for (position, target) in acquisitions {
+            // Only the rectangle's own points are acquisition targets: the four
+            // corners, plus the owned center for a center rectangle. Never
+            // constrain an unrelated existing point that merely happens to sit
+            // at a requested position. `point_position` is `None` for lines, so
+            // scanning the whole authored list is safe.
+            if let Some(point) = entities.iter().copied().find(|id| {
+                self.sketch
+                    .point_position(*id)
+                    .is_some_and(|p| p.distance(position) <= MERGE_EPS)
+            }) {
+                self.attach_origin_if_acquired(point, target);
+                if let Some(relation) = self.midpoint_constraint_for_target(point, target) {
+                    self.try_add_independent_auto_constraint(relation);
+                }
+            }
+        }
+    }
+
     /// Rectangle mutation only (shared by plain and locked/dimensioned
     /// creation): 4 corner points + 4 H/V-constrained lines, returned as
     /// [points…, lines…].
+    ///
+    /// A center rectangle also owns a real, selectable center point, appended
+    /// after the corners and lines so callers that index the corners as
+    /// `entities[0..=3]` stay valid. Binding that point to a diagonal's
+    /// midpoint is what keeps the rectangle symmetric about its center: a
+    /// corner drag moves the opposite corner instead of leaving the far side
+    /// behind (issue #151).
     fn create_rectangle(
         &mut self,
         mode: RectangleMode,
         p1: Vec2,
         p2: Vec2,
+        allow_merge: bool,
     ) -> Result<Vec<EntityId>, SessionError> {
-        let (min, max) = match mode {
-            RectangleMode::TwoPoint => (
-                Vec2::new(p1.x.min(p2.x), p1.y.min(p2.y)),
-                Vec2::new(p1.x.max(p2.x), p1.y.max(p2.y)),
-            ),
-            RectangleMode::Center => {
-                let hx = (p2.x - p1.x).abs();
-                let hy = (p2.y - p1.y).abs();
-                (
-                    Vec2::new(p1.x - hx, p1.y - hy),
-                    Vec2::new(p1.x + hx, p1.y + hy),
-                )
-            }
-        };
-        if max.x - min.x < MIN_LINE_LENGTH_MM || max.y - min.y < MIN_LINE_LENGTH_MM {
-            return Err(SessionError::DegenerateSegment);
-        }
-
-        let corners = [
-            Vec2::new(min.x, min.y),
-            Vec2::new(max.x, min.y),
-            Vec2::new(max.x, max.y),
-            Vec2::new(min.x, max.y),
-        ];
+        let corners = Self::rectangle_corners(mode, p1, p2)?;
         let mut point_ids = Vec::with_capacity(4);
         for c in corners {
-            let existing = self
-                .point_snap
+            let existing = (self.point_snap && allow_merge)
                 .then(|| self.sketch.nearest_point(c, MERGE_EPS))
                 .flatten()
                 .map(|(id, _)| id);
-            let point_id =
-                existing.unwrap_or_else(|| self.sketch.add_entity(Entity::Point { position: c }));
+            let point_id = existing.unwrap_or_else(|| self.sketch.add_generated_point(c));
             point_ids.push(point_id);
         }
         let mut line_ids = Vec::with_capacity(4);
@@ -2440,8 +2694,26 @@ impl SketchSession {
         self.sketch.add_constraint(Constraint::Vertical {
             entity: line_ids[3],
         });
-        let mut entities = point_ids;
+        let mut entities = point_ids.clone();
         entities.extend(line_ids);
+        if mode == RectangleMode::Center {
+            let position = (corners[0] + corners[2]) * 0.5;
+            let existing = (self.point_snap && allow_merge)
+                .then(|| self.sketch.nearest_point(position, MERGE_EPS))
+                .flatten()
+                .map(|(id, _)| id)
+                // Never adopt one of this rectangle's own corners: a
+                // borderline-thin pick can sit within epsilon of the center,
+                // and a center that is also a corner cannot be a midpoint.
+                .filter(|id| !point_ids.contains(id));
+            let center = existing.unwrap_or_else(|| self.sketch.add_generated_point(position));
+            self.sketch.add_constraint(Constraint::SpanMidpoint {
+                point: center,
+                start: point_ids[0],
+                end: point_ids[2],
+            });
+            entities.push(center);
+        }
         Ok(entities)
     }
 
@@ -2476,16 +2748,20 @@ impl SketchSession {
         request: &LockedCircleRequest,
     ) -> Result<ToolResult, SessionError> {
         let mode = request.mode;
-        let (anchor, second, anchor_target) = self.resolve_circle_locked(request)?;
+        let creation::ResolvedCircle {
+            anchor,
+            anchor_target,
+            edge: second,
+            diameter: diameter_mm,
+            ..
+        } = self.resolve_circle(request)?;
+
         let before = self.sketch.snapshot();
-        let id = self.create_circle(mode, anchor, second)?;
-        if mode == CircleMode::CenterDiameter {
-            self.attach_curve_center_if_acquired(id, anchor_target);
-        }
+        let id = self.create_circle(mode, anchor, second, anchor_target)?;
         let d_text = request
             .diameter_text
             .clone()
-            .or_else(|| request.diameter_mm.map(format_number));
+            .or_else(|| diameter_mm.map(format_number));
         if let Some(text) = d_text.as_deref() {
             self.auto_dim_circle(id, text);
         }
@@ -2497,56 +2773,13 @@ impl SketchSession {
         })
     }
 
+    /// Native preview uses the same locked-diameter resolution as commit.
     pub fn preview_circle_locked(
         &self,
         request: &LockedCircleRequest,
     ) -> Result<[Vec2; 2], SessionError> {
-        let (anchor, second, _) = self.resolve_circle_locked(request)?;
-        Ok([anchor, second])
-    }
-
-    fn resolve_circle_locked(
-        &self,
-        request: &LockedCircleRequest,
-    ) -> Result<(Vec2, Vec2, SnapTarget), SessionError> {
-        let mode = request.mode;
-        let diameter_mm = match &request.diameter_text {
-            Some(t) => Some(self.eval_text(t)?),
-            None => request.diameter_mm,
-        };
-        let (anchor, anchor_target) = self.snap_creation(request.anchor, request.ctrl_held);
-        let hint = if diameter_mm.is_none() {
-            self.snap_creation(request.edge_hint, request.ctrl_held).0
-        } else {
-            request.edge_hint
-        };
-        let dir = hint - anchor;
-        let len = dir.length();
-        let unit = if len < MERGE_EPS {
-            Vec2::new(1.0, 0.0)
-        } else {
-            dir * (1.0 / len)
-        };
-        let second = match (mode, diameter_mm) {
-            // Center-Diameter: edge point at radius distance in the hint's
-            // direction (lock composes with point-on-circle snapping).
-            (CircleMode::CenterDiameter, Some(d)) => {
-                let edge = anchor + unit * (d / 2.0);
-                self.point_on_circle_locus(anchor, d / 2.0, hint)
-                    .map(|(_, p)| p)
-                    .unwrap_or(edge)
-            }
-            // 2-Point: diameter endpoints, full d apart.
-            (CircleMode::TwoPoint, Some(d)) => {
-                let edge = anchor + unit * d;
-                self.point_on_circle_locus(anchor, d, hint)
-                    .map(|(_, p)| p)
-                    .unwrap_or(edge)
-            }
-            (_, None) => hint,
-        };
-
-        Ok((anchor, second, anchor_target))
+        let resolved = self.resolve_circle(request)?;
+        Ok([resolved.anchor, resolved.edge])
     }
 
     fn build_circle(
@@ -2557,10 +2790,7 @@ impl SketchSession {
         center_target: SnapTarget,
     ) -> Result<ToolResult, SessionError> {
         let before = self.sketch.snapshot();
-        let id = self.create_circle(mode, p1, p2)?;
-        if mode == CircleMode::CenterDiameter {
-            self.attach_curve_center_if_acquired(id, center_target);
-        }
+        let id = self.create_circle(mode, p1, p2, center_target)?;
         self.recompute();
         self.push_command(before);
         Ok(ToolResult {
@@ -2569,13 +2799,15 @@ impl SketchSession {
         })
     }
 
-    /// Circle mutation only (shared by plain and locked/dimensioned
-    /// creation).
+    /// Circle mutation only (shared by plain and locked/dimensioned creation),
+    /// including seating the selectable center handle so every circle tool goes
+    /// through one path.
     fn create_circle(
         &mut self,
         mode: CircleMode,
         p1: Vec2,
         p2: Vec2,
+        center_target: SnapTarget,
     ) -> Result<EntityId, SessionError> {
         let (center, radius) = match mode {
             CircleMode::CenterDiameter => (p1, p1.distance(p2)),
@@ -2584,7 +2816,9 @@ impl SketchSession {
         if radius < MIN_LINE_LENGTH_MM {
             return Err(SessionError::DegenerateSegment);
         }
-        Ok(self.sketch.add_entity(Entity::Circle { center, radius }))
+        let id = self.sketch.add_entity(Entity::Circle { center, radius });
+        self.attach_circle_center(id, center, mode, center_target);
+        Ok(id)
     }
 
     /// Slot (M1 follow-up): a capsule of 2 parallel
@@ -2592,59 +2826,14 @@ impl SketchSession {
     /// (geomops::slot), with Tangent/Parallel/Equal constraints and a
     /// best-effort Ø width dimension on typed input (D9). One undo command.
     pub fn add_slot(&mut self, request: &SlotRequest) -> Result<ToolResult, SessionError> {
-        let (p1, _) = self.snap(request.p1);
-        let (p2, _) = self.snap(request.p2);
-        let (cursor, _) = self.snap(request.cursor);
-        let width_locked = match &request.width_text {
-            Some(t) => Some(self.eval_text(t)?),
-            None => request.width_mm,
-        };
-        let width = match width_locked {
-            Some(w) => w,
-            // Cursor-driven width: twice the perpendicular distance from the
-            // cursor to the p1→p2 axis.
-            None => {
-                let d = p2 - p1;
-                let len = d.length();
-                if len < MERGE_EPS {
-                    return Err(SessionError::DegenerateSegment);
-                }
-                2.0 * (d.x * (cursor.y - p1.y) - d.y * (cursor.x - p1.x)).abs() / len
-            }
-        };
-        if width < MIN_LINE_LENGTH_MM {
-            return Err(SessionError::DegenerateSegment);
-        }
-        let r = width / 2.0;
-        let (c1, c2) = match request.mode {
-            SlotMode::CenterToCenter => (p1, p2),
-            SlotMode::Overall => {
-                let d = p2 - p1;
-                let len = d.length();
-                if len <= width {
-                    return Err(SessionError::DegenerateSegment);
-                }
-                let u = d * (1.0 / len);
-                (p1 + u * r, p2 - u * r)
-            }
-            SlotMode::CenterPoint => (p2, p1 * 2.0 - p2),
-        };
-        let cap = crate::geomops::slot::slot_capsule(c1, c2, width)
-            .map_err(|_| SessionError::DegenerateSegment)?;
+        let (cap, _, _, width) = self.resolve_slot(request)?;
+        let width_locked = request.width_mm;
 
         let before = self.sketch.snapshot();
-        let pa1 = self.sketch.add_entity(Entity::Point {
-            position: cap.line1.a,
-        });
-        let pa2 = self.sketch.add_entity(Entity::Point {
-            position: cap.line1.b,
-        });
-        let pb1 = self.sketch.add_entity(Entity::Point {
-            position: cap.line2.a,
-        });
-        let pb2 = self.sketch.add_entity(Entity::Point {
-            position: cap.line2.b,
-        });
+        let pa1 = self.sketch.add_generated_point(cap.line1.a);
+        let pa2 = self.sketch.add_generated_point(cap.line1.b);
+        let pb1 = self.sketch.add_generated_point(cap.line2.a);
+        let pb2 = self.sketch.add_generated_point(cap.line2.b);
         let line1 = self.sketch.add_entity(Entity::line(pa1, pa2));
         let line2 = self.sketch.add_entity(Entity::line(pb1, pb2));
         let arc1 = self.sketch.add_entity(Entity::Arc {
@@ -2768,40 +2957,6 @@ impl SketchSession {
         ((snapped - v).abs() <= self.grid_step * GRID_CAPTURE_FRACTION).then_some(snapped)
     }
 
-    /// 1D snap of a free axis component (nearby grid lines when on).
-    fn snap_1d(&self, v: f64) -> f64 {
-        self.snap_1d_with_status(v).unwrap_or(v)
-    }
-
-    /// Coincident corner snap for rectangles, respecting locked axes: only
-    /// points consistent with the locked components are eligible.
-    fn corner_snap(&self, corner: Vec2, x_locked: bool, y_locked: bool) -> Vec2 {
-        if !self.point_snap {
-            return corner;
-        }
-        let mut best: Option<(EntityId, f64)> = None;
-        for (id, e) in self.sketch.entities() {
-            let Entity::Point { position } = e else {
-                continue;
-            };
-            if position.distance(corner) > self.snap_tolerance {
-                continue;
-            }
-            if x_locked && (position.x - corner.x).abs() > self.snap_tolerance {
-                continue;
-            }
-            if y_locked && (position.y - corner.y).abs() > self.snap_tolerance {
-                continue;
-            }
-            let d = position.distance(corner);
-            if best.map_or(true, |(_, bd)| d < bd) {
-                best = Some((id, d));
-            }
-        }
-        best.and_then(|(id, _)| self.sketch.point_position(id))
-            .unwrap_or(corner)
-    }
-
     /// 3-Point Arc: circumscribed circle through p1 (start), p2 (on-arc),
     /// p3 (end); the CCW sweep from start to end contains p2.
     pub fn add_arc_3pt(
@@ -2820,34 +2975,22 @@ impl SketchSession {
         p3: Vec2,
         ctrl_held: bool,
     ) -> Result<ToolResult, SessionError> {
-        let (p1, p1_target) = self.snap_creation(p1, ctrl_held);
-        let (p2, p2_target) = self.snap_creation(p2, ctrl_held);
-        let (p3, p3_target) = self.snap_creation(p3, ctrl_held);
-        let d = 2.0 * (p1.x * (p2.y - p3.y) + p2.x * (p3.y - p1.y) + p3.x * (p1.y - p2.y));
-        if d.abs() < MERGE_EPS {
-            return Err(SessionError::DegenerateSegment); // collinear
-        }
-        let (a2, b2, c2) = (p1.dot(p1), p2.dot(p2), p3.dot(p3));
-        let ux = (a2 * (p2.y - p3.y) + b2 * (p3.y - p1.y) + c2 * (p1.y - p2.y)) / d;
-        let uy = (a2 * (p3.x - p2.x) + b2 * (p1.x - p3.x) + c2 * (p2.x - p1.x)) / d;
-        let center = Vec2::new(ux, uy);
-        let radius = center.distance(p1);
-        if radius < MIN_LINE_LENGTH_MM {
-            return Err(SessionError::DegenerateSegment);
-        }
-        let ang = |p: Vec2| (p.y - center.y).atan2(p.x - center.x);
-        let (a0, a1, am) = (ang(p1), ang(p3), ang(p2));
-        // Choose the CCW sweep that contains the mid pick.
-        let ccw_contains = |s: f64, e: f64, m: f64| {
-            let span = (e - s).rem_euclid(std::f64::consts::TAU);
-            let off = (m - s).rem_euclid(std::f64::consts::TAU);
-            off <= span
-        };
-        let (start_angle, end_angle, start_pick, end_pick) = if ccw_contains(a0, a1, am) {
-            (a0, a1, (p1, p1_target), (p3, p3_target))
-        } else {
-            (a1, a0, (p3, p3_target), (p1, p1_target))
-        };
+        let creation::ResolvedArc {
+            center,
+            radius,
+            start_angle,
+            end_angle,
+            start_pick,
+            end_pick,
+            mid_pick,
+            ..
+        } = self.resolve_three_point_arc(&crate::dto::Arc3PointRequest {
+            p1,
+            p2,
+            p3,
+            ctrl_held,
+        })?;
+        let (p2, p2_target) = mid_pick.expect("three-point arc has a middle pick");
         let before = self.sketch.snapshot();
         let id = self.sketch.add_entity(Entity::Arc {
             center,
@@ -2916,18 +3059,97 @@ impl SketchSession {
         sweep: Vec2,
         ctrl_held: bool,
     ) -> Result<ToolResult, SessionError> {
-        let (center, center_target) = self.snap_creation(center, ctrl_held);
-        let (start, start_target) = self.snap_creation(start, ctrl_held);
-        let (sweep, sweep_target) = self.snap_creation(sweep, ctrl_held);
-        let radius = center.distance(start);
-        if radius < MIN_LINE_LENGTH_MM {
-            return Err(SessionError::DegenerateSegment);
+        self.build_center_arc(center, start, sweep, ctrl_held, None, None, None, None)
+    }
+
+    /// Center Arc honoring a locked radius field (typed value auto-creates a
+    /// Radius dimension, D9). While the radius is locked the cursor supplies
+    /// each pick's direction only, so the second and third clicks still aim
+    /// the arc. `sweep_rad` is the pointer's signed travel from the start pick;
+    /// see [`Self::build_center_arc`] for how a clockwise sweep is stored.
+    pub fn add_arc_center_locked(
+        &mut self,
+        center: Vec2,
+        start: Vec2,
+        sweep: Vec2,
+        ctrl_held: bool,
+        radius_mm: Option<f64>,
+        radius_text: Option<&str>,
+        angle_text: Option<&str>,
+        sweep_rad: Option<f64>,
+    ) -> Result<ToolResult, SessionError> {
+        let radius = match radius_text {
+            Some(text) => Some(self.eval_text(text)?),
+            None => radius_mm,
+        };
+        self.build_center_arc(
+            center,
+            start,
+            sweep,
+            ctrl_held,
+            radius,
+            radius_text,
+            angle_text,
+            sweep_rad,
+        )
+    }
+
+    /// Place a locked-radius pick on the authored radius in the cursor's
+    /// direction. A vertex already at that radius wins when it is under the
+    /// cursor, so a radius lock still composes with point acquisition.
+    fn radius_locked_point(
+        &self,
+        center: Vec2,
+        radius: f64,
+        hint: Vec2,
+        ctrl_held: bool,
+    ) -> (Vec2, SnapTarget) {
+        let (acquired, target) = self.snap_creation(hint, ctrl_held);
+        if (center.distance(acquired) - radius).abs() <= MERGE_EPS {
+            return (acquired, target);
         }
-        let start_angle = (start.y - center.y).atan2(start.x - center.x);
-        let mut end_angle = (sweep.y - center.y).atan2(sweep.x - center.x);
-        if end_angle <= start_angle {
-            end_angle += std::f64::consts::TAU;
-        }
+        let direction = hint - center;
+        let length = direction.length();
+        let unit = if length < MERGE_EPS {
+            Vec2::new(1.0, 0.0)
+        } else {
+            direction * (1.0 / length)
+        };
+        let edge = center + unit * radius;
+        (edge, SnapTarget::None)
+    }
+
+    fn build_center_arc(
+        &mut self,
+        center: Vec2,
+        start: Vec2,
+        sweep: Vec2,
+        ctrl_held: bool,
+        locked_radius: Option<f64>,
+        radius_text: Option<&str>,
+        angle_text: Option<&str>,
+        sweep_rad: Option<f64>,
+    ) -> Result<ToolResult, SessionError> {
+        let creation::ResolvedArc {
+            center,
+            radius,
+            start_angle,
+            end_angle,
+            start_pick,
+            end_pick,
+            center_target,
+            lock,
+            ..
+        } = self.resolve_center_arc(&crate::dto::ArcCenterRequest {
+            center,
+            start,
+            sweep,
+            ctrl_held,
+            radius_mm: locked_radius,
+            radius_text: radius_text.map(str::to_owned),
+            angle_text: angle_text.map(str::to_owned),
+            sweep_rad,
+        })?;
         let before = self.sketch.snapshot();
         let id = self.sketch.add_entity(Entity::Arc {
             center,
@@ -2936,11 +3158,13 @@ impl SketchSession {
             end_angle,
         });
         self.attach_curve_center_if_acquired(id, center_target);
+        let (start_position, stored_start_target) = start_pick;
+        let (end_position, stored_end_target) = end_pick;
         let start_point = match self.attach_arc_endpoint(
             id,
             crate::constraint::ArcEndpoint::Start,
-            start,
-            start_target,
+            start_position,
+            stored_start_target,
         ) {
             Ok(point) => point,
             Err(error) => {
@@ -2949,22 +3173,11 @@ impl SketchSession {
                 return Err(error);
             }
         };
-        // The third center-arc pick defines sweep direction. It represents a
-        // durable endpoint acquisition only when the picked vertex already
-        // lies on the authored radius. A broad screen-space snap tolerance
-        // here would move an off-radius point (or distort the arc) merely
-        // because it happened to provide the intended angular direction.
-        let sweep_is_endpoint = (center.distance(sweep) - radius).abs() <= MERGE_EPS;
-        let end_position = center + Vec2::new(radius * end_angle.cos(), radius * end_angle.sin());
         let end_point = match self.attach_arc_endpoint(
             id,
             crate::constraint::ArcEndpoint::End,
             end_position,
-            if sweep_is_endpoint {
-                sweep_target
-            } else {
-                SnapTarget::None
-            },
+            stored_end_target,
         ) {
             Ok(point) => point,
             Err(error) => {
@@ -2977,12 +3190,72 @@ impl SketchSession {
             self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::Start, start_point);
             self.infer_arc_endpoint_tangent(id, crate::constraint::ArcEndpoint::End, end_point);
         }
+        // A typed/locked radius becomes a driving Radius dimension inside the
+        // same undoable command, exactly as a locked circle diameter does.
+        let dim_text = radius_text
+            .map(str::to_owned)
+            .or_else(|| lock.map(format_number));
+        if let Some(text) = dim_text.as_deref() {
+            self.auto_dim_arc_radius(id, text);
+        }
+        // A typed sweep angle is a dimension in its own right: it must stay
+        // visible and editable after the arc is committed, not vanish into the
+        // numbers the endpoints happened to land on.
+        if let Some(text) = angle_text.map(str::to_owned) {
+            self.auto_dim_arc_angle(id, &text);
+        }
         self.recompute();
         self.push_command(before);
         Ok(ToolResult {
             entities: vec![id],
             sketch: self.dto(),
         })
+    }
+
+    /// The center a corner drag must not disturb: a generated span-midpoint
+    /// center anchored by this corner. A center rectangle resizes *about* its
+    /// center, so the dragged corner moves and the opposite corner mirrors it,
+    /// rather than the whole shape sliding and the center absorbing the change.
+    ///
+    /// A rectangle's diagonal names two opposite corners, but the user can grab
+    /// any of the four. The other two are the ones a single line away from a
+    /// named corner, so the center is pinned for those as well.
+    fn span_center_anchored_by(&self, corner: EntityId) -> Option<EntityId> {
+        let neighbours: Vec<EntityId> = self
+            .sketch
+            .lines_connected_to(corner)
+            .into_iter()
+            .filter_map(|line| self.sketch.line_endpoint_ids(line))
+            .flat_map(|(a, b)| [a, b])
+            .filter(|point| *point != corner)
+            .collect();
+        self.sketch
+            .constraints()
+            .filter_map(|(_, constraint)| match *constraint {
+                Constraint::SpanMidpoint { point, start, end } => Some((point, start, end)),
+                _ => None,
+            })
+            .find(|(point, start, end)| {
+                (corner == *start
+                    || corner == *end
+                    || neighbours.contains(start)
+                    || neighbours.contains(end))
+                    && self.is_owned_span_center(*point)
+            })
+            .map(|(point, _, _)| point)
+    }
+
+    /// A generated rectangle center remains a resize anchor when circles also
+    /// use it. Pinning its existing position keeps those circles stationary;
+    /// the failed-pin fallback still handles dimensioned translation cases.
+    fn is_owned_span_center(&self, point: EntityId) -> bool {
+        self.sketch.is_generated_point(point)
+            && !self.sketch.is_referenced_by_entity(point)
+            && self.sketch.relations_pointing_at(point).all(|constraint| {
+                matches!(constraint,
+                    Constraint::SpanMidpoint { point: center, .. }
+                    | Constraint::CenterCoincident { point: center, .. } if *center == point)
+            })
     }
 
     /// Rubber-band drag of a point via the solver: the dragged point is
@@ -3006,8 +3279,28 @@ impl SketchSession {
         }
 
         // Snap gives the pin target (coordinates only — never a merge).
-        let (target, _) = self.snap(request.to_raw);
-        let analysis = solver::solve(&mut self.sketch, &[(point_id, target)]);
+        let (target, _) = self.snap_inner(request.to_raw, !request.ctrl_held, false, None);
+        let mut pins = vec![(point_id, target)];
+        // A center rectangle's center stays where it is while a corner moves.
+        if let Some(center) = self.span_center_anchored_by(point_id) {
+            if let Some(position) = self.sketch.point_position(center) {
+                pins.push((center, position));
+            }
+        }
+        // Keep the pose the pinned attempt starts from, so the fallback below
+        // does not begin from a half-converged solve.
+        let before_pins = (pins.len() > 1).then(|| self.sketch.snapshot());
+        let mut analysis = solver::solve(&mut self.sketch, &pins);
+        if !analysis.converged {
+            if let Some(before_pins) = before_pins {
+                // A fully dimensioned center rectangle has nothing left but
+                // translation, and holding the center removes exactly that, so
+                // the corner could not follow the cursor at all. Fall back to
+                // an ordinary corner drag, as a two-point rectangle does.
+                self.sketch.restore(before_pins);
+                analysis = solver::solve(&mut self.sketch, &[(point_id, target)]);
+            }
+        }
         if analysis.converged {
             // Hard-set the pin exactly: the damped solve can land ~1e-9
             // off, and chained geometry deserves exact shared points.
@@ -3035,7 +3328,8 @@ impl SketchSession {
     }
 
     /// Delete an entity. Deleting a point cascades to connected lines (and
-    /// their constraints); deleting a line keeps its endpoint points.
+    /// their constraints). Generated handles disappear only when unused;
+    /// independently authored points and shared/constrained handles remain.
     pub fn delete_entity(&mut self, id: EntityId) -> Result<DeleteEntityResult, SessionError> {
         self.delete_entities(&[id])
     }
@@ -3056,10 +3350,47 @@ impl SketchSession {
             ));
         }
         let before = self.sketch.snapshot();
+        // Everything this delete disturbs, so only span midpoints it actually
+        // touched are reconsidered afterwards: the corners of the removed lines,
+        // and the operands of every relation the removal takes down with it.
+        // A filleted corner is no longer a line endpoint — only its relations
+        // hold it — so without the second part a rounded rectangle's diagonal
+        // would outlive the curves it describes.
+        let line_corners: Vec<(EntityId, [EntityId; 2])> = self
+            .sketch
+            .entities()
+            .filter_map(|(line, entity)| match entity {
+                Entity::Line { start, end } => Some((line, [*start, *end])),
+                _ => None,
+            })
+            .collect();
+        let relation_operands: Vec<Vec<EntityId>> = self
+            .sketch
+            .constraints()
+            .map(|(_, constraint)| constraint.referenced_entities())
+            .collect();
         let mut removed = Vec::new();
         for id in existing {
             removed.extend(self.sketch.remove_entity(id));
         }
+        let affected: BTreeSet<EntityId> = removed
+            .iter()
+            .copied()
+            .chain(
+                line_corners
+                    .iter()
+                    .filter(|(line, _)| removed.contains(line))
+                    .flat_map(|(_, corners)| corners.iter().copied()),
+            )
+            .chain(
+                relation_operands
+                    .iter()
+                    .filter(|operands| operands.iter().any(|id| removed.contains(id)))
+                    .flatten()
+                    .copied(),
+            )
+            .collect();
+        removed.extend(self.sketch.sweep_detached_span_midpoints(&affected));
         removed.sort();
         removed.dedup();
         self.recompute();
@@ -3116,9 +3447,11 @@ impl SketchSession {
 
         match *constraint {
             Constraint::ArcEndpointCoincident { .. }
+            | Constraint::ArcAngle { .. }
             | Constraint::OriginCoincident { .. }
             | Constraint::EqualDistance { .. }
             | Constraint::ReferenceMidpoint { .. }
+            | Constraint::ReferenceOnEdge { .. }
             | Constraint::SpanMidpoint { .. } => {
                 return Err(invalid(
                     "This relation is internal and is created by its sketch tool",
@@ -3409,7 +3742,22 @@ impl SketchSession {
             ));
         }
         let before = self.sketch.snapshot();
+        // The relations this module owns as tool scaffolding exist only to bind
+        // a generated handle, so detaching one reaps the handle it owned instead
+        // of leaving an orphan point behind. Arc endpoint handles are
+        // deliberately not reaped here: a trimmed carrier can be re-attached to
+        // one, which is why `modify_does_not_collect_a_previously_detached_point`
+        // requires them to survive.
+        let owned_handle = match constraint {
+            Constraint::CenterCoincident { point, .. } | Constraint::SpanMidpoint { point, .. } => {
+                Some(point)
+            }
+            _ => None,
+        };
         self.sketch.remove_constraint(cid);
+        if let Some(point) = owned_handle {
+            self.sketch.remove_unused_generated_points([point]);
+        }
         self.recompute();
         self.push_command(before);
         Ok(AddConstraintResult {
@@ -4174,7 +4522,9 @@ impl SketchSession {
                 Constraint::Fix { .. }
                 | Constraint::Radius { .. }
                 | Constraint::Diameter { .. }
+                | Constraint::ArcAngle { .. }
                 | Constraint::ReferenceMidpoint { .. }
+                | Constraint::ReferenceOnEdge { .. }
                 | Constraint::SpanMidpoint { .. }
                 | Constraint::ArcEndpointCoincident { .. }
                 | Constraint::EqualDistance { .. } => {}
@@ -4407,6 +4757,12 @@ impl SketchSession {
                     point_positions.insert(point);
                     curve_radii.insert(curve);
                 }
+                // A sweep dimension owns the arc's angles alone: its centre and
+                // radius stay where they are while the endpoints swing.
+                Constraint::ArcAngle { entity, .. } => {
+                    curve_radii.insert(entity);
+                    curve_centers.insert(entity);
+                }
                 Constraint::Midpoint { a: point, b: line } => {
                     add_line_shape(&mut line_lengths, &mut line_angles, line);
                     moving_line_endpoints.insert(point);
@@ -4566,6 +4922,7 @@ impl SketchSession {
                 }
                 Constraint::Fix { .. }
                 | Constraint::ReferenceMidpoint { .. }
+                | Constraint::ReferenceOnEdge { .. }
                 | Constraint::SpanMidpoint { .. }
                 | Constraint::ArcEndpointCoincident { .. }
                 | Constraint::EqualDistance { .. } => {}
@@ -5169,6 +5526,7 @@ impl SketchSession {
                     position: *position,
                 })
                 .collect(),
+            projected_edges: self.projected_edges.clone(),
             dimensions: self.dimension_dtos(),
             dimension_style: self.dimension_style,
             grid_snap: self.grid_snap,

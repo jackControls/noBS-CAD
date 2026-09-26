@@ -617,6 +617,7 @@ fn explicit_slot_center_datum_keeps_width_editable_and_rejects_invalid_targets()
     let mut s = session_off_grid();
     let slot = s
         .add_slot(&nbcad_sketch::SlotRequest {
+            ctrl_held: false,
             mode: nbcad_sketch::SlotMode::CenterToCenter,
             p1: v(0.0, -50.0),
             p2: v(0.0, 50.0),
@@ -853,17 +854,17 @@ fn deleting_a_point_deletes_connected_lines_and_constraints() {
         r.sketch.constraints[0].constraint,
         Constraint::OriginCoincident { entity } if entity == l1.start_point_id
     ));
-    // Only the two outer endpoints survive.
-    assert_eq!(r.sketch.entities.len(), 2);
+    // Only the origin-constrained endpoint survives; the unused handle goes.
+    assert_eq!(r.sketch.entities.len(), 1);
 }
 
 #[test]
-fn deleting_a_line_keeps_its_points() {
+fn deleting_a_line_keeps_only_its_constrained_points() {
     let mut s = session_off_grid();
     let l = s.add_line(v(0.0, 0.0), v(50.0, 0.0), false).unwrap();
     let r = s.delete_entity(l.entity_id).unwrap();
-    assert_eq!(r.removed, vec![l.entity_id]);
-    assert_eq!(r.sketch.entities.len(), 2); // the two endpoints
+    assert_eq!(r.removed, vec![l.end_point_id, l.entity_id]);
+    assert_eq!(r.sketch.entities.len(), 1); // the origin-constrained endpoint
 }
 
 // --- undo / redo ----------------------------------------------------------
@@ -891,7 +892,7 @@ fn delete_is_undoable_with_full_cascade_restore() {
     let l1 = s.add_line(v(0.0, 0.0), v(50.0, 1.0), false).unwrap(); // H inferred
     s.add_line(v(50.0, 0.0), v(90.0, 30.0), true).unwrap();
     s.delete_entity(l1.end_point_id).unwrap();
-    assert_eq!(s.dto().entities.len(), 2);
+    assert_eq!(s.dto().entities.len(), 1);
 
     let restored = s.undo().unwrap();
     assert_eq!(restored.sketch.entities.len(), 5);

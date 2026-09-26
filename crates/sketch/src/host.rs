@@ -410,6 +410,9 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         }),
         "solid_commit" => with_payload(payload, |r: CommitKernelRequest| manager.commit_solid(r)),
         "preview_segment" => with_payload(payload, |r: SegmentRequest| manager.preview_segment(r)),
+        "preview_creation" => with_payload(payload, |r: crate::dto::CreationPreviewRequest| {
+            manager.preview_creation(r)
+        }),
         "eval_expression" => with_payload(payload, |r: EvalExpressionRequest| {
             manager.eval_expression(r)
         }),

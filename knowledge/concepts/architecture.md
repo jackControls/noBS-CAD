@@ -29,7 +29,7 @@ updated: 2026-09-11
 
 These capabilities describe the development branch that bundles this knowledge;
 older release snapshots can predate them. Ideal assembly constraints and rendered
-geometry do not establish physical strength or printable fit.
+geometry leave physical strength and printable fit for coupons and analysis.
 
 Related: [Export & print](export-print.md), [MCP harness](mcp-harness.md),
 and the longer [proposed architecture](../../docs/proposed-architecture.md).

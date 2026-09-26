@@ -19,6 +19,7 @@
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_TransitionMode.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepClass_FaceClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepFill.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
@@ -75,6 +76,7 @@
 #include <Poly_Triangulation.hxx>
 #include <STEPControl_StepModelType.hxx>
 #include <STEPControl_Reader.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <STEPControl_Writer.hxx>
 #include <ShapeFix_Shape.hxx>
 #include <ShapeFix_Solid.hxx>
@@ -114,6 +116,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <optional>
 #include <cstdint>
 #include <cstring>
 #include <map>
@@ -1781,6 +1784,234 @@ TopoDS_Face resolve_planar_face_reference(
   return matches.front();
 }
 
+// A blend whose size reaches the far edge of a wall consumes that wall. OCCT's
+// BRepFilletAPI cannot remove a face while blending, so the everyday "R5 on a
+// 5 mm step" fails. Along a straight edge between two planar faces the same
+// blend exists as Boolean arithmetic: a prism whose section is the corner
+// region between the faces and the blend curve. A concave corner gains that
+// prism and a convex corner loses it. The edge must end on faces
+// perpendicular to it, as plate and step edges do, so the prism's flat ends
+// coincide with them.
+struct PrismaticCorner {
+  gp_Pnt start;
+  gp_Vec along;  // the whole edge, start to end
+  gp_Dir into_first;  // across the first face, leaving the edge
+  gp_Dir into_second;
+  double first_width;
+  double second_width;
+  bool concave;
+};
+
+bool point_in_face(const TopoDS_Face& face, const gp_Pnt& point, double tolerance) {
+  BRepClass_FaceClassifier classifier(face, point, tolerance);
+  const TopAbs_State state = classifier.State();
+  return state == TopAbs_IN || state == TopAbs_ON;
+}
+
+// How far `face` continues from `origin` along `direction`, up to `probe`.
+double wall_width(const TopoDS_Face& face, const gp_Pnt& origin, const gp_Dir& direction,
+                  double probe, double tolerance) {
+  const auto inside = [&](double distance) {
+    return point_in_face(face, origin.Translated(gp_Vec(direction) * distance), tolerance);
+  };
+  if (inside(probe)) {
+    return probe;
+  }
+  double low = 0.0;
+  double high = probe;
+  for (int iteration = 0; iteration < 48; ++iteration) {
+    const double middle = 0.5 * (low + high);
+    if (inside(middle)) {
+      low = middle;
+    } else {
+      high = middle;
+    }
+  }
+  return low;
+}
+
+std::optional<PrismaticCorner> prismatic_corner(
+    const TopoDS_Edge& edge,
+    const TopTools_IndexedDataMapOfShapeListOfShape& edge_faces,
+    const TopTools_IndexedDataMapOfShapeListOfShape& vertex_faces,
+    double probe) {
+  if (BRepAdaptor_Curve(edge).GetType() != GeomAbs_Line || !edge_faces.Contains(edge)) {
+    return std::nullopt;
+  }
+  const TopTools_ListOfShape& adjacent = edge_faces.FindFromKey(edge);
+  if (adjacent.Extent() != 2) {
+    return std::nullopt;
+  }
+  TopoDS_Face faces[2];
+  gp_Dir normals[2];
+  int count = 0;
+  for (TopTools_ListIteratorOfListOfShape iterator(adjacent); iterator.More();
+       iterator.Next(), ++count) {
+    faces[count] = TopoDS::Face(iterator.Value());
+    BRepAdaptor_Surface surface(faces[count], true);
+    if (surface.GetType() != GeomAbs_Plane) {
+      return std::nullopt;
+    }
+    gp_Dir normal = surface.Plane().Axis().Direction();
+    if (faces[count].Orientation() == TopAbs_REVERSED) {
+      normal.Reverse();
+    }
+    normals[count] = normal;
+  }
+  TopoDS_Vertex first, last;
+  TopExp::Vertices(edge, first, last, true);
+  if (first.IsNull() || last.IsNull()) {
+    return std::nullopt;
+  }
+  const gp_Pnt start = BRep_Tool::Pnt(first);
+  const gp_Vec along(start, BRep_Tool::Pnt(last));
+  if (along.SquareMagnitude() < 1.0e-12) {
+    return std::nullopt;
+  }
+  const gp_Dir direction(along);
+  // Every other face at either end must be perpendicular to the edge, so the
+  // prism's flat ends land exactly on them.
+  for (const TopoDS_Vertex& vertex : {first, last}) {
+    if (!vertex_faces.Contains(vertex)) {
+      return std::nullopt;
+    }
+    for (TopTools_ListIteratorOfListOfShape iterator(vertex_faces.FindFromKey(vertex));
+         iterator.More(); iterator.Next()) {
+      const TopoDS_Face face = TopoDS::Face(iterator.Value());
+      if (face.IsSame(faces[0]) || face.IsSame(faces[1])) {
+        continue;
+      }
+      BRepAdaptor_Surface surface(face, true);
+      if (surface.GetType() != GeomAbs_Plane ||
+          std::abs(surface.Plane().Axis().Direction().Dot(direction)) < 1.0 - 1.0e-6) {
+        return std::nullopt;
+      }
+    }
+  }
+  const gp_Pnt middle = start.Translated(along * 0.5);
+  gp_Dir into[2];
+  double widths[2];
+  for (int side = 0; side < 2; ++side) {
+    const double tolerance = std::max(BRep_Tool::Tolerance(faces[side]), 1.0e-7);
+    const double step = std::max(probe * 1.0e-3, tolerance * 10.0);
+    const gp_Dir candidate = normals[side].Crossed(direction);
+    if (point_in_face(faces[side], middle.Translated(gp_Vec(candidate) * step), tolerance)) {
+      into[side] = candidate;
+    } else if (point_in_face(faces[side], middle.Translated(gp_Vec(candidate.Reversed()) * step),
+                             tolerance)) {
+      into[side] = candidate.Reversed();
+    } else {
+      return std::nullopt;
+    }
+    widths[side] = wall_width(faces[side], middle, into[side], probe, tolerance);
+  }
+  // The second face rises above the first face's outer side: an inside corner.
+  const bool concave = into[1].Dot(normals[0]) > 0.0;
+  return PrismaticCorner{start, along, into[0], into[1], widths[0], widths[1], concave};
+}
+
+std::string format_millimetres(double value) {
+  std::ostringstream text;
+  text.precision(4);
+  text << value;
+  return text.str();
+}
+
+TopoDS_Shape blend_prismatic_corners(const TopoDS_Shape& shape,
+                                     const std::vector<TopoDS_Edge>& edges, double size,
+                                     bool chamfer, const char* generic_failure) {
+  TopTools_IndexedDataMapOfShapeListOfShape edge_faces;
+  TopTools_IndexedDataMapOfShapeListOfShape vertex_faces;
+  TopExp::MapShapesAndUniqueAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces, false);
+  TopExp::MapShapesAndUniqueAncestors(shape, TopAbs_VERTEX, TopAbs_FACE, vertex_faces, false);
+  const double pi = std::acos(-1.0);
+  std::vector<std::pair<TopoDS_Shape, bool>> prisms;
+  for (const TopoDS_Edge& edge : edges) {
+    // Probe well past the blend so an oversized request reports the real wall.
+    const std::optional<PrismaticCorner> corner =
+        prismatic_corner(edge, edge_faces, vertex_faces, size * 4.0);
+    if (!corner) {
+      throw std::runtime_error(generic_failure);
+    }
+    const double angle = corner->into_first.Angle(corner->into_second);
+    if (angle < 1.0e-3 || angle > pi - 1.0e-3) {
+      throw std::runtime_error(generic_failure);
+    }
+    // Distance from the edge to where the blend meets each face.
+    const double reach = chamfer ? size : size / std::tan(angle * 0.5);
+    const double narrowest = std::min(corner->first_width, corner->second_width);
+    if (reach > narrowest + 1.0e-6) {
+      throw std::runtime_error("A " + format_millimetres(size) + " mm " +
+                               (chamfer ? "chamfer" : "fillet") + " reaches past the " +
+                               format_millimetres(narrowest) +
+                               " mm wall beside the selected edge");
+    }
+    const gp_Pnt first_tangent = corner->start.Translated(gp_Vec(corner->into_first) * reach);
+    const gp_Pnt second_tangent = corner->start.Translated(gp_Vec(corner->into_second) * reach);
+    BRepBuilderAPI_MakeWire wire;
+    wire.Add(BRepBuilderAPI_MakeEdge(corner->start, first_tangent));
+    if (chamfer) {
+      wire.Add(BRepBuilderAPI_MakeEdge(first_tangent, second_tangent));
+    } else {
+      gp_Vec bisector = gp_Vec(corner->into_first) + gp_Vec(corner->into_second);
+      bisector.Normalize();
+      const gp_Pnt centre = corner->start.Translated(bisector * (size / std::sin(angle * 0.5)));
+      const gp_Pnt crown = centre.Translated(bisector * -size);
+      wire.Add(BRepBuilderAPI_MakeEdge(
+          GC_MakeArcOfCircle(first_tangent, crown, second_tangent).Value()));
+    }
+    wire.Add(BRepBuilderAPI_MakeEdge(second_tangent, corner->start));
+    if (!wire.IsDone()) {
+      throw std::runtime_error(generic_failure);
+    }
+    BRepBuilderAPI_MakeFace section(wire.Wire(), true);
+    if (!section.IsDone()) {
+      throw std::runtime_error(generic_failure);
+    }
+    BRepPrimAPI_MakePrism prism(section.Face(), corner->along);
+    if (!prism.IsDone()) {
+      throw std::runtime_error(generic_failure);
+    }
+    prisms.emplace_back(prism.Shape(), corner->concave);
+  }
+  TopoDS_Shape result = shape;
+  for (const auto& [prism, concave] : prisms) {
+    TopTools_ListOfShape arguments;
+    arguments.Append(result);
+    TopTools_ListOfShape tools;
+    tools.Append(prism);
+    std::unique_ptr<BRepAlgoAPI_BooleanOperation> operation;
+    if (concave) {
+      operation = std::make_unique<BRepAlgoAPI_Fuse>();
+    } else {
+      operation = std::make_unique<BRepAlgoAPI_Cut>();
+    }
+    operation->SetArguments(arguments);
+    operation->SetTools(tools);
+    // The prism's flat sides lie exactly on the faces it blends.
+    operation->SetFuzzyValue(1.0e-6);
+    operation->Build(Message_ProgressRange());
+    if (!operation->IsDone() || operation->HasErrors() || operation->Shape().IsNull()) {
+      throw std::runtime_error(generic_failure);
+    }
+    result = operation->Shape();
+  }
+  // The prism's ends and any uncovered wall remainder are coplanar with the
+  // faces they touch; merge them so the blend reads as one feature.
+  ShapeUpgrade_UnifySameDomain unify(result, true, true, false);
+  unify.Build();
+  result = unify.Shape();
+  BRepLib::EncodeRegularity(result);
+  int solids = 0;
+  for (TopExp_Explorer explorer(result, TopAbs_SOLID); explorer.More(); explorer.Next()) {
+    ++solids;
+  }
+  if (solids != 1 || !BRepCheck_Analyzer(result).IsValid()) {
+    throw std::runtime_error(generic_failure);
+  }
+  return result;
+}
+
 }  // namespace
 
 class Kernel::Impl {
@@ -1828,32 +2059,39 @@ void Kernel::apply_job(const FfiJob& job) {
     }
     TopTools_IndexedMapOfShape edge_map;
     TopExp::MapShapes(found->second, TopAbs_EDGE, edge_map);
+    std::vector<TopoDS_Edge> selected;
+    for (const std::uint32_t index : job.edge_indices) {
+      if (index >= static_cast<std::uint32_t>(edge_map.Extent())) {
+        throw std::runtime_error(job.kind == 5 ? "referenced fillet edge no longer exists"
+                                               : "referenced chamfer edge no longer exists");
+      }
+      selected.push_back(TopoDS::Edge(edge_map.FindKey(index + 1)));
+    }
+    // BRepFilletAPI owns every blend it can express. When it gives up, a
+    // blend that swallows a wall of a prismatic corner is rebuilt by Boolean
+    // arithmetic; anything else keeps its generic failure.
     if (job.kind == 5) {
       BRepFilletAPI_MakeFillet fillet(found->second);
-      for (const std::uint32_t index : job.edge_indices) {
-        if (index >= static_cast<std::uint32_t>(edge_map.Extent())) {
-          throw std::runtime_error("referenced fillet edge no longer exists");
-        }
-        fillet.Add(job.radius, TopoDS::Edge(edge_map.FindKey(index + 1)));
+      for (const TopoDS_Edge& edge : selected) {
+        fillet.Add(job.radius, edge);
       }
       fillet.Build(Message_ProgressRange());
-      if (!fillet.IsDone()) {
-        throw std::runtime_error("OCCT could not build the selected solid fillet");
-      }
-      found->second = fillet.Shape();
+      found->second = fillet.IsDone()
+                          ? fillet.Shape()
+                          : blend_prismatic_corners(
+                                found->second, selected, job.radius, false,
+                                "OCCT could not build the selected solid fillet");
     } else {
       BRepFilletAPI_MakeChamfer chamfer(found->second);
-      for (const std::uint32_t index : job.edge_indices) {
-        if (index >= static_cast<std::uint32_t>(edge_map.Extent())) {
-          throw std::runtime_error("referenced chamfer edge no longer exists");
-        }
-        chamfer.Add(job.radius, TopoDS::Edge(edge_map.FindKey(index + 1)));
+      for (const TopoDS_Edge& edge : selected) {
+        chamfer.Add(job.radius, edge);
       }
       chamfer.Build(Message_ProgressRange());
-      if (!chamfer.IsDone()) {
-        throw std::runtime_error("OCCT could not build the selected solid chamfer");
-      }
-      found->second = chamfer.Shape();
+      found->second = chamfer.IsDone()
+                          ? chamfer.Shape()
+                          : blend_prismatic_corners(
+                                found->second, selected, job.radius, true,
+                                "OCCT could not build the selected solid chamfer");
     }
     return;
   }

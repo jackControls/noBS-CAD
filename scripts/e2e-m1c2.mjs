@@ -11,7 +11,7 @@ import { chromium } from 'playwright';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-const BASE = 'http://localhost:7199';
+const BASE = process.env.NBCAD_E2E_BASE_URL ?? 'http://localhost:7199';
 const SHOTS = fileURLToPath(new URL('../docs/qa/m1c2/', import.meta.url));
 await mkdir(SHOTS, { recursive: true });
 
@@ -46,6 +46,14 @@ const moveSketch = async (x, y) => {
 
 const lineLen = (l) => Math.hypot(l.end.x - l.start.x, l.end.y - l.start.y);
 const lines = (s) => s.entities.filter((e) => e.kind === 'line');
+const chooseTool = async (label, panel) => {
+  const button = page.locator(`button[title="${label}"]`);
+  if (await button.isVisible()) await button.click();
+  else {
+    await page.getByRole('button', { name: panel, exact: true }).click();
+    await page.locator('[data-ribbon-menu]').getByText(label, { exact: true }).click();
+  }
+};
 
 try {
   console.log('setup: sketch + L shape + crossing line');
@@ -59,6 +67,18 @@ try {
   }
   await page.click('text=XY Plane');
   await page.waitForTimeout(1100);
+  await page.evaluate(() => {
+    window.__modifyCalls = [];
+    for (const method of ['trimEntity', 'polygonCreate']) {
+      const original = window.__engine[method].bind(window.__engine);
+      window.__engine[method] = async request => {
+        const call = { method, request };
+        window.__modifyCalls.push(call);
+        try { return await original(request); }
+        catch (error) { call.error = String(error); throw error; }
+      };
+    }
+  });
 
   // L shape: (0,0)-(60,0) and (0,0)-(0,60); crossing vertical at x=40.
   await page.keyboard.press('l');
@@ -108,7 +128,7 @@ try {
 
   // --- 2. Chamfer ---
   console.log('2. chamfer');
-  await page.click('button[title="Chamfer"]');
+  await chooseTool('Chamfer', 'EDIT');
   await page.waitForTimeout(150);
   // Two lines meeting at the other end of the bottom edge: draw first.
   await page.keyboard.press('Escape'); // exit chamfer for now; draw the corner
@@ -118,7 +138,7 @@ try {
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
-  await page.click('button[title="Chamfer"]');
+  await chooseTool('Chamfer', 'EDIT');
   await page.waitForTimeout(150);
   await clickSketch(45, 0); // bottom edge near corner
   await page.waitForTimeout(200);
@@ -140,6 +160,9 @@ try {
 
   // --- 3. Trim ---
   console.log('3. trim');
+  // The chamfer dimension overlaps this segment. Hide annotations so this
+  // check exercises trimming rather than selecting the dimension label.
+  await page.click('li:has-text("Dimensions")');
   await page.click('button[title="Trim"]');
   await page.waitForTimeout(150);
   await moveSketch(50, 0); // hover the bottom edge between x=40 and x=60
@@ -161,6 +184,7 @@ try {
   );
   await shot('03b-trim-result');
   await page.keyboard.press('Escape'); // exit trim tool
+  await page.click('li:has-text("Dimensions")');
 
   // --- 4. Extend ---
   console.log('4. extend');
@@ -300,7 +324,8 @@ try {
 
   // --- 9. Polygon (circumscribed, 6 edges) ---
   console.log('9. polygon');
-  await page.click('button[title="Polygon"]');
+  await chooseTool('Polygon', 'DRAW');
+  await page.locator('[data-ribbon-menu]').getByText('Circumscribed Polygon', { exact: true }).click();
   await page.waitForTimeout(150);
   await clickSketch(-60, -40); // center
   await page.waitForTimeout(300);
@@ -366,6 +391,7 @@ try {
   await page.click('li:has-text("Dimensions")');
 
   check('no page errors during e2e', pageErrors.length === 0, pageErrors[0]?.split('\n')[0] ?? '');
+  if (failures) console.log('Modify diagnostics:', await page.evaluate(() => ({ calls: window.__modifyCalls, dialog: window.__appStore.getState().constraintDialog, tool: window.__appStore.getState().activeTool })));
   if (pageErrors.length > 0) console.log(pageErrors.join('\n---\n').slice(0, 1500));
 } finally {
   await browser.close();

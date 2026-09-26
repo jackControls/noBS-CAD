@@ -35,6 +35,8 @@
 - [Architecture proposals](proposed-architecture.md) — future approaches and rationale.
 - [Agent and maintainer guidance](agentic/INDEX.md) — disclosure, source installation
   and implementation contracts.
+- [Machine-design knowledge base](machine-design-kb.md) — OKF domain help, licenses, MCP plan.
+- [Help search ADR](machine-design-help-search.md) — BM25 `cad_help` caps and growth bar.
 
 <details>
 <summary>Specialist implementation references</summary>
@@ -46,6 +48,9 @@
 - [Sketch constraint matrix](SKETCH_CONSTRAINT_PAIRWISE_MATRIX.md),
   [modeling selection](MODELING_VIEWPORT_SELECTION.md) and
   [viewport interaction](VIEWPORT_INTERACTION_THEME.md).
+- [Projected face-boundary profiles](SKETCH_FACE_BOUNDARY_PROFILES.md) — how a
+  face sketch receives the support face's edges, and why a projected-only face
+  never becomes a profile.
 - [Icon provenance](ICON_PROVENANCE.md), [MCP milestones](../mcp-server/OKRs.md) and
   [presentation review](demo-presentation.md).
 

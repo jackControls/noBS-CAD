@@ -112,6 +112,9 @@ pub struct ViewportPalette {
     pub finished_sketch_point: [f32; 3],
     pub finished_sketch_point_outline: [f32; 3],
     pub preview: [f32; 3],
+    /// Support-face boundary projected into the active sketch. Read-only
+    /// reference geometry, never a pick target.
+    pub projected: [f32; 3],
 }
 
 impl Default for ViewportPalette {
@@ -148,6 +151,7 @@ impl Default for ViewportPalette {
             finished_sketch_point: [134.0 / 255.0, 169.0 / 255.0, 199.0 / 255.0],
             finished_sketch_point_outline: [21.0 / 255.0, 25.0 / 255.0, 31.0 / 255.0],
             preview: [143.0 / 255.0, 196.0 / 255.0, 1.0],
+            projected: [192.0 / 255.0, 140.0 / 255.0, 245.0 / 255.0],
         }
     }
 }
@@ -197,6 +201,12 @@ pub struct ViewportPresentation {
     pub hovered_edge_id: Option<u64>,
     #[serde(default)]
     pub pick_refinable_edges: bool,
+    /// Sketch-palette "Projected Geometries" visibility toggle. Inverted so
+    /// the derived `Default` (an older payload that predates the toggle) keeps
+    /// the reference geometry visible. The projected support-face boundary is
+    /// never a pick target, so hiding it cannot change selection state.
+    #[serde(default)]
+    pub hide_projected_geometry: bool,
     #[serde(default)]
     pub pick_straight_edges: bool,
     #[serde(default)]
@@ -503,6 +513,11 @@ pub enum ViewportConstraintIcon {
     Fix,
     Midpoint,
     Concentric,
+    /// A point glued to an arc's implicit start/end. Every variant here must
+    /// stay in step with `ConstraintIconKind` in
+    /// `src/sketch/constraintIcons.tsx`: an unknown variant makes serde reject
+    /// the whole transient preview, which freezes the cursor HUD on screen.
+    ArcEndpoint,
     Collinear,
     Symmetry,
 }

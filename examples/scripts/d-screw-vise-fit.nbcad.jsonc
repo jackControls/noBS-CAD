@@ -406,24 +406,6 @@
       "id": "Thread coupon / 40 mm male_profile"
     },
     {
-      "call": {
-        "arguments": {
-          "curve": {
-            "$ref": "Thread coupon / 40 mm male_profile",
-            "pointer": "/entities/0"
-          },
-          "point": {
-            "$ref": "Thread coupon / 40 mm male_point",
-            "pointer": "/entities/0"
-          },
-          "type": "center_coincident"
-        },
-        "group": "sketch/constrain",
-        "operation": "sketch_add_constraint"
-      },
-      "id": "Thread coupon / 40 mm male_locate"
-    },
-    {
       "duration_ms": 180,
       "fit": true,
       "target": "active_sketch",

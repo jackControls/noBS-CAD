@@ -6,10 +6,9 @@ bundle: Markdown concepts with YAML frontmatter for humans and agents.
 
 - Browse in-repo: start at [`knowledge/index.md`](../knowledge/index.md)
 - Hosted: [knowledge site](https://jackcontrols.github.io/noBS-CAD/) via `.github/workflows/pages-knowledge.yml`
-- Agents: prefer reading the markdown files over scraping the HTML page
-- MCP: use `resources/list` and `resources/read` for the same Markdown bundled
-  into the native server. Start at `nbcad://knowledge/index.md`; use listed titles
-  and descriptions to find gear and workholding guidance before designing.
+- Prefer **`cad_help`** (`search` → `get` / `topics`) for discovery; then
+  `resources/read` on `nbcad://knowledge/...` when the full page is needed
+  (start at `nbcad://knowledge/index.md`). Prefer bundled markdown over scraping Pages HTML.
 - Keep concepts **thin**; longer factual and proposed design stays in
   [`mcp-harness.md`](mcp-harness.md) and
   [`proposed-architecture.md`](proposed-architecture.md)
@@ -25,8 +24,10 @@ The Pages site is intentionally a thin landing page over the source bundle.
 A richer viewer can be added later without changing `knowledge/` as the source
 of truth.
 
-The MCP inventory is derived from `knowledge/**/*.md` during compilation, including
-the index and update log. Reads return the compiled Markdown unchanged, without
+The MCP inventory is derived from every `knowledge/**/*.md` file during compilation
+(`crates/help/build.rs`), including the index and update log; `cad_help` search
+covers the Concept pages of that same bundle. Reads return the compiled Markdown
+unchanged, without
 network requests, arbitrary file access, document mutation or an additional tool
 surface. The immutable bundle does not advertise subscriptions or list changes;
 rebuild the server when updating it. Links outside `knowledge/` point to supporting
@@ -34,15 +35,16 @@ repository documents and are not separately served as MCP resources.
 
 ## Mechanical-design guidance
 
-The [four introductory articles](../knowledge/index.md#mechanical-design-guidance)
-cover datums, fits, manufacturing and assembly decisions. They link to the existing
-gear, workholding, bearing and printing guidance and to committed recipes.
+Start at the [OKF index](../knowledge/index.md) and
+[machine-design taxonomy](../knowledge/machine-design/taxonomy.md) for the seeded
+Concept set (fits, GD&T, DFM/DFAM, fasteners, materials vocabulary, CAD-program
+ops). Product concepts (gears, workholding, bearings, wind) live under
+`knowledge/concepts/`.
 
-An agent can list resources, choose a title/description, then read an article such
-as `nbcad://knowledge/machine-design/concepts/fits-clearances.md`. Follow related
-resource links for context. Use `cad_interface` with `action: recipes` to inspect
-the current recipe catalog before selecting a referenced example. The articles
-do not run commands or replace the current document.
+Prefer `cad_help` search → get by id; use `resources/read` on a chosen
+`nbcad://knowledge/...` URI for the full page. Use `cad_interface` with
+`action: recipes` to inspect the recipe catalog before selecting a referenced
+example. Articles do not run commands or replace the current document.
 
 ## Maintaining the content
 
@@ -70,6 +72,7 @@ native MCP tests check that every Markdown file is served unchanged and recipe
 references name published recipes. These checks do not establish factual accuracy,
 license compatibility or physical fitness; review the article and cited source.
 
-The Markdown and MCP resource URIs are the foundation for future native Help and
-lessons. A later Bevy surface can consume this same content; this scope adds no
-search engine, duplicate help API or browser Help panel.
+The Markdown corpus, MCP `cad_help` (BM25 via `nbcad-help`), and
+`nbcad://knowledge/...` resources are one surface. Future desktop Help should
+call the same crate — not a second corpus or ranker. Prefer Scripts deep-links
+over a Bevy viewport inside Help.

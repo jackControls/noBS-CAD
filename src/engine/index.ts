@@ -267,6 +267,7 @@ export interface Engine {
   previewSegment(request: SegmentRequest): Promise<PreviewDto>;
   addLine(request: SegmentRequest): Promise<AddLineResult>;
   previewSegmentLocked(request: LockedSegmentRequest): Promise<PreviewDto>;
+  previewCreation(request: import('./types').CreationPreviewRequest): Promise<import('./types').CreationPreviewDto>;
   addLineLocked(request: LockedSegmentRequest): Promise<AddLineResult>;
   addPoint(request: PointRequest): Promise<ToolResult>;
   addLineMidpoint(request: MidpointLineRequest): Promise<ToolResult>;

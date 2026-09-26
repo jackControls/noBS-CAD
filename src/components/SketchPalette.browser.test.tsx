@@ -48,7 +48,8 @@ async function checkNativeHistoryFromPalette() {
   const sketch: SketchDto = {
     name: 'History', plane: {type: 'origin_plane', plane: 'xy'},
     basis: {origin: [0, 0, 0], u: [1, 0, 0], v: [0, 1, 0], normal: [0, 0, 1]},
-    entities: [], constraints: [], reference_midpoints: [], dimensions: [], dimension_style: 'aligned',
+    entities: [], constraints: [], reference_midpoints: [],
+    projected_edges: [], dimensions: [], dimension_style: 'aligned',
     dof: {value: 0, fully_defined: true}, can_undo: true, can_redo: true,
   };
   try {

@@ -1033,6 +1033,10 @@ export class WasmEngine implements Engine {
     return unwrapEnvelope(this.inner.add_circle_locked(JSON.stringify(request)));
   }
 
+  async previewCreation(request: import('./types').CreationPreviewRequest): Promise<import('./types').CreationPreviewDto> {
+    return unwrapEnvelope(this.inner.preview_creation(JSON.stringify(request)));
+  }
+
   async addSlot(request: SlotRequest): Promise<ToolResult> {
     return unwrapEnvelope(this.inner.add_slot(JSON.stringify(request)));
   }

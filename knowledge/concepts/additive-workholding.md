@@ -35,7 +35,7 @@ Plan insertion order before closing pockets. Model the approach path for the
 screw head, nut, washer and installation tool; check how a nut is held while
 tightening and how a wear part is removed. Check assembly at intermediate
 positions, not only at the final pose. Use supplier dimensions for purchased
-hardware. Label simplified clearance envelopes as such; they do not represent
+hardware. Label simplified clearance envelopes as such; treat them as envelopes, not
 fastener threads, strength, or a qualified supplier substitution.
 
 ## D flats, roots and printing
@@ -47,7 +47,7 @@ retain the hub with suitable contact and stock.
 
 A through-axis D flat removes roughly half a circular shaft before other cuts;
 it changes torsion, bending, eccentric contact and available thread engagement.
-Do not rate it using an intact circular-shaft formula. Review the narrowest neck,
+Prefer rating from the narrowest neck (not an intact circular-shaft formula). Review the narrowest neck,
 thread root and abrupt handle junction independently. Use a load-spreading hub
 or blend where needed, then selectively soften touched edges without eroding
 bearing shoulders, clamp faces, guide fits or the thread.
@@ -83,5 +83,5 @@ an ideal joint solution or an illustrative force calculation is not a load ratin
 
 The [D-screw vise record](../../docs/d-screw-vise.md) is a worked development
 example with explicit assumptions and unresolved qualification, not a universal
-fixture standard. Do not copy its dimensions without reviewing the new use.
+fixture standard. Prefer re-checking dimensions against the new use before reuse.
 See also [gear pairs](gears.md) and [export and print](export-print.md).

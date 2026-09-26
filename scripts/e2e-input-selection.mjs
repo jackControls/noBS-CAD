@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 
-const BASE = 'http://localhost:7199';
+const BASE = process.env.NBCAD_E2E_BASE_URL ?? 'http://localhost:7199';
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 const pageErrors = [];
@@ -37,7 +37,7 @@ const pickOriginPlaneFromViewport = async (plane) => {
 
 try {
   await page.goto(BASE, { waitUntil: 'networkidle' });
-  await page.waitForFunction(() => window.__appStore.getState().document !== null);
+  await page.waitForFunction(() => window.__appStore?.getState().document != null);
 
   // A lightweight real feature dialog gives us an ordinary numeric input
   // without first creating a solid.
@@ -232,6 +232,58 @@ try {
   );
   await expressionInput.press('Escape');
 
+  // Real annotation double-clicks must start a fresh edit, including when a
+  // same-ID editor is still mounted while application Undo changes its value.
+  const openExpressionDimension = async () => {
+    const point = await page.evaluate((id) => {
+      const dim = window.__appStore.getState().activeSketch.dimensions
+        .find((candidate) => candidate.constraint_id === id);
+      return window.__sketchToScreen(dim.text_pos.x, dim.text_pos.y);
+    }, expressionDimensionId);
+    assert(point, 'active dimension must have a viewport position');
+    await page.mouse.dblclick(point.x, point.y);
+    await expressionInput.waitFor({ state: 'visible' });
+  };
+  const waitForDimensionValue = async (value) => page.waitForFunction(
+    ([id, expected]) => window.__appStore.getState().activeSketch?.dimensions
+      .find((dimension) => dimension.constraint_id === id)?.value === expected,
+    [expressionDimensionId, value],
+  );
+  await openExpressionDimension();
+  await page.keyboard.type('50');
+  await page.keyboard.press('Enter');
+  await expressionInput.waitFor({ state: 'detached' });
+  await waitForDimensionValue(50);
+  await openExpressionDimension();
+  await clickSketch(60, -40);
+  await page.keyboard.press('ControlOrMeta+z');
+  await waitForDimensionValue(25);
+  await openExpressionDimension();
+  assert.equal(await expressionInput.inputValue(), '25', 'Reopening after Undo must not retain the old 50 draft');
+  assert.deepEqual(await expressionInput.evaluate(input => ({
+    focused: input === document.activeElement,
+    start: input.selectionStart,
+    end: input.selectionEnd,
+  })), { focused: true, start: 0, end: 2 });
+  await page.keyboard.type('30');
+  await page.keyboard.press('Enter');
+  await expressionInput.waitFor({ state: 'detached' });
+  await waitForDimensionValue(30);
+  await openExpressionDimension();
+  await page.keyboard.type('99');
+  await page.keyboard.press('Escape');
+  await expressionInput.waitFor({ state: 'detached' });
+  await waitForDimensionValue(30);
+
+  await openExpressionDimension();
+  await page.keyboard.type('=60/2');
+  await page.keyboard.press('Enter');
+  await expressionInput.waitFor({ state: 'detached' });
+  await waitForDimensionValue(30);
+  await openExpressionDimension();
+  assert.equal(await expressionInput.inputValue(), '=60/2', 'Committed formulas must survive reopening');
+  await page.keyboard.press('Escape');
+
   // Exercise the custom sketch dynamic-input system in that same sketch.
   await page.locator('button[title="Rectangle"]').click();
   await clickSketch(-30, -20);
@@ -268,6 +320,62 @@ try {
     '20',
     'typing replaces the mouse-selected height instead of appending',
   );
+
+  // The shared field's key can change before a geometry-derived value is
+  // populated by its caller's effect. Exercise the actual External Thread
+  // dialog with two real custom-diameter shafts, not just a synthetic input.
+  const threadPage = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  threadPage.on('pageerror', error => pageErrors.push(String(error)));
+  try {
+    await threadPage.goto(BASE, { waitUntil: 'networkidle' });
+    await threadPage.waitForFunction(() => window.__appStore?.getState().document && window.__engine);
+    const shafts = await threadPage.evaluate(async () => {
+      const engine = window.__engine;
+      const store = window.__appStore.getState();
+      const results = [];
+      for (const [x, radius] of [[0, 6.15], [40, 8.65]]) {
+        const sketch = await engine.beginSketch({ type: 'origin_plane', plane: 'xy' });
+        await engine.setGridSnap(false);
+        await engine.addCircle({
+          mode: 'center_diameter', p1: { x, y: 0 }, p2: { x: x + radius, y: 0 }, ctrl_held: true,
+        });
+        const ended = await engine.endSketch();
+        store.setDocument(ended.document);
+        store.setFinishedSketches(await engine.finishedSketches());
+        const update = await engine.extrude({
+          sketch_name: sketch.name, profile_indices: [0], operation: 'new_body',
+          extent: { type: 'distance', distance: 10 }, taper_angle_deg: 0, flip: false, target_body_ids: [],
+        });
+        store.applySolidUpdate(update);
+        const body = update.scene.bodies.find(body => body.faces.some(face =>
+          face.cylinder && Math.abs(face.cylinder.radius - radius) < 1e-6));
+        const face = body.faces.find(face => face.cylinder && Math.abs(face.cylinder.radius - radius) < 1e-6);
+        results.push({ body: body.id, face: face.id });
+      }
+      store.setMode('solid');
+      store.setSelectedBody(results[0].body);
+      store.setSelectedFace(results[0].face);
+      store.openBodyFeatureDialog('external_thread');
+      return results;
+    });
+    const nominal = threadPage.getByTestId('external-thread-nominal');
+    await nominal.waitFor({ state: 'visible' });
+    await threadPage.waitForFunction(() => document.querySelector('[data-testid="external-thread-nominal"]')?.value === '12.3');
+    // These are the same accepted body/face selections produced by viewport picking.
+    await threadPage.evaluate(shaft => {
+      const store = window.__appStore.getState();
+      store.setModelingPickTarget('external_thread_face');
+      store.setSelectedBody(shaft.body);
+      store.setSelectedFace(shaft.face);
+    }, shafts[1]);
+    await threadPage.waitForFunction(() => document.querySelector('[data-testid="external-thread-nominal"]')?.value === '17.3');
+    await threadPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert(await nominal.evaluate(input => input === document.activeElement));
+    await threadPage.keyboard.type('22');
+    assert.equal(await nominal.inputValue(), '22', 'Retargeting must select the updated value, not append to produce 17.322');
+  } finally {
+    await threadPage.close();
+  }
   assert.deepEqual(pageErrors, []);
 
   console.log('  [ok] dimension inputs support fast replacement and precise caret editing');

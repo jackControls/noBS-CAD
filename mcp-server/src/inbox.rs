@@ -99,8 +99,18 @@ pub(crate) fn publish(inbox: &Path, content: &[u8]) -> io::Result<u64> {
 }
 
 fn publish_with(inbox: &Path, write: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<u64> {
+    publish_with_timeout(inbox, PUBLISH_TIMEOUT, write)
+}
+
+// Keep the application's bounded wait separate from the safety stress test's
+// budget for many contending, durable writes on slower filesystems.
+fn publish_with_timeout(
+    inbox: &Path,
+    timeout: Duration,
+    write: impl FnOnce(&mut File) -> io::Result<()>,
+) -> io::Result<u64> {
     fs::create_dir_all(inbox)?;
-    let _lock = lock_publishers(inbox, PUBLISH_TIMEOUT)?;
+    let _lock = lock_publishers(inbox, timeout)?;
     let seq = next_sequence(inbox)?;
     // Only the publisher holding the OS lock touches this ignored path. A
     // crash after publication can leave it hard-linked to a pending command
@@ -238,42 +248,68 @@ mod tests {
         fs::write(dir.0.join("failed/9.json"), "legacy failed").unwrap();
         const WRITERS: usize = 8;
         const EACH: usize = 16;
+        // This tests publication/sequence safety, not whether 128 fsyncs fit
+        // within ten seconds or OS lock scheduling is fair within five. All
+        // workers share one bounded stress budget; production keeps its 5s
+        // timeout, tested independently below.
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let (published_tx, published_rx) = mpsc::channel();
         std::thread::scope(|scope| {
-            let reader = scope.spawn(|| {
-                let deadline = Instant::now() + Duration::from_secs(10);
+            let inbox = &dir.0;
+            let reader = scope.spawn(move || {
                 let mut observed = Vec::new();
-                while observed.len() < WRITERS * EACH {
-                    for seq in sequences(&dir.0).unwrap() {
-                        let src = dir.0.join(format!("{seq}.json"));
+                // Drain every notification, even if an earlier scan already
+                // saw a later publisher's file before that publisher sent its
+                // wakeup. Otherwise the final send could race receiver exit.
+                for _ in 0..WRITERS * EACH {
+                    // Do not busy-scan the directory while writers are doing
+                    // durable I/O. The notification is only a wakeup: still
+                    // discover/read/archive real numeric files concurrently
+                    // with the other writers, just as the desktop reader does.
+                    let remaining = deadline
+                        .checked_duration_since(Instant::now())
+                        .expect("reader exceeded the publication stress deadline");
+                    published_rx
+                        .recv_timeout(remaining)
+                        .expect("reader did not receive every command");
+                    for seq in sequences(inbox).unwrap() {
+                        let src = inbox.join(format!("{seq}.json"));
                         let body = fs::read_to_string(&src).unwrap();
                         assert!(
                             body.starts_with("writer-") && body.ends_with("-complete"),
                             "reader observed incomplete payload: {body:?}"
                         );
-                        fs::rename(src, dir.0.join(format!("applied/{seq}.json"))).unwrap();
+                        fs::rename(src, inbox.join(format!("applied/{seq}.json"))).unwrap();
                         observed.push((seq, body));
                     }
-                    assert!(
-                        Instant::now() < deadline,
-                        "reader did not receive every command"
-                    );
-                    std::thread::yield_now();
                 }
                 observed
             });
             let writers: Vec<_> = (0..WRITERS)
                 .map(|writer| {
                     let inbox = &dir.0;
+                    let published_tx = published_tx.clone();
                     scope.spawn(move || {
                         (0..EACH)
                             .map(|index| {
                                 let payload = format!("writer-{writer}-{index}-complete");
-                                (publish(inbox, payload.as_bytes()).unwrap(), payload)
+                                let remaining = deadline
+                                    .checked_duration_since(Instant::now())
+                                    .expect("writer exceeded the publication stress deadline");
+                                let seq = publish_with_timeout(inbox, remaining, |file| {
+                                    file.write_all(payload.as_bytes())
+                                })
+                                .unwrap();
+                                published_tx.send(()).unwrap();
+                                (seq, payload)
                             })
                             .collect::<Vec<_>>()
                     })
                 })
                 .collect();
+            // A failed writer must disconnect the reader once all publishers
+            // exit, not leave it waiting on a sender owned by this parent.
+            drop(published_tx);
             let mut expected: Vec<_> = writers
                 .into_iter()
                 .flat_map(|writer| writer.join().unwrap())
@@ -285,6 +321,7 @@ mod tests {
                 observed.iter().map(|(seq, _)| *seq).collect::<Vec<_>>(),
                 (10..10 + (WRITERS * EACH) as u64).collect::<Vec<_>>()
             );
+            assert!(sequences(&dir.0).unwrap().is_empty());
         });
     }
 
@@ -296,6 +333,25 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::TimedOut);
         drop(owner);
         assert_eq!(publish(&dir.0, b"complete").unwrap(), 1);
+    }
+
+    #[test]
+    fn publication_timeout_does_not_write_or_consume_a_sequence() {
+        let dir = TestDir::new();
+        let owner = lock_publishers(&dir.0, Duration::from_secs(1)).unwrap();
+        let mut wrote = false;
+        let error = publish_with_timeout(&dir.0, Duration::from_millis(20), |file| {
+            wrote = true;
+            file.write_all(b"must not be published")
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::TimedOut);
+        assert!(!wrote, "a timed-out publisher must not call its writer");
+        assert!(sequences(&dir.0).unwrap().is_empty());
+        assert!(!dir.0.join(".publish.tmp").exists());
+        drop(owner);
+        assert_eq!(publish(&dir.0, b"complete").unwrap(), 1);
+        assert_eq!(fs::read(dir.0.join("1.json")).unwrap(), b"complete");
     }
 
     #[test]

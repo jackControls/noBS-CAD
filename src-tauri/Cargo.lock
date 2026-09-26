@@ -4872,6 +4872,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nbcad-help"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nbcad-interface"
 version = "0.2.0"
 dependencies = [
@@ -4888,9 +4896,11 @@ dependencies = [
  "nbcad-build-info",
  "nbcad-core",
  "nbcad-export",
+ "nbcad-help",
  "nbcad-interface",
  "nbcad-mcp-mutate",
  "nbcad-occt",
+ "nbcad-print",
  "nbcad-recipes",
  "nbcad-script",
  "nbcad-sketch",
@@ -4920,6 +4930,14 @@ dependencies = [
  "nbcad-sketch",
  "nbcad-solid",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nbcad-print"
+version = "0.2.0"
+dependencies = [
+ "png 0.17.16",
  "serde_json",
 ]
 

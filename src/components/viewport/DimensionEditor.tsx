@@ -3,33 +3,53 @@
  * Accepts plain values or formulas (`=50/2`, `=d1*2`) — Enter commits via
  * the engine (geometry re-solves live), Esc cancels.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { EngineError, getEngine } from '../../engine';
+import type { DimensionDto } from '../../engine/types';
 import { useTranslation } from '../../i18n';
 import { useAppStore } from '../../store/appStore';
 import { DimensionInput } from '../DimensionInput';
 
+type DimEditorState = { dimId: number; initial: string; x: number; y: number };
+
 export function DimensionEditor() {
-  const { t } = useTranslation();
   const editor = useAppStore((s) => s.dimEditor);
   const dimension = useAppStore((s) =>
     editor
       ? s.activeSketch?.dimensions.find((candidate) => candidate.constraint_id === editor.dimId)
       : undefined,
   );
-  const setDimEditor = useAppStore((s) => s.setDimEditor);
-  const setConstraintDialog = useAppStore((s) => s.setConstraintDialog);
-  const [value, setValue] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    setValue(editor?.initial ?? '');
-    // Focus after mount.
-    const id = window.setTimeout(() => inputRef.current?.select(), 0);
-    return () => window.clearTimeout(id);
-  }, [editor?.dimId, editor?.initial]);
 
   if (!editor || !dimension) return null;
+
+  return <DimensionEditorSession key={editor.dimId} editor={editor} dimension={dimension} />;
+}
+
+function DimensionEditorSession({
+  editor,
+  dimension,
+}: {
+  editor: DimEditorState;
+  dimension: DimensionDto;
+}) {
+  const { t } = useTranslation();
+  const setDimEditor = useAppStore((s) => s.setDimEditor);
+  const setConstraintDialog = useAppStore((s) => s.setConstraintDialog);
+  const [draft, setDraft] = useState({ editor, value: editor.initial });
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Each opening supplies a new editor snapshot, even for the same dimension.
+  // Reset before committing the DOM so selection sees the new value. Ordinary
+  // sketch updates keep the snapshot and must not overwrite in-progress typing.
+  if (draft.editor !== editor) {
+    setDraft({ editor, value: editor.initial });
+  }
+
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    input?.focus({ preventScroll: true });
+    input?.select();
+  }, [editor]);
 
   const reportError = (err: unknown, fallback: string) => {
     const report = err instanceof EngineError
@@ -53,7 +73,7 @@ export function DimensionEditor() {
     try {
       const result = await engine.editDimension({
         constraint_id: editor.dimId,
-        text: value,
+        text: draft.value,
       });
       useAppStore.getState().setActiveSketch(result.sketch);
       setDimEditor(null);
@@ -89,8 +109,8 @@ export function DimensionEditor() {
         <DimensionInput
           ref={inputRef}
           allowExpressions
-          value={value}
-          onValueChange={setValue}
+          value={draft.value}
+          onValueChange={(value) => setDraft({ editor, value })}
           placeholder={t('dimEditor.placeholder')}
           title={t('dimEditor.title')}
           className="h-7 w-32 rounded border border-accent bg-header px-2 font-mono text-xs text-ink shadow-lg shadow-black/50 outline-none"

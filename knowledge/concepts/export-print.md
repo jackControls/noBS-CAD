@@ -1,9 +1,12 @@
 ---
 type: Concept
 title: Export and print
-description: CAD interchange, mesh print export, preflight and physical qualification boundaries.
+description: CAD interchange, 3MF vs STL print export, mesh preflight, and physical qualification boundaries.
 status: stable
-updated: 2026-09-11
+updated: 2026-09-20
+topics: export, print, am
+keywords: STEP, 3MF, STL, interchange, mesh preflight, manifold
+related_recipes: turbine-fit-coupons
 ---
 
 # Export and print
@@ -16,13 +19,34 @@ updated: 2026-09-11
 - STL fallback without the same appearance metadata
 - Mesh preflight and explicit selection/assembly placement for print export
 
-## Choose and verify
+## Choose format
 
-Keep `.nbcad` for editable project history and STEP for CAD interchange. Prefer
-3MF for a print package, then inspect scale, body selection, orientation and
-slicer interpretation. A manifold mesh, material name or successful preflight
-does not validate strength, support strategy, fit or manufacturing settings.
-Qualify mating parts with process-specific samples; see
+| | **3MF** | **STL** |
+|--|---------|---------|
+| Role | Preferred **print package** | Fallback mesh |
+| Appearance / body metadata | Often preserved (product-dependent) | Typically none |
+| Units / multi-body | Better package semantics | Easy to mis-scale in slicers |
+| When | Default AM export when available | Legacy slicer or explicit request |
+
+Keep `.nbcad` for editable history and **STEP** for CAD interchange. Mesh
+export is not a substitute for either. Prefer millimetre project units; confirm
+slicer import scale after export.
+
+## Preflight before “printable”
+
+1. **Bodies** — intended bodies only; no leftover coupons unless intentional.
+2. **Units** — mm project → mm mesh; confirm slicer scale.
+3. **Manifold / watertight** — run mesh preflight; fix non-manifold edges.
+4. **Wall probe** — thin walls and seats ([adversarial mesh audit](adversarial-mesh-audit.md)).
+5. **Orientation** — note bed face; supports policy separate from mesh truth.
+6. **Format** — 3MF first; STL only as fallback with the same preflight.
+7. **Identity** — keep export identifiable against the native document.
+8. **Qualification boundary** — manifold ≠ strength ≠ fit. Coupon mates
+   ([fits](../machine-design/concepts/fits-clearances.md)).
+
+A manifold mesh, material name, or successful preflight does not validate
+strength, support strategy, fit, or manufacturing settings. Qualify mating
+parts with process-specific samples; see
 [additive workholding](additive-workholding.md).
 
 Older release snapshots can predate these exports. Read the operation catalog
@@ -47,8 +71,8 @@ equally long empty span. Measure the actual unsupported region and its anchors.
 Where clearance permits, tangent sloped roof faces can preserve a circular
 tool envelope while limiting each layer's inward step. A small flat ceiling
 can retain more roof stock than a pointed peak. Check both the retained
-clearance and remaining material, then reslice the native geometry; do not
-silently alter critical fits using a slicer's geometry-changing options.
+clearance and remaining material, then reslice the native geometry; prefer
+native edits over silently altering critical fits with a slicer's geometry-changing options.
 
 Short bridges still depend on material, cooling, speed and flow.
 [Prusa's bridging guidance](https://help.prusa3d.com/article/poor-bridging_1802)
@@ -58,4 +82,7 @@ physical qualification.
 
 See [goals](../../docs/goals.md) for the accepted direction and
 [proposed architecture](../../docs/proposed-architecture.md) for ideas that
-have not shipped.
+have not shipped. Related: [AM supports / overhangs](../machine-design/concepts/am-supports-overhangs.md),
+[validate before show](validate-before-show.md),
+[MCP workflow](agent-mcp-workflow.md),
+[geometry naming](geometry-naming.md).

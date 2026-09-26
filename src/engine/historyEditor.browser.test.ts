@@ -12,7 +12,8 @@ export async function checkHistoryEditorCallbacks() {
   const initial = useAppStore.getState();
   const basis = {origin: [0, 0, 0], u: [1, 0, 0], v: [0, 1, 0], normal: [0, 0, 1]} as SketchDto['basis'];
   const sketch: SketchDto = {name: 'Sketch A', plane: {type: 'origin_plane', plane: 'xy'}, basis,
-    entities: [], constraints: [], reference_midpoints: [], dimensions: [], dimension_style: 'aligned',
+    entities: [], constraints: [], reference_midpoints: [],
+    projected_edges: [], dimensions: [], dimension_style: 'aligned',
     dof: {value: 0, fully_defined: true}, can_undo: false, can_redo: false};
   const plane: DatumPlaneDefinitionDto = {feature_id: 1, name: 'Plane A', datum_id: 1, basis,
     source: {type: 'offset', reference: {type: 'origin_plane', plane: 'xy'}, distance: 5}};

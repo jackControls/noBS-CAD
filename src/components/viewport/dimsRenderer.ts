@@ -81,6 +81,19 @@ export function computeDimGeometry(
   const ents = dim.entities.map((id) => byId.get(id)).filter((e): e is EntityDto => !!e);
 
   if (dim.kind === 'angle') {
+    // An arc's included angle is dimensioned about its own centre, between the
+    // two endpoint directions. Naming a single arc is what tells the two
+    // angular dimensions apart, exactly as one circle/arc names a radius.
+    if (ents.length === 1 && ents[0].kind === 'arc') {
+      const arc = ents[0];
+      return {
+        shape: 'angular',
+        vertex: arc.center,
+        a1: arc.start_angle,
+        a2: arc.end_angle,
+        textPos: dim.text_pos,
+      };
+    }
     if (ents.length !== 2) return null;
     const l1 = lineEnds(ents[0]);
     const l2 = lineEnds(ents[1]);

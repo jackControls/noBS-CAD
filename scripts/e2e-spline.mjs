@@ -13,7 +13,7 @@ import { chromium } from 'playwright';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const BASE = 'http://localhost:7199';
+const BASE = process.env.NBCAD_E2E_BASE_URL ?? 'http://localhost:7199';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const shots = path.join(here, '..', 'docs', 'qa', 'spline');
 
