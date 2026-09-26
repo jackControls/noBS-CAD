@@ -48,12 +48,16 @@ pub fn open_recipe_in_running_desktop(recipe: &str) -> Result<bool, String> {
 }
 
 /// Inspect the same validated JSONC source accepted by `cad_interface/script`.
+///
+/// `source` is the expanded script (safe to replay inline). `authored_source`
+/// is the text the user opened, including unresolved `includes` and comments.
 pub fn inspect_script(arguments: Value) -> Result<Value, String> {
-    let source = interface::script_source(&arguments)?;
-    let script = nbcad_script::Script::parse(&source)?;
+    let loaded = interface::load_script(&arguments)?;
+    let script = nbcad_script::Script::parse(&loaded.expanded)?;
     interface::validate_script(&script)?;
     let mut result = script.metadata();
-    result["source"] = Value::String(source);
+    result["source"] = Value::String(loaded.expanded);
+    result["authored_source"] = Value::String(loaded.authored);
     if let Some(path) = arguments.get("path") {
         result["path"] = path.clone();
     }
@@ -64,11 +68,15 @@ pub fn inspect_script(arguments: Value) -> Result<Value, String> {
 /// inbox and the shared interface, exactly as it does for an external MCP call.
 pub fn run_script(
     source: &str,
+    include_base: Option<&str>,
     session_id: Option<&str>,
     mode: &str,
     speed: f64,
 ) -> Result<Value, String> {
     let mut arguments = json!({"action":"script","source":source,"mode":mode,"speed":speed});
+    if let Some(include_base) = include_base {
+        arguments["include_base"] = json!(include_base);
+    }
     if let Some(session_id) = session_id {
         arguments["session_id"] = json!(session_id);
     }
@@ -90,7 +98,7 @@ pub fn preview_script(source: &str) -> Result<Value, String> {
                 .into(),
         );
     }
-    run_script(source, None, "fast", 1.0)
+    run_script(source, None, None, "fast", 1.0)
 }
 
 /// A pause may begin and end between receipt observations. Give resumed
@@ -230,6 +238,9 @@ struct CadServer {
     composite_depth: u32,
     /// Expanded source from last successful cad_interface script.
     last_script_source: Option<String>,
+    /// `tool_trace.len()` when `last_script_source` was captured. A later tool
+    /// call means that source no longer describes the session.
+    last_script_trace_len: usize,
     /// Scripts use authoritative live results without rebuilding a second
     /// OCCT model after each mutation. Snapshot reads still refresh on demand.
     script_running: bool,
@@ -260,6 +271,7 @@ impl CadServer {
             tool_trace: Vec::new(),
             composite_depth: 0,
             last_script_source: None,
+            last_script_trace_len: 0,
             script_running: false,
             script_progress: None,
             live_snapshot_dirty: false,
@@ -762,6 +774,7 @@ impl CadServer {
             }
         }
         if result.is_ok() {
+            self.last_script_trace_len = self.tool_trace.len();
             self.last_script_source = Some(source);
         }
         // Feedback the agent can act on: what was built, in feature terms, and
@@ -1487,6 +1500,10 @@ impl CadServer {
 
     /// Emit a version-1 `.nbcad.jsonc` from the last successful script source
     /// or, failing that, from this process `tool_trace` (lossy).
+    ///
+    /// `auto` keeps the authored script only while `tool_trace` is still the
+    /// trace captured at that run. Later tool calls make it stale, and `auto`
+    /// follows the session trace instead of labelling the old script lossless.
     fn export_script(&mut self, arguments: &Value) -> Result<Value, String> {
         let name = arguments
             .get("name")
@@ -1499,41 +1516,53 @@ impl CadServer {
         if !matches!(from, "auto" | "last_script" | "session_trace") {
             return Err("export_script from must be auto, last_script, or session_trace".into());
         }
-        let prefer_script = matches!(from, "auto" | "last_script");
-        if prefer_script {
-            if let Some(source) = &self.last_script_source {
-                return script_export::export_script_result(
-                    source.clone(),
-                    "lossless_authored",
-                    vec![
-                        "Source is the expanded JSONC last successfully run via action script in this process.",
-                        "Comments may be absent if includes were flattened; commands and refs match the replay.",
-                        "cad_script remains the forward MCP call dump — not this JSONC export.",
-                    ],
+        let stale = self.last_script_source.is_some()
+            && self.tool_trace.len() != self.last_script_trace_len;
+        let use_authored = match from {
+            "last_script" => self.last_script_source.is_some(),
+            "auto" => self.last_script_source.is_some() && !stale,
+            _ => false,
+        };
+        if use_authored {
+            let mut notes = vec![
+                "Source is the expanded JSONC last successfully run via action script in this process.",
+                "Comments may be absent if includes were flattened; commands and refs match the replay.",
+                "cad_script remains the forward MCP call dump — not this JSONC export.",
+            ];
+            if stale {
+                notes.push(
+                    "stale is true: tools ran after that script, so this source no longer matches the session. Ask for from:auto to export the session trace.",
                 );
             }
-            if from == "last_script" {
-                return Err(
-                    "No last_script source in this process; run action script first".into(),
-                );
-            }
+            let source = self
+                .last_script_source
+                .clone()
+                .ok_or("No last_script source in this process; run action script first")?;
+            return script_export::export_script_result(source, "lossless_authored", stale, notes);
+        }
+        if from == "last_script" {
+            return Err("No last_script source in this process; run action script first".into());
         }
         let source = script_export::session_trace_to_v1_source(&self.tool_trace, name)?;
-        script_export::export_script_result(
-            source,
-            "lossy_session_trace",
-            vec![
-                "Built from this process tool_trace with literal arguments (no $select/$project, no notes).",
-                "Prefer hand-authored JSONC for durable recipes; use this for scratch replay of a blank-session MCP build.",
-                "cad_load_project_model attach baselines are omitted; UI-only history is not reverse-engineered.",
-                "cad_script remains the forward MCP call dump — not this JSONC export.",
-            ],
-        )
+        let mut notes = vec![
+            "Built from this process tool_trace with literal arguments (no $select/$project, no notes).",
+            "Prefer hand-authored JSONC for durable recipes; use this for scratch replay of a blank-session MCP build.",
+            "cad_load_project_model attach baselines are omitted; UI-only history is not reverse-engineered.",
+            "cad_script remains the forward MCP call dump — not this JSONC export.",
+        ];
+        if from == "auto" && stale {
+            notes.insert(
+                0,
+                "The retained authored script is stale because tools ran after it. This export follows the session trace instead.",
+            );
+        }
+        script_export::export_script_result(source, "lossy_session_trace", false, notes)
     }
 
     /// Clear `tool_trace` and seed `cad_load_project_model` with the loaded model JSON.
     fn seed_script_baseline_from_model(&mut self, model_json: &str) {
         self.last_script_source = None;
+        self.last_script_trace_len = 0;
         self.tool_trace.clear();
         self.tool_trace.push(json!({
             "name": "cad_load_project_model",
@@ -4375,7 +4404,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "shift":{"type":"boolean"},
                 "command":{"type":"string","enum":["open","save","rename","configure","note","pause","resume","step","stop","status","finish","dismiss","show"]},
                 "path":{"type":"string"},"name":{"type":"string"},
-                "from":{"type":"string","enum":["auto","last_script","session_trace"],"description":"export_script source: last_script (lossless_authored), session_trace (lossy_session_trace), or auto (last_script when available)."},
+                "from":{"type":"string","enum":["auto","last_script","session_trace"],"description":"export_script source: last_script (authored, stale:true if tools ran after it), session_trace (lossy_session_trace), or auto (authored while the tool trace still matches that run; otherwise the session trace)."},
                 "overwrite":{"type":"boolean"},"discard_changes":{"type":"boolean"},
                 "target":{"type":"string","description":"Fresh inspect control ID, or active_sketch for view"},"value":{"type":"string"},
                 "key":{"type":"string","enum":["Enter","Escape","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Home","Delete","Backspace"]},
@@ -15478,5 +15507,48 @@ mod agent_feedback_tests {
             "(attached as image content)"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_script_auto_refuses_to_call_a_stale_script_lossless() {
+        let mut server = CadServer::new().unwrap();
+        let authored = r#"{"version":1,"name":"Authored box","starting_state":"empty","steps":[{"id":"only","note":"authored only"}]}"#;
+        server.last_script_source = Some(authored.into());
+        server.last_script_trace_len = server.tool_trace.len();
+        let fresh = server
+            .export_script(&json!({"from":"auto","name":"Session"}))
+            .unwrap();
+        assert_eq!(fresh["fidelity"], "lossless_authored");
+        assert_eq!(fresh["stale"], false);
+        assert!(fresh["source"].as_str().unwrap().contains('\n'));
+        assert!(fresh["source"].as_str().unwrap().contains("authored only"));
+
+        server.tool_trace.push(json!({
+            "name": "solid_box",
+            "arguments": {"size":[10, 10, 10]}
+        }));
+        let auto = server
+            .export_script(&json!({"from":"auto","name":"After box"}))
+            .unwrap();
+        assert_eq!(auto["fidelity"], "lossy_session_trace");
+        assert_eq!(auto["stale"], false);
+        let auto_source = auto["source"].as_str().unwrap();
+        assert!(auto_source.contains("solid_box"), "{auto_source}");
+        assert!(!auto_source.contains("authored only"), "{auto_source}");
+        assert!(auto["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|note| note.as_str().unwrap().contains("stale")));
+
+        let explicit = server
+            .export_script(&json!({"from":"last_script"}))
+            .unwrap();
+        assert_eq!(explicit["fidelity"], "lossless_authored");
+        assert_eq!(explicit["stale"], true);
+        assert!(explicit["source"]
+            .as_str()
+            .unwrap()
+            .contains("authored only"));
     }
 }

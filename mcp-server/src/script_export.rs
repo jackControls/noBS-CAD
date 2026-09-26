@@ -44,30 +44,42 @@ pub fn session_trace_to_v1_source(calls: &[Value], name: &str) -> Result<String,
                 .into(),
         );
     }
-    Ok(json!({
+    let document = json!({
         "version": 1,
         "name": name,
         "starting_state": "empty",
         "steps": steps
-    })
-    .to_string())
+    });
+    serde_json::to_string_pretty(&document).map_err(|e| e.to_string())
 }
 
 pub fn export_script_result(
     source: String,
     fidelity: &str,
+    stale: bool,
     notes: Vec<&str>,
 ) -> Result<Value, String> {
+    let source = pretty_json(source);
     let script = nbcad_script::Script::parse(&source)?;
     let meta = script.metadata();
     Ok(json!({
         "format": "nbcad.jsonc",
         "version": 1,
         "fidelity": fidelity,
+        "stale": stale,
         "source": source,
         "name": meta["name"],
         "step_count": meta["step_count"],
         "check_count": meta["check_count"],
         "notes": notes,
     }))
+}
+
+/// Compact retained JSON becomes a readable export. JSONC comments are already
+/// gone once includes have been flattened, so pretty-printing does not drop them.
+fn pretty_json(source: String) -> String {
+    serde_json::from_str::<Value>(&source)
+        .ok()
+        .and_then(|value| serde_json::to_string_pretty(&value).ok())
+        .unwrap_or(source)
 }

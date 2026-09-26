@@ -9,8 +9,8 @@ use std::{
 mod includes;
 mod manufacturing;
 pub use includes::{
-    flatten_includes, has_unresolved_includes, parse_with_includes, validate_include_path,
-    MAX_INCLUDE_DEPTH,
+    flatten_includes, has_unresolved_includes, parse_with_includes, resolve_include_path,
+    validate_include_path, MAX_INCLUDE_DEPTH,
 };
 
 /// Shared limit for files, source text, the desktop picker and MCP.
@@ -49,7 +49,7 @@ impl Script {
             .is_some_and(|items| !items.is_empty())
         {
             return Err(
-                "Script has unresolved includes; use parse_with_includes with a file loader".into(),
+                "This script includes other files. Open it from its file path so those files can be loaded.".into(),
             );
         }
         if document["version"] != 1 {
