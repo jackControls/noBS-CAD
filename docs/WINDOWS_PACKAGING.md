@@ -111,9 +111,9 @@ installer, gathers the native runtime DLLs and license notices, and writes:
 
 ```text
 src-tauri/target/<rust-target>/release/bundle/portable/
-├── noBS-CAD-0.2.0-windows-<architecture>/
-├── noBS-CAD-0.2.0-windows-<architecture>.zip
-└── noBS-CAD-0.2.0-windows-<architecture>.zip.sha256
+├── noBS-CAD-0.2.1-windows-<architecture>/
+├── noBS-CAD-0.2.1-windows-<architecture>.zip
+└── noBS-CAD-0.2.1-windows-<architecture>.zip.sha256
 ```
 
 The directory contains `noBS-CAD.exe`, the OCCT dependency DLLs, a runtime
