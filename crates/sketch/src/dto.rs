@@ -157,9 +157,16 @@ pub struct SketchDto {
     /// Driving dimensions with presentation data (D9).
     pub dimensions: Vec<DimensionDto>,
     pub dimension_style: DimensionStyle,
+    /// Current snap preference, including changes made through another host.
+    #[serde(default = "snap_enabled_by_default")]
+    pub grid_snap: bool,
     pub dof: DofDto,
     pub can_undo: bool,
     pub can_redo: bool,
+}
+
+fn snap_enabled_by_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

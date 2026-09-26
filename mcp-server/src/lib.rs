@@ -8,6 +8,7 @@ use nbcad_sketch::{host, SketchManager};
 use nbcad_solid::{CommitKernelRequest, RecomputePlanDto, StepExportRequest};
 use serde_json::{json, Map, Value};
 
+mod assembly_tools;
 mod cam_tools;
 mod desktop;
 mod disclosure;
@@ -20,7 +21,10 @@ mod session;
 mod stdio;
 mod summary;
 
-pub use stdio::{prepare_desktop_stdio, run_desktop_stdio, run_stdio, shutdown_desktop_stdio};
+pub use stdio::{
+    desktop_mcp_presence, prepare_desktop_stdio, run_desktop_stdio, run_stdio,
+    shutdown_desktop_stdio, DesktopMcpPresence,
+};
 
 use disclosure::{
     auto_focus_for_tool, tags_for_tool, AdvertisementState, DisclosureMode, DisclosureState,
@@ -415,6 +419,24 @@ impl CadServer {
                 })
             } else if name == "solid_export_stl" || name == "solid_export_3mf" {
                 self.export_mesh(name, arguments)?
+            } else if name == "assembly_evaluate_motion_study" {
+                let request = serde_json::from_value(arguments)
+                    .map_err(|e| format!("motion evaluation request: {e}"))?;
+                serde_json::to_value(nbcad_occt::evaluate_motion_study(
+                    &self.manager,
+                    &self.kernel,
+                    &request,
+                )?)
+                .map_err(|e| e.to_string())?
+            } else if name == "assembly_swept_collision_check" {
+                let request = serde_json::from_value(arguments)
+                    .map_err(|e| format!("swept collision request: {e}"))?;
+                serde_json::to_value(nbcad_occt::exact_swept_collision_check(
+                    &self.manager,
+                    &self.kernel,
+                    &request,
+                )?)
+                .map_err(|e| e.to_string())?
             } else if name == "assembly_interference_check" {
                 let request = serde_json::from_value(arguments)
                     .map_err(|e| format!("interference request: {e}"))?;
@@ -1862,6 +1884,11 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "assembly_document"
             | "assembly_solution"
             | "assembly_interference_check"
+            | "assembly_swept_collision_check"
+            | "assembly_preview_joint_coordinates"
+            | "assembly_evaluate_motion_study"
+            | "assembly_sample_motion_study"
+            | "assembly_export_motion_path_csv"
             | "solid_tessellate"
             | "solid_extrude_definitions"
             | "solid_revolve_definitions"
@@ -2808,6 +2835,18 @@ fn tool_specs() -> Vec<ToolSpec> {
                 json!({"constraints": {"type": "array", "items": {"type": "object"}, "minItems": 1}}),
                 &["constraints"],
             ),
+        ),
+        ToolSpec::direct(
+            "sketch_delete_constraint", "Delete geometric constraint",
+            "Remove a geometric constraint by its stable constraint id.",
+            "delete_constraint", Payload::Object,
+            object_schema(json!({"constraint_id":{"type":"integer","minimum":1}}), &["constraint_id"]),
+        ),
+        ToolSpec::direct(
+            "sketch_set_dimension_mode", "Set dimension mode",
+            "Choose a driving dimension or a reference measurement without deleting its annotation.",
+            "set_dimension_mode", Payload::Object,
+            object_schema(json!({"constraint_id":{"type":"integer","minimum":1},"mode":{"type":"string","enum":["driving","reference"]}}), &["constraint_id","mode"]),
         ),
         ToolSpec::direct(
             "sketch_add_dimension",
@@ -3847,6 +3886,12 @@ fn tool_specs() -> Vec<ToolSpec> {
             ),
         ),
         ToolSpec::direct(
+            "assembly_duplicate_occurrence", "Duplicate component instance",
+            "Copy a component instance and its complete subtree, preserving reusable definitions and internal joints. Parent and local pose are optional.",
+            "assembly_duplicate_occurrence", Payload::Object,
+            object_schema(json!({"occurrence_id":{"type":"integer","minimum":1},"parent_occurrence_id":{"type":["integer","null"],"minimum":1},"local_pose":assembly_transform.clone()}), &["occurrence_id"]),
+        ),
+        ToolSpec::direct(
             "assembly_update_occurrence",
             "Update assembly occurrence",
             "Patch an occurrence record. Only id is required; omitted name/component_id/parent/pose/visibility/grounded keep their current values (ComponentOccurrencePatchDto).",
@@ -4297,7 +4342,7 @@ fn tool_specs() -> Vec<ToolSpec> {
             "Catalog returns shared product groups and typed operations. Execute runs an operation by group and name with identical arguments/results headlessly or live. Recipes lists committed native examples without running them. Open_recipe queues a built-in recipe in the live Scripts source editor, preserving edited source with Save/Discard/Cancel; it never runs commands or replaces the model. Script runs one versioned JSONC command file selected by recipe ID, source or an absolute .nbcad.jsonc path in the current blank document; Rust sequences every operation, stops on failure, and runs final checks by default. Its result carries a feature summary (bodies with bounding boxes, holes tallied by class; detail full lists every hole with position, diameter, depth, face and thread) and warnings for mistakes that raise no error: a hole position left out of positions, overlapping holes, holes off the body, blind depths deeper than the body, unused bindings; a failing step names the step, the reason and, for selectors, the candidates or the values present. Summary returns that feature summary of the current document (detail compact or full). Check compares expected {bbox: [x, y, z], holes: [{x, y, z?, diameter?, counterbore_diameter?, through?, depth?}]} with the built model within tolerance_mm (default 0.6) and reports matched, missing and extra holes with offsets. Mode fast has no presentation delays; present requires an attached desktop. Presentation provides configure/note/pause/resume/step/stop/status/finish/dismiss/show and speed controls shared with native playback. View supports timed orientation and focus on an active sketch, body, or component. Launch connects a new desktop. Inspect returns rendered controls with fresh opaque target IDs for click/set_value/key. Window close requests guarded application exit; the reply acknowledges the request, not process termination. No selectors or executable script evaluation.",
             object_schema(json!({
                 "session_id":{"type":"string"},
-                "action":{"type":"string","enum":["catalog","recipes","open_recipe","execute","script","summary","check","presentation","launch","view","inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
+                "action":{"type":"string","enum":["catalog","recipes","open_recipe","execute","script","summary","check","presentation","launch","view","inspect","capture","click","double_click","context_menu","set_value","key","window","file","viewport"]},
                 "recipe":{"type":"string","description":"Bundled recipe ID for script or open_recipe; mutually exclusive with source and path. List IDs with action recipes."},
                 "group":{"type":"string"},"operation":{"type":"string"},"arguments":{"type":"object"},
                 "executable":{"type":"string"},
@@ -4321,7 +4366,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "path":{"type":"string"},"name":{"type":"string"},
                 "overwrite":{"type":"boolean"},"discard_changes":{"type":"boolean"},
                 "target":{"type":"string","description":"Fresh inspect control ID, or active_sketch for view"},"value":{"type":"string"},
-                "key":{"type":"string","enum":["Enter","Escape","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Home","Delete","Backspace"]},
+                "key":{"type":"string","enum":["Enter","Escape","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Home","End","Delete","Backspace"]},
                 "mode":{"type":"string","enum":["foreground","background","inspect","close","fast","present"]},
                 "pace_ms":{"type":"integer","minimum":0,"maximum":2000}
             }), &[]),
@@ -4445,6 +4490,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ),
     ];
     tools.extend(drawing_tools::specs());
+    tools.extend(assembly_tools::specs());
     tools.extend(cam_tools::specs());
     for tool in &mut tools {
         let (pack, spine) = tags_for_tool(tool.name);
@@ -4643,8 +4689,8 @@ fn handle_message(server: &mut CadServer, message: Value) -> Vec<Value> {
                     "serverInfo": {
                         "name": "nbcad",
                         "title": "noBS CAD",
-                        "version": nbcad_core::build_info().display_version(),
-                        "_meta": {"nbcad/build": nbcad_core::build_info()}
+                        "version": nbcad_build_info::build_info().display_version(),
+                        "_meta": {"nbcad/build": nbcad_build_info::build_info()}
                     },
                     "instructions": stdio::instructions(server.desktop_binding.is_some())
                 }),
@@ -11281,6 +11327,221 @@ mod tests {
             restored.call_tool("assembly_document", json!({})).unwrap()["gear_relations"],
             json!([])
         );
+    }
+
+    #[test]
+    fn contact_tools_preserve_instances_validate_and_roundtrip() {
+        let mut server = CadServer::new().unwrap();
+        extrude_offset_box(&mut server, "Sketch1", -12., -2.);
+        extrude_offset_box(&mut server, "Sketch2", 2., 12.);
+        let source = server.call_tool("solid_scene", json!({})).unwrap();
+        let poses = server.call_tool("assembly_solution", json!({})).unwrap()
+            ["instance_body_poses"]
+            .clone();
+        let args = json!({"name":"Travel stop","occurrence_a":poses[0]["occurrence_id"],"body_a":poses[0]["body_id"],"occurrence_b":poses[1]["occurrence_id"],"body_b":poses[1]["body_id"],"clearance_mm":0.3,"stop_motion":true});
+        let mut invalid = args.clone();
+        invalid["clearance_mm"] = json!(-1.);
+        assert!(server
+            .call_tool("assembly_create_contact_set", invalid)
+            .is_err());
+        server
+            .call_tool("assembly_create_contact_set", args)
+            .unwrap();
+        let mut contact =
+            server.call_tool("assembly_document", json!({})).unwrap()["contact_sets"][0].clone();
+        contact["enabled"] = json!(false);
+        contact["name"] = json!("Edited stop");
+        server
+            .call_tool("assembly_update_contact_set", contact.clone())
+            .unwrap();
+        assert_eq!(
+            server.call_tool("assembly_document", json!({})).unwrap()["contact_sets"][0],
+            contact
+        );
+        assert_eq!(server.call_tool("solid_scene", json!({})).unwrap(), source);
+        let model = server.call_tool("cad_project_model", json!({})).unwrap();
+        let mut restored = CadServer::new().unwrap();
+        restored
+            .call_tool(
+                "cad_load_project_model",
+                json!({"model_json":model.as_str().unwrap()}),
+            )
+            .unwrap();
+        assert_eq!(
+            restored.call_tool("assembly_document", json!({})).unwrap()["contact_sets"][0],
+            contact
+        );
+        restored
+            .call_tool(
+                "assembly_delete_contact_set",
+                json!({"contact_id":contact["id"]}),
+            )
+            .unwrap();
+        assert_eq!(
+            restored.call_tool("assembly_document", json!({})).unwrap()["contact_sets"],
+            json!([])
+        );
+    }
+
+    #[test]
+    fn motion_studio_tools_roundtrip_typed_drivers_positions_and_read_only_paths() {
+        let mut server = CadServer::new().unwrap();
+        extrude_offset_box(&mut server, "Sketch1", -12., -2.);
+        let scene = extrude_offset_box(&mut server, "Sketch2", 2., 12.);
+        let bodies = scene["scene"]["bodies"].as_array().unwrap();
+        let joint=server.call_tool("assembly_create_joint",json!({"name":"Slide","kind":"slider","grounded_body_id":bodies[0]["id"],"connector_a":planar_connector_from_body(&bodies[0]),"connector_b":planar_connector_from_body(&bodies[1])})).unwrap();
+        let mut study = server
+            .call_tool(
+                "assembly_create_motion_study",
+                json!({"name":"Travel","duration_seconds":2.}),
+            )
+            .unwrap();
+        study["drivers"] = json!([{"id":1,"name":"Motor","joint_id":joint["id"],"coordinate":"primary_linear","enabled":true,"law":{"kind":"motor","initial_value":0.,"velocity_per_second":4.,"acceleration_per_second2":2.}}]);
+        study["next_driver_id"] = json!(2);
+        server
+            .call_tool("assembly_update_motion_study", study.clone())
+            .unwrap();
+        let before = server.call_tool("cad_project_model", json!({})).unwrap();
+        let evaluation = server
+            .call_tool(
+                "assembly_evaluate_motion_study",
+                json!({"study_id":study["id"],"time_seconds":1.}),
+            )
+            .unwrap();
+        assert_eq!(
+            evaluation["sample"]["joint_motions"][0]["linear_offset_mm"],
+            5.
+        );
+        let mut sample = server
+            .call_tool(
+                "assembly_sample_motion_study",
+                json!({"study_id":study["id"],"time_seconds":1.}),
+            )
+            .unwrap();
+        sample.as_object_mut().unwrap().remove("_disclosure");
+        assert_eq!(sample, evaluation["sample"]);
+        let csv = server
+            .call_tool(
+                "assembly_export_motion_path_csv",
+                json!({"study_id":study["id"],"sample_rate_hz":10,"occurrence_ids":[]}),
+            )
+            .unwrap();
+        assert!(csv.as_str().unwrap().lines().count() > 10);
+        assert_eq!(
+            server.call_tool("cad_project_model", json!({})).unwrap(),
+            before
+        );
+        let mut position = server
+            .call_tool(
+                "assembly_create_position",
+                json!({"name":"Middle","motions":evaluation["sample"]["joint_motions"]}),
+            )
+            .unwrap();
+        position["name"] = json!("Captured middle");
+        server
+            .call_tool("assembly_update_position", position.clone())
+            .unwrap();
+        server
+            .call_tool(
+                "assembly_apply_position",
+                json!({"position_id":position["id"]}),
+            )
+            .unwrap();
+        assert_eq!(
+            server.call_tool("assembly_document", json!({})).unwrap()["joints"][0]
+                ["linear_offset_mm"],
+            5.
+        );
+        let model = server.call_tool("cad_project_model", json!({})).unwrap();
+        let mut restored = CadServer::new().unwrap();
+        restored
+            .call_tool(
+                "cad_load_project_model",
+                json!({"model_json":model.as_str().unwrap()}),
+            )
+            .unwrap();
+        assert_eq!(
+            restored.call_tool("assembly_document", json!({})).unwrap(),
+            server.call_tool("assembly_document", json!({})).unwrap()
+        );
+        restored
+            .call_tool(
+                "assembly_delete_position",
+                json!({"position_id":position["id"]}),
+            )
+            .unwrap();
+        restored
+            .call_tool(
+                "assembly_delete_motion_study",
+                json!({"study_id":study["id"]}),
+            )
+            .unwrap();
+        let empty = restored.call_tool("assembly_document", json!({})).unwrap();
+        assert_eq!(empty["positions"], json!([]));
+        assert_eq!(empty["motion_studies"], json!([]));
+        for op in [
+            "assembly_evaluate_motion_study",
+            "assembly_sample_motion_study",
+            "assembly_export_motion_path_csv",
+        ] {
+            assert!(is_read_safe_while_attached(op));
+            assert!(nbcad_mcp_mutate::is_live_engine_query(op));
+        }
+    }
+
+    #[test]
+    fn swept_inspection_is_exact_read_only_bounded_and_deterministic() {
+        let mut server = CadServer::new().unwrap();
+        extrude_offset_box(&mut server, "Sketch1", -12., -2.);
+        extrude_offset_box(&mut server, "Sketch2", 2., 12.);
+        parse_engine_envelope(host::handle(
+            &mut server.manager,
+            "assembly_create_motion_study",
+            r#"{"name":"Stationary pair","duration_seconds":0.1}"#,
+        ))
+        .unwrap();
+        let before = server.call_tool("cad_project_model", json!({})).unwrap();
+        let args = json!({"study_id":1,"sample_rate_hz":10,"clearance_threshold_mm":5.,"stop_at_first":true});
+        let report = server
+            .call_tool("assembly_swept_collision_check", args.clone())
+            .unwrap();
+        assert_eq!(report["exact"], true);
+        assert_eq!(report["sample_count"], 1);
+        assert_eq!(report["events"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            server
+                .call_tool("assembly_swept_collision_check", args)
+                .unwrap(),
+            report
+        );
+        assert_eq!(
+            server.call_tool("cad_project_model", json!({})).unwrap(),
+            before
+        );
+        assert!(is_read_safe_while_attached(
+            "assembly_swept_collision_check"
+        ));
+        assert!(nbcad_mcp_mutate::is_live_engine_query(
+            "assembly_swept_collision_check"
+        ));
+        for args in [
+            json!({"study_id":1,"sample_rate_hz":0}),
+            json!({"study_id":1,"clearance_threshold_mm":-1}),
+        ] {
+            assert!(server
+                .call_tool("assembly_swept_collision_check", args)
+                .is_err());
+        }
+        parse_engine_envelope(host::handle(
+            &mut server.manager,
+            "assembly_create_motion_study",
+            r#"{"name":"Enormous duration","duration_seconds":1e30}"#,
+        ))
+        .unwrap();
+        let error = server
+            .call_tool("assembly_swept_collision_check", json!({"study_id":2}))
+            .unwrap_err();
+        assert!(error.contains("100,001"), "{error}");
     }
 
     #[test]

@@ -24,6 +24,9 @@ custom-protocol = ["tauri/custom-protocol"]
 # Tauri binary keeps using the embedded native view and does not include the
 # capture entry point.
 dev-ui-lab = ["bevy/bevy_log"]
+# Temporary migration host for the existing binary. Remove this switch after
+# native surface parity; it is not an additional user-facing application mode.
+dev-bevy-host = ["bevy/bevy_winit", "bevy/bevy_input_focus", "bevy/bevy_feathers", "bevy/bevy_scene", "bevy/ui_picking", "bevy/custom_cursor", "bevy/system_clipboard", "bevy/x11", "bevy/wayland", "bevy/accesskit_unix", "dep:accesskit", "dep:time", "dep:rfd"]
 
 [[bin]]
 name = "bevy-ui-lab"
@@ -34,15 +37,21 @@ required-features = ["dev-ui-lab"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+nbcad-build-info = { path = "../crates/build-info" }
+time = { version = "=0.3.53", features = ["formatting"], optional = true }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-deep-link = "2"
 tokio = { version = "1", features = ["time"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
+# Render shared vector tool glyphs once; no SVG text/font or external-image support.
+resvg = { version = "0.45.1", default-features = false }
 sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 uuid = { version = "1", features = ["v4"] }
 nbcad-core = { path = "../crates/core" }
+nbcad-interface = { path = "../crates/interface" }
+nbcad-project-file = { path = "../crates/project-file" }
 nbcad-cam = { path = "../crates/cam" }
 nbcad-sketch = { path = "../crates/sketch" }
 nbcad-solid = { path = "../crates/solid" }
@@ -51,8 +60,12 @@ nbcad-occt = { path = "../crates/occt", features = ["native-occt"] }
 nbcad-mcp-mutate = { path = "../crates/mcp-mutate" }
 nbcad-mcp = { path = "../mcp-server" }
 
+[dev-dependencies]
+# Candidate-widget probes only; production fields keep ordered native routing.
+bevy_ui_widgets = "=0.20.0-rc.1"
+
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
-bevy = { version = "0.19.0", default-features = false, features = [
+bevy = { version = "=0.20.0-rc.1", default-features = false, features = [
   "async_executor",
   "bevy_asset",
   "bevy_camera",
@@ -79,10 +92,12 @@ bevy = { version = "0.19.0", default-features = false, features = [
   "tonemapping_luts",
   "zstd_rust",
 ] }
-bevy_ecs = "0.19.0"
-bevy_gizmos = "0.19.0"
-bevy_reflect = "0.19.0"
+bevy_ecs = "=0.20.0-rc.1"
+bevy_gizmos = "=0.20.0-rc.1"
+bevy_reflect = "=0.20.0-rc.1"
 raw-window-handle = "0.6"
+accesskit = { version = "=0.24.1", optional = true }
+rfd = { version = "0.16.0", default-features = false, features = ["gtk3"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # GTK/WebKitGTK remain the React/Tauri shell. An X11 child DrawingArea beneath
@@ -109,6 +124,8 @@ hidapi = { version = "2.6", default-features = false, features = ["windows-nativ
 # Keep gpu-allocator and wgpu-hal on the same Direct3D COM types. Version 0.62.0
 # is the exact intersection of gpu-allocator's `<=0.62` cap and wgpu-hal's
 # `^0.62` requirement; allowing a newer patch release makes Cargo split them.
+# The lockfile must also resolve gpu-allocator to this version: the pin alone
+# does not stop Cargo reusing WebView2's incompatible 0.61 bindings for it.
 windows = { version = "=0.62.0", default-features = false }
 webview2-com = "0.38.2"
 windows-core-webview2 = { package = "windows-core", version = "0.61" }

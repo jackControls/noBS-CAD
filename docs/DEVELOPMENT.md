@@ -118,6 +118,57 @@ cargo test --locked -p nbcad-occt --features native-occt
 cargo test --locked --manifest-path mcp-server/Cargo.toml -- --test-threads=1
 ```
 
+The desktop shell is its own Cargo workspace, so the root `--workspace` command
+above does not reach it. Run both of its configurations with the matching OCCT SDK
+available:
+
+```sh
+cargo test --locked --manifest-path src-tauri/Cargo.toml
+cargo test --locked --manifest-path src-tauri/Cargo.toml --features dev-bevy-host
+```
+
+`dev-bevy-host` is the temporary native host that is replacing the React shell. It
+is the only configuration that compiles the interface shell, the winit host, the
+native sketch editor and the native Extrude form, so the default run does not
+verify a change to any of them. The **Native desktop host tests** workflow runs
+both configurations in CI.
+
+The native host supports middle-button pan, right-button or Shift+middle-button
+orbit, wheel zoom, trackpad pan, Shift+scroll orbit, and pinch zoom. These use the
+rendered camera and remain available while the modeling worker is busy. Escape
+or loss of window focus ends a camera drag; new navigation interrupts a timed
+view transition. An OCC operation that has already started still runs to completion.
+
+Run the complete native modeling lifecycle against an explicitly chosen blank
+document in a build with `dev-bevy-host`:
+
+```sh
+cargo xtask test-mcp native-lifecycle --server /absolute/path/to/nbcad --session BLANK_DOCUMENT_UUID --out /absolute/path/to/fresh-evidence-directory
+```
+
+The fixture creates its own tab, draws a rectangle through native controls, checks
+Extrude preview/invalid input/edit/Cancel/Apply and Undo/Redo, then saves, closes,
+and reopens the `.nbcad` file through native File actions. A separate headless
+process recomputes the saved archive to check that it does not depend on live
+editor caches. Captures and a JSON report stay in the supplied evidence directory;
+partial runs are preserved. This requires a graphical desktop and complements
+the library tests; it is not a cross-platform visual parity check.
+
+The native File lifecycle regressions carry over selected ownership and exit cases from
+`projectSave.browser.test.ts`, `saveOnExit.browser.test.ts`, and
+`applicationExit.browser.test.ts`. They exercise the real ordered worker and
+`.nbcad` archives, including failed Save As, cancelled Save-and-close pickers,
+same-tab replacement during Save, and partial Save-all failure/retry. Run them
+without opening an OS window or file picker:
+
+```sh
+cargo test --locked --manifest-path src-tauri/Cargo.toml --features dev-bevy-host --lib session_bridge::native_interface::controller::files::tests -- --test-threads=1
+```
+
+These controller tests complement live rendered checks; they do not establish
+visual, keyboard, or native-picker parity. Keep the browser cases while the
+ordinary desktop build still uses the existing shell.
+
 The MCP suite includes complete recipe acceptance tests and can take a while.
 Run its native tests sequentially so heavy OCCT operations do not compete for
 memory and request deadlines. The **Desktop packages** workflow also checks the

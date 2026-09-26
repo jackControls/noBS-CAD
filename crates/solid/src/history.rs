@@ -1084,12 +1084,22 @@ impl SolidDocument {
         &mut self,
         feature_id: FeatureId,
         name: impl Into<String>,
-        request: SolidFilletRequest,
+        mut request: SolidFilletRequest,
         catalog: &[ProfileCatalogItemDto],
         active_features: &BTreeSet<FeatureId>,
     ) -> Result<RecomputePlanDto, SolidError> {
         self.ensure_idle()?;
         validate_positive(request.radius, "fillet radius")?;
+        if request.tangent_chain {
+            edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
+            let body = self
+                .scene
+                .bodies
+                .iter()
+                .find(|b| b.id == request.body_id)
+                .ok_or(SolidError::MissingTarget(request.body_id))?;
+            request.edge_ids = crate::tangent_chain_edges(body, &request.edge_ids);
+        }
         let edge_keys = edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
         let mut fillets = self.fillets.clone();
         fillets.push(SolidFilletDefinitionDto {
@@ -1118,12 +1128,22 @@ impl SolidDocument {
     pub fn prepare_edit_fillet(
         &mut self,
         feature_id: FeatureId,
-        request: SolidFilletRequest,
+        mut request: SolidFilletRequest,
         catalog: &[ProfileCatalogItemDto],
         active_features: &BTreeSet<FeatureId>,
     ) -> Result<RecomputePlanDto, SolidError> {
         self.ensure_idle()?;
         validate_positive(request.radius, "fillet radius")?;
+        if request.tangent_chain {
+            edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
+            let body = self
+                .scene
+                .bodies
+                .iter()
+                .find(|b| b.id == request.body_id)
+                .ok_or(SolidError::MissingTarget(request.body_id))?;
+            request.edge_ids = crate::tangent_chain_edges(body, &request.edge_ids);
+        }
         let edge_keys = edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
         let mut fillets = self.fillets.clone();
         let definition = fillets
@@ -1153,12 +1173,22 @@ impl SolidDocument {
         &mut self,
         feature_id: FeatureId,
         name: impl Into<String>,
-        request: SolidChamferRequest,
+        mut request: SolidChamferRequest,
         catalog: &[ProfileCatalogItemDto],
         active_features: &BTreeSet<FeatureId>,
     ) -> Result<RecomputePlanDto, SolidError> {
         self.ensure_idle()?;
         validate_positive(request.distance, "chamfer distance")?;
+        if request.tangent_chain {
+            edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
+            let body = self
+                .scene
+                .bodies
+                .iter()
+                .find(|b| b.id == request.body_id)
+                .ok_or(SolidError::MissingTarget(request.body_id))?;
+            request.edge_ids = crate::tangent_chain_edges(body, &request.edge_ids);
+        }
         let edge_keys = edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
         let mut chamfers = self.chamfers.clone();
         chamfers.push(SolidChamferDefinitionDto {
@@ -1187,12 +1217,22 @@ impl SolidDocument {
     pub fn prepare_edit_chamfer(
         &mut self,
         feature_id: FeatureId,
-        request: SolidChamferRequest,
+        mut request: SolidChamferRequest,
         catalog: &[ProfileCatalogItemDto],
         active_features: &BTreeSet<FeatureId>,
     ) -> Result<RecomputePlanDto, SolidError> {
         self.ensure_idle()?;
         validate_positive(request.distance, "chamfer distance")?;
+        if request.tangent_chain {
+            edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
+            let body = self
+                .scene
+                .bodies
+                .iter()
+                .find(|b| b.id == request.body_id)
+                .ok_or(SolidError::MissingTarget(request.body_id))?;
+            request.edge_ids = crate::tangent_chain_edges(body, &request.edge_ids);
+        }
         let edge_keys = edge_keys_for(&self.scene, request.body_id, &request.edge_ids)?;
         let mut chamfers = self.chamfers.clone();
         let definition = chamfers
@@ -1496,9 +1536,8 @@ impl SolidDocument {
                         "second pattern direction",
                     )?;
                 }
-                let copies = (request.count as usize * second_count as usize)
-                    .saturating_sub(1)
-                    .saturating_mul(request.body_ids.len());
+                let copies =
+                    pattern_copy_count(request.count, second_count, request.body_ids.len())?;
                 let new_body_ids = reuse_or_allocate(copies);
                 BodyFeatureDefinitionDto::RectangularPattern {
                     feature_id,
@@ -1525,7 +1564,7 @@ impl SolidDocument {
                 {
                     return Err(SolidError::InvalidAngle);
                 }
-                let copies = (request.count as usize - 1) * request.body_ids.len();
+                let copies = pattern_copy_count(request.count, 1, request.body_ids.len())?;
                 let new_body_ids = reuse_or_allocate(copies);
                 BodyFeatureDefinitionDto::CircularPattern {
                     feature_id,
@@ -3168,7 +3207,9 @@ fn near(a: Point2Dto, b: Point2Dto) -> bool {
     (a.x - b.x).hypot(a.y - b.y) <= 1e-5
 }
 
-fn ordered_path(
+/// Resolve an ordered selection to the same connected path used for replay.
+/// Editors can reject missing or disconnected curves before invoking the kernel.
+pub fn ordered_path(
     sketch: &ProfileCatalogItemDto,
     entity_ids: &[u64],
 ) -> Result<Vec<KernelCurveDto>, SolidError> {
@@ -3897,6 +3938,30 @@ fn validate_positive(value: f64, label: &str) -> Result<(), SolidError> {
     }
 }
 
+/// Bound expansion before allocating topology IDs or entering a kernel loop.
+/// The same check is used by native forms and every engine entry point.
+pub fn pattern_copy_count(
+    count: u32,
+    second_count: u32,
+    sources: usize,
+) -> Result<usize, SolidError> {
+    validate_pattern_count(count, "first direction")?;
+    let second_count = second_count.max(1);
+    if second_count > 1 {
+        validate_pattern_count(second_count, "second direction")?;
+    }
+    let copies = (count as usize)
+        .checked_mul(second_count as usize)
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|n| n.checked_mul(sources));
+    match copies {
+        Some(copies) if sources > 0 && copies <= 10_000 => Ok(copies),
+        _ => Err(SolidError::InvalidExtent(
+            "A pattern can create at most 10000 bodies; reduce the counts or selection".into(),
+        )),
+    }
+}
+
 fn validate_pattern_count(count: u32, label: &str) -> Result<(), SolidError> {
     if (2..=10_000).contains(&count) {
         Ok(())
@@ -4080,7 +4145,7 @@ fn support_face_basis(
         .ok_or_else(|| SolidError::InvalidExtent("Hole support face must be planar".to_string()))
 }
 
-fn validate_hole(request: &HoleRequest) -> Result<(), SolidError> {
+pub fn validate_hole(request: &HoleRequest) -> Result<(), SolidError> {
     validate_positive(request.diameter, "hole diameter")?;
     let legacy_position;
     let positions = if request.positions.is_empty() {
@@ -4257,7 +4322,7 @@ fn validate_hole_thread(
     Ok(())
 }
 
-fn validate_external_thread(
+pub fn validate_external_thread(
     thread: &HoleThreadDto,
     surface_diameter: f64,
 ) -> Result<(), SolidError> {
@@ -4380,7 +4445,7 @@ fn hole_positions(definition: &HoleDefinitionDto) -> Vec<HolePositionDto> {
     }
 }
 
-fn hole_reference_center(
+pub fn hole_reference_center(
     reference: &SketchPointRefDto,
     catalog: &[ProfileCatalogItemDto],
     active_features: &BTreeSet<FeatureId>,
@@ -4524,9 +4589,21 @@ fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-fn plane_bases_coplanar(first: PlaneBasis, second: PlaneBasis) -> bool {
+/// Whether two sketch bases describe the same infinite plane, using the
+/// feature replay tolerances. Editors use this same predicate for references.
+pub fn plane_bases_coplanar(first: PlaneBasis, second: PlaneBasis) -> bool {
     const NORMAL_TOLERANCE: f64 = 1e-6;
     const PLANE_DISTANCE_TOLERANCE_MM: f64 = 1e-5;
+    if !first
+        .normal
+        .iter()
+        .chain(&second.normal)
+        .chain(&first.origin)
+        .chain(&second.origin)
+        .all(|v| v.is_finite())
+    {
+        return false;
+    }
     let first_normal_length = dot(first.normal, first.normal).sqrt();
     let second_normal_length = dot(second.normal, second.normal).sqrt();
     if first_normal_length <= EPS || second_normal_length <= EPS {
@@ -4547,8 +4624,41 @@ fn plane_bases_coplanar(first: PlaneBasis, second: PlaneBasis) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pattern_expansion_is_bounded_before_allocation() {
+        assert_eq!(super::pattern_copy_count(3, 2, 2).unwrap(), 10);
+        assert_eq!(super::pattern_copy_count(10_000, 1, 1).unwrap(), 9999);
+        for (first, second, sources) in [
+            (3, 10_000, 1),
+            (u32::MAX, u32::MAX, usize::MAX),
+            (2, 1, usize::MAX),
+            (2, 1, 0),
+        ] {
+            assert!(super::pattern_copy_count(first, second, sources).is_err());
+        }
+    }
     use super::*;
     use nbcad_core::OriginPlane;
+
+    #[test]
+    fn coplanar_axis_references_reject_nonfinite_planes() {
+        let basis = nbcad_core::PlaneRef::OriginPlane {
+            plane: OriginPlane::Xy,
+        }
+        .origin_basis()
+        .unwrap();
+        assert!(plane_bases_coplanar(basis, basis));
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut other = basis;
+            other.normal[0] = invalid;
+            assert!(!plane_bases_coplanar(basis, other));
+            assert!(!plane_bases_coplanar(other, basis));
+            other = basis;
+            other.origin[2] = invalid;
+            assert!(!plane_bases_coplanar(basis, other));
+            assert!(!plane_bases_coplanar(other, basis));
+        }
+    }
 
     fn catalog() -> Vec<ProfileCatalogItemDto> {
         vec![ProfileCatalogItemDto {

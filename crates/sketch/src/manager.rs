@@ -4517,6 +4517,26 @@ impl SketchManager {
         self.active_mut()?.add_rectangle_locked(&request)
     }
 
+    pub fn preview_rectangle_locked(
+        &self,
+        request: LockedRectangleRequest,
+    ) -> Result<[crate::Vec2; 2], SessionError> {
+        self.active
+            .as_ref()
+            .ok_or(SessionError::NoActiveSketch)?
+            .preview_rectangle_locked(&request)
+    }
+
+    pub fn preview_circle_locked(
+        &self,
+        request: LockedCircleRequest,
+    ) -> Result<[crate::Vec2; 2], SessionError> {
+        self.active
+            .as_ref()
+            .ok_or(SessionError::NoActiveSketch)?
+            .preview_circle_locked(&request)
+    }
+
     pub fn add_circle(&mut self, request: CircleRequest) -> Result<ToolResult, SessionError> {
         self.active_mut()?.add_circle_selective(
             request.mode,
@@ -4648,6 +4668,16 @@ impl SketchManager {
 
     pub fn chamfer_lines(&mut self, request: ChamferRequest) -> Result<ToolResult, SessionError> {
         self.active_mut()?.chamfer_lines(&request)
+    }
+
+    pub fn chamfer_preview(
+        &self,
+        request: ChamferRequest,
+    ) -> Result<crate::PreviewCurve, SessionError> {
+        self.active
+            .as_ref()
+            .ok_or(SessionError::NoActiveSketch)?
+            .chamfer_preview(&request)
     }
 
     pub fn offset_preview(
@@ -5012,6 +5042,16 @@ fn resolve_datum_source(
         }
     };
 
+    construction_plane_basis(source, resolve, |body, edge| solids.edge_points(body, edge))
+}
+
+/// The same validated construction geometry serves history replay and native
+/// previews. Callers resolve only references from their coherent model snapshot.
+pub fn construction_plane_basis(
+    source: &mut DatumPlaneSourceDto,
+    resolve: impl Fn(PlaneRef) -> Result<PlaneBasis, SessionError>,
+    edge_points: impl Fn(BodyId, nbcad_core::EdgeId) -> Option<Vec<Point3Dto>>,
+) -> Result<PlaneBasis, SessionError> {
     match source {
         DatumPlaneSourceDto::Offset {
             reference,
@@ -5063,8 +5103,7 @@ fn resolve_datum_source(
                 ));
             }
             let basis = resolve(*reference)?;
-            let points = solids
-                .edge_points(*body_id, *edge_id)
+            let points = edge_points(*body_id, *edge_id)
                 .filter(|points| points.len() >= 2)
                 .or_else(|| axis_points.map(|points| points.to_vec()))
                 .ok_or_else(|| {
@@ -9645,6 +9684,7 @@ mod project_tests {
             reference_midpoints: Vec::new(),
             dimensions: Vec::new(),
             dimension_style: DimensionStyle::Aligned,
+            grid_snap: true,
             dof: crate::dto::DofDto {
                 value: 0,
                 fully_defined: true,

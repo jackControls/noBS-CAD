@@ -17,6 +17,11 @@ pub fn is_live_engine_query(method: &str) -> bool {
             | "drawing_export"
             | "drawing_projection"
             | "assembly_document"
+            | "assembly_swept_collision_check"
+            | "assembly_preview_joint_coordinates"
+            | "assembly_evaluate_motion_study"
+            | "assembly_sample_motion_study"
+            | "assembly_export_motion_path_csv"
             | "eval_expression"
             | "preview_segment"
             | "preview_segment_locked"
@@ -55,6 +60,48 @@ pub struct MutateSpec {
 
 /// Every modeling mutate that `cad_submit` may enqueue and the UI inbox may apply.
 pub static MUTATES: &[MutateSpec] = &[
+    MutateSpec {
+        name: "assembly_create_position",
+        engine_method: "assembly_create_position",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_update_position",
+        engine_method: "assembly_update_position",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_delete_position",
+        engine_method: "assembly_delete_position",
+        payload: PayloadKind::Field("position_id"),
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_apply_position",
+        engine_method: "assembly_apply_position",
+        payload: PayloadKind::Field("position_id"),
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_create_motion_study",
+        engine_method: "assembly_create_motion_study",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_update_motion_study",
+        engine_method: "assembly_update_motion_study",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_delete_motion_study",
+        engine_method: "assembly_delete_motion_study",
+        payload: PayloadKind::Field("study_id"),
+        execution: ExecutionKind::Direct,
+    },
     MutateSpec {
         name: "project_set_visibility",
         engine_method: "project_set_visibility",
@@ -238,6 +285,18 @@ pub static MUTATES: &[MutateSpec] = &[
     MutateSpec {
         name: "sketch_add_constraints",
         engine_method: "add_constraints",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "sketch_delete_constraint",
+        engine_method: "delete_constraint",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "sketch_set_dimension_mode",
+        engine_method: "set_dimension_mode",
         payload: PayloadKind::Object,
         execution: ExecutionKind::Direct,
     },
@@ -668,6 +727,12 @@ pub static MUTATES: &[MutateSpec] = &[
         execution: ExecutionKind::Direct,
     },
     MutateSpec {
+        name: "assembly_duplicate_occurrence",
+        engine_method: "assembly_duplicate_occurrence",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
         name: "assembly_update_occurrence",
         engine_method: "assembly_update_occurrence",
         payload: PayloadKind::Object,
@@ -713,6 +778,30 @@ pub static MUTATES: &[MutateSpec] = &[
         name: "assembly_set_joint_motion",
         engine_method: "assembly_set_joint_motion",
         payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_set_joint_coordinates",
+        engine_method: "assembly_set_joint_coordinates",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_create_contact_set",
+        engine_method: "assembly_create_contact_set",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_update_contact_set",
+        engine_method: "assembly_update_contact_set",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "assembly_delete_contact_set",
+        engine_method: "assembly_delete_contact_set",
+        payload: PayloadKind::Field("contact_id"),
         execution: ExecutionKind::Direct,
     },
     MutateSpec {

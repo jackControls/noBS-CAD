@@ -76,7 +76,10 @@ pub fn run(output: PathBuf) {
                 ..default()
             }),
     );
-    if let Some(path) = std::env::var_os("NBCAD_CAM_LAB_MESH") {
+    if std::env::var_os("NBCAD_RIBBON_LAB").is_some() {
+        super::interface_shell::install_visual_lab(&mut app);
+        app.add_systems(Startup, (ui::load_system_font, setup_ribbon_lab).chain());
+    } else if let Some(path) = std::env::var_os("NBCAD_CAM_LAB_MESH") {
         let mesh = serde_json::from_slice(&std::fs::read(path).expect("read CAM capture mesh"))
             .expect("parse CAM capture mesh");
         app.insert_resource(CamLabMesh(mesh))
@@ -110,6 +113,78 @@ pub fn run(output: PathBuf) {
         }
     }
     panic!("Bevy UI lab screenshot did not complete");
+}
+
+/// Lossless GPU readback of the production ribbon widgets, avoiding desktop
+/// capture compression when comparing typography and one-pixel strokes.
+fn setup_ribbon_lab(world: &mut World) {
+    use super::interface_shell::{
+        self,
+        ribbon::{self, Icon},
+        InterfaceControl,
+    };
+    let mut target = Image::new_uninit(
+        Extent3d {
+            width: 1360,
+            height: 280,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    target.texture_descriptor.usage |= TextureUsages::RENDER_ATTACHMENT;
+    let target = world.resource_mut::<Assets<Image>>().add(target);
+    world.insert_resource(LabTarget(target.clone()));
+    let theme = ViewportUiTheme::from_palette(&super::ViewportPalette::default());
+    world.insert_resource(ClearColor(theme.header.with_alpha(1.)));
+    let camera = world
+        .spawn((
+            Camera2d,
+            RenderTarget::Image(target.into()),
+            IsDefaultUiCamera,
+        ))
+        .id();
+    let assets = world.resource::<ViewportUiAssets>().clone();
+    for row in 0..3 {
+        for (index, (label, icon)) in [
+            ("Line", Icon::Line),
+            ("Three-point arc", Icon::Arc),
+            ("Rectangle", Icon::Rectangle),
+            ("Circle", Icon::Circle),
+            ("Fit-point spline", Icon::Spline),
+            ("Center-to-center slot", Icon::Slot),
+            ("Create Sketch", Icon::Sketch),
+            ("Extrude", Icon::Extrude),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut control = InterfaceControl::button("ribbon-lab", label);
+            control.disabled = row == 2;
+            control.selected = Some(row == 1);
+            let entity = interface_shell::spawn_button(
+                &mut world.commands(),
+                camera,
+                ribbon::node(60. + index as f32 * 50., 34. + row as f32 * 80., 48.),
+                control,
+                theme,
+                &assets,
+            );
+            world.flush();
+            ribbon::decorate(world, entity, icon);
+        }
+    }
+    let entity = interface_shell::spawn_button(
+        &mut world.commands(),
+        camera,
+        ribbon::finish_node(8., 57.5, true),
+        InterfaceControl::button("ribbon-lab", "Finish sketch"),
+        theme,
+        &assets,
+    );
+    world.flush();
+    ribbon::decorate(world, entity, Icon::Finish);
 }
 
 /// Uses the production stock material, lights and AA, not browser screenshot
@@ -375,16 +450,13 @@ fn save_capture(
         "Captured {:?} {:?}; first bytes: {sample:?}",
         capture.image.texture_descriptor.size, capture.image.texture_descriptor.format
     );
-    match capture.image.clone().try_into_dynamic() {
-        Ok(image) => {
-            if let Err(error) = image.to_rgb8().save(&request.path) {
-                eprintln!(
-                    "Could not save Bevy UI lab capture to {}: {error}",
-                    request.path.display()
-                );
-            }
-        }
-        Err(error) => eprintln!("Could not convert Bevy UI lab capture: {error}"),
-    }
+    capture
+        .image
+        .clone()
+        .try_into_dynamic()
+        .expect("convert Bevy UI lab capture")
+        .to_rgb8()
+        .save(&request.path)
+        .expect("save Bevy UI lab capture");
     complete.0 = true;
 }

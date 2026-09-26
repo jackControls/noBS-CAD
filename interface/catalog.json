@@ -228,7 +228,9 @@
             "solid_hole",
             "solid_edit_hole",
             "solid_external_thread",
-            "solid_edit_external_thread"
+            "solid_edit_external_thread",
+            "solid_shell",
+            "solid_edit_shell"
           ]
         },
         {
@@ -380,8 +382,6 @@
             }
           ],
           "operations": [
-            "solid_shell",
-            "solid_edit_shell",
             "solid_move_copy",
             "solid_edit_move_copy",
             "solid_combine",
@@ -1091,6 +1091,7 @@
             "sketch_edit_dimension",
             "sketch_move_dimension",
             "sketch_delete_dimension",
+            "sketch_set_dimension_mode",
             "sketch_eval_expression",
             "sketch_set_dimension_style"
           ]
@@ -1350,6 +1351,7 @@
           "operations": [
             "sketch_add_constraint",
             "sketch_add_constraints",
+            "sketch_delete_constraint",
             "sketch_toggle_fix"
           ]
         },
@@ -1976,6 +1978,7 @@
             "assembly_create_component",
             "assembly_update_component",
             "assembly_create_occurrence",
+            "assembly_duplicate_occurrence",
             "assembly_update_occurrence",
             "assembly_set_occurrence_pose",
             "assembly_set_occurrence_grounded",
@@ -1984,6 +1987,8 @@
             "assembly_delete_joint",
             "assembly_set_joint_enabled",
             "assembly_set_joint_motion",
+            "assembly_set_joint_coordinates",
+            "assembly_preview_joint_coordinates",
             "assembly_create_gear_relation",
             "assembly_update_gear_relation",
             "assembly_delete_gear_relation"
@@ -2176,6 +2181,7 @@
     }
   ],
   "groups": [
+    {"id":"assembly/motion","labelKey":"assembly.browser.motionStudy","operations":["assembly_create_position","assembly_update_position","assembly_delete_position","assembly_apply_position","assembly_create_motion_study","assembly_update_motion_study","assembly_delete_motion_study","assembly_evaluate_motion_study","assembly_sample_motion_study","assembly_export_motion_path_csv"]},
     {
       "id": "solid/primitives",
       "labelKey": "solid/primitives",
@@ -2199,7 +2205,7 @@
     {
       "id": "assembly/inspect",
       "labelKey": "ribbon.solid.interference",
-      "operations": ["assembly_interference_check"]
+      "operations": ["assembly_interference_check", "assembly_swept_collision_check", "assembly_create_contact_set", "assembly_update_contact_set", "assembly_delete_contact_set"]
     },
     {
       "id": "document/files",

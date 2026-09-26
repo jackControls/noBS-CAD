@@ -1,0 +1,128 @@
+name: Native desktop host tests
+
+# The root workspace deliberately excludes `src-tauri`, so
+# `linux-engine-tests.yml` never reaches the desktop shell, and the packaging
+# workflow only runs `tauri build` — no test harness. Before this workflow the
+# normal desktop build was unit-tested nowhere, and everything behind
+# `dev-bevy-host` was neither compiled nor tested by any check.
+#
+# Both configurations matter:
+#   * the default build is what ships today and what the existing shell uses;
+#   * `dev-bevy-host` is the temporary native host that is replacing it, and it
+#     is the only configuration that compiles the interface shell, the winit
+#     host, the native sketch editor and the native Extrude form.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src-tauri/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/native-host-tests.yml'
+  pull_request:
+    paths:
+      - 'src-tauri/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/native-host-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-host-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native-host-tests:
+    name: Ubuntu desktop shell and native host
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out noBS CAD
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Mirrors the OpenCASCADE/desktop SDK set the Linux packaging job already
+      # proves works for this crate, so the two share one dependency contract.
+      - name: Install Ubuntu 26.04 desktop and OpenCASCADE SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            clang \
+            cmake \
+            libgtk-3-dev \
+            libocct-data-exchange-7.9 \
+            libocct-foundation-dev \
+            libocct-modeling-algorithms-dev \
+            libocct-modeling-data-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libudev-dev \
+            libvulkan-dev \
+            libwayland-dev \
+            libwebkit2gtk-4.1-dev \
+            libx11-dev \
+            libxdo-dev \
+            libxkbcommon-dev \
+            ninja-build \
+            pkg-config
+
+          # Ubuntu's STEP development package recommends the VTK/IVTK SDK,
+          # which noBS CAD does not use. Extract only its headers.
+          pushd "$RUNNER_TEMP"
+          apt-get download libocct-data-exchange-dev
+          package="$(find . -maxdepth 1 -name 'libocct-data-exchange-dev_*.deb' -print -quit)"
+          test -n "$package"
+          sudo dpkg-deb --extract "$package" /
+          popd
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: native-host-${{ runner.arch }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            native-host-${{ runner.arch }}-
+
+      # tauri.linux.conf.json declares bundle resources from both node_modules
+      # (`opencascade.js/LICENSE`) and the staged license notices, so tauri-build
+      # fails unless the frontend dependencies are installed and the packaging
+      # script's staging step has run.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Stage the Linux bundle license notices
+        run: node scripts/bundle-linux.mjs --stage-licenses
+
+      # The shipping configuration. This is the only check that compiles the
+      # desktop shell's own unit tests at all.
+      - name: Test the default desktop build
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      # The native host being built to replace the React shell. Without this
+      # step none of the interface shell, winit host, native editor or native
+      # Extrude form is compiled by any workflow.
+      - name: Test the native Bevy host
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --features dev-bevy-host

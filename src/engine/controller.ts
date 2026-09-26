@@ -889,54 +889,6 @@ export async function submitBodyFeature(
   }
 }
 
-/** Expand selected tessellated topology edges through smooth endpoint joins. */
-export function tangentChainEdges(bodyId: number, edgeIds: number[]): number[] {
-  const body = useAppStore.getState().solidScene.bodies.find((candidate) => candidate.id === bodyId);
-  if (!body || edgeIds.length === 0) return edgeIds;
-  const near = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) =>
-    Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) <= 1e-4;
-  const endpointTangent = (edge: typeof body.edges[number], atStart: boolean) => {
-    const points = edge.points;
-    const a = atStart ? points[0] : points[points.length - 1];
-    const b = atStart ? points[1] : points[points.length - 2];
-    const length = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) || 1;
-    return { x: (b.x - a.x) / length, y: (b.y - a.y) / length, z: (b.z - a.z) / length };
-  };
-  const requested = new Set(edgeIds);
-  const queue = body.edges.filter((edge) => edge.refinable && requested.has(edge.id));
-  const selected = new Set(queue.map((edge) => edge.id));
-  while (queue.length > 0) {
-    const edge = queue.shift()!;
-    for (const candidate of body.edges) {
-      if (
-        !candidate.refinable
-        || selected.has(candidate.id)
-        || candidate.points.length < 2
-        || edge.points.length < 2
-      ) continue;
-      const pairs = [
-        [true, true],
-        [true, false],
-        [false, true],
-        [false, false],
-      ] as const;
-      const tangent = pairs.some(([edgeStart, candidateStart]) => {
-        const a = edgeStart ? edge.points[0] : edge.points[edge.points.length - 1];
-        const b = candidateStart ? candidate.points[0] : candidate.points[candidate.points.length - 1];
-        if (!near(a, b)) return false;
-        const ta = endpointTangent(edge, edgeStart);
-        const tb = endpointTangent(candidate, candidateStart);
-        return Math.abs(ta.x * tb.x + ta.y * tb.y + ta.z * tb.z) >= Math.cos(Math.PI / 36);
-      });
-      if (tangent) {
-        selected.add(candidate.id);
-        queue.push(candidate);
-      }
-    }
-  }
-  return [...selected];
-}
-
 export async function submitExtrude(
   request: ExtrudeRequest,
   featureId?: number,

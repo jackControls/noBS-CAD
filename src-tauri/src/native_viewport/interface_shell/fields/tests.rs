@@ -1,0 +1,422 @@
+use super::*;
+use crate::native_viewport::interface_shell::tests::fixture;
+
+#[test]
+fn submit_fields_commit_the_visible_buffer_before_forwarding_enter() {
+    let (mut app, handle, entity) = editor_fixture_with_submit(true);
+    apply_edit(app.world_mut(), entity, TextEdit::Insert("3".into())).unwrap();
+    let owner = handle.frame().unwrap().context;
+    let enter = handle
+        .resolve_input(
+            ControlKey(entity.to_bits()),
+            ControlInput::Key(nbcad_interface::KeyChord::plain("Enter")),
+            &owner,
+        )
+        .unwrap();
+    let value = adapt_control_input(app.world_mut(), &handle, &enter)
+        .unwrap()
+        .unwrap();
+    assert_eq!(value.control.input, ControlInput::SetValue("123".into()));
+    acknowledge_control_input(app.world_mut(), &value, true);
+    let queued = handle.take_actions().unwrap();
+    assert_eq!(queued.len(), 1);
+    let submit = adapt_control_input(app.world_mut(), &handle, &queued[0])
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        submit.control.input,
+        ControlInput::Key(nbcad_interface::KeyChord::plain("Enter"))
+    );
+    assert!(handle.take_actions().unwrap().is_empty());
+}
+
+#[test]
+fn cancelling_a_form_discards_its_buffer_without_blocking_the_next_action() {
+    let (mut app, handle, entity) = editor_fixture();
+    apply_edit(app.world_mut(), entity, TextEdit::Insert("invalid".into())).unwrap();
+    app.world_mut().despawn(entity);
+    app.update();
+    assert!(commit_active(app.world_mut(), &handle).unwrap().is_none());
+    after_window_input(app.world_mut(), &handle).unwrap();
+    assert!(app.world().resource::<EditorSession>().active.is_none());
+    assert!(handle.take_actions().unwrap().is_empty());
+}
+
+#[test]
+fn mcp_backspace_edits_the_same_visible_buffer_and_enter_does_not_revert_it() {
+    let (mut app, handle, entity) = editor_fixture();
+    let owner = handle.frame().unwrap().context;
+    let action = handle
+        .resolve_input(
+            ControlKey(entity.to_bits()),
+            ControlInput::Key(nbcad_interface::KeyChord::plain("Backspace")),
+            &owner,
+        )
+        .unwrap();
+    let normalized = adapt_control_input(app.world_mut(), &handle, &action)
+        .unwrap()
+        .unwrap();
+    assert_eq!(normalized.control.input, ControlInput::SetValue("1".into()));
+    acknowledge_control_input(app.world_mut(), &normalized, true);
+    let enter = handle
+        .resolve_input(
+            ControlKey(entity.to_bits()),
+            ControlInput::Key(nbcad_interface::KeyChord::plain("Enter")),
+            &owner,
+        )
+        .unwrap();
+    assert!(adapt_control_input(app.world_mut(), &handle, &enter)
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        app.world()
+            .get::<EditableText>(entity)
+            .unwrap()
+            .value()
+            .to_string(),
+        "1"
+    );
+}
+
+#[test]
+fn field_undo_redo_changes_only_its_draft_and_new_input_discards_redo() {
+    let (mut app, _handle, entity) = editor_fixture();
+    apply_edit(app.world_mut(), entity, TextEdit::Insert("3".into())).unwrap();
+    history_edit(app.world_mut(), entity, false).unwrap();
+    assert_eq!(
+        app.world()
+            .get::<EditableText>(entity)
+            .unwrap()
+            .value()
+            .to_string(),
+        "12"
+    );
+    history_edit(app.world_mut(), entity, true).unwrap();
+    assert_eq!(
+        app.world()
+            .get::<EditableText>(entity)
+            .unwrap()
+            .value()
+            .to_string(),
+        "123"
+    );
+    history_edit(app.world_mut(), entity, false).unwrap();
+    apply_edit(app.world_mut(), entity, TextEdit::Insert("4".into())).unwrap();
+    history_edit(app.world_mut(), entity, true).unwrap();
+    assert_eq!(
+        app.world()
+            .get::<EditableText>(entity)
+            .unwrap()
+            .value()
+            .to_string(),
+        "124"
+    );
+    assert_eq!(
+        app.world().get::<NativeTextField>(entity).unwrap().baseline,
+        "12"
+    );
+}
+
+fn editor_fixture() -> (App, NativeInterfaceHandle, Entity) {
+    editor_fixture_with_submit(false)
+}
+
+fn editor_fixture_with_submit(submit: bool) -> (App, NativeInterfaceHandle, Entity) {
+    let (mut app, handle, entity, _) = fixture();
+    app.add_plugins((
+        MinimalPlugins,
+        AssetPlugin::default(),
+        bevy::text::TextPlugin,
+    ))
+    .init_resource::<EditorSession>();
+    let value = "12".to_owned();
+    let mut control = app.world_mut().get_mut::<InterfaceControl>(entity).unwrap();
+    control.field = Field::Text {
+        value: value.clone(),
+        read_only: false,
+        selection: None,
+    };
+    control.text_editing = true;
+    control.role = "textbox".into();
+    if submit {
+        control
+            .owned_keys
+            .push(nbcad_interface::KeyChord::plain("Enter"));
+    }
+    drop(control);
+    app.world_mut().entity_mut(entity).insert((
+        EditableText::new(&value),
+        InterfaceTextRevision::default(),
+        ComputedUiRenderTargetInfo::default(),
+        NativeTextField {
+            baseline: value,
+            queued: None,
+            undo: VecDeque::new(),
+            redo: VecDeque::new(),
+            binding: 1,
+            theme: ViewportUiTheme::from_palette(&default()),
+        },
+    ));
+    app.update();
+    // Editing is layout based: use the production Bevy UI style adapter,
+    // rather than an unstyled PlainEditor with no resolved font family.
+    app.world_mut()
+        .run_system_cached(bevy::ui::widget::update_editable_text_styles)
+        .unwrap();
+    app.init_resource::<Assets<Image>>();
+    app.world_mut()
+        .run_system_cached(bevy::ui::widget::update_editable_text_layout)
+        .unwrap();
+    let action = handle
+        .resolve_retained(ControlKey(entity.to_bits()))
+        .unwrap();
+    handle.prepare_activation(&action).unwrap();
+    after_window_input(app.world_mut(), &handle).unwrap();
+    (app, handle, entity)
+}
+
+#[test]
+fn a_direct_mcp_value_updates_the_visible_editor_and_is_not_reverted_on_blur() {
+    let (mut app, handle, entity) = editor_fixture();
+    let owner = handle.frame().unwrap().context;
+    let action = handle
+        .resolve_input(
+            ControlKey(entity.to_bits()),
+            ControlInput::SetValue("36 mm".into()),
+            &owner,
+        )
+        .unwrap();
+    assert!(prepare_control_input(app.world_mut(), &handle, &action)
+        .unwrap()
+        .is_empty());
+    acknowledge_control_input(app.world_mut(), &action, true);
+    assert_eq!(
+        app.world()
+            .get::<EditableText>(entity)
+            .unwrap()
+            .value()
+            .to_string(),
+        "36 mm"
+    );
+    assert!(commit_active(app.world_mut(), &handle).unwrap().is_none());
+    handle.blur();
+    after_window_input(app.world_mut(), &handle).unwrap();
+    assert!(handle.take_actions().unwrap().is_empty());
+}
+
+#[test]
+fn rejected_commit_stays_dirty_and_duplicate_queued_blur_is_not_accepted_early() {
+    let (mut app, handle, entity) = editor_fixture();
+    app.world_mut()
+        .get_mut::<EditableText>(entity)
+        .unwrap()
+        .queue_edit(TextEdit::Insert("bad".into()));
+    let commit = commit_active(app.world_mut(), &handle).unwrap().unwrap();
+    assert_eq!(
+        app.world().get::<NativeTextField>(entity).unwrap().baseline,
+        "12"
+    );
+    assert!(commit_active(app.world_mut(), &handle).unwrap().is_none());
+    acknowledge_control_input(app.world_mut(), &commit, false);
+    let retry = commit_active(app.world_mut(), &handle).unwrap().unwrap();
+    assert_eq!(retry.control.input, commit.control.input);
+    acknowledge_control_input(app.world_mut(), &retry, true);
+    assert!(commit_active(app.world_mut(), &handle).unwrap().is_none());
+}
+
+#[test]
+fn unicode_editing_and_ime_commit_precede_enter_without_synthetic_keys() {
+    let (mut app, handle, entity) = editor_fixture();
+    let window = Entity::from_bits(900);
+    let event = WindowEvent::Ime(Ime::Commit {
+        window,
+        value: "日本".into(),
+    });
+    assert!(
+        before_window_input(app.world_mut(), &handle, &event, None, Modifiers::default()).unwrap()
+    );
+    let value = app
+        .world()
+        .get::<EditableText>(entity)
+        .unwrap()
+        .value()
+        .to_string();
+    assert_eq!(value, "12日本");
+    app.world_mut()
+        .get_mut::<EditableText>(entity)
+        .unwrap()
+        .queue_edit(TextEdit::Backspace);
+    let commit = commit_active(app.world_mut(), &handle).unwrap().unwrap();
+    assert_eq!(commit.control.input, ControlInput::SetValue("12日".into()));
+}
+
+#[test]
+fn read_only_fields_keep_selection_but_reject_typing_and_ime() {
+    let (mut app, handle, entity) = editor_fixture();
+    if let Field::Text { read_only, .. } = &mut app
+        .world_mut()
+        .get_mut::<InterfaceControl>(entity)
+        .unwrap()
+        .field
+    {
+        *read_only = true;
+    }
+    let key = WindowEvent::KeyboardInput(KeyboardInput {
+        key_code: bevy::input::keyboard::KeyCode::ArrowLeft,
+        logical_key: Key::ArrowLeft,
+        state: ButtonState::Pressed,
+        text: None,
+        repeat: false,
+        window: Entity::PLACEHOLDER,
+    });
+    // Cmd+Shift+Left exercises HardLineStart on macOS; Shift+Left elsewhere.
+    before_window_input(
+        app.world_mut(),
+        &handle,
+        &key,
+        None,
+        Modifiers {
+            meta: cfg!(target_os = "macos"),
+            shift: true,
+            ..default()
+        },
+    )
+    .unwrap();
+    assert!(!app
+        .world()
+        .get::<EditableText>(entity)
+        .unwrap()
+        .editor
+        .raw_selection()
+        .text_range()
+        .is_empty());
+    for edit in [
+        TextEdit::Insert("changed".into()),
+        TextEdit::Backspace,
+        TextEdit::ImeSetCompose {
+            value: "日本".into(),
+            cursor: None,
+        },
+        TextEdit::ImeCommit {
+            value: "日本".into(),
+        },
+    ] {
+        apply_edit(app.world_mut(), entity, edit).unwrap();
+    }
+    let editor = app.world().get::<EditableText>(entity).unwrap();
+    assert_eq!(editor.value().to_string(), "12");
+    assert!(!editor.is_composing());
+    assert!(app
+        .world()
+        .get::<NativeTextField>(entity)
+        .unwrap()
+        .undo
+        .is_empty());
+}
+
+#[test]
+fn preedit_is_provisional_and_committing_records_one_draft_undo() {
+    let (mut app, handle, entity) = editor_fixture();
+    let window = Entity::PLACEHOLDER;
+    let preedit = WindowEvent::Ime(Ime::Preedit {
+        window,
+        value: "日本".into(),
+        cursor: Some((6, 6)),
+    });
+    before_window_input(
+        app.world_mut(),
+        &handle,
+        &preedit,
+        None,
+        Modifiers::default(),
+    )
+    .unwrap();
+    assert!(app
+        .world()
+        .get::<EditableText>(entity)
+        .unwrap()
+        .is_composing());
+    assert!(app
+        .world()
+        .get::<NativeTextField>(entity)
+        .unwrap()
+        .undo
+        .is_empty());
+    let commit = WindowEvent::Ime(Ime::Commit {
+        window,
+        value: "日本".into(),
+    });
+    before_window_input(
+        app.world_mut(),
+        &handle,
+        &commit,
+        None,
+        Modifiers::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        commit_active(app.world_mut(), &handle)
+            .unwrap()
+            .unwrap()
+            .control
+            .input,
+        ControlInput::SetValue("12日本".into())
+    );
+    history_edit(app.world_mut(), entity, false).unwrap();
+    assert_eq!(
+        app.world()
+            .get::<EditableText>(entity)
+            .unwrap()
+            .value()
+            .to_string(),
+        "12"
+    );
+}
+
+#[test]
+fn bevy_text_viewport_keeps_pointer_selection_and_ime_on_the_visible_text() {
+    let (mut app, handle, entity) = editor_fixture();
+    app.init_resource::<UiScale>();
+    let window = app
+        .world_mut()
+        .spawn((Window::default(), PrimaryWindow))
+        .id();
+    app.world_mut()
+        .run_system_cached(bevy::ui::widget::sync_editable_text_viewports)
+        .unwrap();
+    apply_edit(
+        app.world_mut(),
+        entity,
+        TextEdit::Insert("abcdefghijklmnopqrstuvwxyz".into()),
+    )
+    .unwrap();
+    assert!(
+        app.world()
+            .get::<EditableText>(entity)
+            .unwrap()
+            .viewport
+            .offset
+            .x
+            > 0.
+    );
+    app.world_mut().run_system_cached(update_ime).unwrap();
+    let window_state = app.world().get::<Window>(window).unwrap();
+    assert!(window_state.ime_enabled);
+    assert!((20.0..=100.0).contains(&window_state.ime_position.x));
+    after_pointer_input(
+        app.world_mut(),
+        &handle,
+        &WindowEvent::MouseButtonInput(bevy::input::mouse::MouseButtonInput {
+            button: MouseButton::Left,
+            state: ButtonState::Pressed,
+            window,
+        }),
+        Some(Vec2::new(21., 42.)),
+        Modifiers::default(),
+    )
+    .unwrap();
+    let editor = app.world().get::<EditableText>(entity).unwrap();
+    let selection = editor.editor.raw_selection().text_range();
+    assert!(selection.is_empty());
+    assert!(selection.start > 0 && selection.start < editor.value().to_string().len());
+}

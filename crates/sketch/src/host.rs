@@ -431,6 +431,12 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         "add_rectangle_locked" => with_payload(payload, |r: LockedRectangleRequest| {
             manager.add_rectangle_locked(r)
         }),
+        "preview_rectangle_locked" => with_payload(payload, |r: LockedRectangleRequest| {
+            manager.preview_rectangle_locked(r)
+        }),
+        "preview_circle_locked" => with_payload(payload, |r: LockedCircleRequest| {
+            manager.preview_circle_locked(r)
+        }),
         "add_circle" => with_payload(payload, |r: CircleRequest| manager.add_circle(r)),
         "add_circle_locked" => with_payload(payload, |r: LockedCircleRequest| {
             manager.add_circle_locked(r)
@@ -465,6 +471,7 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         "fillet_preview" => with_payload(payload, |r: FilletRequest| manager.fillet_preview(&r)),
         "fillet_lines" => with_payload(payload, |r: FilletRequest| manager.fillet_lines(r)),
         "chamfer_lines" => with_payload(payload, |r: ChamferRequest| manager.chamfer_lines(r)),
+        "chamfer_preview" => with_payload(payload, |r: ChamferRequest| manager.chamfer_preview(r)),
         "offset_preview" => with_payload(payload, |r: OffsetRequest| manager.offset_preview(&r)),
         "offset_curve" => with_payload(payload, |r: OffsetRequest| manager.offset_curve(r)),
         "trim_preview" => with_payload(payload, |r: TrimRequest| manager.trim_preview(&r)),

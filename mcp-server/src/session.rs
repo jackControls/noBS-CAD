@@ -185,6 +185,7 @@ pub fn request_ui(arguments: &Value, attached: Option<&str>) -> Result<Value, St
             | "viewport"
             | "presentation"
             | "open_recipe"
+            | "capture"
     ) {
         return Err("unknown UI action".into());
     }

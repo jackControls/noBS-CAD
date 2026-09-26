@@ -5,7 +5,6 @@ import {
   cancelTimelineFeatureEdit,
   submitSolidChamfer,
   submitSolidFillet,
-  tangentChainEdges,
 } from '../engine/controller';
 import { useTranslation } from '../i18n';
 import { useAppStore } from '../store/appStore';
@@ -102,15 +101,15 @@ function SolidEdgeDialog({ kind }: { kind: 'fillet' | 'chamfer' }) {
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!canSubmit) return;
-    const resolvedEdges = tangentChain ? tangentChainEdges(bodyId, edgeIds) : edgeIds;
+    // Rust resolves tangent chains for every interface and transport.
     if (kind === 'fillet') {
       void submitSolidFillet(
-        { body_id: bodyId, edge_ids: resolvedEdges, radius: value, tangent_chain: tangentChain },
+        { body_id: bodyId, edge_ids: edgeIds, radius: value, tangent_chain: tangentChain },
         featureId > 0 ? featureId : undefined,
       );
     } else {
       void submitSolidChamfer(
-        { body_id: bodyId, edge_ids: resolvedEdges, distance: value, tangent_chain: tangentChain },
+        { body_id: bodyId, edge_ids: edgeIds, distance: value, tangent_chain: tangentChain },
         featureId > 0 ? featureId : undefined,
       );
     }

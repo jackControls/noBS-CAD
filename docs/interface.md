@@ -63,6 +63,15 @@ focus policy. Native wake events advance camera animation, operation playback,
 and keepalives while browser timers are throttled. Hidden execution reports
 `presented: false`; a successful operation is not proof of rendered pixels.
 
+The native Bevy host also supports `action: capture` with an absolute PNG `path`.
+It captures the application's own rendered window, including controls and open
+dialogs, without reading the desktop or other applications. The reply waits for
+GPU readback and file encoding and returns the path and pixel dimensions. Existing
+files require explicit `overwrite: true`. Restore a minimized window with
+`action: window, mode: foreground` first. The legacy web shell does not implement
+this capture action. Native background control retains the last window layout
+while reporting `presented: false`.
+
 `close` requests application exit through the same unsaved-work guard as the
 title-bar close button, Alt+F4, File → Exit, and native macOS Quit. Its reply
 acknowledges the request, not process termination. Inspect and use the normal

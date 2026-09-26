@@ -2595,6 +2595,15 @@ impl SketchSession {
         })
     }
 
+    /// Native preview uses the same locked-axis resolution as commit.
+    pub fn preview_rectangle_locked(
+        &self,
+        request: &LockedRectangleRequest,
+    ) -> Result<[Vec2; 2], SessionError> {
+        let resolved = self.resolve_rectangle(request)?;
+        Ok([resolved.anchor, resolved.corner])
+    }
+
     fn build_rectangle(
         &mut self,
         mode: RectangleMode,
@@ -2762,6 +2771,15 @@ impl SketchSession {
             entities: vec![id],
             sketch: self.dto(),
         })
+    }
+
+    /// Native preview uses the same locked-diameter resolution as commit.
+    pub fn preview_circle_locked(
+        &self,
+        request: &LockedCircleRequest,
+    ) -> Result<[Vec2; 2], SessionError> {
+        let resolved = self.resolve_circle(request)?;
+        Ok([resolved.anchor, resolved.edge])
     }
 
     fn build_circle(
@@ -5511,6 +5529,7 @@ impl SketchSession {
             projected_edges: self.projected_edges.clone(),
             dimensions: self.dimension_dtos(),
             dimension_style: self.dimension_style,
+            grid_snap: self.grid_snap,
             dof: DofDto {
                 value: analysis.dof,
                 fully_defined: analysis.dof == 0 && analysis.unknowns > 0,
