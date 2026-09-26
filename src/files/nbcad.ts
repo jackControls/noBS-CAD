@@ -36,7 +36,7 @@ export function createNbcadArchive(modelJson: string): Uint8Array {
     model: 'model.json',
     model_schema_version: model.schema_version as number,
     application: 'noBS CAD',
-    application_version: '0.2.0',
+    application_version: '0.2.1',
     saved_at: new Date().toISOString(),
   };
   return zipSync(

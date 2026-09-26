@@ -112,7 +112,7 @@ The results are:
 
 ```text
 src-tauri/target/release/bundle/macos/noBS CAD.app
-src-tauri/target/release/bundle/dmg/noBS.CAD_0.2.0_aarch64.dmg
+src-tauri/target/release/bundle/dmg/noBS.CAD_0.2.1_aarch64.dmg
 ```
 
 Useful manual release audit:

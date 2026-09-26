@@ -156,7 +156,7 @@ packaged paths. A standalone `nbcad-mcp` server needs no `--server-arg`.
 For an AppImage without FUSE, pass each argument explicitly:
 
 ```sh
-cargo xtask run-script --recipe fillet-basics --server /absolute/path/to/noBS.CAD_0.2.0_amd64.AppImage --server-arg --appimage-extract-and-run --server-arg --headless
+cargo xtask run-script --recipe fillet-basics --server /absolute/path/to/noBS.CAD_0.2.1_amd64.AppImage --server-arg --appimage-extract-and-run --server-arg --headless
 ```
 
 `--repeat 2` compares independent headless runs. To watch in an existing CAD
