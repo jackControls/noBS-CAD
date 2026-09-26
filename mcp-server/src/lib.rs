@@ -1,3 +1,6 @@
+// The cad_interface schema is one large json! literal; the default macro
+// recursion limit is not enough once its property list grows past this size.
+#![recursion_limit = "256"]
 use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -16,6 +19,7 @@ mod inbox;
 mod interface;
 mod knowledge;
 mod prompts;
+mod script_export;
 mod session;
 mod stdio;
 mod summary;
@@ -47,12 +51,16 @@ pub fn open_recipe_in_running_desktop(recipe: &str) -> Result<bool, String> {
 }
 
 /// Inspect the same validated JSONC source accepted by `cad_interface/script`.
+///
+/// `source` is the expanded script (safe to replay inline). `authored_source`
+/// is the text the user opened, including unresolved `includes` and comments.
 pub fn inspect_script(arguments: Value) -> Result<Value, String> {
-    let source = interface::script_source(&arguments)?;
-    let script = nbcad_script::Script::parse(&source)?;
+    let loaded = interface::load_script(&arguments)?;
+    let script = nbcad_script::Script::parse(&loaded.expanded)?;
     interface::validate_script(&script)?;
     let mut result = script.metadata();
-    result["source"] = Value::String(source);
+    result["source"] = Value::String(loaded.expanded);
+    result["authored_source"] = Value::String(loaded.authored);
     if let Some(path) = arguments.get("path") {
         result["path"] = path.clone();
     }
@@ -63,11 +71,15 @@ pub fn inspect_script(arguments: Value) -> Result<Value, String> {
 /// inbox and the shared interface, exactly as it does for an external MCP call.
 pub fn run_script(
     source: &str,
+    include_base: Option<&str>,
     session_id: Option<&str>,
     mode: &str,
     speed: f64,
 ) -> Result<Value, String> {
     let mut arguments = json!({"action":"script","source":source,"mode":mode,"speed":speed});
+    if let Some(include_base) = include_base {
+        arguments["include_base"] = json!(include_base);
+    }
     if let Some(session_id) = session_id {
         arguments["session_id"] = json!(session_id);
     }
@@ -89,7 +101,7 @@ pub fn preview_script(source: &str) -> Result<Value, String> {
                 .into(),
         );
     }
-    run_script(source, None, "fast", 1.0)
+    run_script(source, None, None, "fast", 1.0)
 }
 
 /// A pause may begin and end between receipt observations. Give resumed
@@ -227,6 +239,15 @@ struct CadServer {
     tool_trace: Vec<Value>,
     /// Depth of composite tools (`solid_box`) whose parts must not be traced twice.
     composite_depth: u32,
+    /// Expanded source from last successful cad_interface script.
+    last_script_source: Option<String>,
+    /// Successful modeling mutations in this process, traced or live. A live
+    /// (attached) mutation never grows `tool_trace`, so staleness of
+    /// `last_script_source` is judged against this count instead.
+    modeling_mutations: u64,
+    /// `modeling_mutations` when `last_script_source` was captured. A later
+    /// mutation means that source no longer describes the session.
+    last_script_mutations: u64,
     /// Scripts use authoritative live results without rebuilding a second
     /// OCCT model after each mutation. Snapshot reads still refresh on demand.
     script_running: bool,
@@ -256,6 +277,9 @@ impl CadServer {
             pending_recompute_transaction: None,
             tool_trace: Vec::new(),
             composite_depth: 0,
+            last_script_source: None,
+            modeling_mutations: 0,
+            last_script_mutations: 0,
             script_running: false,
             script_progress: None,
             live_snapshot_dirty: false,
@@ -268,6 +292,9 @@ impl CadServer {
         let live_mutation = self.attached_document_id.is_some() && is_modeling_mutate(name);
         let trace_args = arguments.clone();
         let result = self.dispatch_tool(name, arguments);
+        if result.is_ok() && is_modeling_mutate(name) {
+            self.modeling_mutations += 1;
+        }
         if result.is_ok() && records_in_script(name) && !live_mutation && self.composite_depth == 0
         {
             self.tool_trace.push(json!({
@@ -546,6 +573,8 @@ impl CadServer {
                     self.feature_summary(&arguments)?
                 } else if arguments["action"] == "check" {
                     self.check_features(&arguments)?
+                } else if arguments["action"] == "export_script" {
+                    self.export_script(&arguments)?
                 } else if arguments["action"] == "open_recipe" {
                     // Source-editor delivery is independent of the CAD model.
                     // The window receipt includes active_session_id, but this
@@ -754,6 +783,10 @@ impl CadServer {
                     Err(error) => result = Err(format!("Playback completion failed: {error}")),
                 }
             }
+        }
+        if result.is_ok() {
+            self.last_script_mutations = self.modeling_mutations;
+            self.last_script_source = Some(source);
         }
         // Feedback the agent can act on: what was built, in feature terms, and
         // the mistakes that do not raise errors. Compact unless detail is full.
@@ -1476,8 +1509,72 @@ impl CadServer {
         Ok(true)
     }
 
+    /// Emit a version-1 `.nbcad.jsonc` from the last successful script source
+    /// or, failing that, from this process `tool_trace` (lossy).
+    ///
+    /// `auto` keeps the authored script only while no modeling tool has
+    /// succeeded since that run, traced or live. A later mutation makes it
+    /// stale, and `auto` follows the session trace instead of labelling the
+    /// old script lossless.
+    fn export_script(&mut self, arguments: &Value) -> Result<Value, String> {
+        let name = arguments
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("Exported model");
+        let from = arguments
+            .get("from")
+            .and_then(Value::as_str)
+            .unwrap_or("auto");
+        if !matches!(from, "auto" | "last_script" | "session_trace") {
+            return Err("export_script from must be auto, last_script, or session_trace".into());
+        }
+        let stale = self.last_script_source.is_some()
+            && self.modeling_mutations != self.last_script_mutations;
+        let use_authored = match from {
+            "last_script" => self.last_script_source.is_some(),
+            "auto" => self.last_script_source.is_some() && !stale,
+            _ => false,
+        };
+        if use_authored {
+            let mut notes = vec![
+                "Source is the expanded JSONC last successfully run via action script in this process.",
+                "Comments may be absent if includes were flattened; commands and refs match the replay.",
+                "cad_script remains the forward MCP call dump — not this JSONC export.",
+            ];
+            if stale {
+                notes.push(
+                    "stale is true: tools ran after that script, so this source no longer matches the session. Ask for from:auto to export the session trace.",
+                );
+            }
+            let source = self
+                .last_script_source
+                .clone()
+                .ok_or("No last_script source in this process; run action script first")?;
+            return script_export::export_script_result(source, "lossless_authored", stale, notes);
+        }
+        if from == "last_script" {
+            return Err("No last_script source in this process; run action script first".into());
+        }
+        let source = script_export::session_trace_to_v1_source(&self.tool_trace, name)?;
+        let mut notes = vec![
+            "Built from this process tool_trace with literal arguments (no $select/$project, no notes).",
+            "Prefer hand-authored JSONC for durable recipes; use this for scratch replay of a blank-session MCP build.",
+            "cad_load_project_model attach baselines are omitted; UI-only history is not reverse-engineered.",
+            "cad_script remains the forward MCP call dump — not this JSONC export.",
+        ];
+        if from == "auto" && stale {
+            notes.insert(
+                0,
+                "The retained authored script is stale because tools ran after it. This export follows the session trace instead.",
+            );
+        }
+        script_export::export_script_result(source, "lossy_session_trace", false, notes)
+    }
+
     /// Clear `tool_trace` and seed `cad_load_project_model` with the loaded model JSON.
     fn seed_script_baseline_from_model(&mut self, model_json: &str) {
+        self.last_script_source = None;
+        self.last_script_mutations = self.modeling_mutations;
         self.tool_trace.clear();
         self.tool_trace.push(json!({
             "name": "cad_load_project_model",
@@ -4294,10 +4391,10 @@ fn tool_specs() -> Vec<ToolSpec> {
         ),
         ToolSpec::control(
             "cad_interface", "Explore and drive the product interface",
-            "Catalog returns shared product groups and typed operations. Execute runs an operation by group and name with identical arguments/results headlessly or live. Recipes lists committed native examples without running them. Open_recipe queues a built-in recipe in the live Scripts source editor, preserving edited source with Save/Discard/Cancel; it never runs commands or replaces the model. Script runs one versioned JSONC command file selected by recipe ID, source or an absolute .nbcad.jsonc path in the current blank document; Rust sequences every operation, stops on failure, and runs final checks by default. Its result carries a feature summary (bodies with bounding boxes, holes tallied by class; detail full lists every hole with position, diameter, depth, face and thread) and warnings for mistakes that raise no error: a hole position left out of positions, overlapping holes, holes off the body, blind depths deeper than the body, unused bindings; a failing step names the step, the reason and, for selectors, the candidates or the values present. Summary returns that feature summary of the current document (detail compact or full). Check compares expected {bbox: [x, y, z], holes: [{x, y, z?, diameter?, counterbore_diameter?, through?, depth?}]} with the built model within tolerance_mm (default 0.6) and reports matched, missing and extra holes with offsets. Mode fast has no presentation delays; present requires an attached desktop. Presentation provides configure/note/pause/resume/step/stop/status/finish/dismiss/show and speed controls shared with native playback. View supports timed orientation and focus on an active sketch, body, or component. Launch connects a new desktop. Inspect returns rendered controls with fresh opaque target IDs for click/set_value/key. Window close requests guarded application exit; the reply acknowledges the request, not process termination. No selectors or executable script evaluation.",
+            "Catalog returns shared product groups and typed operations. Execute runs an operation by group and name with identical arguments/results headlessly or live. Recipes lists committed native examples without running them. Open_recipe queues a built-in recipe in the live Scripts source editor, preserving edited source with Save/Discard/Cancel; it never runs commands or replaces the model. Script runs one versioned JSONC command file selected by recipe ID, source or an absolute .nbcad.jsonc path in the current blank document; Rust sequences every operation, stops on failure, and runs final checks by default. Its result carries a feature summary (bodies with bounding boxes, holes tallied by class; detail full lists every hole with position, diameter, depth, face and thread) and warnings for mistakes that raise no error: a hole position left out of positions, overlapping holes, holes off the body, blind depths deeper than the body, unused bindings; a failing step names the step, the reason and, for selectors, the candidates or the values present. Summary returns that feature summary of the current document (detail compact or full). Check compares expected {bbox: [x, y, z], holes: [{x, y, z?, diameter?, counterbore_diameter?, through?, depth?}]} with the built model within tolerance_mm (default 0.6) and reports matched, missing and extra holes with offsets. Export_script emits a version-1 .nbcad.jsonc from the last successful script source (from last_script, fidelity lossless_authored) or from the session tool_trace (from session_trace, fidelity lossy_session_trace); it is distinct from cad_script's forward call dump. Mode fast has no presentation delays; present requires an attached desktop. Presentation provides configure/note/pause/resume/step/stop/status/finish/dismiss/show and speed controls shared with native playback. View supports timed orientation and focus on an active sketch, body, or component. Launch connects a new desktop. Inspect returns rendered controls with fresh opaque target IDs for click/set_value/key. Window close requests guarded application exit; the reply acknowledges the request, not process termination. No selectors or executable script evaluation.",
             object_schema(json!({
                 "session_id":{"type":"string"},
-                "action":{"type":"string","enum":["catalog","recipes","open_recipe","execute","script","summary","check","presentation","launch","view","inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
+                "action":{"type":"string","enum":["catalog","recipes","open_recipe","execute","script","summary","check","export_script","presentation","launch","view","inspect","click","double_click","context_menu","set_value","key","window","file","viewport"]},
                 "recipe":{"type":"string","description":"Bundled recipe ID for script or open_recipe; mutually exclusive with source and path. List IDs with action recipes."},
                 "group":{"type":"string"},"operation":{"type":"string"},"arguments":{"type":"object"},
                 "executable":{"type":"string"},
@@ -4307,6 +4404,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "duration_ms":{"type":"integer","minimum":0,"maximum":10000},
                 "orbit_degrees":{"type":"number","minimum":-360,"maximum":360,"description":"For action view with view current: rotate about the current camera target/up axis at fixed radius and elevation. Optional fit/focal target frames first. Positive angles turn counterclockwise viewed along the up axis toward the target."},
                 "source":{"type":"string","description":"Version 1 JSONC command script; mutually exclusive with path"},
+                "include_base":{"type":"string","description":"Absolute directory that relative includes resolve under. Inline source only; not valid with path or recipe, whose includes resolve beside the file."},
                 "validate":{"type":"boolean","default":true},
                 "speed":{"type":"number","minimum":0.1,"maximum":16},
                 "text":{"type":"string","maxLength":4000},"chapter":{"type":"string","maxLength":200},
@@ -4319,6 +4417,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "shift":{"type":"boolean"},
                 "command":{"type":"string","enum":["open","save","rename","configure","note","pause","resume","step","stop","status","finish","dismiss","show"]},
                 "path":{"type":"string"},"name":{"type":"string"},
+                "from":{"type":"string","enum":["auto","last_script","session_trace"],"description":"export_script source: last_script (authored, stale:true if tools ran after it), session_trace (lossy_session_trace), or auto (authored while no modeling tool has run since that script, live desktop edits included; otherwise the session trace)."},
                 "overwrite":{"type":"boolean"},"discard_changes":{"type":"boolean"},
                 "target":{"type":"string","description":"Fresh inspect control ID, or active_sketch for view"},"value":{"type":"string"},
                 "key":{"type":"string","enum":["Enter","Escape","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Home","Delete","Backspace"]},
@@ -4371,7 +4470,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::control(
             "cad_script",
             "Dump forward MCP script",
-            "Return this process's successful mutating tool-call sequence as JSON { calls: [{ name, arguments }] }. Portable modeling ops only — skips session-control reads (cad_attach/cad_refresh/cad_detach), inspect/export helpers, failed calls, and cad_script itself. After attach/refresh, the trace baseline is cad_load_project_model with the loaded model_json (refresh replaces that baseline). Does not reverse-engineer STEP feature history.",
+            "Return this process's successful mutating tool-call sequence as JSON { calls: [{ name, arguments }] }. Portable modeling ops only — skips session-control reads (cad_attach/cad_refresh/cad_detach), inspect/export helpers, failed calls, and cad_script itself. After attach/refresh, the trace baseline is cad_load_project_model with the loaded model_json (refresh replaces that baseline). Does not reverse-engineer STEP feature history. For version-1 .nbcad.jsonc export see cad_interface action export_script.",
             empty_schema(),
         ),
         ToolSpec::control(
@@ -15421,5 +15520,63 @@ mod agent_feedback_tests {
             "(attached as image content)"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_script_auto_refuses_to_call_a_stale_script_lossless() {
+        let mut server = CadServer::new().unwrap();
+        let authored = r#"{"version":1,"name":"Authored box","starting_state":"empty","steps":[{"id":"only","note":"authored only"}]}"#;
+        server.last_script_source = Some(authored.into());
+        server.last_script_mutations = server.modeling_mutations;
+        let fresh = server
+            .export_script(&json!({"from":"auto","name":"Session"}))
+            .unwrap();
+        assert_eq!(fresh["fidelity"], "lossless_authored");
+        assert_eq!(fresh["stale"], false);
+        assert!(fresh["source"].as_str().unwrap().contains('\n'));
+        assert!(fresh["source"].as_str().unwrap().contains("authored only"));
+
+        server
+            .call_tool("solid_box", json!({"size":[10, 10, 10]}))
+            .unwrap();
+        let auto = server
+            .export_script(&json!({"from":"auto","name":"After box"}))
+            .unwrap();
+        assert_eq!(auto["fidelity"], "lossy_session_trace");
+        assert_eq!(auto["stale"], false);
+        let auto_source = auto["source"].as_str().unwrap();
+        assert!(auto_source.contains("solid_box"), "{auto_source}");
+        assert!(!auto_source.contains("authored only"), "{auto_source}");
+        assert!(auto["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|note| note.as_str().unwrap().contains("stale")));
+
+        let explicit = server
+            .export_script(&json!({"from":"last_script"}))
+            .unwrap();
+        assert_eq!(explicit["fidelity"], "lossless_authored");
+        assert_eq!(explicit["stale"], true);
+        assert!(explicit["source"]
+            .as_str()
+            .unwrap()
+            .contains("authored only"));
+
+        // A live (attached) mutation never grows tool_trace, but it still
+        // counts: the authored script must not read as current afterwards.
+        server.last_script_source = Some(authored.into());
+        server.last_script_mutations = server.modeling_mutations;
+        let trace_len = server.tool_trace.len();
+        server.modeling_mutations += 1;
+        assert_eq!(server.tool_trace.len(), trace_len);
+        let live = server
+            .export_script(&json!({"from":"last_script"}))
+            .unwrap();
+        assert_eq!(live["stale"], true);
+        let live_auto = server
+            .export_script(&json!({"from":"auto","name":"Live"}))
+            .unwrap();
+        assert_eq!(live_auto["fidelity"], "lossy_session_trace");
     }
 }

@@ -287,3 +287,76 @@ source before the built-in fixture; the additional source is never executed.
 The recipe-library layer adds headless recipe and real-kernel preview checks
 alongside their authored sources. These do not replace the live adapter checks
 above or establish that the teaching interface has been validated on a new build.
+
+## Script collections
+
+Large designs can keep each part in its own JSONC fragment and compose them from
+a root `.nbcad.jsonc`:
+
+```jsonc
+{
+  "version": 1,
+  "name": "Clamshell assembly",
+  "includes": [
+    "collections/base.collection.jsonc",
+    { "path": "collections/lid.collection.jsonc" }
+  ],
+  "steps": [
+    // mating / assembly calls after included part construction
+  ]
+}
+```
+
+A collection file is not a full script. It supplies `steps` and optional
+`checks` (and may itself `includes` further fragments). A `.nbcad.jsonc` file
+may also be included: its `steps` and `checks` are composed in, and its
+`version`, `starting_state`, `verification`, `exports`, and `$schema` are
+ignored. The root script keeps those fields.
+
+The host expands `includes` when the root is loaded by **absolute `path`**, or
+when inline `source` is paired with an absolute `include_base` directory (the
+desktop editor uses that so an edited buffer still finds its fragments). Each
+include path is relative to the file that declares it, not always the root
+directory. Paths use forward slashes only, must not contain `.` or `..`, must
+stay under the root file’s directory after canonicalization, and must end with
+`.collection.jsonc` or `.nbcad.jsonc`.
+
+Included steps share the root’s binding and step-id namespace. Prefix ids per part
+(`base_…`, `lid_…`). After expansion, validation and execution are identical to a
+monolithic script — including fast mode skipping presentation.
+
+Inline `source` without `include_base`, and bundled `recipe` selectors, reject
+unresolved includes. The desktop Scripts panel keeps the authored file in the
+editor and expands includes only when validating or running.
+
+## Exporting version-1 JSONC
+
+`cad_interface` action `export_script` returns a version-1 `.nbcad.jsonc` `source`
+string (and fidelity metadata). It is **not** `cad_script`.
+
+- `cad_script` — forward dump of successful mutating MCP calls in this process as
+  `{ calls: [{ name, arguments }] }`. Debugging aid; not a recipe format.
+- `export_script` — emits replayable version-1 JSONC when possible.
+
+| `fidelity` | Meaning |
+|------------|---------|
+| `lossless_authored` | Expanded source from the last successful `action: script` in this process. Modeling commands and result references match that run. Comments may be omitted after include flattening. The export is pretty-printed. `stale: true` means tools ran after that script; the source is still that script, not the later session. |
+| `lossy_session_trace` | Synthetic script from the session tool trace with literal arguments. No `$select` / `$project`, no notes/views. Suitable for scratch replay of a blank-session MCP build, not for publishing. |
+
+`from` selects the source:
+
+- `auto` returns the authored script while no modeling tool has succeeded since that run, live desktop edits included. Once later tools have run, it returns the session trace instead of calling the old script lossless.
+- `last_script` returns the authored script even when `stale` is true.
+- `session_trace` always rebuilds from the tool trace.
+
+Attach/refresh baselines (`cad_load_project_model`), pure UI feature edits, and
+STEP imports without native history are **out of scope** for faithful JSONC
+export in this release. Prefer keeping JSONC as the generator SoT.
+
+### Agent rebuilds
+
+Always use `"mode": "fast"` for agent and CI rebuilds. Fast mode skips `note` and
+`view` (including those inside collections) while running the same modeling
+commands and checks as presentation mode. See
+[agentic JSONC workflow](agentic/jsonc-workflow.md).
+

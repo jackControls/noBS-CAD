@@ -11,6 +11,8 @@ Prefer leaving root `AGENTS.md` / `.cursor/rules` out of git (project policy).
 
 | Doc | Purpose |
 |-----|---------|
+| [jsonc-workflow.md](jsonc-workflow.md) | Collections, fast rebuilds, and `export_script` versus `cad_script` |
+| [PLAN-jsonc-roundtrip-collections.md](PLAN-jsonc-roundtrip-collections.md) | Constraints and non-goals for includes and script export |
 | [HUMAN_HELP.md](HUMAN_HELP.md) | Human browse path (pre–Tauri Help) |
 | [STEERABLE_MCP.md](STEERABLE_MCP.md) | Soft disclosure invariants |
 | [INSTALL_MCP.md](INSTALL_MCP.md) | Standalone development-server installer |

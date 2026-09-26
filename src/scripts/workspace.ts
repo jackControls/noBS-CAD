@@ -25,6 +25,8 @@ export interface ScriptInfo {
   step_count: number;
   check_count: number;
   source: string;
+  /** File text before include expansion. Absent when inspection only saw inline source. */
+  authored_source?: string;
   path?: string;
   chapters?: Array<{ chapter?: string; text: string; step_index?: number }>;
 }
@@ -97,8 +99,26 @@ async function inspect(source: string): Promise<ScriptInfo> {
   requireDesktop();
   return invoke<ScriptInfo>('native_script_inspect', { source });
 }
-function acceptScript(info: ScriptInfo, example: ScriptExample | null = null, path = '', tab: 'overview' | 'source' = 'overview'): void {
-  useScriptWorkspace.setState({ info, source: info.source, sourceBaseline: info.source, selectedExample: example,
+/** Directory of an absolute script path. Include paths resolve under it. */
+function scriptDirectory(path: string): string | null {
+  const trimmed = path.trim();
+  if (!/^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(trimmed)) return null;
+  const cut = trimmed.replace(/[\\/]+$/, '');
+  const slash = Math.max(cut.lastIndexOf('/'), cut.lastIndexOf('\\'));
+  if (slash <= 0) return null;
+  return cut.slice(0, slash);
+}
+function editorSource(info: ScriptInfo, fallback: string): string {
+  return info.authored_source ?? fallback;
+}
+async function inspectEditor(source: string, path: string): Promise<ScriptInfo> {
+  requireDesktop();
+  const includeBase = scriptDirectory(path);
+  return invoke<ScriptInfo>('native_script_inspect', includeBase ? { source, includeBase } : { source });
+}
+function acceptScript(info: ScriptInfo, example: ScriptExample | null = null, path = '', tab: 'overview' | 'source' = 'overview', authored = info.source): void {
+  const source = authored;
+  useScriptWorkspace.setState({ info: { ...info, source }, source, sourceBaseline: source, selectedExample: example,
     // Loading opened the panel already. A later Close must survive this reply.
     path: info.path ?? path, error: null, completed: false, tab });
 }
@@ -134,7 +154,11 @@ export async function openScriptFile(): Promise<void> {
     // The shared Rust parser enforces the same 16 MiB limit as path/MCP loading.
     const source = new TextDecoder('utf-8', { fatal: true }).decode(file.bytes);
     const path = file.writableTarget?.kind === 'native' ? file.writableTarget.path : file.name;
-    acceptScript(await inspect(source), null, path);
+    // Path inspection expands includes. The editor keeps the file the user opened.
+    const info = scriptDirectory(path)
+      ? await invoke<ScriptInfo>('native_script_inspect', { path })
+      : await inspect(source);
+    acceptScript(info, null, path, 'overview', source);
   }, true);
 }
 export async function loadScriptPath(): Promise<void> {
@@ -144,14 +168,15 @@ export async function loadScriptPath(): Promise<void> {
   await load(async () => {
     requireDesktop();
     if (!path) throw new Error(translate('scripts.errors.errorChooseScriptFile'));
-    acceptScript(await invoke<ScriptInfo>('native_script_inspect', { path }), null, path);
+    const info = await invoke<ScriptInfo>('native_script_inspect', { path });
+    acceptScript(info, null, path, 'overview', editorSource(info, info.source));
   }, true);
 }
 export async function validateScriptSource(): Promise<void> {
   await load(async () => {
     const state = useScriptWorkspace.getState();
-    const info = await inspect(state.source);
-    useScriptWorkspace.setState({ info, completed: false });
+    const info = await inspectEditor(state.source, state.path);
+    useScriptWorkspace.setState({ info: { ...info, source: state.source }, completed: false });
   });
 }
 
@@ -206,9 +231,9 @@ export async function runLoadedScript(): Promise<void> {
     // new session. Playback itself stays asynchronous so controls remain usable.
     const owner = await trackEngineOperation(async operationOwner => {
       // Validate before creating a document or changing the existing one.
-      const info = await inspect(state.source);
+      const info = await inspectEditor(state.source, state.path);
       checkCancelled();
-      useScriptWorkspace.setState({ info });
+      useScriptWorkspace.setState({ info: { ...info, source: state.source } });
       await Promise.allSettled([...previews.values()]);
       checkCancelled();
       // This one deliberate New is the handoff from the user's retained
@@ -225,7 +250,8 @@ export async function runLoadedScript(): Promise<void> {
     });
     checkCancelled();
     attempt.nativeStarted = true;
-    await invoke('native_script_run', { source: state.source, mode: state.mode, speed: state.speed,
+    const includeBase = scriptDirectory(state.path);
+    await invoke('native_script_run', { source: state.source, ...(includeBase ? { includeBase } : {}), mode: state.mode, speed: state.speed,
       documentId: owner.documentId, sessionId: owner.sessionId });
     checkCancelled();
     useScriptWorkspace.setState({ completed: true });
