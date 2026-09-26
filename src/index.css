@@ -52,6 +52,8 @@
   --cad-finished: #86a9c7;
   --cad-finished-point: #86a9c7;
   --cad-finished-point-outline: #15191f;
+  /* Support-face boundary projected into the active sketch (read-only). */
+  --cad-projected: #c08cf5;
   --cad-body: #8b9bac;
   --cad-body-selected: #a96725;
   --cad-body-tool: #b58a43;
@@ -117,6 +119,8 @@
   --cad-finished: #38566a;
   --cad-finished-point: #38566a;
   --cad-finished-point-outline: #ffffff;
+  /* Support-face boundary projected into the active sketch (read-only). */
+  --cad-projected: #7b3fc4;
   --cad-body: #9fb3c5;
   --cad-body-selected: #c35d2a;
   --cad-body-tool: #d2a04b;

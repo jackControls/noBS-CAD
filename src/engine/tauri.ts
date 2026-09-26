@@ -713,6 +713,10 @@ export class TauriEngine implements Engine {
     return this.call('engine_add_circle_locked', request);
   }
 
+  async previewCreation(request: import('./types').CreationPreviewRequest): Promise<import('./types').CreationPreviewDto> {
+    return this.call('engine_preview_creation', request);
+  }
+
   async addSlot(request: SlotRequest): Promise<ToolResult> {
     return this.call('engine_add_slot', request);
   }

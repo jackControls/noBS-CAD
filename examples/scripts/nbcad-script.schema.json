@@ -1,63 +1,74 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "noBS CAD native command script version 1",
-  "description": "Readable shared-interface commands interpreted by Rust. Modeling arguments use the existing operation schemas; result references are resolved at runtime.",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "version",
-    "name",
-    "steps"
-  ],
-  "properties": {
-    "$schema": {
-      "type": "string"
+  "description": "Readable shared-interface commands interpreted by Rust. A file is either a version-1 script or a collection fragment. Includes are relative to the file that declares them. Modeling arguments use the existing operation schemas; result references are resolved at runtime.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/script_document"
     },
-    "version": {
-      "const": 1
-    },
-    "starting_state": {
-      "const": "empty"
-    },
-    "name": {
-      "type": "string",
-      "minLength": 1
-    },
-    "verification": {
-      "enum": [
-        "garden-bench"
-      ],
-      "description": "Optional native end gate for the reference model."
-    },
-    "steps": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "$ref": "#/$defs/step"
-      }
-    },
-    "checks": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/step"
-      },
-      "description": "Evaluated after construction; operation errors still stop at their point of occurrence."
-    },
-    "exports": {
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/value"
-      }
-    },
-    "includes": {
-      "type": "array",
-      "description": "Relative collection fragments composed before steps/checks. Expanded by the host loader; the Rust parser rejects unresolved includes.",
-      "items": {
-        "$ref": "#/$defs/include_entry"
-      }
+    {
+      "$ref": "#/$defs/collection_document"
     }
-  },
+  ],
   "$defs": {
+    "script_document": {
+      "description": "Version-1 command script.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "name",
+        "steps"
+      ],
+      "properties": {
+        "$schema": {
+          "type": "string"
+        },
+        "version": {
+          "const": 1
+        },
+        "starting_state": {
+          "const": "empty"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verification": {
+          "enum": [
+            "garden-bench"
+          ],
+          "description": "Optional native end gate for the reference model."
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/step"
+          },
+          "description": "Evaluated after construction; operation errors still stop at their point of occurrence."
+        },
+        "exports": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/value"
+          }
+        },
+        "includes": {
+          "type": "array",
+          "description": "Relative collection fragments composed before steps/checks. Expanded by the host loader; the Rust parser rejects unresolved includes.",
+          "items": {
+            "$ref": "#/$defs/include_entry"
+          }
+        }
+      }
+    },
     "value": {
       "description": "Literal JSON data or a runtime result expression. The Rust interpreter validates nested expressions and their result types.",
       "anyOf": [
@@ -479,7 +490,7 @@
       ]
     },
     "include_entry": {
-      "description": "Relative path to a .collection.jsonc or .nbcad.jsonc fragment.",
+      "description": "Path to a .collection.jsonc or .nbcad.jsonc fragment, relative to the file that declares the include.",
       "oneOf": [
         {
           "type": "string",
@@ -530,6 +541,9 @@
           "items": {
             "$ref": "#/$defs/include_entry"
           }
+        },
+        "$schema": {
+          "type": "string"
         }
       }
     }

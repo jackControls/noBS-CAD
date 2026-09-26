@@ -1,9 +1,5 @@
 # PLAN: JSONC script collections + round-trip export MVP
 
-Branch target: `feat/jsonc-roundtrip-and-script-collections`  
-Slice researched: `/workspace/nobs-src` from Thunder `jackControls/noBS-CAD`  
-Product brief: `/workspace/jsonc-roundtrip-brief.md`
-
 ## Architecture constraints (do not violate)
 
 1. **`nbcad-script` is host-neutral** — no filesystem, no MCP session, no window. It only
@@ -68,8 +64,9 @@ Root script may declare:
 }
 ```
 
-Recommended filename suffix: `.collection.jsonc` (also accept `.nbcad.jsonc` fragments
-that only supply `steps`/`checks`/`name`).
+Recommended filename suffix: `.collection.jsonc`. An included `.nbcad.jsonc` may be a
+full script; only its `steps` and `checks` are composed. `version`,
+`starting_state`, `verification`, `exports`, and `$schema` are ignored.
 
 ### Flatten semantics
 
@@ -90,13 +87,15 @@ When expanding from a root **file path**:
 
 - Include paths must be **relative** (reject absolute / drive letters / `\\`).
 - Reject empty segments, `.`, and `..`.
-- Join against the root file’s parent directory; after `canonicalize` (or normalize),
-  require the resolved file stays under that base directory.
+- Resolve each include relative to the file that declares it, then join that
+  root-relative path against the root file’s parent directory. After
+  `canonicalize`, the resolved file must stay under that base directory.
 - Extension must be `.nbcad.jsonc` or `.collection.jsonc` (case-insensitive).
-- Total expanded UTF-8 size still ≤ `MAX_SCRIPT_BYTES` (16 MiB).
+- Reject once the running total of loaded source bytes exceeds `MAX_SCRIPT_BYTES`
+  (16 MiB), not only after every fragment has been read.
 
-When root is inline `source` / `recipe` **with** `includes`: fail with a clear error
-unless a future optional absolute `base_dir` is supplied (out of MVP — path-based only).
+Inline `source` with `includes` requires an absolute `include_base` directory.
+Bundled recipes still cannot carry unresolved includes.
 
 ### Crate API (`crates/script`)
 
@@ -115,7 +114,8 @@ pub fn parse_with_includes(
 ```
 
 - `Script::parse`: if top-level `includes` is present and non-empty →  
-  `Err("Script has unresolved includes; use parse_with_includes")`.
+  an error that tells the caller to open the script from its file path. No Rust
+  API name belongs in that message.
 - Export `strip_jsonc` as `pub(crate)` or keep private and reuse inside includes.
 - No filesystem in the crate — `load` is caller-supplied.
 
@@ -266,7 +266,7 @@ Fixtures under `crates/script/tests/fixtures/collections/`.
    - Exporting version-1 JSONC (`export_script` vs `cad_script`)
    - Lossless vs lossy table
    - Agent rebuilds: always `mode:fast`; presentation is optional teaching chrome
-2. **Short agentic note** — `docs/agentic-jsonc-workflow.md` (1–2 pages): SoT = JSONC,
+2. **Short agentic note** — `docs/agentic/jsonc-workflow.md` (1–2 pages): SoT = JSONC,
    compose parts via includes, replay fast, export caveats.
 3. Schema: `examples/scripts/nbcad-script.schema.json` — add `includes` + fragment
    `$defs/collection`.
@@ -287,7 +287,7 @@ Fixtures under `crates/script/tests/fixtures/collections/`.
 | `mcp-server/src/interface.rs` | expand includes when `path` load |
 | `mcp-server/src/lib.rs` | `export_script` action; retain `last_script_source`; tests |
 | `docs/native-scripts.md` | collections + export + fast/agent |
-| `docs/agentic-jsonc-workflow.md` | **NEW** short agent note |
+| `docs/agentic/jsonc-workflow.md` | short agent note |
 | `crates/script/README.md` | one paragraph on includes |
 
 ## Apply order for parent

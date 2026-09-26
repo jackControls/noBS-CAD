@@ -28,7 +28,9 @@ bench verification helpers without requiring OpenCASCADE or a desktop session.
 
 ## Collections
 
-A root script may declare `includes` (relative `.collection.jsonc` / `.nbcad.jsonc`
-fragments). Hosts expand them with `parse_with_includes` / `flatten_includes` before
-execution. The crate never opens files itself. Fast mode still skips presentation
-steps contributed by collections.
+A root script may declare `includes`. Each path is relative to the file that
+declares it (`.collection.jsonc` or `.nbcad.jsonc`). Hosts expand them with
+`parse_with_includes` / `flatten_includes` before execution. The crate never
+opens files itself. An included `.nbcad.jsonc` contributes steps and checks;
+its version, starting state, verification, and exports stay with the root.
+Fast mode still skips presentation steps contributed by collections.

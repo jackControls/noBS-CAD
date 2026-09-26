@@ -33,7 +33,8 @@ pub fn flatten_includes(
         return Err("Script exceeds 16 MiB".into());
     }
     let mut stack = Vec::new();
-    let document = flatten_document(source, &mut load, 0, &mut stack)?;
+    let mut loaded_bytes = 0usize;
+    let document = flatten_document(source, "", &mut load, 0, &mut stack, &mut loaded_bytes)?;
     let text = serde_json::to_string(&document).map_err(|e| e.to_string())?;
     if text.len() > MAX_SCRIPT_BYTES {
         return Err("Expanded script exceeds 16 MiB".into());
@@ -41,12 +42,48 @@ pub fn flatten_includes(
     Ok(text)
 }
 
+/// Include paths are relative to the file that declares them.
+///
+/// `from_file` is empty for the root, or a root-relative forward-slash path of
+/// the fragment being expanded. `..` stays rejected, so the resolved path cannot
+/// climb above the root directory.
+pub fn resolve_include_path(from_file: &str, include_path: &str) -> Result<String, String> {
+    validate_include_path(include_path)?;
+    if from_file.contains('\\')
+        || from_file
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        // An empty from_file is the root and splits into one empty segment.
+        if !from_file.is_empty() {
+            return Err(format!(
+                "Include base must be a relative forward-slash path: {from_file}"
+            ));
+        }
+    }
+    let parent = match from_file.rsplit_once('/') {
+        Some((dir, _)) if !from_file.is_empty() => dir,
+        _ => "",
+    };
+    if parent.is_empty() {
+        Ok(include_path.to_owned())
+    } else {
+        Ok(format!("{parent}/{include_path}"))
+    }
+}
+
 fn flatten_document(
     source: &str,
+    from_file: &str,
     load: &mut impl FnMut(&str) -> Result<String, String>,
     depth: usize,
     stack: &mut Vec<String>,
+    loaded_bytes: &mut usize,
 ) -> Result<Value, String> {
+    *loaded_bytes = loaded_bytes.saturating_add(source.len());
+    if *loaded_bytes > MAX_SCRIPT_BYTES {
+        return Err("Expanded script exceeds 16 MiB".into());
+    }
     let document: Value = serde_json::from_str(&strip_jsonc(source)?)
         .map_err(|e| format!("Invalid script JSONC: {e}"))?;
     let object = document
@@ -74,8 +111,8 @@ fn flatten_document(
     let mut merged_checks = Vec::new();
 
     for (index, entry) in includes.as_array().unwrap().iter().enumerate() {
-        let path = include_path(entry, index)?;
-        validate_include_path(&path)?;
+        let requested = include_path(entry, index)?;
+        let path = resolve_include_path(from_file, &requested)?;
         if stack.iter().any(|seen| seen == &path) {
             return Err(format!("Include cycle detected at {path}"));
         }
@@ -85,7 +122,14 @@ fn flatten_document(
             stack.pop();
             return Err(format!("Include {path} exceeds 16 MiB"));
         }
-        let fragment = flatten_document(&fragment_source, load, depth + 1, stack)?;
+        let fragment = flatten_document(
+            &fragment_source,
+            &path,
+            load,
+            depth + 1,
+            stack,
+            loaded_bytes,
+        )?;
         stack.pop();
         append_fragment(&path, &fragment, &mut merged_steps, &mut merged_checks)?;
     }
@@ -173,14 +217,41 @@ fn append_fragment(
     let object = fragment
         .as_object()
         .ok_or_else(|| format!("Include {path} must be a JSON object"))?;
-    let allowed: BTreeSet<&str> = ["name", "steps", "checks", "includes"]
+    let full_script = path.to_ascii_lowercase().ends_with(".nbcad.jsonc");
+    let allowed: BTreeSet<&str> = ["$schema", "name", "steps", "checks", "includes"]
         .into_iter()
         .collect();
+    // A full script's root owns version, starting state, verification, exports
+    // and the editor schema. An include contributes steps and checks only.
+    let ignored: BTreeSet<&str> = [
+        "$schema",
+        "version",
+        "starting_state",
+        "verification",
+        "exports",
+    ]
+    .into_iter()
+    .collect();
     for key in object.keys() {
-        if !allowed.contains(key.as_str()) {
-            return Err(format!(
-                "Include {path} has unsupported field {key}; collections may only supply name, steps, checks, includes"
-            ));
+        if allowed.contains(key.as_str()) {
+            continue;
+        }
+        if full_script && ignored.contains(key.as_str()) {
+            continue;
+        }
+        return Err(format!(
+            "Include {path} has unsupported field {key}; collections may only supply name, steps, checks, and includes"
+        ));
+    }
+    if full_script {
+        if object.get("version").is_some_and(|version| version != 1) {
+            return Err(format!("Include {path} must be version 1"));
+        }
+        if object
+            .get("starting_state")
+            .is_some_and(|state| state != "empty")
+        {
+            return Err(format!("Include {path} starting_state must be empty"));
         }
     }
     let fragment_steps = object
@@ -212,12 +283,14 @@ pub fn has_unresolved_includes(source: &str) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     use super::*;
     use crate::{run, RunOptions};
+    use serde_json::json;
     use std::collections::BTreeMap;
 
-    fn load_map<'a>(files: BTreeMap<&'a str, &'a str>) -> impl FnMut(&str) -> Result<String, String> + use<'a> {
+    fn load_map<'a>(
+        files: BTreeMap<&'a str, &'a str>,
+    ) -> impl FnMut(&str) -> Result<String, String> + use<'a> {
         move |path: &str| {
             files
                 .get(path)
@@ -313,5 +386,88 @@ mod tests {
         assert!(parse_with_includes(root, load_map(files))
             .unwrap_err()
             .contains("Duplicate"));
+    }
+
+    #[test]
+    fn included_full_script_contributes_steps_and_ignores_root_fields() {
+        let root = r#"{
+          "version":1,"name":"Assembly",
+          "includes":["part.nbcad.jsonc"],
+          "steps":[{"id":"mate","note":"mate"}]
+        }"#;
+        let mut files = BTreeMap::new();
+        files.insert(
+            "part.nbcad.jsonc",
+            r#"{
+              "$schema":"./nbcad-script.schema.json",
+              "version":1,
+              "name":"Part",
+              "starting_state":"empty",
+              "verification":"garden-bench",
+              "exports":{"made":{"$ref":"make"}},
+              "steps":[{"id":"make","let":{"size":2}}]
+            }"#,
+        );
+        let flat = flatten_includes(root, load_map(files)).unwrap();
+        let value: Value = serde_json::from_str(&flat).unwrap();
+        assert_eq!(value["name"], "Assembly");
+        assert!(value.get("exports").is_none() || value["exports"].get("made").is_none());
+        assert_eq!(value["steps"][0]["id"], "make");
+        assert_eq!(value["steps"][1]["id"], "mate");
+        assert!(value.get("verification").is_none());
+    }
+
+    #[test]
+    fn nested_include_paths_resolve_against_the_including_file() {
+        let root = r#"{"version":1,"name":"Nested","includes":["collections/a.collection.jsonc"],"steps":[{"id":"root","note":"root"}]}"#;
+        let mut files = BTreeMap::new();
+        files.insert(
+            "collections/a.collection.jsonc",
+            r#"{"steps":[{"id":"a","note":"a"}],"includes":["b.collection.jsonc"]}"#,
+        );
+        files.insert(
+            "collections/b.collection.jsonc",
+            r#"{"steps":[{"id":"nested","note":"nested"}]}"#,
+        );
+        files.insert(
+            "b.collection.jsonc",
+            r#"{"steps":[{"id":"wrong-root-level","note":"wrong"}]}"#,
+        );
+        let mut requested = Vec::new();
+        let flat = flatten_includes(root, |path| {
+            requested.push(path.to_owned());
+            files
+                .get(path)
+                .map(|text| (*text).to_owned())
+                .ok_or_else(|| format!("missing {path}"))
+        })
+        .unwrap();
+        assert_eq!(
+            requested,
+            vec![
+                "collections/a.collection.jsonc",
+                "collections/b.collection.jsonc"
+            ]
+        );
+        let value: Value = serde_json::from_str(&flat).unwrap();
+        assert_eq!(value["steps"][0]["id"], "nested");
+        assert_eq!(value["steps"][1]["id"], "a");
+        assert_eq!(value["steps"][2]["id"], "root");
+    }
+
+    #[test]
+    fn expanded_size_is_rejected_before_later_fragments_load() {
+        let root = r#"{"version":1,"name":"Big","includes":["a.collection.jsonc","b.collection.jsonc","c.collection.jsonc"],"steps":[{"note":"end"}]}"#;
+        let chunk = "x".repeat(8 * 1024 * 1024);
+        let fragment = format!(r#"{{"name":"{chunk}","steps":[{{"note":"n"}}]}}"#);
+        let mut loads = 0;
+        let error = flatten_includes(root, |path| {
+            loads += 1;
+            assert_ne!(path, "c.collection.jsonc");
+            Ok(fragment.clone())
+        })
+        .unwrap_err();
+        assert!(error.contains("16 MiB"), "{error}");
+        assert!(loads < 3, "loaded {loads} fragments before rejecting");
     }
 }

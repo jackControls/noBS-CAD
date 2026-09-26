@@ -119,7 +119,7 @@ pub(super) fn instructions(desktop: bool) -> String {
     } else {
         "This is one persistent headless CAD document. Attach explicitly to control a running desktop."
     };
-    format!("{mode} Begin and finish sketches before creating solid features. Use returned stable entity/body/face/edge ids in later calls. Dynamic tool disclosure is enabled; out-of-focus tools remain callable. Engineering guidance is available through resources/list and resources/read; start at nbcad://knowledge/index.md.")
+    format!("{mode} Begin and finish sketches before creating solid features. Use returned stable entity/body/face/edge ids in later calls. Dynamic tool disclosure is enabled; out-of-focus tools remain callable. Prefer cad_help (search/get/topics) before web search for design guidance; use resources/list and resources/read on nbcad://knowledge/... when the full page is needed (start at nbcad://knowledge/index.md). Be tenacious: use cad_list_all_tools or soft focus when the list looks thin; inspect (solid_scene/cad_document) between mutates; run recipe scripts on a blank document.")
 }
 
 pub(super) fn independent_of_default_document(name: &str, arguments: &Value) -> bool {
@@ -133,14 +133,21 @@ pub(super) fn independent_of_default_document(name: &str, arguments: &Value) -> 
         | "cad_get_tool_disclosure_mode"
         | "cad_set_tool_disclosure_mode"
         | "cad_list_all_tools"
+        | "cad_help"
         | "material_catalog" => true,
         "cad_interface" => {
             let action = arguments["action"].as_str();
+            let grouped_help = action == Some("execute")
+                && arguments["operation"] == "cad_help"
+                && crate::interface::group_for("cad_help")
+                    .is_some_and(|group| arguments["group"] == group);
             arguments["action"].is_null()
                 || matches!(action, Some("catalog" | "recipes" | "launch"))
+                // Help does not select a document through either entry point.
+                || grouped_help
                 // Scripts select their supplied session themselves. Other UI
                 // controls already validate and use their explicit session.
-                // execute has no such selector: it always uses the attachment.
+                // Other execute operations have no selector and use the attachment.
                 || (action != Some("execute") && arguments.get("session_id").is_some())
         }
         _ => false,
@@ -397,8 +404,14 @@ mod tests {
         for (name, args) in [
             ("cad_list_sessions", json!({})),
             ("cad_attach", json!({"session_id":"explicit"})),
+            ("cad_help", json!({"action":"topics"})),
             ("cad_interface", json!({"action":"catalog"})),
             ("cad_interface", json!({"action":"recipes"})),
+            (
+                "cad_interface",
+                json!({"action":"execute", "group":"document/session", "operation":"cad_help",
+                    "arguments":{"action":"topics"}}),
+            ),
             (
                 "cad_interface",
                 json!({"action":"script","session_id":"explicit"}),
@@ -412,6 +425,26 @@ mod tests {
             (
                 "cad_interface",
                 json!({"action":"execute","session_id":"ignored"}),
+            ),
+            (
+                "cad_interface",
+                json!({"action":"execute", "operation":"cad_help",
+                    "arguments":{"action":"topics"}}),
+            ),
+            (
+                "cad_interface",
+                json!({"action":"execute", "group":"not-a-group", "operation":"cad_help",
+                    "arguments":{"action":"topics"}}),
+            ),
+            (
+                "cad_interface",
+                json!({"action":"execute", "group":"document/session", "operation":"cad_interface",
+                    "arguments":{"action":"catalog"}}),
+            ),
+            (
+                "cad_interface",
+                json!({"action":"execute", "group":"document/session", "operation":"sketch_begin",
+                    "arguments":{}}),
             ),
             (
                 "cad_interface",

@@ -226,6 +226,7 @@ export class WasmEngine {
      * `payload`: serialized `PolygonRequest`.
      */
     polygon_create(payload: string): string;
+    preview_creation(payload: string): string;
     /**
      * `payload`: serialized `SegmentRequest`.
      */
@@ -422,6 +423,7 @@ export interface InitOutput {
     readonly wasmengine_offset_curve: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_offset_preview: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_polygon_create: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_preview_creation: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_preview_segment: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_preview_segment_locked: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_profile_catalog: (a: number) => [number, number];

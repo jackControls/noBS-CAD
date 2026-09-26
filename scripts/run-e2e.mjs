@@ -8,7 +8,8 @@ import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-const PORT = 7199;
+const PORT = Number(process.env.NBCAD_E2E_PORT ?? 7199);
+if (!Number.isInteger(PORT) || PORT < 1024 || PORT > 65535) throw new Error('Invalid NBCAD_E2E_PORT');
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
 const suiteFiles = process.argv.slice(2);
@@ -30,11 +31,25 @@ const waitForServer = async () => {
   for (let i = 0; i < 60; i++) {
     if (serverError) throw serverError;
     if (server.exitCode !== null) throw new Error(`dev server exited with code ${server.exitCode}`);
+    let ready = false;
     try {
       const res = await fetch(`http://localhost:${PORT}/`);
-      if (res.ok) return;
+      ready = res.ok;
     } catch {
       // not up yet
+    }
+    if (ready) {
+      // An unrelated dev server already on this port answers the probe even
+      // though our own server never bound: --strictPort makes Vite exit
+      // instead of moving. Give the child a moment to report that, because
+      // testing that window would silently validate another checkout.
+      await new Promise((r) => setTimeout(r, 250));
+      if (server.exitCode !== null || server.signalCode !== null) {
+        throw new Error(
+          `port ${PORT} is already serving another process; choose an isolated port with NBCAD_E2E_PORT`,
+        );
+      }
+      return;
     }
     await new Promise((r) => setTimeout(r, 500));
   }
@@ -49,6 +64,7 @@ try {
     const suite = spawn(process.execPath, [path.join(here, suiteFile)], {
       cwd: root,
       stdio: 'inherit',
+      env: { ...process.env, NBCAD_E2E_BASE_URL: `http://localhost:${PORT}` },
     });
     const result = await new Promise((resolve, reject) => {
       suite.on('error', reject);

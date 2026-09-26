@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 
-const BASE = 'http://localhost:7199';
+const BASE = process.env.NBCAD_E2E_BASE_URL ?? 'http://localhost:7199';
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const pageErrors = [];

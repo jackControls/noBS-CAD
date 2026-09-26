@@ -250,6 +250,12 @@ impl Author {
             json!({"type":"fix","entity":point}),
         );
     }
+    /// A locked circle centered on a fixed point.
+    ///
+    /// The point is created first and the circle is placed exactly on it, so the
+    /// circle already owns that point as its center: a center pick that lands on
+    /// an existing point reuses it and binds it. The recipe therefore does not
+    /// add `center_coincident` itself — that step now comes back as a duplicate.
     fn circle(&mut self, id: &str, center: [f64; 2], diameter: f64) {
         self.call(
             &format!("{id}_point"),
@@ -266,9 +272,6 @@ impl Author {
         self.call(&format!("{id}_profile"),"sketch/draw","sketch_add_circle_locked",json!({
             "mode":"center_diameter","anchor":{"x":center[0],"y":center[1]},
             "edge_hint":{"x":center[0]+diameter/2.,"y":center[1]},"diameter_mm":diameter,"ctrl_held":true
-        }));
-        self.call(&format!("{id}_locate"),"sketch/constrain","sketch_add_constraint",json!({
-            "type":"center_coincident","point":reference(&format!("{id}_point"),"/entities/0"),"curve":reference(&format!("{id}_profile"),"/entities/0")
         }));
     }
     fn extrude(&mut self, id: &str, distance: f64, operation: &str, part: &str) {

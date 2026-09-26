@@ -1,6 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, Mul, Sub};
 
+/// Included CCW arc span, retaining a deliberate full turn instead of
+/// reducing 360° to zero. Stored clockwise creations have swapped endpoints.
+pub(crate) fn arc_span(start: f64, end: f64) -> f64 {
+    let delta = end - start;
+    if delta.abs() >= std::f64::consts::TAU - 1e-9 {
+        std::f64::consts::TAU
+    } else {
+        delta.rem_euclid(std::f64::consts::TAU)
+    }
+}
+
 /// 2D vector in sketch plane coordinates (document units, mm by default).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Vec2 {

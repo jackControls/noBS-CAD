@@ -13,7 +13,7 @@ import { chromium } from 'playwright';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const BASE = 'http://localhost:7199';
+const BASE = process.env.NBCAD_E2E_BASE_URL ?? 'http://localhost:7199';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const shots = path.join(here, '..', 'docs', 'qa', 'm1d');
 
@@ -327,6 +327,11 @@ try {
   check('finished sketch listed with its entities', s5.finishedSketches.length === 1 && s5.finishedSketches[0].entities.length > 0,
     JSON.stringify(s5.finishedSketches.map((f) => f.name)));
   const finishedVisuals = await page.evaluate(() => window.__finishedSketchVisualState());
+  const normalStroke = await page.evaluate(async () => {
+    const { viewportInteractionStrokePx } = await import('/src/theme/viewportInteractionTheme.ts');
+    const canvas = document.querySelector('[data-cad-interaction-surface]');
+    return viewportInteractionStrokePx('normal', canvas.clientWidth, canvas.clientHeight);
+  });
   const finishedPointStyles = finishedVisuals.pointRoles.map((role, index) => ({
     role,
     size: finishedVisuals.pointSizes[index],
@@ -339,7 +344,7 @@ try {
       finishedVisuals.pointDepthTests.every((depthTest) => !depthTest) &&
       finishedVisuals.lineDepthTests.length > 0 &&
       finishedVisuals.lineDepthTests.every((depthTest) => !depthTest) &&
-      finishedVisuals.lineWidths.every((width) => width <= 1.15) &&
+      finishedVisuals.lineWidths.every((width) => Math.abs(width - normalStroke) < 1e-6) &&
       finishedVisuals.lineOpacities.every((opacity) => opacity <= 0.42) &&
       finishedPointStyles.some(
         (point) => point.role === 'finished-point-outline' && point.size <= 7 && point.opacity >= 0.95,

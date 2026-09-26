@@ -13,7 +13,7 @@ import { chromium } from 'playwright';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const BASE = 'http://localhost:7199';
+const BASE = process.env.NBCAD_E2E_BASE_URL ?? 'http://localhost:7199';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const shots = path.join(here, '..', 'docs', 'qa', 'slot');
 
@@ -107,13 +107,19 @@ try {
   await clickSketch(0, 40);
   await clickSketch(60, 40);
   await page.waitForTimeout(300);
-  await clickSketch(60, 48); // acquires y=50 grid point → width 20
+  // Grid spacing adapts to zoom; compare the actual acquired preview rather
+  // than assuming a fixed 10 mm grid will pull y=48 up to y=50.
+  await moveSketch(60, 48);
+  await page.waitForTimeout(250);
+  const previewWidth = Number((await state()).dynInput.fields.find(f => f.key === 'width')?.value);
+  check('cursor width preview is live', Number.isFinite(previewWidth) && previewWidth > 0);
+  await clickSketch(60, 48);
   await page.waitForTimeout(500);
   sk = await sketch();
   const arcs2 = sk.entities.filter((e) => e.kind === 'arc' && Math.abs(e.center.y - 40) < 1);
   check(
-    'cursor width honors snap acquisition (radius 10)',
-    arcs2.length === 2 && arcs2.every((a) => Math.abs(a.radius - 10) < 0.01),
+    'cursor width honors the acquired preview',
+    arcs2.length === 2 && arcs2.every((a) => Math.abs(a.radius - previewWidth / 2) < 0.01),
     arcs2.map((a) => `${a.radius}`).join(','),
   );
   check('no dimension without typed input', sk.dimensions.length === 1, `dims=${sk.dimensions.length}`); // still only Ø12 from #1

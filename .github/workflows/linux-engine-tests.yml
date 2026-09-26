@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - 'crates/**'
-      - 'knowledge/open.html'
+      - 'knowledge/**'
       - 'examples/scripts/**'
       - 'xtask/**'
       - 'Cargo.toml'
@@ -14,7 +14,7 @@ on:
   pull_request:
     paths:
       - 'crates/**'
-      - 'knowledge/open.html'
+      - 'knowledge/**'
       - 'examples/scripts/**'
       - 'xtask/**'
       - 'Cargo.toml'

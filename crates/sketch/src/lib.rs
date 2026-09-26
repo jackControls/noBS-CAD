@@ -28,6 +28,7 @@ mod geomops;
 mod manager;
 mod params;
 mod plane;
+mod profile_identity;
 mod project;
 mod session;
 mod sketch;
@@ -36,7 +37,7 @@ mod solver;
 pub mod host;
 
 pub use cam_chamfer::{CamChamferGeometry, CamChamferGeometryRequest};
-pub use constraint::{Constraint, ConstraintId, ConstraintKind};
+pub use constraint::{ArcEndpoint, Constraint, ConstraintId, ConstraintKind};
 pub use drawing::{
     DrawingAnnotationDto, DrawingBreakAxis, DrawingCircularRefDto, DrawingDimensionPresentationDto,
     DrawingDimensionToleranceMode, DrawingDocumentDto, DrawingEdgeEndpoint, DrawingLineRefDto,
@@ -51,19 +52,20 @@ pub use dto::{
     err_json, ok_json, AddConstraintResult, AddLineResult, Arc3PointRequest, ArcCenterRequest,
     BeginSketchRequest, BreakRequest, ChamferRequest, CircleMode, CircleRequest,
     CircularPatternRequest, ConstraintBatchRequest, ConstraintDesc, ConstraintDto,
-    ConstructionVisibilityRequest, CurveCrossingRequest, DeleteConstraintRequest,
-    DeleteDimensionRequest, DeleteEntitiesRequest, DeleteEntityRequest, DeleteEntityResult,
-    DimensionDto, DimensionRequest, DofDto, DragPhase, EditDimensionRequest, EndSketchResult,
-    EntityDesc, EntityDto, EvalExpressionRequest, EvalExpressionResult, ExtendRequest,
-    FaceSketchOrigin, FilletPreviewDto, FilletRequest, Inference, LineIntersectionRequest,
-    LineTrackingRequest, LockedCircleRequest, LockedRectangleRequest, LockedSegmentRequest,
-    MidpointLineRequest, MirrorRequest, MoveCopyRequest, MoveDimensionRequest, MovePointRequest,
-    MovePointResult, OffsetPreviewDto, OffsetRequest, PointRequest, PolygonRequest, PreviewCurve,
-    PreviewDto, ProjectVisibilityDto, RectangleMode, RectangleRequest, RectangularPatternRequest,
-    ReferenceMidpointDto, ScaleRequest, SegmentRequest, SetDimensionModeRequest,
-    SetDimensionStyleRequest, SetGridSnapRequest, SetGridStepRequest, SketchDto, SlotMode,
-    SlotRequest, SnapTarget, SplineRequest, ToggleFixBatchRequest, ToolResult, TrackingAxis,
-    TrackingGuideDto, TrimPreviewDto, TrimRequest, UndoResult,
+    ConstructionVisibilityRequest, CreationPreviewDto, CreationPreviewRequest,
+    CurveCrossingRequest, DeleteConstraintRequest, DeleteDimensionRequest, DeleteEntitiesRequest,
+    DeleteEntityRequest, DeleteEntityResult, DimensionDto, DimensionRequest, DofDto, DragPhase,
+    EditDimensionRequest, EndSketchResult, EntityDesc, EntityDto, EvalExpressionRequest,
+    EvalExpressionResult, ExtendRequest, FaceSketchOrigin, FilletPreviewDto, FilletRequest,
+    Inference, LineIntersectionRequest, LineTrackingRequest, LockedCircleRequest,
+    LockedRectangleRequest, LockedSegmentRequest, MidpointLineRequest, MirrorRequest,
+    MoveCopyRequest, MoveDimensionRequest, MovePointRequest, MovePointResult, OffsetPreviewDto,
+    OffsetRequest, PointRequest, PolygonRequest, PreviewCurve, PreviewDto, ProjectVisibilityDto,
+    ProjectedCircleDto, ProjectedEdgeDto, RectangleMode, RectangleRequest,
+    RectangularPatternRequest, ReferenceMidpointDto, ScaleRequest, SegmentRequest,
+    SetDimensionModeRequest, SetDimensionStyleRequest, SetGridSnapRequest, SetGridStepRequest,
+    SketchDto, SlotMode, SlotRequest, SnapTarget, SplineRequest, ToggleFixBatchRequest, ToolResult,
+    TrackingAxis, TrackingGuideDto, TrimPreviewDto, TrimRequest, UndoResult,
 };
 pub use edge_selection::{ChainMode, ChainSource, EdgeChainRequest};
 pub use entity::{Entity, EntityId};

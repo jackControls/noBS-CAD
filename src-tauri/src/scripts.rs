@@ -38,13 +38,20 @@ fn failure(code: &str, message: impl ToString) -> Value {
 }
 
 #[tauri::command]
-pub fn native_script_inspect(source: Option<String>, path: Option<String>) -> Result<Value, Value> {
+pub fn native_script_inspect(
+    source: Option<String>,
+    path: Option<String>,
+    include_base: Option<String>,
+) -> Result<Value, Value> {
     let mut arguments = json!({});
     if let Some(source) = source {
         arguments["source"] = json!(source);
     }
     if let Some(path) = path {
         arguments["path"] = json!(path);
+    }
+    if let Some(include_base) = include_base {
+        arguments["include_base"] = json!(include_base);
     }
     nbcad_mcp::inspect_script(arguments).map_err(|error| failure("invalid_script", error))
 }
@@ -56,6 +63,7 @@ pub async fn native_script_run(
     engine: tauri::State<'_, AppState>,
     state: tauri::State<'_, NativeScriptState>,
     source: String,
+    include_base: Option<String>,
     mode: String,
     speed: f64,
     document_id: String,
@@ -69,8 +77,14 @@ pub async fn native_script_run(
     // interpreter waits for the existing presentation and mutation receipts.
     tauri::async_runtime::spawn_blocking(move || {
         let _running = running;
-        nbcad_mcp::run_script(&source, Some(&session_id), &mode, speed)
-            .map_err(|error| failure("script_failed", error))
+        nbcad_mcp::run_script(
+            &source,
+            include_base.as_deref(),
+            Some(&session_id),
+            &mode,
+            speed,
+        )
+        .map_err(|error| failure("script_failed", error))
     })
     .await
     .map_err(|error| failure("script_worker_failed", error))?
@@ -162,11 +176,12 @@ mod tests {
         let inspected = native_script_inspect(
             Some(r#"{"version":1,"name":"Loaded lesson","steps":[{"note":"Inspect before running"}]}"#.into()),
             None,
+            None,
         ).unwrap();
         assert_eq!(inspected["step_count"], 1);
         assert_eq!(inspected["chapters"].as_array().unwrap().len(), 1);
         assert_eq!(
-            native_script_inspect(Some("{}".into()), None).unwrap_err()["code"],
+            native_script_inspect(Some("{}".into()), None, None).unwrap_err()["code"],
             "invalid_script"
         );
     }

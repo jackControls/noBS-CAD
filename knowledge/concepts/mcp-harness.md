@@ -3,7 +3,7 @@ type: Concept
 title: MCP harness
 description: Local headless and live-document MCP routing, engineering resources and replay boundaries.
 status: stable
-updated: 2026-09-11
+updated: 2026-09-20
 ---
 
 # MCP harness
@@ -21,12 +21,14 @@ Proposals: [proposed architecture](../../docs/proposed-architecture.md).
   and native OCCT. It does not silently edit a visible desktop document.
 - Discover live windows with `cad_list_sessions`, attach explicitly, submit
   changes through the owning UI's inbox and await their apply/publication receipt.
-  Never write session `model.json` directly or reuse a retired session as a new owner.
+  Prefer MCP attach/new-project owners; keep session `model.json` untouched and start fresh rather than reuse a retired session id.
 - `cad_interface` supplies guarded application, UI and script control; use its
   inspected controls and returned state rather than a second UI-specific model API.
-- Standard `resources/list` and `resources/read` expose this offline Markdown
-  knowledge bundle. Read `nbcad://knowledge/index.md`, then select concepts by
-  their titles/descriptions before designing; guidance is not an execution tool.
+- Prefer MCP tool **`cad_help`** (`search` → `get` / `topics`) before designing;
+  optional prompt **`help_search`** frames a contextual query. Standard
+  `resources/list` and `resources/read` expose the same offline Markdown bundle
+  (`nbcad://knowledge/...`, start at `index.md` when browsing full pages).
+  Guidance is not an execution tool.
 
 These notes describe the branch that bundles them. Older snapshots may predate
 live routing or resource discovery; inspect the running server's capabilities.

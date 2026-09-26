@@ -2225,7 +2225,7 @@ mod tests {
             ]}).to_string();
                 let attached = session.clone();
                 let runner = std::thread::spawn(move || {
-                    nbcad_mcp::run_script(&source, Some(&attached), "fast", 1.)
+                    nbcad_mcp::run_script(&source, None, Some(&attached), "fast", 1.)
                 });
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
                 let mut completed_queries = 0;

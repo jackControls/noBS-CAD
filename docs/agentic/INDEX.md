@@ -1,10 +1,19 @@
 # Agentic guidance index
 
+- [Eval goldens](EVALS.md) — modeling E1–E5 and help H1–H8+ wire checks (`cad_help` + resources).
+- [How humans find help today](HUMAN_HELP.md) — index/taxonomy/MCP/Pages doors; Scripts deep-link; prompts gap.
+- Design package VERSION / `design_v*.nbcad.jsonc` naming: Help id `concepts.design-version-scripts`.
+- Geometry naming (bodies / faces / scripts / STEP): Help id `concepts.geometry-naming`.
+- Shared reference geometry (followers / named parents): Help id `concepts.shared-reference-geometry`.
+
 Committed operating docs for humans and coding agents working on noBS CAD.
-**Do not** add root `AGENTS.md` / `.cursor/rules` to git (project policy).
+Prefer leaving root `AGENTS.md` / `.cursor/rules` out of git (project policy).
 
 | Doc | Purpose |
 |-----|---------|
+| [jsonc-workflow.md](jsonc-workflow.md) | Collections, fast rebuilds, and `export_script` versus `cad_script` |
+| [PLAN-jsonc-roundtrip-collections.md](PLAN-jsonc-roundtrip-collections.md) | Constraints and non-goals for includes and script export |
+| [HUMAN_HELP.md](HUMAN_HELP.md) | Human browse path (pre–Tauri Help) |
 | [STEERABLE_MCP.md](STEERABLE_MCP.md) | Soft disclosure invariants |
 | [INSTALL_MCP.md](INSTALL_MCP.md) | Standalone development-server installer |
 | [../DEVELOPMENT.md](../DEVELOPMENT.md) | Canonical build, SDK and test setup |

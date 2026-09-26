@@ -11,6 +11,9 @@ export const VIEWPORT_INTERACTION_THEME = {
     hover: '#00f5ff',
     selected: '#ffd000',
     halo: '#ffffff',
+    /** Support-face geometry projected into a sketch. Never selectable, so it
+     * must not read as authored sketch geometry or as a pick state. */
+    projected: '#c08cf5',
   },
   light: {
     background: '#dce3ea',
@@ -18,6 +21,7 @@ export const VIEWPORT_INTERACTION_THEME = {
     hover: '#004fd8',
     selected: '#b83200',
     halo: '#17212b',
+    projected: '#7b3fc4',
   },
 } as const;
 

@@ -695,6 +695,7 @@ engine_command!(engine_add_rectangle, "add_rectangle");
 engine_command!(engine_add_rectangle_locked, "add_rectangle_locked");
 engine_command!(engine_add_circle, "add_circle");
 engine_command!(engine_add_circle_locked, "add_circle_locked");
+engine_command!(engine_preview_creation, "preview_creation");
 engine_command!(engine_add_slot, "add_slot");
 engine_command!(engine_add_spline, "add_spline");
 engine_command!(engine_add_arc_3pt, "add_arc_3pt");
@@ -1442,6 +1443,7 @@ pub fn run() {
             engine_add_rectangle_locked,
             engine_add_circle,
             engine_add_circle_locked,
+            engine_preview_creation,
             engine_add_slot,
             engine_add_spline,
             engine_add_arc_3pt,

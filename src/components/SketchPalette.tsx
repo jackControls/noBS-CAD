@@ -2,9 +2,9 @@
  * SKETCH PALETTE (right overlay, sketch mode only): explicit flat-view
  * action, collapsible option checkboxes, and Finish Sketch.
  *
- * Wired options: Snap, Sketch Grid, Points, Dimensions, and Constraints.
- * Options whose underlying feature is not implemented are shown disabled
- * instead of pretending to change viewport behavior.
+ * Wired options: Snap, Sketch Grid, Points, Dimensions, Constraints, and
+ * Projected Geometries. Options whose underlying feature is not implemented
+ * are shown disabled instead of pretending to change viewport behavior.
  */
 import { useState } from 'react';
 import { Check, ChevronDown, ChevronRight, Focus } from 'lucide-react';
@@ -19,6 +19,7 @@ const SUPPORTED_OPTIONS = new Set<PaletteOptionKey>([
   'points',
   'dimensions',
   'constraints',
+  'projectedGeometries',
 ]);
 
 function PaletteToggle({ label, checked, disabled = false, onChange }: {
