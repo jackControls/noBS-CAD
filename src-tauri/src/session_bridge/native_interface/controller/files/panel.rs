@@ -137,7 +137,9 @@ fn button(
         interface_shell::caption_size(world, entity, 11.);
     } else {
         if scope != Some("file-dialog") {
-            world.entity_mut(entity).insert(interface_shell::InterfaceFlat);
+            world
+                .entity_mut(entity)
+                .insert(interface_shell::InterfaceFlat);
         }
         interface_shell::center_caption(world, entity);
         interface_shell::caption_size(world, entity, if key == "new" { 14. } else { 11. });
@@ -294,7 +296,11 @@ pub(crate) fn synchronize(
                 world.entity_mut(*state.decoration.last().unwrap()).insert((
                     BorderColor::all(theme.edge),
                     bevy::ui::BoxShadow::new(
-                        Color::BLACK.with_alpha(0.5), px(0.), px(10.), px(-5.), px(25.),
+                        Color::BLACK.with_alpha(0.5),
+                        px(0.),
+                        px(10.),
+                        px(-5.),
+                        px(25.),
                     ),
                 ));
             }
@@ -414,7 +420,8 @@ pub(crate) fn synchronize(
             None,
             picker,
         )?;
-        let available = ((width - 212.) / 192.).floor().max(1.) as usize;
+        // Left file controls, the MCP chip, tab arrows, and Scripts.
+        let available = ((width - 286.) / 192.).floor().max(1.) as usize;
         let active = tabs.iter().position(|t| t.active).unwrap_or(0);
         let start = active.saturating_sub(available - 1);
         for (offset, tab) in tabs.iter().skip(start).take(available).enumerate() {
@@ -906,6 +913,40 @@ pub(crate) fn synchronize(
                 picker,
             )?;
         }
+        let presence = nbcad_mcp::desktop_mcp_presence();
+        let (mcp_label, mcp_selected) = match presence {
+            nbcad_mcp::DesktopMcpPresence::Attached => ("MCP attached", Some(true)),
+            nbcad_mcp::DesktopMcpPresence::Waiting => ("MCP waiting", None),
+            nbcad_mcp::DesktopMcpPresence::Off => ("MCP off", None),
+        };
+        let mut mcp = InterfaceControl::button("document/session", mcp_label);
+        mcp.role = "status".into();
+        mcp.selected = mcp_selected;
+        state.chrome.button(
+            world,
+            camera,
+            "mcp",
+            mcp,
+            Some("MCP"),
+            NativeCommand::File(FileCommand::ReportMcp),
+            node(width - 218., 0., 72., 28.),
+            None,
+            42,
+        )?;
+        let mut dot = node(width - 210., 11., 6., 6.);
+        dot.border_radius = BorderRadius::all(px(3.));
+        state.chrome.panel(
+            world,
+            camera,
+            "mcp-dot",
+            dot,
+            match presence {
+                nbcad_mcp::DesktopMcpPresence::Attached => theme.accent,
+                nbcad_mcp::DesktopMcpPresence::Waiting => theme.mute,
+                nbcad_mcp::DesktopMcpPresence::Off => theme.edge,
+            },
+            43,
+        );
         let mut scripts = InterfaceControl::button("document/session", "Scripts");
         scripts.disabled = true;
         state.chrome.button(

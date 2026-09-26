@@ -1,6 +1,7 @@
 //! One stdio transport for rendered and headless CAD. The desktop owns its
 //! lifetime: a disconnected client never exits or closes the application.
 use std::io::{self, BufRead, Write};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::thread;
@@ -12,6 +13,40 @@ use crate::{error_response, handle_message, idle_due_messages, CadServer, Deskto
 
 #[path = "stdio_output.rs"]
 mod output_pipe;
+
+/// What the desktop title bar can say about the stdio agent.
+///
+/// Headless `run_stdio` does not change this. A desktop worker is `Waiting`
+/// until `initialize` succeeds, then `Attached` until that worker returns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum DesktopMcpPresence {
+    Off = 0,
+    Waiting = 1,
+    Attached = 2,
+}
+
+static DESKTOP_MCP_PRESENCE: AtomicU8 = AtomicU8::new(0);
+
+pub fn desktop_mcp_presence() -> DesktopMcpPresence {
+    match DESKTOP_MCP_PRESENCE.load(Ordering::Relaxed) {
+        1 => DesktopMcpPresence::Waiting,
+        2 => DesktopMcpPresence::Attached,
+        _ => DesktopMcpPresence::Off,
+    }
+}
+
+fn set_desktop_mcp_presence(presence: DesktopMcpPresence) {
+    DESKTOP_MCP_PRESENCE.store(presence as u8, Ordering::Relaxed);
+}
+
+struct ClearDesktopMcpPresence;
+
+impl Drop for ClearDesktopMcpPresence {
+    fn drop(&mut self) {
+        set_desktop_mcp_presence(DesktopMcpPresence::Off);
+    }
+}
 
 pub fn run_stdio() -> Result<(), String> {
     run(CadServer::new, None)
@@ -29,6 +64,8 @@ pub fn prepare_desktop_stdio() -> Result<(), String> {
 /// Run on a worker while the native event loop remains on the main thread.
 /// Merely opening CAD does not allocate a second kernel or document.
 pub fn run_desktop_stdio() -> Result<(), String> {
+    set_desktop_mcp_presence(DesktopMcpPresence::Waiting);
+    let _clear = ClearDesktopMcpPresence;
     let result = run(
         || {
             let mut server = CadServer::new()?;
@@ -262,10 +299,20 @@ fn serve_events(
         };
         let outgoing = match serde_json::from_str::<Value>(&line) {
             Ok(message) => {
+                let initialized = desktop.is_some()
+                    && message.get("method").and_then(Value::as_str) == Some("initialize");
                 if server.is_none() {
                     server = Some(create.take().expect("server initialized once")()?);
                 }
-                handle_message(server.as_mut().unwrap(), message)
+                let outgoing = handle_message(server.as_mut().unwrap(), message);
+                if initialized
+                    && outgoing
+                        .iter()
+                        .all(|message| message.get("error").is_none())
+                {
+                    set_desktop_mcp_presence(DesktopMcpPresence::Attached);
+                }
+                outgoing
             }
             Err(error) => vec![error_response(
                 Value::Null,
@@ -456,5 +503,15 @@ mod tests {
         }
         assert!(instructions(true).contains("desktop_not_ready"));
         assert!(!instructions(true).contains("persistent headless"));
+    }
+
+    #[test]
+    fn desktop_presence_is_off_until_a_worker_marks_it() {
+        let previous = desktop_mcp_presence();
+        set_desktop_mcp_presence(DesktopMcpPresence::Waiting);
+        assert_eq!(desktop_mcp_presence(), DesktopMcpPresence::Waiting);
+        set_desktop_mcp_presence(DesktopMcpPresence::Attached);
+        assert_eq!(desktop_mcp_presence(), DesktopMcpPresence::Attached);
+        set_desktop_mcp_presence(previous);
     }
 }

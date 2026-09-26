@@ -21,7 +21,10 @@ mod session;
 mod stdio;
 mod summary;
 
-pub use stdio::{prepare_desktop_stdio, run_desktop_stdio, run_stdio, shutdown_desktop_stdio};
+pub use stdio::{
+    desktop_mcp_presence, prepare_desktop_stdio, run_desktop_stdio, run_stdio,
+    shutdown_desktop_stdio, DesktopMcpPresence,
+};
 
 use disclosure::{
     auto_focus_for_tool, tags_for_tool, AdvertisementState, DisclosureMode, DisclosureState,

@@ -28,6 +28,8 @@ pub(crate) enum FileCommand {
     Cancel(u64),
     Discard(u64),
     SaveContinue(u64),
+    /// Read the desktop stdio presence. Does not change the document or menus.
+    ReportMcp,
 }
 #[derive(Clone, Debug)]
 enum Intent {
@@ -311,6 +313,14 @@ fn execute(
     owner: &DocumentContext,
     command: FileCommand,
 ) -> Result<Value, String> {
+    if matches!(command, FileCommand::ReportMcp) {
+        let presence = match nbcad_mcp::desktop_mcp_presence() {
+            nbcad_mcp::DesktopMcpPresence::Attached => "attached",
+            nbcad_mcp::DesktopMcpPresence::Waiting => "waiting",
+            nbcad_mcp::DesktopMcpPresence::Off => "off",
+        };
+        return Ok(json!({"mcp": presence}));
+    }
     if matches!(command, FileCommand::Menu | FileCommand::DismissMenu) {
         let mut f = world.resource_mut::<Files>();
         if f.dialog.is_some() || f.picker.is_some() {
