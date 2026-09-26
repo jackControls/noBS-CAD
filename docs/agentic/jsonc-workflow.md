@@ -57,10 +57,10 @@ requires a **path**-loaded root, or inline `source` with an absolute
 - **`lossy_session_trace`** — rebuilt from `tool_trace` with literal arguments; no
   `$select`, no teaching notes; not for published recipes.
 
-`from: auto` returns the authored script only while the tool trace still matches
-that run. After later tools (for example `solid_box`), `auto` exports the session
-trace instead. `from: last_script` still returns the authored source, with
-`stale: true`.
+`from: auto` returns the authored script only while no modeling tool has
+succeeded since that run; live desktop edits count as well. After later tools
+(for example `solid_box`), `auto` exports the session trace instead.
+`from: last_script` still returns the authored source, with `stale: true`.
 
 UI-only edits and attach baselines (`cad_load_project_model`) are **not** turned
 into faithful JSONC in this MVP. Document gaps rather than inventing history.

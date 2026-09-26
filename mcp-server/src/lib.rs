@@ -1,3 +1,6 @@
+// The cad_interface schema is one large json! literal; the default macro
+// recursion limit is not enough once its property list grows past this size.
+#![recursion_limit = "256"]
 use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -238,9 +241,13 @@ struct CadServer {
     composite_depth: u32,
     /// Expanded source from last successful cad_interface script.
     last_script_source: Option<String>,
-    /// `tool_trace.len()` when `last_script_source` was captured. A later tool
-    /// call means that source no longer describes the session.
-    last_script_trace_len: usize,
+    /// Successful modeling mutations in this process, traced or live. A live
+    /// (attached) mutation never grows `tool_trace`, so staleness of
+    /// `last_script_source` is judged against this count instead.
+    modeling_mutations: u64,
+    /// `modeling_mutations` when `last_script_source` was captured. A later
+    /// mutation means that source no longer describes the session.
+    last_script_mutations: u64,
     /// Scripts use authoritative live results without rebuilding a second
     /// OCCT model after each mutation. Snapshot reads still refresh on demand.
     script_running: bool,
@@ -271,7 +278,8 @@ impl CadServer {
             tool_trace: Vec::new(),
             composite_depth: 0,
             last_script_source: None,
-            last_script_trace_len: 0,
+            modeling_mutations: 0,
+            last_script_mutations: 0,
             script_running: false,
             script_progress: None,
             live_snapshot_dirty: false,
@@ -284,6 +292,9 @@ impl CadServer {
         let live_mutation = self.attached_document_id.is_some() && is_modeling_mutate(name);
         let trace_args = arguments.clone();
         let result = self.dispatch_tool(name, arguments);
+        if result.is_ok() && is_modeling_mutate(name) {
+            self.modeling_mutations += 1;
+        }
         if result.is_ok() && records_in_script(name) && !live_mutation && self.composite_depth == 0
         {
             self.tool_trace.push(json!({
@@ -774,7 +785,7 @@ impl CadServer {
             }
         }
         if result.is_ok() {
-            self.last_script_trace_len = self.tool_trace.len();
+            self.last_script_mutations = self.modeling_mutations;
             self.last_script_source = Some(source);
         }
         // Feedback the agent can act on: what was built, in feature terms, and
@@ -1501,9 +1512,10 @@ impl CadServer {
     /// Emit a version-1 `.nbcad.jsonc` from the last successful script source
     /// or, failing that, from this process `tool_trace` (lossy).
     ///
-    /// `auto` keeps the authored script only while `tool_trace` is still the
-    /// trace captured at that run. Later tool calls make it stale, and `auto`
-    /// follows the session trace instead of labelling the old script lossless.
+    /// `auto` keeps the authored script only while no modeling tool has
+    /// succeeded since that run, traced or live. A later mutation makes it
+    /// stale, and `auto` follows the session trace instead of labelling the
+    /// old script lossless.
     fn export_script(&mut self, arguments: &Value) -> Result<Value, String> {
         let name = arguments
             .get("name")
@@ -1517,7 +1529,7 @@ impl CadServer {
             return Err("export_script from must be auto, last_script, or session_trace".into());
         }
         let stale = self.last_script_source.is_some()
-            && self.tool_trace.len() != self.last_script_trace_len;
+            && self.modeling_mutations != self.last_script_mutations;
         let use_authored = match from {
             "last_script" => self.last_script_source.is_some(),
             "auto" => self.last_script_source.is_some() && !stale,
@@ -1562,7 +1574,7 @@ impl CadServer {
     /// Clear `tool_trace` and seed `cad_load_project_model` with the loaded model JSON.
     fn seed_script_baseline_from_model(&mut self, model_json: &str) {
         self.last_script_source = None;
-        self.last_script_trace_len = 0;
+        self.last_script_mutations = self.modeling_mutations;
         self.tool_trace.clear();
         self.tool_trace.push(json!({
             "name": "cad_load_project_model",
@@ -4392,6 +4404,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "duration_ms":{"type":"integer","minimum":0,"maximum":10000},
                 "orbit_degrees":{"type":"number","minimum":-360,"maximum":360,"description":"For action view with view current: rotate about the current camera target/up axis at fixed radius and elevation. Optional fit/focal target frames first. Positive angles turn counterclockwise viewed along the up axis toward the target."},
                 "source":{"type":"string","description":"Version 1 JSONC command script; mutually exclusive with path"},
+                "include_base":{"type":"string","description":"Absolute directory that relative includes resolve under. Inline source only; not valid with path or recipe, whose includes resolve beside the file."},
                 "validate":{"type":"boolean","default":true},
                 "speed":{"type":"number","minimum":0.1,"maximum":16},
                 "text":{"type":"string","maxLength":4000},"chapter":{"type":"string","maxLength":200},
@@ -4404,7 +4417,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "shift":{"type":"boolean"},
                 "command":{"type":"string","enum":["open","save","rename","configure","note","pause","resume","step","stop","status","finish","dismiss","show"]},
                 "path":{"type":"string"},"name":{"type":"string"},
-                "from":{"type":"string","enum":["auto","last_script","session_trace"],"description":"export_script source: last_script (authored, stale:true if tools ran after it), session_trace (lossy_session_trace), or auto (authored while the tool trace still matches that run; otherwise the session trace)."},
+                "from":{"type":"string","enum":["auto","last_script","session_trace"],"description":"export_script source: last_script (authored, stale:true if tools ran after it), session_trace (lossy_session_trace), or auto (authored while no modeling tool has run since that script, live desktop edits included; otherwise the session trace)."},
                 "overwrite":{"type":"boolean"},"discard_changes":{"type":"boolean"},
                 "target":{"type":"string","description":"Fresh inspect control ID, or active_sketch for view"},"value":{"type":"string"},
                 "key":{"type":"string","enum":["Enter","Escape","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Home","Delete","Backspace"]},
@@ -15514,7 +15527,7 @@ mod agent_feedback_tests {
         let mut server = CadServer::new().unwrap();
         let authored = r#"{"version":1,"name":"Authored box","starting_state":"empty","steps":[{"id":"only","note":"authored only"}]}"#;
         server.last_script_source = Some(authored.into());
-        server.last_script_trace_len = server.tool_trace.len();
+        server.last_script_mutations = server.modeling_mutations;
         let fresh = server
             .export_script(&json!({"from":"auto","name":"Session"}))
             .unwrap();
@@ -15523,10 +15536,9 @@ mod agent_feedback_tests {
         assert!(fresh["source"].as_str().unwrap().contains('\n'));
         assert!(fresh["source"].as_str().unwrap().contains("authored only"));
 
-        server.tool_trace.push(json!({
-            "name": "solid_box",
-            "arguments": {"size":[10, 10, 10]}
-        }));
+        server
+            .call_tool("solid_box", json!({"size":[10, 10, 10]}))
+            .unwrap();
         let auto = server
             .export_script(&json!({"from":"auto","name":"After box"}))
             .unwrap();
@@ -15550,5 +15562,21 @@ mod agent_feedback_tests {
             .as_str()
             .unwrap()
             .contains("authored only"));
+
+        // A live (attached) mutation never grows tool_trace, but it still
+        // counts: the authored script must not read as current afterwards.
+        server.last_script_source = Some(authored.into());
+        server.last_script_mutations = server.modeling_mutations;
+        let trace_len = server.tool_trace.len();
+        server.modeling_mutations += 1;
+        assert_eq!(server.tool_trace.len(), trace_len);
+        let live = server
+            .export_script(&json!({"from":"last_script"}))
+            .unwrap();
+        assert_eq!(live["stale"], true);
+        let live_auto = server
+            .export_script(&json!({"from":"auto","name":"Live"}))
+            .unwrap();
+        assert_eq!(live_auto["fidelity"], "lossy_session_trace");
     }
 }

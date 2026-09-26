@@ -345,7 +345,7 @@ string (and fidelity metadata). It is **not** `cad_script`.
 
 `from` selects the source:
 
-- `auto` returns the authored script while the tool trace still matches that run. Once later tools have run, it returns the session trace instead of calling the old script lossless.
+- `auto` returns the authored script while no modeling tool has succeeded since that run, live desktop edits included. Once later tools have run, it returns the session trace instead of calling the old script lossless.
 - `last_script` returns the authored script even when `stale` is true.
 - `session_trace` always rebuilds from the tool trace.
 
