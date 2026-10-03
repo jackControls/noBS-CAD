@@ -1,7 +1,7 @@
 ---
 type: Concept
 title: Design VERSION and JSONC script naming
-description: Authoritative design artifact is a versioned .nbcad.jsonc recipe script — one VERSION constant, filename + embedded metadata, prune prior revisions, prefer small editable chunks over Python generators.
+description: Optional JSONC recipe versioning for teaching and replay; working designs are saved projects edited through MCP.
 status: draft
 updated: 2026-09-20
 topics: workflow, modeling, mcp, export, sessions
@@ -10,20 +10,14 @@ keywords: VERSION, DESIGN_VERSION, design_v, nbcad.jsonc, JSONC, design version,
 
 # Design VERSION and JSONC script naming
 
-CAD design packages treat a **versioned (or VERSION-embedded) `.nbcad.jsonc`
-recipe script** as the authoritative artifact — not a Python generator.
-Agents and humans edit JSONC with normal file-edit tools.
+Working designs are saved `.nbcad` projects, constructed and edited through
+MCP. Agents should not maintain presentation copies for normal iteration.
+See [the MCP workflow](agent-mcp-workflow.md).
 
-## Authoritative artifact
-
-| Role | What |
-|------|------|
-| **Source of truth** | The live `.nbcad.jsonc` script (and any companion status/meta JSON) |
-| **Not required** | A `gen_*.py` / `gen_v*.py` tooling path for design packages |
-
-Prefer **hand-authored / edit-tool JSONC** over Python generators for design
-packages. If a leftover `gen_v*.py` exists from an older workflow, prune it
-when cutting the next revision (git keeps history).
+The conventions below apply only when an authored JSONC recipe is explicitly
+requested for teaching, reusable construction or replay. In that case, prefer
+hand-authored JSONC and keep its version metadata consistent. Do not delete
+existing design artifacts merely to adopt these optional naming conventions.
 
 ## One VERSION constant
 

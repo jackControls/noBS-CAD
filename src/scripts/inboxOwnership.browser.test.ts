@@ -45,11 +45,14 @@ export async function checkInboxDocumentOwnership() {
           queried.resolve(); return hydration.promise;
         }
         if (command === 'get_document') {
-          if (phase === 'assembly-refresh' || phase === 'general-refresh') { queried.resolve(); return hydration.promise; }
+          if (phase === 'general-refresh') { queried.resolve(); return hydration.promise; }
           return document;
         }
         if (command === 'engine_drawing_document') return ok(initial.drawingDocument);
-        if (command === 'engine_assembly_document') return ok(initial.assemblyDocument);
+        if (command === 'engine_assembly_document') {
+          if (phase === 'assembly-refresh') { queried.resolve(); return hydration.promise; }
+          return ok(initial.assemblyDocument);
+        }
         if (command === 'engine_cam_document') return ok(initial.camDocument);
         if (command === 'engine_assembly_solution') return ok(initial.assemblySolution);
         if (command === 'engine_solid_scene') return ok(update.scene);
@@ -77,7 +80,8 @@ export async function checkInboxDocumentOwnership() {
       const playbackB = JSON.stringify(presentation.snapshot());
       if (phase === 'failed-reply') inbox.reject(new Error('Old native reply lost'));
       else if (phase === 'solid-reply') inbox.resolve({applied: true, name: 'solid_extrude', result: update});
-      else hydration.resolve(phase === 'drawing-refresh' ? ok(initial.drawingDocument) : document);
+      else hydration.resolve(phase === 'drawing-refresh' ? ok(initial.drawingDocument)
+        : phase === 'assembly-refresh' ? ok(initial.assemblyDocument) : document);
       await applying;
       check(JSON.stringify(useAppStore.getState()) === stateB, `Late ${phase} must not alter the replacement document or dirty state`);
       check(JSON.stringify(presentation.snapshot()) === playbackB, `Late ${phase} must not update replacement playback`);

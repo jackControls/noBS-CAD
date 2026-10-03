@@ -367,6 +367,8 @@
     },
     "documentSettings": "Configuración del documento",
     "namedViews": "Vistas nombradas",
+    "assembledView": "Volver a la vista ensamblada",
+    "namedViewError": "No se pudo mostrar la vista",
     "origin": "Origen",
     "originPlaneXy": "Plano XY",
     "originPlaneXz": "Plano XZ",

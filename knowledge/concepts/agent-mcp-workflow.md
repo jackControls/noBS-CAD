@@ -116,28 +116,40 @@ Snapshot bridge (`NBCAD_SESSION_DIR`): UUID v4 session ids; desktop publishes
 MCP edits stay in memory (session files are read-side). Other session
 strategies remain available as the product evolves.
 
-## Blank-document scripts
+## Drive the design through MCP
 
-Recipes and long `cad_interface` / `cad_script` demos assume a **blank**
-document (or one you intentionally wiped).
+The saved `.nbcad` project is the working design. Use typed MCP operations
+for construction, feature edits, review configurations, verification and saving
+from start to finish. Continue editing the current feature history; ordinary
+design iteration does not require a parallel presentation script or a blank
+document rebuild.
 
-| Situation | Action |
-|-----------|--------|
-| Teaching / coupon / recipe id | `cad_new_project` → `cad_interface` `{ "action": "script", "recipe": "<id>", "mode": "fast" }` |
-| Live desktop already has work | New project or headless for the lesson |
-| One feature on an existing part | `solid_edit_*` + inspect |
-| Recipe needs a clean restart | New blank doc |
+Use `cad_interface` `execute` with the discovered group and operation, or
+individual modeling tools. Attached execution submits and waits for application
+internally. Inspect between writes and re-read topology after feature edits.
 
-`related_recipes` on help pages match `cad_interface` `recipes`. Humans open
-the same `.nbcad.jsonc` via Scripts / presentation.
+Save one review configuration with `upsert_named_view`; use
+`rename_named_view`, `delete_named_view`, `recall_named_view`, and
+`clear_named_view` in `document/appearance`. Attached `cad_interface`
+`inspect` returns `view_state`: copy its camera, visible body IDs and
+part offsets plus a name into `upsert_named_view`. A null camera means the
+modeling viewport is unavailable; headless clients supply a camera directly.
+Display offsets do not move native solids. View metadata edits clear the active
+configuration, and clear preserves visibility.
 
-Design package scripts: keep one authoritative `VERSION` /
-`DESIGN_VERSION` string; for working designs prefer `design_vM_N.nbcad.jsonc`
-(version in filename **and** inside JSONC metadata), prune prior
-`design_v*.nbcad.jsonc` (and leftover `gen_v*.py`) when cutting — see
-[design VERSION / JSONC scripts](design-version-scripts.md). Name bodies /
-features / critical faces with role nouns and verify via `solid_scene` — see
-[geometry naming](geometry-naming.md).
+Save via desktop `cad_interface` with `action: file`, `command: save`, and
+an absolute `.nbcad` `path` (explicit `overwrite: true` to replace a file), or retain
+the headless `cad_project_model` string and restore it with
+`cad_load_project_model`. Inspect the restored model before handoff.
+
+Use desktop `cad_interface` `action: history` with `command: undo` or `redo`
+for document history, and inspect `state.history` for availability. Check live
+UI replies for `status: applied` before treating an action as complete.
+
+Recipes and JSONC scripts remain optional for explicitly requested teaching or
+replay on a deliberately blank document. They are not the source of truth for
+an interactively edited design. See [agent workflow](../../docs/agentic/jsonc-workflow.md)
+and [optional recipe versioning](design-version-scripts.md).
 
 ## Export format (AM)
 

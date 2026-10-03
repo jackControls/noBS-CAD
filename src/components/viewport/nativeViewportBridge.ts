@@ -19,6 +19,7 @@ import {
   type FinishedSketchEntityPickRef,
 } from '../../modeling/viewportPickFeedback';
 import { revolveProfileAcceptsAxis } from '../../lib/revolveAxis';
+import { translateByPartOffset } from '../../namedViewOffsets';
 import { presentation as playbackPresentation } from '../../operationPlayback';
 import {
   simulationPlaybackPose,
@@ -889,11 +890,24 @@ export function collectNativeViewportPresentation(): NativePresentation {
   const movePreview = state.solidCommandPreview?.kind === 'move_copy'
     ? state.solidCommandPreview
     : null;
-  const [bodyPoses, instanceBodyPoses] = moveCopyPresentationPoses(
+  const [movedBodyPoses, movedInstanceBodyPoses] = moveCopyPresentationPoses(
     solved.body_poses,
     solved.instance_body_poses,
     movePreview,
   );
+  const viewOffsets = state.viewPartOffsets;
+  const bodyPoses = viewOffsets.length === 0
+    ? movedBodyPoses
+    : movedBodyPoses.map((pose) => ({
+      ...pose,
+      translation: translateByPartOffset(pose.translation, pose.body_id, viewOffsets),
+    }));
+  const instanceBodyPoses = viewOffsets.length === 0
+    ? movedInstanceBodyPoses
+    : movedInstanceBodyPoses.map((pose) => ({
+      ...pose,
+      translation: translateByPartOffset(pose.translation, pose.body_id, viewOffsets),
+    }));
   const camView = camWorkpiecePresentation({ ...state, camDialogOpen: state.camDialog !== null });
   const ghostedBodyIds = camView.ghostedBodyIds;
   const hiddenBodyIds = [...new Set([

@@ -6,11 +6,11 @@
   "license": "LGPL-2.1-or-later",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jackControls/noBS-CAD.git"
+    "url": "https://github.com/jackControls/Limo-CAD.git"
   },
-  "homepage": "https://github.com/jackControls/noBS-CAD#readme",
+  "homepage": "https://github.com/jackControls/Limo-CAD#readme",
   "bugs": {
-    "url": "https://github.com/jackControls/noBS-CAD/issues"
+    "url": "https://github.com/jackControls/Limo-CAD/issues"
   },
   "type": "module",
   "scripts": {
@@ -31,7 +31,7 @@
     "test:arc-sweep": "tsx src/components/viewport/arcSweep.test.ts && tsx src/components/viewport/toolOperation.test.ts",
     "test:drawing-instances": "tsx src/drawing/instances.test.ts",
     "test:export-flow": "tsx src/files/exportFlow.test.ts && tsx src/engine/projectLoad.test.ts",
-    "test:presentation": "tsx src/operationPlayback.test.ts && tsx src/viewControl.test.ts && tsx src/scripts/sourceNavigation.test.ts",
+    "test:presentation": "tsx src/operationPlayback.test.ts && tsx src/viewControl.test.ts && tsx src/scripts/sourceNavigation.test.ts && tsx src/namedViews.test.ts",
     "test:constraint-glyphs": "tsx src/sketch/constraintGlyphAnchor.test.ts && tsx src/sketch/applyConstraint.test.ts",
     "test:revolve-axis": "tsx src/lib/revolveAxis.test.ts",
     "test:modeling-picker": "tsx src/modeling/viewportPicker.test.ts",

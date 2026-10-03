@@ -367,6 +367,8 @@
     },
     "documentSettings": "文档设置",
     "namedViews": "命名视图",
+    "assembledView": "返回装配视图",
+    "namedViewError": "无法显示视图",
     "origin": "原点",
     "originPlaneXy": "XY 平面",
     "originPlaneXz": "XZ 平面",

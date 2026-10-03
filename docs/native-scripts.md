@@ -125,7 +125,7 @@ display; it does not remove geometry or substitute for explicit export selection
 ## File structure
 
 A script has `version: 1`, a human-readable `name`, ordered `steps`, optional final
-`checks`, and `exports`. The optional `starting_state: "empty"` documents the required
+`checks`, optional named `views`, and `exports`. The optional `starting_state: "empty"` documents the required
 blank starting state; omitting it has the same effect in version 1. The
 [editor schema](../examples/scripts/nbcad-script.schema.json) describes these fields.
 Each step has exactly one of these actions:
@@ -212,6 +212,32 @@ transition, put a normal view step before it. Orbit requires `view: "current"`.
 The same fields work directly with `cad_interface` action `view` on a loaded
 document; a script still starts from a blank document. Completion acknowledges the
 actual camera animation. Presentation speed and reduced-motion preferences apply.
+
+## Named view configurations
+
+A top-level `views` array is stored in the project when the script finishes, in
+both fast and presentation mode. Each view has a `name`, a `camera`
+(`position`, `target`, `up`, in millimeters), `visible_body_ids`, and optional
+`part_offsets` (`body_id` and a world-axis `translation` in millimeters).
+Offsets change only the display. Body ids may be literals or result references.
+The Browser recalls a view by name.
+
+Replacing `views` clears the active-view marker and display offsets; recall a
+view to apply the replacement. A recalled view's camera and offsets stay with
+its open project tab, including when an idle tab is released from memory.
+Modeling picks exclude the display translation, so holes and move pivots keep
+their model coordinates in an exploded view.
+Use **Return to assembled view** in the Browser's Named Views folder to clear
+display offsets and the active marker while preserving visibility and saved
+configurations. Entering a sketch or feature edit, or changing the solid model,
+also returns to the assembled pose. `clear_named_view` exposes the same explicit
+reset through the engine and MCP interface.
+
+Recall does not add a modeling Undo step. Ctrl+Z/Redo continues to change the
+feature history and returns the model to assembled poses. Visibility choices
+and saved named-view definitions survive solid Undo/Redo, including choices
+made between Undo and Redo. Assembly edits and motion previews also return to
+assembled poses before editing.
 
 The shared presentation interface exposes `configure`, `note`, `pause`, `resume`,
 `step`, `status`, `finish`, `stop`, `dismiss` and `show`. Configuration chooses `mode: "fast"` or

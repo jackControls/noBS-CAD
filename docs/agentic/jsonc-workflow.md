@@ -1,9 +1,45 @@
-# Agentic JSONC workflow (short)
+# Agent design workflow: MCP first
 
-**Source of truth** for rebuildable designs is version-1 `.nbcad.jsonc`, not the
-live MCP call stream and not `cad_script`.
+The saved `.nbcad` project is the working design. Drive construction, feature
+edits, inspection, review views, and persistence through MCP from start to finish.
+Continue editing existing history; agents do not need a parallel presentation copy.
 
-## Rebuild loop
+## Working loop
+
+1. Check `cad_session_status`. Select the user's desktop explicitly with
+   `cad_list_sessions` and `cad_attach`, or use an independent headless document.
+   Preserve existing work; create a new project only when a new design is intended.
+2. Discover with `cad_interface` `catalog`, `cad_help`, or `cad_list_all_tools`.
+   Call `cad_interface` `execute` with the operation's group and arguments, or
+   use the individual MCP tool. Attached execution submits and awaits internally.
+3. Begin, constrain, and finish sketches; build features with returned IDs.
+   Inspect `solid_scene` and `cad_document` between edits. Use `solid_edit_*`
+   for changes and re-read topology IDs after recomputation.
+4. Use `upsert_named_view`, `rename_named_view`, `delete_named_view`,
+   `recall_named_view`, and `clear_named_view` in `document/appearance`.
+   Attached `cad_interface` `inspect` returns `view_state`: copy its `camera`,
+   `visible_body_ids`, and `part_offsets` plus a chosen `name` into upsert.
+   Do not pass the extra inspection fields. A null camera means no modeling
+   viewport is available; headless clients supply camera coordinates directly.
+5. Save via desktop `cad_interface` with `action: file`, `command: save`, and
+   an absolute `.nbcad` `path` (set `overwrite: true` only to replace that file),
+   or retain the exact headless `cad_project_model` string and restore with
+   `cad_load_project_model`.
+   Reopen/restore and inspect the model and `named_views` before handoff.
+
+For live document Undo/Redo, use `cad_interface` `action: history` with
+`command: undo` or `redo`. Inspect `state.history` for availability. This uses
+the same history controller as the keyboard and Edit menu.
+Check live UI replies for `status: applied`; failed or timed-out receipts are
+not completed actions. Inspect the current state before retrying.
+
+View offsets affect display only. Metadata edits clear the active view; recall
+it to display the updated configuration. Clear preserves current visibility.
+
+## Optional recipe rebuild loop
+
+Use this only for explicitly requested teaching, reusable recipes, or replay.
+Scripts do not supersede the saved project after interactive or MCP edits.
 
 1. Edit the root `.nbcad.jsonc` (and optional `collections/*.collection.jsonc`).
 2. Replay on a **blank** document:
@@ -17,9 +53,9 @@ live MCP call stream and not `cad_script`.
 }
 ```
 
-3. Use live MCP `execute` only for tiny exploratory tweaks.
-4. Fold durable changes back into JSONC. Prefer hand-authored `$select` /
-   `$project` over literal entity IDs.
+3. Inspect the result. Continue design iteration through MCP feature edits.
+4. For an authored recipe revision, prefer hand-authored `$select` / `$project`
+   over literal entity IDs. Normal design edits do not require updating a recipe.
 
 `mode: "fast"` (the default) skips `note` / `view` presentation while keeping
 every modeling call and check — including steps contributed by collections.

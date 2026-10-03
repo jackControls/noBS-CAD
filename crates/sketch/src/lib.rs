@@ -60,13 +60,15 @@ pub use dto::{
     EvalExpressionResult, ExtendRequest, FaceSketchOrigin, FilletPreviewDto, FilletRequest,
     Inference, LineIntersectionRequest, LineTrackingRequest, LockedCircleRequest,
     LockedRectangleRequest, LockedSegmentRequest, MidpointLineRequest, MirrorRequest,
-    MoveCopyRequest, MoveDimensionRequest, MovePointRequest, MovePointResult, OffsetPreviewDto,
-    OffsetRequest, PointRequest, PolygonRequest, PreviewCurve, PreviewDto, ProjectVisibilityDto,
-    ProjectedCircleDto, ProjectedEdgeDto, RectangleMode, RectangleRequest,
+    MoveCopyRequest, MoveDimensionRequest, MovePointRequest, MovePointResult,
+    NamedViewConfigurationDto, NamedViewsDto, OffsetPreviewDto, OffsetRequest, PointRequest,
+    PolygonRequest, PreviewCurve, PreviewDto, ProjectVisibilityDto, ProjectedCircleDto,
+    ProjectedEdgeDto, RecallNamedViewDto, RectangleMode, RectangleRequest,
     RectangularPatternRequest, ReferenceMidpointDto, ScaleRequest, SegmentRequest,
     SetDimensionModeRequest, SetDimensionStyleRequest, SetGridSnapRequest, SetGridStepRequest,
     SketchDto, SlotMode, SlotRequest, SnapTarget, SplineRequest, ToggleFixBatchRequest, ToolResult,
-    TrackingAxis, TrackingGuideDto, TrimPreviewDto, TrimRequest, UndoResult,
+    TrackingAxis, TrackingGuideDto, TrimPreviewDto, TrimRequest, UndoResult, ViewCameraDto,
+    ViewPartOffsetDto,
 };
 pub use edge_selection::{ChainMode, ChainSource, EdgeChainRequest};
 pub use entity::{Entity, EntityId};

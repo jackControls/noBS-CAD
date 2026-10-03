@@ -435,6 +435,13 @@ engine_command!(
     read
 );
 engine_command!(engine_project_set_visibility, "project_set_visibility");
+engine_command!(engine_named_views, "named_views", no_payload, read);
+engine_command!(engine_upsert_named_view, "upsert_named_view");
+engine_command!(engine_rename_named_view, "rename_named_view");
+engine_command!(engine_delete_named_view, "delete_named_view");
+engine_command!(engine_set_named_views, "set_named_views");
+engine_command!(engine_recall_named_view, "recall_named_view");
+engine_command!(engine_clear_named_view, "clear_named_view", no_payload);
 engine_command!(
     engine_construction_set_visibility,
     "construction_set_visibility"
@@ -1357,6 +1364,13 @@ pub fn run() {
             engine_body_appearances,
             engine_project_visibility,
             engine_project_set_visibility,
+            engine_named_views,
+            engine_upsert_named_view,
+            engine_rename_named_view,
+            engine_delete_named_view,
+            engine_set_named_views,
+            engine_recall_named_view,
+            engine_clear_named_view,
             engine_construction_set_visibility,
             engine_drawing_document,
             engine_drawing_apply,

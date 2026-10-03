@@ -23,6 +23,7 @@ import {
   MousePointer2,
   PenLine,
   Pencil,
+  RotateCcw,
   SlidersHorizontal,
   Square,
   Trash2,
@@ -57,6 +58,7 @@ import { DeleteFeatureDialog } from './DeleteFeatureDialog';
 const KIND_LABEL_KEYS: Record<BrowserNodeKind, string> = {
   document_settings: 'browser.documentSettings',
   named_views: 'browser.namedViews',
+  named_view: 'browser.namedViews',
   origin: 'browser.origin',
   origin_plane_xy: 'browser.originPlaneXy',
   origin_plane_xz: 'browser.originPlaneXz',
@@ -73,6 +75,7 @@ const KIND_LABEL_KEYS: Record<BrowserNodeKind, string> = {
 const KIND_ICONS: Record<BrowserNodeKind, LucideIcon> = {
   document_settings: SlidersHorizontal,
   named_views: Bookmark,
+  named_view: Bookmark,
   origin: Crosshair,
   origin_plane_xy: Square,
   origin_plane_xz: Square,
@@ -108,6 +111,15 @@ interface JointContextTarget {
 
 function isMacPlatform(): boolean {
   return typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+}
+
+function recallBrowserView(name: string) {
+  void useAppStore.getState().recallNamedView(name).catch((error: unknown) => {
+    useAppStore.getState().setConstraintDialog({
+      titleKey: 'browser.namedViewError',
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
 }
 
 function selectBrowserNode(node: BrowserNode, additive = false) {
@@ -561,11 +573,15 @@ function NodeRow({
   onOpenContext: (node: BrowserNode, label: string, x: number, y: number) => void;
 }) {
   const { t } = useTranslation();
-  const expanded = useAppStore((s) => !!s.expanded[node.id]);
+  const expandedFlag = useAppStore((s) => s.expanded[node.id]);
   const hidden = useAppStore((s) => !!s.hidden[node.id]);
+  const activeNamedView = useAppStore((s) => s.activeNamedView);
+  const hasViewOffsets = useAppStore((s) => s.viewPartOffsets.length > 0);
+  const namedViewBusy = useAppStore((s) => s.solidBusy || s.projectBusy);
   const selected = useAppStore(
     (s) =>
       s.selectedNode === node.id ||
+      (node.kind === 'named_view' && node.name === activeNamedView) ||
       (node.kind === 'body' &&
         node.reference_id !== null &&
         (s.selectedBody === node.reference_id ||
@@ -583,6 +599,9 @@ function NodeRow({
   const groundedBodyId = useAppStore((s) => s.assemblyDocument.grounded_body_id);
 
   const hasChildren = node.children.length > 0;
+  const expanded = node.kind === 'named_views' && hasChildren
+    ? expandedFlag !== false
+    : !!expandedFlag;
   const Icon = KIND_ICONS[node.kind];
   const label = node.name ?? t(KIND_LABEL_KEYS[node.kind]);
 
@@ -630,6 +649,10 @@ function NodeRow({
     if (event.target !== event.currentTarget) return;
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
+      if (node.kind === 'named_view' && node.name) {
+        recallBrowserView(node.name);
+        return;
+      }
       selectBrowserNode(node);
     }
   };
@@ -642,6 +665,7 @@ function NodeRow({
         aria-haspopup="menu"
         tabIndex={0}
         data-browser-node-id={node.id}
+        data-named-view={node.kind === 'named_view' ? node.name ?? '' : undefined}
         className={cx(
           'group flex h-6 cursor-pointer items-center gap-0.5 pr-1 text-xs hover:bg-header',
           selected && 'bg-accent/20 hover:bg-accent/25',
@@ -654,6 +678,10 @@ function NodeRow({
           // macOS control-click emits a primary click as part of the
           // secondary-click gesture. Let onContextMenu own that gesture.
           if (event.ctrlKey && isMacPlatform()) return;
+          if (node.kind === 'named_view' && node.name) {
+            recallBrowserView(node.name);
+            return;
+          }
           if (picking && plane) {
             void pickPlane(plane);
             return;
@@ -697,7 +725,14 @@ function NodeRow({
           onClick={(e) => {
             if (e.ctrlKey) return;
             e.stopPropagation();
-            if (hasChildren) toggleExpanded(node.id);
+            if (!hasChildren) return;
+            if (node.kind === 'named_views' && expandedFlag === undefined) {
+              useAppStore.setState((state) => ({
+                expanded: { ...state.expanded, [node.id]: false },
+              }));
+              return;
+            }
+            toggleExpanded(node.id);
           }}
         >
           {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
@@ -707,6 +742,25 @@ function NodeRow({
         <span className={cx('min-w-0 flex-1 truncate', isActiveSketch ? 'font-semibold text-accent' : 'text-ink')}>
           {label}
         </span>
+        {node.kind === 'named_views' && (activeNamedView !== null || hasViewOffsets) && (
+          <button
+            type="button"
+            title={t('browser.assembledView')}
+            aria-label={t('browser.assembledView')}
+            data-testid="clear-named-view"
+            disabled={namedViewBusy}
+            className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-mute hover:bg-edge hover:text-ink disabled:opacity-50"
+            onClick={(event) => {
+              event.stopPropagation();
+              void useAppStore.getState().clearNamedView().catch((error: unknown) => {
+                useAppStore.getState().setConstraintDialog({ titleKey: 'browser.namedViewError',
+                  message: error instanceof Error ? error.message : String(error) });
+              });
+            }}
+          >
+            <RotateCcw size={11} />
+          </button>
+        )}
         {isGroundedBody && (
           <Anchor
             size={11}

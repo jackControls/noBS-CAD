@@ -2251,7 +2251,14 @@
         "body_appearances",
         "set_body_appearance",
         "project_visibility",
-        "project_set_visibility"
+        "project_set_visibility",
+        "named_views",
+        "set_named_views",
+        "upsert_named_view",
+        "rename_named_view",
+        "delete_named_view",
+        "recall_named_view",
+        "clear_named_view"
       ]
     },
     {

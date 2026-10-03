@@ -41,7 +41,7 @@ export async function checkControlDocumentOwnership() {
   };
   const outcomes: string[] = [];
   try {
-    for (const kind of ['configure', 'stop', 'pace', 'button', 'viewport', 'camera', 'window', 'file'] as const) {
+    for (const kind of ['configure', 'stop', 'pace', 'button', 'viewport', 'camera', 'window', 'file', 'history'] as const) {
       replace('A.nbcad'); effects = 0;
       const controlA = inspectUi(sharedDocument).surfaces.flatMap(surface => surface.controls)
         .find(control => control.label === button.textContent)!;
@@ -51,6 +51,7 @@ export async function checkControlDocumentOwnership() {
         : kind === 'button' ? {action: 'click', target: controlA.id}
         : kind === 'viewport' ? {action: 'viewport', gesture: 'click', point: [10, 10]}
         : kind === 'window' ? {action: 'window', mode: 'maximize'}
+        : kind === 'history' ? {action: 'history', command: 'undo'}
         : kind === 'file' ? {action: 'file', command: 'rename', name: 'Old command'} : undefined;
       const request = {id: `A-${kind}`, session_id: 'session-A', expires_ms: Date.now() + 10_000,
         ...(ui ? {ui} : {view: 'top', fit: true, duration_ms: 0})};

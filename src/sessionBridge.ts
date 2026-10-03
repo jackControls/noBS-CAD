@@ -21,6 +21,7 @@ import { applyLiveUiControl } from './liveUiBridge';
 import { translate } from './i18n';
 import { SerialPlayback, presentOperation, presentation, wakePlayback, type ScriptProgress } from './operationPlayback';
 import { getSessionCamera } from './components/viewport/cameraApi';
+import { namedViewRecallAllowed } from './namedViews';
 import { captureSessionSnapshot, synchronizeSnapshotVisibility } from './sessionSnapshot';
 import type { SolidUpdateDto } from './engine/types';
 import { projectTransitions, type ProjectTransitionRelease } from './files/projectTransitions';
@@ -258,7 +259,9 @@ export async function applyInboxNow(): Promise<void> {
     if (!ownsDocument()) return;
     const drawingBefore=useAppStore.getState().drawingDocument;
     const drawingProject=currentHistoryProjectKey();
-    const result = await invoke<InboxApplyResult>('mcp_session_bridge_apply_inbox', owner);
+    const result = await invoke<InboxApplyResult>('mcp_session_bridge_apply_inbox', {
+      ...owner, recallAllowed: namedViewRecallAllowed(useAppStore.getState()),
+    });
     if (!ownsDocument()) return;
     changed = Boolean(result?.applied || result?.project_replaced);
     replacingDocument = Boolean(result?.project_replaced);

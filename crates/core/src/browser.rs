@@ -15,6 +15,7 @@ pub struct NodeId(pub u64);
 pub enum BrowserNodeKind {
     DocumentSettings,
     NamedViews,
+    NamedView,
     Origin,
     OriginPlaneXy,
     OriginPlaneXz,

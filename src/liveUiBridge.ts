@@ -11,6 +11,8 @@ import { applicationExitBarrier } from './files/applicationExit';
 import { leaveDrawingWorkspace } from './drawing/document';
 import { applyView, type ViewRequest as CameraViewRequest } from './viewControl';
 import { translate } from './i18n';
+import { inspectNamedViewState } from './namedViews';
+import { inspectUiHistory, operateUiHistory } from './uiHistory';
 import {acceptDrawingProjection, captureDrawingProjectionScope, holdAutomaticDrawingProjections, type CompletedDrawingProjection} from './drawing/projectionPresentation';
 
 let applying = false;
@@ -19,7 +21,7 @@ interface ViewRequest extends CameraViewRequest { id: string; session_id: string
   document_id?: string;
   engine_revision?: number;
   ui?: Omit<UiAction, 'action'> & Omit<UiFileRequest, 'command'> & Omit<PresentationRequest, 'mode' | 'command'> & {
-    action: UiAction['action'] | 'window' | 'file' | 'viewport' | 'presentation' | 'open_recipe'; command?: string; recipe?: string;
+    action: UiAction['action'] | 'window' | 'file' | 'history' | 'viewport' | 'presentation' | 'open_recipe'; command?: string; recipe?: string;
     pace_ms?: number; mode?: string; canvas?: 'viewport' | 'drawing'; gesture?: UiGesture;
     point?: [number, number]; to?: [number, number]; world?: [number, number, number]; shift?: boolean;
   }
@@ -67,6 +69,9 @@ export async function applyLiveUiControl(publishChangedState: () => Promise<void
           response.presentation = presentation.control(request.ui as PresentationRequest);
         } else if (request.ui.action === 'window') {
           response.window = await invoke('mcp_window_control', { mode: request.ui.mode ?? 'inspect' });
+        } else if (request.ui.action === 'history') {
+          await operateUiHistory(request.ui.command);
+          await presentOperation(request.ui.command ?? 'history');
         } else if (request.ui.action === 'file') {
           useAppStore.getState().setProjectBusy(true);
           try { response.completed = await operateUiFile(request.ui as UiFileRequest); }
@@ -102,11 +107,14 @@ export async function applyLiveUiControl(publishChangedState: () => Promise<void
           || after.drawingDocument !== before.drawingDocument || after.assemblyDocument !== before.assemblyDocument) {
           await publishChangedState();
         }
+        if (request.ui.action === 'inspect' && !ownsDocument()) throw new Error(translate('ui.errorDocumentChangedBeforeRequest'));
         response.status = 'applied';
         response.ui = inspectUi(useAppStore.getState().document);
         const state = useAppStore.getState();
+        if (request.ui.action === 'inspect') response.view_state = inspectNamedViewState(state);
         response.state = { mode: state.mode, active_tool: state.activeTool, selected_body: state.selectedBody,
           selected_face: state.selectedFace, selected_edges: state.selectedEdges, selected_entities: state.selectedEntities,
+          history: inspectUiHistory(),
           viewport: getSessionCamera()?.bounds() ?? null };
         response.presented = window.document.visibilityState === 'visible';
         await invoke('mcp_session_bridge_control', { response });

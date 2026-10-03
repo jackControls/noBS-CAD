@@ -1216,12 +1216,31 @@ fn apply_project_replacement_inbox(
     Ok(response)
 }
 
+#[cfg(test)]
 fn apply_or_reject_one_inbox_op(
     state: &SessionBridgeState,
     window_label: &str,
     engine: &AppState,
     reject_reason: Option<&str>,
     expected_owner: Option<(&str, &str)>,
+) -> Result<Value, String> {
+    apply_one_inbox_op_with_recall_guard(
+        state,
+        window_label,
+        engine,
+        reject_reason,
+        expected_owner,
+        true,
+    )
+}
+
+fn apply_one_inbox_op_with_recall_guard(
+    state: &SessionBridgeState,
+    window_label: &str,
+    engine: &AppState,
+    reject_reason: Option<&str>,
+    expected_owner: Option<(&str, &str)>,
+    recall_allowed: bool,
 ) -> Result<Value, String> {
     let process_instance_id = state.process_instance_id.clone();
     let _ = state.write_process_instance_file();
@@ -1350,6 +1369,15 @@ fn apply_or_reject_one_inbox_op(
         }
     };
     let arguments = parsed.get("arguments").cloned().unwrap_or(json!({}));
+    if name == "recall_named_view" && !recall_allowed {
+        let message = "Finish the active edit before recalling a named view";
+        dead_letter_inbox_op(&session_id, seq, message)?;
+        return Ok(
+            json!({"applied":false,"dead_lettered":true,"seq":seq,"name":name,
+            "error":message,"session_id":session_id,"session_mode":"ui_owned_apply",
+            "writeback":false,"pending":pending_inbox_seqs(&session_id).len(),"engine_revision":project.engine_revision}),
+        );
+    }
     let base_generation = match parsed.get("base_generation").and_then(Value::as_u64) {
         Some(base) => base,
         None => {
@@ -1890,6 +1918,7 @@ pub fn mcp_session_bridge_apply_inbox(
     reject_reason: Option<String>,
     document_id: Option<String>,
     session_id: Option<String>,
+    recall_allowed: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let (Some(document), Some(session)) = (document_id, session_id) else {
         return Ok(Value::Null);
@@ -1899,12 +1928,13 @@ pub fn mcp_session_bridge_apply_inbox(
             return Err("playback rejection needs a nonempty reason of at most 1000 bytes".into());
         }
     }
-    apply_or_reject_one_inbox_op(
+    apply_one_inbox_op_with_recall_guard(
         &state,
         window.label(),
         &engine,
         reject_reason.as_deref(),
         Some((&document, &session)),
+        recall_allowed.unwrap_or(false),
     )
 }
 
@@ -3147,6 +3177,47 @@ mod tests {
         assert_eq!(next["applied"], true);
         assert_eq!(next["seq"], 2);
 
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn editing_guard_rejects_named_view_recall_before_native_mutation() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("nbcad-recall-edit-guard-{}", Uuid::new_v4()));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let state = SessionBridgeState::default();
+        let engine = AppState::new();
+        envelope_ok(&state.with_project_session_transition("main", &engine, || {
+            engine.bind_project_session("guard-tab")
+        }));
+        envelope_ok(&engine.engine_call("set_named_views", r#"{"views":[{"name":"review","camera":{"position":[30,40,50],"target":[0,0,0],"up":[0,0,1]},"visible_body_ids":[],"part_offsets":[]}]}"#));
+        let before = engine.engine_call("named_views", "");
+        let (session, generation) = reserve(&state, "main");
+        state
+            .write_for_window("main", payload(&session, generation, "guarded"))
+            .unwrap();
+        write_inbox(
+            &session,
+            1,
+            "recall_named_view",
+            generation,
+            json!({"name":"review"}),
+        );
+        let result = apply_one_inbox_op_with_recall_guard(
+            &state,
+            "main",
+            &engine,
+            None,
+            Some(("guard-tab", &session)),
+            false,
+        )
+        .unwrap();
+        assert_eq!(result["applied"], false);
+        assert_eq!(result["dead_lettered"], true);
+        assert_eq!(engine.engine_call("named_views", ""), before);
+        assert_eq!(result["engine_revision"], generation);
+        assert!(pending_inbox_seqs(&session).is_empty());
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
     }

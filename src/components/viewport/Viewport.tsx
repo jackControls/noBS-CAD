@@ -3,6 +3,7 @@ import { registerSessionCamera, unregisterSessionCamera, notifySessionCameraChan
 import { presentation } from '../../operationPlayback';
 import { listenForModelKeys } from '../../modelKeyboard';
 import { consumeProjectFraming, subscribeProjectFraming } from '../../files/projectFraming';
+import { modelPointFromDisplay, translateByPartOffset } from '../../namedViewOffsets';
 import { CamGeometryPicker } from '../../cam/geometryPicker';
 import { hoverCamChain, pickCamChain } from '../../cam/chainPicking';
 
@@ -1056,12 +1057,17 @@ export function Viewport() {
               && candidate.occurrence_id === occurrenceId,
           )
         : solution.body_poses.find((candidate) => candidate.body_id === bodyId);
+      const translation = translateByPartOffset(
+        pose?.translation ?? [0, 0, 0],
+        bodyId,
+        store.getState().viewPartOffsets,
+      );
       if (!pose) {
-        object.position.set(0, 0, 0);
+        object.position.set(...translation);
         object.quaternion.set(0, 0, 0, 1);
         return;
       }
-      object.position.set(...pose.translation);
+      object.position.set(...translation);
       object.quaternion.set(...pose.rotation).normalize();
     };
 
@@ -1456,6 +1462,7 @@ export function Viewport() {
     let cachedPickerTriangles: NativeViewportTransient['triangles'] = [];
     let cachedSolidPreview: ViewportState['solidCommandPreview'] | undefined;
     let cachedSolidScene: ViewportState['solidScene'] | undefined;
+    let cachedSolidOffsets: ViewportState['viewPartOffsets'] | undefined;
     let cachedSolidTriangles: NativeViewportTransient['triangles'] = [];
     let cachedSolidArrows: NativeViewportTransient['arrows'] = [];
     let committedHoleDefinitions: HoleDefinitionDto[] = [];
@@ -1465,6 +1472,7 @@ export function Viewport() {
     let cachedThreadScene: ViewportState['solidScene'] | undefined;
     let cachedThreadHidden: ViewportState['hidden'] | undefined;
     let cachedThreadAppearances: ViewportState['bodyAppearances'] | undefined;
+    let cachedThreadOffsets: ViewportState['viewPartOffsets'] | undefined;
     let cachedThreadSolution: ReturnType<typeof effectiveAssemblySolution> | undefined;
     let cachedThreadLines: NativeViewportTransient['lines'] = [];
     /** Viewport-local logical pixels, offset from the physical pointer. */
@@ -1854,6 +1862,7 @@ export function Viewport() {
         && transientState.solidScene === cachedThreadScene
         && transientState.hidden === cachedThreadHidden
         && transientState.bodyAppearances === cachedThreadAppearances
+        && transientState.viewPartOffsets === cachedThreadOffsets
         && threadSolution === cachedThreadSolution
       ) {
         cachedThreadLines.forEach(appendLineLayer);
@@ -1868,16 +1877,20 @@ export function Viewport() {
           translation: [number, number, number];
           rotation: [number, number, number, number];
         };
-        const identityPose: CosmeticThreadPose = {
-          translation: [0, 0, 0],
-          rotation: [0, 0, 0, 1],
-        };
         const posesForBody = (bodyId: number): CosmeticThreadPose[] => {
+          const identityPose: CosmeticThreadPose = {
+            translation: translateByPartOffset([0, 0, 0], bodyId, transientState.viewPartOffsets),
+            rotation: [0, 0, 0, 1],
+          };
           if (threadSolution.instance_body_poses.length > 0) {
             return threadSolution.instance_body_poses
               .filter((pose) => pose.body_id === bodyId && pose.visible)
               .map((pose) => ({
-                translation: pose.translation,
+                translation: translateByPartOffset(
+                  pose.translation,
+                  bodyId,
+                  transientState.viewPartOffsets,
+                ),
                 rotation: pose.rotation,
               }));
           }
@@ -1885,7 +1898,14 @@ export function Viewport() {
             (candidate) => candidate.body_id === bodyId,
           );
           return pose
-            ? [{ translation: pose.translation, rotation: pose.rotation }]
+            ? [{
+                translation: translateByPartOffset(
+                  pose.translation,
+                  bodyId,
+                  transientState.viewPartOffsets,
+                ),
+                rotation: pose.rotation,
+              }]
             : [identityPose];
         };
         const applyCosmeticPose = (
@@ -2555,6 +2575,7 @@ export function Viewport() {
         cachedThreadScene = transientState.solidScene;
         cachedThreadHidden = transientState.hidden;
         cachedThreadAppearances = transientState.bodyAppearances;
+        cachedThreadOffsets = transientState.viewPartOffsets;
         cachedThreadSolution = threadSolution;
         cachedThreadLines = generatedThreadLines;
       }
@@ -2569,6 +2590,7 @@ export function Viewport() {
         || (solidPreview?.kind === 'extrude' && solidPreview.sourceFace !== null);
       const solidPreviewCached =
         solidPreview === cachedSolidPreview
+        && transientState.viewPartOffsets === cachedSolidOffsets
         && (!solidPreviewDependsOnScene || transientState.solidScene === cachedSolidScene);
       if (solidPreviewCached) {
         triangles.push(...cachedSolidTriangles);
@@ -3081,6 +3103,7 @@ export function Viewport() {
               (candidate) => candidate.id === target.bodyId,
             );
             if (!body) continue;
+            const offset = translateByPartOffset([0, 0, 0], target.bodyId, transientState.viewPartOffsets);
             for (const vertexIndex of body.mesh.indices) {
               const local: [number, number, number] = [
                 body.mesh.positions[vertexIndex * 3],
@@ -3101,9 +3124,9 @@ export function Viewport() {
                 ];
                 const world = rotateTuple(localResult, target.baseRotation);
                 ghostPositions.push(
-                  world[0] + target.baseTranslation[0],
-                  world[1] + target.baseTranslation[1],
-                  world[2] + target.baseTranslation[2],
+                  world[0] + target.baseTranslation[0] + offset[0],
+                  world[1] + target.baseTranslation[1] + offset[1],
+                  world[2] + target.baseTranslation[2] + offset[2],
                 );
               } else {
                 const baseRotated = rotateTuple(local, target.baseRotation);
@@ -3119,9 +3142,9 @@ export function Viewport() {
                 ];
                 const moved = rotateTuple(aboutPivot, solidPreview.rotation);
                 ghostPositions.push(
-                  solidPreview.pivot.x + moved[0] + solidPreview.translation.x,
-                  solidPreview.pivot.y + moved[1] + solidPreview.translation.y,
-                  solidPreview.pivot.z + moved[2] + solidPreview.translation.z,
+                  solidPreview.pivot.x + moved[0] + solidPreview.translation.x + offset[0],
+                  solidPreview.pivot.y + moved[1] + solidPreview.translation.y + offset[1],
+                  solidPreview.pivot.z + moved[2] + solidPreview.translation.z + offset[2],
                 );
               }
             }
@@ -3134,8 +3157,28 @@ export function Viewport() {
             });
           }
         }
+        const previewBodyId = solidPreview?.kind === 'hole' || solidPreview?.kind === 'external_thread'
+          ? solidPreview.bodyId
+          : solidPreview?.kind === 'extrude' ? solidPreview.sourceFace?.body_id : undefined;
+        if (previewBodyId !== undefined) {
+          const offset = translateByPartOffset([0, 0, 0], previewBodyId, transientState.viewPartOffsets);
+          for (let index = triangleStart; index < triangles.length; index++) {
+            triangles[index] = {
+              ...triangles[index],
+              positions: triangles[index].positions.map((value, axis) => value + offset[axis % 3]),
+            };
+          }
+          for (let index = arrowStart; index < arrows.length; index++) {
+            arrows[index] = {
+              ...arrows[index],
+              start: translateByPartOffset(arrows[index].start, previewBodyId, transientState.viewPartOffsets),
+              end: translateByPartOffset(arrows[index].end, previewBodyId, transientState.viewPartOffsets),
+            };
+          }
+        }
         cachedSolidPreview = solidPreview;
         cachedSolidScene = transientState.solidScene;
+        cachedSolidOffsets = transientState.viewPartOffsets;
         cachedSolidTriangles = triangles.slice(triangleStart);
         cachedSolidArrows = arrows.slice(arrowStart);
       }
@@ -3295,13 +3338,13 @@ export function Viewport() {
           : connectorSolution.body_poses.find(
               (candidate) => candidate.body_id === connector.body_id,
             );
-        const poseMatrix = pose
-          ? new CAD.Matrix4().compose(
-              new CAD.Vector3(...pose.translation),
-              new CAD.Quaternion(...pose.rotation).normalize(),
-              new CAD.Vector3(1, 1, 1),
-            )
-          : new CAD.Matrix4();
+        const poseMatrix = new CAD.Matrix4().compose(
+          new CAD.Vector3(...translateByPartOffset(
+            pose?.translation ?? [0, 0, 0], connector.body_id, transientState.viewPartOffsets,
+          )),
+          new CAD.Quaternion(...(pose?.rotation ?? [0, 0, 0, 1] as const)).normalize(),
+          new CAD.Vector3(1, 1, 1),
+        );
         const origin = new CAD.Vector3(...connector.frame.origin).applyMatrix4(poseMatrix);
         const primary = new CAD.Vector3(...connector.frame.primary_axis)
           .transformDirection(poseMatrix)
@@ -4820,13 +4863,13 @@ export function Viewport() {
           (candidate) => candidate.body_id === targetBodyId
             && candidate.occurrence_id === targetOccurrenceId,
         );
-        return pose
-          ? new CAD.Matrix4().compose(
-            new CAD.Vector3(...pose.translation),
-            new CAD.Quaternion(...pose.rotation).normalize(),
-            new CAD.Vector3(1, 1, 1),
-          )
-          : new CAD.Matrix4();
+        return new CAD.Matrix4().compose(
+          new CAD.Vector3(...translateByPartOffset(
+            pose?.translation ?? [0, 0, 0], targetBodyId, state.viewPartOffsets,
+          )),
+          new CAD.Quaternion(...(pose?.rotation ?? [0, 0, 0, 1] as const)).normalize(),
+          new CAD.Vector3(1, 1, 1),
+        );
       };
       const movingPoseMatrix = poseMatrixFor(movingBodyId, movingOccurrenceId);
       const fixedOccurrenceId = movingOccurrenceId === occurrenceA ? occurrenceB : occurrenceA;
@@ -5034,7 +5077,7 @@ export function Viewport() {
       if (!pose) return false;
       const grabbedWorld: [number, number, number] = pickedPoint
         ? [pickedPoint.x, pickedPoint.y, pickedPoint.z]
-        : [...pose.translation];
+        : translateByPartOffset(pose.translation, bodyId, state.viewPartOffsets);
       const grabbedLocal = bodyLocalPoint(
         bodyId,
         { x: grabbedWorld[0], y: grabbedWorld[1], z: grabbedWorld[2] },
@@ -9546,6 +9589,7 @@ export function Viewport() {
       faceId: number;
       planar: boolean;
       point: Point3Dto;
+      modelPoint: Point3Dto;
     } | null => {
       raycaster.setFromCamera(ndcFromEvent(event), camera);
       const hit = raycaster
@@ -9558,6 +9602,11 @@ export function Viewport() {
         faceId: hit.object.userData.faceId as number,
         planar: hit.object.userData.planar as boolean,
         point: { x: hit.point.x, y: hit.point.y, z: hit.point.z },
+        modelPoint: modelPointFromDisplay(
+          hit.point,
+          hit.object.userData.bodyId as number,
+          store.getState().viewPartOffsets,
+        ),
       };
     };
 
@@ -9574,10 +9623,14 @@ export function Viewport() {
           )
         : solution.body_poses.find((candidate) => candidate.body_id === bodyId);
       const point = new CAD.Vector3(world.x, world.y, world.z);
-      if (!pose) return point;
+      const translation = translateByPartOffset(
+        pose?.translation ?? [0, 0, 0],
+        bodyId,
+        store.getState().viewPartOffsets,
+      );
       const matrix = new CAD.Matrix4().compose(
-        new CAD.Vector3(...pose.translation),
-        new CAD.Quaternion(...pose.rotation).normalize(),
+        new CAD.Vector3(...translation),
+        new CAD.Quaternion(...(pose?.rotation ?? [0, 0, 0, 1] as const)).normalize(),
         new CAD.Vector3(1, 1, 1),
       );
       return point.applyMatrix4(matrix.invert());
@@ -10002,7 +10055,7 @@ export function Viewport() {
         face: {
           bodyId: face.bodyId,
           faceId: face.faceId,
-          point: face.point,
+          point: face.modelPoint,
         },
       };
     };
@@ -10958,7 +11011,7 @@ export function Viewport() {
             state.setHolePositionSelections([]);
             state.setSelectedBody(faceHit.bodyId);
             state.setSelectedFace(faceHit.faceId);
-            state.setSelectedFacePoint(faceHit.point);
+            state.setSelectedFacePoint(faceHit.modelPoint);
             state.setSelectedEdges([]);
           }
           return;
@@ -11106,7 +11159,7 @@ export function Viewport() {
           if (!pointHit) return;
           state.setSelectedBody(pointHit.bodyId);
           state.setSelectedFace(pointHit.faceId);
-          state.setSelectedFacePoint(pointHit.point);
+          state.setSelectedFacePoint(pointHit.modelPoint);
           state.setSelectedEdges([]);
           return;
         }
@@ -11244,7 +11297,7 @@ export function Viewport() {
               'face',
               faceHit.bodyId,
               faceHit.faceId,
-              faceHit.point,
+              faceHit.modelPoint,
               bodyFeaturePickMode === 'face-multi',
             );
           } else {
@@ -11271,7 +11324,7 @@ export function Viewport() {
               'face',
               faceHit.bodyId,
               faceHit.faceId,
-              faceHit.point,
+              faceHit.modelPoint,
               false,
             );
           }
@@ -11311,11 +11364,11 @@ export function Viewport() {
                   'face',
                   hit.bodyId,
                   hit.faceId,
-                  {
+                  modelPointFromDisplay({
                     x: hit.point[0],
                     y: hit.point[1],
                     z: hit.point[2],
-                  },
+                  }, hit.bodyId, current.viewPartOffsets),
                   additive,
                 );
               } else if (!additive) {
@@ -11335,7 +11388,7 @@ export function Viewport() {
             'face',
             hit.bodyId,
             hit.faceId,
-            hit.point,
+            hit.modelPoint,
             e.shiftKey || e.ctrlKey || e.metaKey,
           );
         } else if (!(e.shiftKey || e.ctrlKey || e.metaKey)) {
@@ -12784,6 +12837,7 @@ export function Viewport() {
     let lastSolidHidden = store.getState().hidden;
     let lastSolidDocument = store.getState().document;
     let lastBodyAppearances = store.getState().bodyAppearances;
+    let lastViewPartOffsets = store.getState().viewPartOffsets;
     let holeDefinitionsRequest = 0;
     const refreshCommittedHoleDefinitions = (
       expectedScene: ViewportState['solidScene'],
@@ -12982,6 +13036,10 @@ export function Viewport() {
           ?? s.jointMotionPreview?.solution
           ?? s.motionStudyPreview?.sample.solution
           ?? s.assemblySolution;
+      if (s.viewPartOffsets !== lastViewPartOffsets) {
+        lastViewPartOffsets = s.viewPartOffsets;
+        updateAssemblyPoses();
+      }
       if (nextAssemblySolution !== lastAssemblySolution) {
         lastAssemblySolution = nextAssemblySolution;
         const nextLayoutKey = assemblyInstanceLayoutKey(nextAssemblySolution);

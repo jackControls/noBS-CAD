@@ -182,6 +182,7 @@ pub fn request_ui(arguments: &Value, attached: Option<&str>) -> Result<Value, St
             | "key"
             | "window"
             | "file"
+            | "history"
             | "viewport"
             | "presentation"
             | "open_recipe"
@@ -190,6 +191,9 @@ pub fn request_ui(arguments: &Value, attached: Option<&str>) -> Result<Value, St
     }
     if action == "presentation" {
         validate_presentation(arguments)?;
+    }
+    if action == "history" && !matches!(arguments["command"].as_str(), Some("undo" | "redo")) {
+        return Err("history requires command undo or redo".into());
     }
     if action == "open_recipe" {
         nbcad_recipes::find(
@@ -255,7 +259,7 @@ fn request_control(
     );
     let request_name = format!("controls/{id}.request.json");
     let result_name = format!("controls/{id}.result.json");
-    // File reconstruction and precise native drawing projection can exceed an
+    // File/history reconstruction and precise native drawing projection can exceed an
     // ordinary control's deadline. The caller and desktop must retain the same
     // bounded request while that work finishes, including a document replacement.
     // Camera motion remains capped at ten seconds by the presentation controller.
@@ -267,8 +271,9 @@ fn request_control(
     });
     let lifetime = if slow_drawing
         || (ui
-            && arguments["action"] == "file"
-            && matches!(arguments["command"].as_str(), Some("open" | "save")))
+            && (arguments["action"] == "history"
+                || (arguments["action"] == "file"
+                    && matches!(arguments["command"].as_str(), Some("open" | "save")))))
     {
         300_000
     } else if ui || arguments.get("duration_ms").is_some() {
@@ -2121,6 +2126,20 @@ mod tests {
 
     #[test]
     fn ui_requests_reject_invalid_actions_targets_and_pacing_before_io() {
+        for command in [Value::Null, json!("save"), json!("UNDO"), json!(1)] {
+            assert!(
+                request_ui(&json!({"action":"history","command":command}), None)
+                    .unwrap_err()
+                    .contains("undo or redo")
+            );
+        }
+        for command in ["undo", "redo"] {
+            assert!(
+                request_ui(&json!({"action":"history","command":command}), None)
+                    .unwrap_err()
+                    .contains("session_id")
+            );
+        }
         for arguments in [
             json!({"action":"open_recipe"}),
             json!({"action":"open_recipe","recipe":"unknown"}),

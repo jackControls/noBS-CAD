@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { getEngine } from '../engine';
+import { displayPointFromModel } from '../namedViewOffsets';
 import { cancelTimelineFeatureEdit, submitBodyFeature } from '../engine/controller';
 import { useTranslation } from '../i18n';
 import type {
@@ -545,6 +546,7 @@ export function BodyFeatureDialog() {
   const datumPlanes = useAppStore((state) => state.datumPlanes);
   const assembly = useAppStore((state) => state.assemblyDocument);
   const assemblySolution = useAppStore((state) => state.assemblySolution);
+  const viewPartOffsets = useAppStore((state) => state.viewPartOffsets);
   const selectedOccurrenceId = useAppStore((state) => state.selectedOccurrenceId);
   const setSelectedOccurrenceId = useAppStore((state) => state.setSelectedOccurrenceId);
   const moveCopyOccurrence = useAppStore((state) => state.moveCopyOccurrence);
@@ -1568,6 +1570,9 @@ export function BodyFeatureDialog() {
         z: displayTarget.baseTranslation[2] + z,
       };
       gizmoOrientation = displayTarget.baseRotation;
+    }
+    if (displayTarget) {
+      gizmoPivot = displayPointFromModel(gizmoPivot, displayTarget.bodyId, viewPartOffsets);
     }
     return {
       kind: 'move_copy',

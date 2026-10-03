@@ -48,6 +48,8 @@ interface ProjectTabRuntime {
   viewState: ProjectTabViewState | null;
   /** Camera pose this tab was last viewed with; null frames the home view. */
   camera: CameraSnapshot | null;
+  /** Small presentation state survives eviction of the mesh read-model. */
+  namedViewPresentation?: Pick<ProjectTabViewState, 'viewPartOffsets' | 'activeNamedView'>;
 }
 
 interface ProjectTabViewState {
@@ -60,6 +62,8 @@ interface ProjectTabViewState {
   assemblySolution: AssemblySolutionDto;
   projectVisibility: ProjectVisibilityDto;
   camDocument: CamDocumentDto;
+  viewPartOffsets: import('../engine/types').ViewPartOffsetDto[];
+  activeNamedView: string | null;
 }
 
 export interface RecoverableProjectTab {
@@ -177,6 +181,8 @@ function activeViewState(): ProjectTabViewState | null {
     assemblySolution: state.assemblySolution,
     projectVisibility: state.projectVisibility,
     camDocument: state.camDocument,
+    viewPartOffsets: state.viewPartOffsets,
+    activeNamedView: state.activeNamedView,
   };
 }
 
@@ -196,7 +202,9 @@ function sameViewState(
     left.assemblyDocument === right.assemblyDocument &&
     left.assemblySolution === right.assemblySolution &&
     left.projectVisibility === right.projectVisibility &&
-    left.camDocument === right.camDocument
+    left.camDocument === right.camDocument &&
+    left.viewPartOffsets === right.viewPartOffsets &&
+    left.activeNamedView === right.activeNamedView
   );
 }
 
@@ -308,6 +316,8 @@ async function loadModelState(
     assemblySolution,
     projectVisibility,
     camDocument,
+    viewPartOffsets: [],
+    activeNamedView: null,
   };
 }
 
@@ -324,6 +334,7 @@ async function currentModelState(): Promise<ProjectTabViewState> {
     assemblySolution,
     projectVisibility,
     camDocument,
+    namedViews,
   ] =
     await Promise.all([
       engine.getDocument(),
@@ -336,6 +347,7 @@ async function currentModelState(): Promise<ProjectTabViewState> {
       engine.assemblySolution(),
       engine.projectVisibility(),
       engine.camDocument(),
+      engine.namedViews(),
     ]);
   return {
     update: { document, scene },
@@ -347,6 +359,8 @@ async function currentModelState(): Promise<ProjectTabViewState> {
     assemblySolution,
     projectVisibility,
     camDocument,
+    viewPartOffsets: namedViews.views.find(view => view.name === namedViews.active)?.part_offsets ?? [],
+    activeNamedView: namedViews.active ?? null,
   };
 }
 
@@ -368,6 +382,14 @@ async function hydrateProjectTab(tabId: string): Promise<void> {
       await engine.createProjectSession(tabId);
       createdColdContext = true;
       projectState = await loadModelState(runtime.modelJson);
+      if (runtime.namedViewPresentation) {
+        projectState = { ...projectState, ...runtime.namedViewPresentation };
+        if (projectState.activeNamedView !== null) {
+          await engine.recallNamedView(projectState.activeNamedView);
+          // Eye toggles made after recall belong to the tab as well.
+          await engine.setProjectVisibility(projectState.projectVisibility);
+        }
+      }
     } else if (!projectState) {
       // Recovery normally leaves only its active tab resident. This fallback
       // keeps the engine API robust if a host restores contexts independently.
@@ -393,6 +415,8 @@ async function hydrateProjectTab(tabId: string): Promise<void> {
         projectState.projectVisibility,
         projectState.assemblySolution,
         projectState.camDocument,
+        projectState.viewPartOffsets,
+        projectState.activeNamedView,
       );
     useAppStore.setState({
       activeProjectTabId: tabId,
@@ -498,6 +522,8 @@ export function createProjectTab(operationOwner?: EngineOperationOwner): Promise
         assemblySolution: emptyAssemblySolution(),
         projectVisibility: { hidden_body_ids: [], hidden_datum_plane_ids: [], hidden_sketch_names: [] },
         camDocument: emptyCamDocument(),
+        viewPartOffsets: [],
+        activeNamedView: null,
       },
     });
     const state = useAppStore.getState();
@@ -594,6 +620,8 @@ export function closeProjectTab(
         assemblySolution: emptyAssemblySolution(),
         projectVisibility: { hidden_body_ids: [], hidden_datum_plane_ids: [], hidden_sketch_names: [] },
         camDocument: emptyCamDocument(),
+        viewPartOffsets: [],
+        activeNamedView: null,
       },
     });
     useAppStore.getState().loadProjectState(update, [], [], null);
@@ -746,7 +774,7 @@ export async function restoreProjectTabs(
         camera: null,
         viewState:
           tab.id === active.id
-            ? { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility, camDocument }
+            ? { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility, camDocument, viewPartOffsets: [], activeNamedView: null }
             : null,
       });
     }
@@ -812,7 +840,17 @@ async function evictProjectRuntimes(tabIds: string[]): Promise<void> {
       const runtime = runtimes.get(id);
       if (!runtime?.resident) continue;
       await engine.dropProjectSession(id);
-      runtimes.set(id, { ...runtime, resident: false, viewState: null });
+      runtimes.set(id, {
+        ...runtime,
+        resident: false,
+        namedViewPresentation: runtime.viewState
+          ? {
+              viewPartOffsets: runtime.viewState.viewPartOffsets,
+              activeNamedView: runtime.viewState.activeNamedView,
+            }
+          : runtime.namedViewPresentation,
+        viewState: null,
+      });
     }
   } finally {
     useAppStore.getState().setSolidBusy(false);

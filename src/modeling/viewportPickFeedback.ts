@@ -9,6 +9,7 @@ import type {
 import type { AppState } from '../store/appStore';
 import type { ActiveViewportPick } from './viewportPicker';
 import { activeViewportPick, pickAccepts } from './viewportPicker';
+import { displayPointFromModel } from '../namedViewOffsets';
 
 /** Stable identity for a curve in a finished sketch. Entity ids are only
  * unique inside their owning sketch, so both fields are required. */
@@ -213,7 +214,9 @@ export function collectAppViewportPickFeedback(
     constructionPlaneSelection: state.constructionPlanePickedReference,
     hoveredOriginPlane: state.hoveredPlane,
     hoveredDatumPlaneId: state.hoveredDatumPlane,
-    selectedSurfacePoint: state.selectedFacePoint,
+    selectedSurfacePoint: state.selectedFacePoint && state.selectedBody !== null
+      ? displayPointFromModel(state.selectedFacePoint, state.selectedBody, state.viewPartOffsets)
+      : state.selectedFacePoint,
     hoveredSurfacePoint: state.modelingPointHover,
   });
 }

@@ -22,6 +22,13 @@ type WasmEngineMethods = WasmEngineInner & {
   set_body_appearance(payload: string): string;
   project_visibility(): string;
   project_set_visibility(payload: string): string;
+  named_views(): string;
+  upsert_named_view(payload: string): string;
+  rename_named_view(payload: string): string;
+  delete_named_view(payload: string): string;
+  clear_named_view(): string;
+  set_named_views(payload: string): string;
+  recall_named_view(payload: string): string;
   construction_set_visibility(payload: string): string;
   drawing_document(): string;
   drawing_apply(payload: string): string;
@@ -280,6 +287,38 @@ export class WasmEngine implements Engine {
   async setProjectVisibility(visibility: ProjectVisibilityDto): Promise<ProjectVisibilityDto> {
     return unwrapEnvelope(
       (this.inner as WasmEngineMethods).project_set_visibility(JSON.stringify(visibility)),
+    );
+  }
+
+  async upsertNamedView(view: import('./types').NamedViewConfigurationDto): Promise<import('./types').NamedViewsDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).upsert_named_view(JSON.stringify(view)));
+  }
+
+  async renameNamedView(name: string, newName: string): Promise<import('./types').NamedViewsDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).rename_named_view(JSON.stringify({ name, new_name: newName })));
+  }
+
+  async deleteNamedView(name: string): Promise<import('./types').NamedViewsDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).delete_named_view(JSON.stringify({ name })));
+  }
+
+  async namedViews(): Promise<import('./types').NamedViewsDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).named_views());
+  }
+
+  async clearNamedView(): Promise<import('./types').NamedViewsDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).clear_named_view());
+  }
+
+  async setNamedViews(views: import('./types').NamedViewConfigurationDto[]): Promise<import('./types').NamedViewsDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).set_named_views(JSON.stringify({ views })),
+    );
+  }
+
+  async recallNamedView(name: string): Promise<import('./types').RecallNamedViewDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).recall_named_view(JSON.stringify({ name })),
     );
   }
 

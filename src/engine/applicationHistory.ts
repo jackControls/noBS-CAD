@@ -8,7 +8,7 @@
  * written to disk, and a normal mutation after Undo invalidates that branch.
  */
 import { useAppStore } from '../store/appStore';
-import type { AssemblyDocumentDto, DrawingDocumentDto } from './types';
+import type { AssemblyDocumentDto, DocumentDto, DrawingDocumentDto } from './types';
 
 export type SolidRedoSnapshot = {
   modelJson: string;
@@ -30,7 +30,7 @@ export type AssemblyHistoryEntry = {
 
 type ObservedModel = {
   projectKey: string;
-  document: unknown;
+  document: DocumentDto | null;
   activeSketch: unknown;
   finishedSketches: unknown;
   solidScene: unknown;
@@ -69,8 +69,13 @@ function observeModel(): ObservedModel {
 }
 
 function sameObservedModel(left: ObservedModel, right: ObservedModel): boolean {
+  const sameDocument = left.document === right.document || (!!left.document && !!right.document
+    && left.document.name === right.document.name
+    && left.document.settings === right.document.settings
+    && left.document.features === right.document.features
+    && left.document.rollback_index === right.document.rollback_index);
   return (
-    left.document === right.document &&
+    sameDocument &&
     left.activeSketch === right.activeSketch &&
     left.finishedSketches === right.finishedSketches &&
     left.solidScene === right.solidScene &&
@@ -118,7 +123,10 @@ function assemblyStack(
 
 function solidFingerprint(): string {
   const document = useAppStore.getState().document;
-  return document ? JSON.stringify(document) : 'no-document';
+  // Browser rows and eye states are presentation metadata. Named-view edits
+  // and visibility recall must not invalidate an assembly command's history.
+  return document ? JSON.stringify({name: document.name, settings: document.settings,
+    features: document.features, rollback_index: document.rollback_index}) : 'no-document';
 }
 
 function notify(): void {

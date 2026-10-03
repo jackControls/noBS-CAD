@@ -367,6 +367,8 @@
     },
     "documentSettings": "Dokument-Einstellungen",
     "namedViews": "Benannte Ansichten",
+    "assembledView": "Zur montierten Ansicht zurückkehren",
+    "namedViewError": "Ansicht konnte nicht gezeigt werden",
     "origin": "Ursprung",
     "originPlaneXy": "XY-Ebene",
     "originPlaneXz": "XZ-Ebene",

@@ -60,6 +60,13 @@
             "$ref": "#/$defs/value"
           }
         },
+        "views": {
+          "type": "array",
+          "description": "Named view configurations stored in the project when the script runs. Each view recalls a camera, the bodies that stay visible, and optional display offsets so an exploded review does not need a second script.",
+          "items": {
+            "$ref": "#/$defs/named_view"
+          }
+        },
         "includes": {
           "type": "array",
           "description": "Relative collection fragments composed before steps/checks. Expanded by the host loader; the Rust parser rejects unresolved includes.",
@@ -452,6 +459,51 @@
           }
         }
       ]
+    },
+    "named_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "camera", "visible_body_ids"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "camera": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["position", "target", "up"],
+          "properties": {
+            "position": { "$ref": "#/$defs/vec3" },
+            "target": { "$ref": "#/$defs/vec3" },
+            "up": { "$ref": "#/$defs/vec3" }
+          }
+        },
+        "visible_body_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/focal_id" }
+        },
+        "part_offsets": {
+          "type": "array",
+          "description": "Display-only translations in millimeters. They do not edit solid geometry.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["body_id", "translation"],
+            "properties": {
+              "body_id": { "$ref": "#/$defs/focal_id" },
+              "translation": { "$ref": "#/$defs/vec3" }
+            }
+          }
+        }
+      }
+    },
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number" }
     },
     "focal_id": {
       "description": "A nonnegative body/component ID or an expression resolving to one.",

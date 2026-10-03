@@ -95,6 +95,34 @@ impl WasmEngine {
         host::handle(&mut self.manager, "project_set_visibility", payload)
     }
 
+    pub fn named_views(&mut self) -> String {
+        host::handle(&mut self.manager, "named_views", "")
+    }
+
+    pub fn clear_named_view(&mut self) -> String {
+        host::handle(&mut self.manager, "clear_named_view", "")
+    }
+
+    pub fn upsert_named_view(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "upsert_named_view", payload)
+    }
+
+    pub fn rename_named_view(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "rename_named_view", payload)
+    }
+
+    pub fn delete_named_view(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "delete_named_view", payload)
+    }
+
+    pub fn set_named_views(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "set_named_views", payload)
+    }
+
+    pub fn recall_named_view(&mut self, payload: &str) -> String {
+        host::handle(&mut self.manager, "recall_named_view", payload)
+    }
+
     pub fn construction_set_visibility(&mut self, payload: &str) -> String {
         host::handle(&mut self.manager, "construction_set_visibility", payload)
     }

@@ -261,3 +261,33 @@ values. Names survive native replay, history and references. Empty/control-chara
 or duplicate names reject before allocating history IDs. Automatic sketch names
 skip an explicitly named SketchN. Headless and live arguments use the same shared
 encoder, including datum names; there is no second conversion implementation.
+
+## Review configurations through MCP
+
+Use `cad_interface` `execute` in `document/appearance` for `named_views`,
+`upsert_named_view`, `rename_named_view`, `delete_named_view`,
+`recall_named_view`, and `clear_named_view`. The individual tool names are also
+callable. Prefer per-view operations over replacing the entire list with
+`set_named_views`. Invalid configurations or names reject atomically.
+
+`upsert_named_view` accepts `{name, camera: {position, target, up},
+visible_body_ids, part_offsets?: [{body_id, translation}]}`.
+`rename_named_view` accepts `{name, new_name}`; delete and recall accept `{name}`.
+Attached `cad_interface` `inspect` returns `view_state` with current camera,
+visibility and offsets. Copy those three fields plus a name into upsert.
+Camera is null when no modeling viewport is available; supply explicit camera
+coordinates headlessly. Do not pass the extra inspection fields to upsert.
+
+Saved views live in the project and survive save/load. Offsets affect display
+only. Metadata edits clear the active configuration; recall to display it again.
+Clear preserves current visibility. Use existing feature-edit tools to iterate
+on the working project, then save with desktop `action: file`, `command: save`,
+and an absolute `.nbcad` `path` (explicit `overwrite: true` to replace a file), or
+headless `cad_project_model`/`cad_load_project_model`. Scripts are optional for
+explicitly requested teaching and replay.
+
+Attached `cad_interface` `action: history` with `command: undo` or `redo` uses the
+same document history controller as Ctrl/Cmd-Z and the native Edit menu, including
+sketch, solid, drawing, and assembly history. Inspect returns `state.history`
+availability. Unavailable commands and commands blocked by a dialog reject;
+this action operates on document history rather than a focused text field.

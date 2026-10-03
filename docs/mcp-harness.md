@@ -116,7 +116,18 @@ The `cam` focus pack exposes CAM document inspection, editing, generation,
 posting and remaining-stock simulation. These operations use the same native
 CAM engine and freshness checks as the Manufacture workspace.
 
-## Repeatable construction and presentation
+## MCP design iteration
+
+Drive working designs through individual MCP operations or `cad_interface`
+`execute`, inspecting between feature edits. Save the `.nbcad` project rather
+than maintaining a presentation copy. Review configurations support list,
+upsert, rename, delete, recall, clear, and project roundtrip through
+`document/appearance`. Attached `cad_interface` `inspect` returns `view_state`
+for camera/visibility/offset capture. Headless clients supply the camera.
+The native stdio regression in `mcp-server/tests/named_views.rs` constructs and
+restores a design through actual MCP requests without script playback.
+
+## Optional repeatable construction and presentation
 
 The readable `.nbcad.jsonc` sources under [examples/scripts](../examples/scripts)
 run through one Rust interpreter from MCP, `cargo xtask run-script`, or the native
