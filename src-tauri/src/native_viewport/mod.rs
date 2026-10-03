@@ -11,6 +11,8 @@
 //! through JavaScript.
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod gpu_stock;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod path_progress;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod platform;
@@ -240,6 +242,13 @@ pub struct ViewportPresentation {
     pub cam_tool: Option<ViewportCamTool>,
     /// Lightweight playback cursor for retained, time-tagged path segments.
     pub cam_path_progress: Option<ViewportCamPathProgress>,
+    /// Settings: remove stock on the GPU between retained CPU stock frames.
+    #[serde(default = "default_true")]
+    pub cam_gpu_stock_removal: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
@@ -390,6 +399,9 @@ pub struct ViewportLineLayer {
     pub segments: Vec<f32>,
     /// CAM-only timing; absent on ordinary modeling/selection guides.
     pub playback: Option<ViewportLinePlayback>,
+    /// Timed travel retained for GPU stock removal while Paths is hidden.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -679,6 +691,9 @@ pub(crate) struct ViewportModel {
 pub(crate) struct ViewportCamStock {
     pub positions: std::sync::Arc<Vec<f32>>,
     pub normals: std::sync::Arc<Vec<f32>>,
+    /// Playback time of this remaining stock; `None` for a complete result.
+    /// GPU removal shows travel after this time until the next frame.
+    pub time_seconds: Option<f64>,
 }
 
 pub struct NativeViewport {

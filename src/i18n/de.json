@@ -123,6 +123,8 @@
     "display": "ANZEIGE",
     "uiScale": "Oberflächengröße",
     "uiScaleDescription": "Skaliert Menüs, Bedienfelder und Werkzeugleisten. Die 3D-Ansicht behält ihren eigenen Zoom. Strg oder ⌘ mit +, − oder 0.",
+    "gpuStockRemoval": "Materialabtrag auf der GPU",
+    "gpuStockRemovalDescription": "Entfernt bei der CAM-Simulationswiedergabe das Material direkt hinter dem Werkzeug auf der GPU. Die CPU-Simulation misst und prüft das Restmaterial weiterhin.",
     "navigation": "NAVIGATION",
     "sixDofSpeed": "3D-Mausgeschwindigkeit",
     "sixDofSpeedDescription": "Steuert sowohl Translation als auch Rotation. Der Standardwert für die Produktion beträgt 150 %.",

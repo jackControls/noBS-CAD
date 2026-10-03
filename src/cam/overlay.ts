@@ -61,6 +61,8 @@ export interface CamOverlayState {
   camSimulationPlayback: CamSimulationPlaybackState | null;
   camWorkpieceView?: CamWorkpieceView;
   camToolpathsVisible?: boolean;
+  /** Keep hidden timed travel for native GPU stock removal. */
+  camGpuStockRemoval?: boolean;
   /** Native Bevy playback uses a retained semantic cutter primitive rather
    *  than resending triangle soup every animation frame. */
   renderPlaybackTool?: boolean;
@@ -322,12 +324,21 @@ export function collectCamOverlay(state: CamOverlayState): CamOverlayLayers {
   // This is transient: closing the dialog restores the user's Paths preference.
   const toolpathsVisible = state.camToolpathsVisible !== false && !state.camDialogOpen;
   if (toolpathsVisible && state.camSimulationTimeline && state.camSimulationPlayback) {
-    const firstCommand = state.camSimulationTimeline.source === 'cam_toolpath' && state.selectedCamOperationId !== null
-      ? state.camProgram?.commands.findIndex((command) => command.kind === 'section_start' && command.operation_id === state.selectedCamOperationId) ?? 0
-      : 0;
-    pushSimulationTimelinePath(layers, state.camSimulationTimeline, setup, firstCommand);
+    pushSimulationTimelinePath(layers, state.camSimulationTimeline, setup, timelineFirstCommand(state));
   } else if (toolpathsVisible) {
     pushSelectedToolpath(layers, state, setup);
+  } else if (
+    !state.camDialogOpen
+    && state.camGpuStockRemoval
+    && state.camSimulationTimeline
+    && state.camSimulationPlayback
+  ) {
+    // Native GPU stock removal follows the timed travel even with Paths off.
+    const start = layers.lines.length;
+    pushSimulationTimelinePath(layers, state.camSimulationTimeline, setup, timelineFirstCommand(state));
+    for (let index = start; index < layers.lines.length; index += 1) {
+      layers.lines[index] = { ...layers.lines[index], hidden: true };
+    }
   }
   if (
     !state.camDialogOpen
@@ -729,6 +740,12 @@ function pushPlaybackTool(
   if (!pose || pose.toolId === null) return;
   const tool = state.camDocument.tools.find((entry) => entry.id === pose.toolId);
   if (tool) pushToolAt(layers, setup, tool, pose.position);
+}
+
+function timelineFirstCommand(state: CamOverlayState): number {
+  return state.camSimulationTimeline?.source === 'cam_toolpath' && state.selectedCamOperationId !== null
+    ? state.camProgram?.commands.findIndex((command) => command.kind === 'section_start' && command.operation_id === state.selectedCamOperationId) ?? 0
+    : 0;
 }
 
 function pushSimulationTimelinePath(

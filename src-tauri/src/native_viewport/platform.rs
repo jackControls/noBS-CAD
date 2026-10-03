@@ -102,6 +102,7 @@ use {
     gtk::prelude::*,
 };
 
+use super::gpu_stock::{GpuStock, GpuStockInputs, GpuStockPlugin, GpuStockStamp};
 use super::path_progress::{active_cursor, split_segment};
 use super::profile_outline::{base_curve_remainder, profile_outline_segments, BaseCurveRemainder};
 use super::ui::{
@@ -2450,7 +2451,11 @@ fn install_cad_scene(app: &mut bevy::app::App) {
         .init_resource::<PresentationResource>()
         .init_resource::<RenderedRevisions>()
         .init_resource::<ViewportUiAssets>()
-        .add_systems(Startup, (ui::load_system_font, setup_scene).chain())
+        .add_plugins(GpuStockPlugin)
+        .add_systems(
+            Startup,
+            (ui::load_system_font, setup_gpu_stock, setup_scene).chain(),
+        )
         .add_systems(
             Update,
             (
@@ -2464,6 +2469,7 @@ fn install_cad_scene(app: &mut bevy::app::App) {
                 rebuild_native_cam_stock,
                 update_native_cam_stock_visibility,
                 update_native_cam_tool,
+                update_gpu_stock,
                 update_native_preview_arrows,
                 rebuild_native_annotations,
                 rebuild_native_hud,
@@ -3575,9 +3581,9 @@ fn rebuild_native_cam_stock(
     stock: Res<CamStockResource>,
     presentation: Res<PresentationResource>,
     mut revisions: ResMut<RenderedRevisions>,
-    existing: Query<(Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>), With<NativeCamStockMesh>>,
+    existing: Query<(Entity, &Mesh3d), With<NativeCamStockMesh>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    gpu_stock: Res<GpuStock>,
     mut cache: Local<CamDisplayMeshCache>,
 ) {
     if revisions.cam_stock == stock.revision {
@@ -3586,8 +3592,7 @@ fn rebuild_native_cam_stock(
     revisions.cam_stock = stock.revision;
 
     let Some(stock) = &stock.value else {
-        for (entity, _mesh, material) in &existing {
-            materials.remove(material.0.id());
+        for (entity, _mesh) in &existing {
             commands.entity(entity).despawn();
         }
         for (_, mesh) in cache.entries.drain(..) {
@@ -3648,7 +3653,7 @@ fn rebuild_native_cam_stock(
         }
         handle
     };
-    if let Some((entity, _, _)) = existing.iter().next() {
+    if let Some((entity, _)) = existing.iter().next() {
         // Replacing only the mesh keeps material/pipeline/entity identity
         // stable; frame playback is not a repeated scene teardown.
         commands.entity(entity).insert(Mesh3d(handle));
@@ -3658,7 +3663,9 @@ fn rebuild_native_cam_stock(
         Name::new("Native retained CAM remaining stock"),
         NativeCamStockMesh,
         Mesh3d(handle),
-        MeshMaterial3d(materials.add(cam_stock_material())),
+        // The shared GPU-removal material: without active playback removal
+        // it renders exactly as the plain stock material.
+        MeshMaterial3d(gpu_stock.clip.clone()),
         if presentation.0.cam_stock_visible {
             Visibility::Visible
         } else {
@@ -3682,6 +3689,65 @@ fn update_native_cam_stock_visibility(
     };
     for mut current in &mut stock {
         *current = visibility;
+    }
+}
+
+fn setup_gpu_stock(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    mut clip_materials: ResMut<Assets<super::gpu_stock::StockClipMaterial>>,
+    mut cut_materials: ResMut<Assets<super::gpu_stock::CutSurfaceMaterial>>,
+) {
+    commands.insert_resource(GpuStock::new(
+        &mut images,
+        &mut clip_materials,
+        &mut cut_materials,
+        cam_stock_material(),
+    ));
+}
+
+/// Advance GPU stock removal to the playback cursor. Runs every frame but
+/// only re-extracts travel when the cursor, path or retained stock changed.
+#[allow(clippy::too_many_arguments)]
+fn update_gpu_stock(
+    mut commands: Commands,
+    presentation: Res<PresentationResource>,
+    preview: Res<PreviewResource>,
+    stock: Res<CamStockResource>,
+    mut gpu_stock: ResMut<GpuStock>,
+    mut stamp: ResMut<GpuStockStamp>,
+    mut images: ResMut<Assets<Image>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut clip_materials: ResMut<Assets<super::gpu_stock::StockClipMaterial>>,
+    mut cut_materials: ResMut<Assets<super::gpu_stock::CutSurfaceMaterial>>,
+    mut visibility: Query<&mut Visibility>,
+) {
+    if !presentation.is_changed() && !preview.is_changed() && !stock.is_changed() {
+        return;
+    }
+    let state = &presentation.0;
+    let value = stock.value.as_ref();
+    let revision = stamp.revision();
+    gpu_stock.update(
+        GpuStockInputs {
+            enabled: state.cam_gpu_stock_removal && state.cam_stock_visible,
+            stock_positions: value.map(|stock| stock.positions.as_slice()),
+            stock_time: value.and_then(|stock| stock.time_seconds),
+            stock_revision: stock.revision,
+            cursor: state.cam_path_progress,
+            tool: state.cam_tool,
+            lines: &preview.value.lines,
+        },
+        &mut commands,
+        &mut images,
+        &mut meshes,
+        &mut clip_materials,
+        &mut cut_materials,
+        stamp.bypass_change_detection(),
+        &mut visibility,
+    );
+    if stamp.revision() != revision {
+        stamp.set_changed();
     }
 }
 
@@ -5007,7 +5073,7 @@ fn draw_cad_gizmos(
     // traveled segments. Retain their geometry and clip with the clock so
     // playing and rewinding never rebuild or upload the full timeline.
     for completed_pass in [false, true] {
-        for layer in &preview.value.lines {
+        for layer in preview.value.lines.iter().filter(|layer| !layer.hidden) {
             let playback = layer.playback.as_ref();
             // Presentation and preview arrive independently. Never attach the
             // new cutter's cursor to a still-visible previous timeline.

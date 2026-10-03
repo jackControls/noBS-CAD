@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { simulationPlaybackPathId, simulationPlaybackPathLayers, simulationPlaybackPose } from '../src/cam/simulationPath';
-import type { CamSimulationResultDto, CamSimulationStepDto } from '../src/engine/types';
+import type { CamDocumentDto, CamSimulationResultDto, CamSimulationStepDto } from '../src/engine/types';
+import { collectCamOverlay } from '../src/cam/overlay';
 
 const step = (overrides: Partial<CamSimulationStepDto>): CamSimulationStepDto => ({
   command_index: 1, source_line: null, kind: 'linear', tool_id: 1,
@@ -52,4 +53,24 @@ for (const plane of ['xy', 'xz', 'yz'] as const) {
   assert.deepEqual(layers[0].segments.slice(14 * 6, 14 * 6 + 3), modelPoint,
     `${plane} helix display and cutter must use the same interpolation/WCS`);
 }
-console.log('PASS: retained timed path, operation scope, WCS, dwell, all arc planes and clock-only reuse');
+// Native GPU stock removal follows the timed travel even with Paths hidden;
+// those layers stay hidden and exist only while removal is enabled.
+const camDocument = {
+  active_setup_id: 1,
+  setups: [{ id: 1, wcs: timeline.wcs, stock: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 10, z: 10 } }, operations: [], body_ids: [] }],
+  tools: [], linking: [],
+} as unknown as CamDocumentDto;
+const overlay = (camToolpathsVisible: boolean, camGpuStockRemoval: boolean) => collectCamOverlay({
+  activeTab: 'cam', camDocument, selectedCamOperationId: null, camProgram: null,
+  camSimulation: null, camSimulationTimeline: timeline,
+  camSimulationPlayback: { timeSeconds: 12, playing: true, speed: 1 } as never,
+  camWorkpieceView: 'model', camToolpathsVisible, camGpuStockRemoval, renderPlaybackTool: false,
+  camPointPick: null, camHolePick: null, camLoopPick: null, camChainPick: null,
+  camDialogOpen: false, solidScene: null,
+} as never).lines.filter((layer) => layer.playback);
+assert.ok(overlay(true, true).every((layer) => !layer.hidden), 'visible Paths draw the timed travel');
+const hidden = overlay(false, true);
+assert.equal(hidden.length, 2);
+assert.ok(hidden.every((layer) => layer.hidden && layer.segments.length > 0), 'hidden travel keeps its segments');
+assert.equal(overlay(false, false).length, 0, 'no hidden travel without GPU removal');
+console.log('PASS: retained timed path, operation scope, WCS, dwell, all arc planes, clock-only reuse and hidden travel for GPU stock removal');

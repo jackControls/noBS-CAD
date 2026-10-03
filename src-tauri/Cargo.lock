@@ -3929,9 +3929,13 @@ name = "nbcad"
 version = "0.2.2"
 dependencies = [
  "bevy",
+ "bevy_asset",
  "bevy_ecs",
  "bevy_gizmos",
+ "bevy_image",
  "bevy_reflect",
+ "bevy_render",
+ "encase",
  "gdk",
  "gdkx11-sys",
  "glib",

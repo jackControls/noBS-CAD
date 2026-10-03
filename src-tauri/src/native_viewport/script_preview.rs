@@ -1169,6 +1169,204 @@ mod tests {
         }
     }
 
+    /// Real production GPU path for playback stock removal: a retained stock
+    /// box, a flat cutter pass across its top and the playback cursor half
+    /// way. GPU removal must change the image (slot floor and walls), and
+    /// with no travel since the retained frame it must render exactly like
+    /// plain stock: no stray cut surface, no z-fighting. Kept opt-in for
+    /// GPU-less hosts; set `NBCAD_PREVIEW_PROOF_DIR` to retain the images.
+    #[test]
+    #[ignore = "requires a GPU; set NBCAD_PREVIEW_PROOF_DIR to retain visual evidence"]
+    fn native_gpu_stock_removal_cuts_behind_the_cutter() {
+        use super::super::super::{
+            ViewportCamPathProgress, ViewportCamStock, ViewportCamTool, ViewportLineLayer,
+            ViewportLinePlayback, ViewportPresentation, ViewportPreview,
+        };
+        let (size, height) = (40.0f32, 10.0f32);
+        let corners = |i: usize| {
+            [
+                if i & 1 == 0 { 0.0 } else { size },
+                if i & 2 == 0 { 0.0 } else { size },
+                if i & 4 == 0 { 0.0 } else { height },
+            ]
+        };
+        // Outward faces of the box as triangle soup with flat normals.
+        let faces: [([usize; 4], [f32; 3]); 6] = [
+            ([0, 2, 3, 1], [0.0, 0.0, -1.0]),
+            ([4, 5, 7, 6], [0.0, 0.0, 1.0]),
+            ([0, 1, 5, 4], [0.0, -1.0, 0.0]),
+            ([2, 6, 7, 3], [0.0, 1.0, 0.0]),
+            ([0, 4, 6, 2], [-1.0, 0.0, 0.0]),
+            ([1, 3, 7, 5], [1.0, 0.0, 0.0]),
+        ];
+        let mut positions = Vec::new();
+        let mut normals = Vec::new();
+        for (quad, normal) in faces {
+            for index in [quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]] {
+                positions.extend(corners(index));
+                normals.extend(normal);
+            }
+        }
+        let body: Frame = serde_json::from_value(serde_json::json!({
+            "caption": "Hidden fit body",
+            "scene": {"bodies": [{"id": 1, "name": "Fit", "feature_id": 2, "faces": [],
+                "edges": [], "mesh": {"positions": [0.0, 0.0, 0.0, size, 0.0, 0.0,
+                    0.0, size, 0.0, 0.0, 0.0, height], "normals": [0, 0, 1, 0, 0, 1, 0, 0, 1,
+                    0, 0, 1], "indices": [0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3]}}], "errors": []}
+        }))
+        .unwrap();
+        let document = PreviewDocument::new(vec![body]).unwrap();
+        let mut renderer = PreviewRenderer::new().unwrap();
+        let cancelled = AtomicBool::new(false);
+        let tool = nbcad_cam::CamCutterGeometryDto {
+            kind: nbcad_cam::CamToolKind::FlatEndMill,
+            diameter: 10.0,
+            flute_length: 20.0,
+            overall_length: 50.0,
+            point_angle_degrees: None,
+            corner_radius: None,
+            corner_chamfer: None,
+        };
+        let world = renderer.app.world_mut();
+        *world.resource_mut::<CamStockResource>() = CamStockResource {
+            value: Some(ViewportCamStock {
+                positions: Arc::new(positions),
+                normals: Arc::new(normals),
+                time_seconds: Some(0.0),
+            }),
+            revision: 1,
+        };
+        *world.resource_mut::<PreviewResource>() = PreviewResource {
+            value: ViewportPreview {
+                lines: vec![ViewportLineLayer {
+                    color: [0.2, 0.4, 1.0, 1.0],
+                    segments: vec![-10.0, 20.0, 7.0, 50.0, 20.0, 7.0],
+                    playback: Some(ViewportLinePlayback {
+                        path_id: 7,
+                        completed_color: [0.2, 0.4, 1.0, 1.0],
+                        segment_times: vec![0.0, 1.0],
+                    }),
+                    ..default()
+                }],
+                ..default()
+            },
+            revision: 1,
+            mesh_revision: 1,
+        };
+        // `side` cuts the +X face with the tool axis along +X: the field
+        // frame must follow any setup tool axis, not only model Z.
+        let mut render = |label: &str, enabled: bool, time: f64, z: f32, side: bool| {
+            let x = -10.0 + 60.0 * time as f32;
+            let (start, end, tip, axis) = if side {
+                (
+                    [37.0, -10.0, 5.0],
+                    [37.0, 50.0, 5.0],
+                    [37.0, x, 5.0],
+                    [1.0, 0.0, 0.0],
+                )
+            } else {
+                (
+                    [-10.0, 20.0, z],
+                    [50.0, 20.0, z],
+                    [x, 20.0, z],
+                    [0.0, 0.0, 1.0],
+                )
+            };
+            renderer
+                .app
+                .world_mut()
+                .resource_mut::<PreviewResource>()
+                .value
+                .lines[0]
+                .segments = [start, end].concat();
+            renderer
+                .app
+                .world_mut()
+                .resource_mut::<PresentationResource>()
+                .0 = ViewportPresentation {
+                hidden_body_ids: vec![1],
+                cam_stock_visible: true,
+                cam_tool: Some(ViewportCamTool {
+                    tip,
+                    axis,
+                    geometry: tool,
+                }),
+                cam_path_progress: Some(ViewportCamPathProgress {
+                    path_id: 7,
+                    time_seconds: time,
+                    position: tip,
+                }),
+                cam_gpu_stock_removal: enabled,
+                ..default()
+            };
+            let mut request = request(format!("gpu-stock-{label}"), String::new(), 1);
+            request.width = 600;
+            request.height = 400;
+            let png = renderer
+                .render(
+                    &document,
+                    &request,
+                    &cancelled,
+                    Instant::now() + Duration::from_secs(60),
+                )
+                .unwrap();
+            if let Some(path) = std::env::var_os("NBCAD_PREVIEW_PROOF_DIR") {
+                std::fs::create_dir_all(&path).unwrap();
+                std::fs::write(
+                    std::path::Path::new(&path).join(format!("gpu-stock-{label}.png")),
+                    &png,
+                )
+                .unwrap();
+            }
+            decode_rgba(&png).2
+        };
+        let plain_start = render("off-start", false, 0.0, 7.0, false);
+        let untraveled = render("untraveled", true, 0.0, 7.0, false);
+        let plain = render("off", false, 0.5, 7.0, false);
+        let cut = render("cut", true, 0.5, 7.0, false);
+        let plain_again = render("off-again", false, 0.5, 7.0, false);
+        // A pass exactly at the retained top removes nothing: the retained
+        // surface must win, without z-fighting against the GPU surface.
+        let plain_top = render("off-top", false, 0.5, height, false);
+        let coplanar = render("coplanar", true, 0.5, height, false);
+        let plain_side = render("off-side", false, 0.5, 0.0, true);
+        let side = render("side", true, 0.5, 0.0, true);
+        let differing = |a: &[u8], b: &[u8]| {
+            a.chunks_exact(4)
+                .zip(b.chunks_exact(4))
+                .filter(|(p, q)| p.iter().zip(q.iter()).any(|(x, y)| x.abs_diff(*y) > 8))
+                .count()
+        };
+        assert_eq!(
+            differing(&plain_start, &untraveled),
+            0,
+            "no travel since the retained frame renders exactly like plain stock"
+        );
+        let removed = differing(&plain, &cut);
+        assert!(
+            removed > 1_000,
+            "the traveled slot must be visibly removed ({removed} pixels changed)"
+        );
+        assert_eq!(
+            differing(&plain, &plain_again),
+            0,
+            "turning removal off restores the retained stock"
+        );
+        // MSAA shades a partly covered pixel at its center, where a cut
+        // surface triangle's height is extrapolated: allow a few silhouette
+        // pixels where the cutter meets the retained top.
+        let side_pixels = differing(&plain_side, &side);
+        assert!(
+            side_pixels > 300,
+            "a tilted tool axis must remove its groove ({side_pixels} pixels changed)"
+        );
+        let coplanar_pixels = differing(&plain_top, &coplanar);
+        assert!(
+            coplanar_pixels <= 4,
+            "travel on the retained top surface changes nothing ({coplanar_pixels} pixels changed)"
+        );
+    }
+
     fn decode_rgba(png: &[u8]) -> (u32, u32, Vec<u8>) {
         use bevy::asset::RenderAssetUsages;
         use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};

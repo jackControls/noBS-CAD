@@ -197,6 +197,8 @@ interface NativePresentation {
     timeSeconds: number;
     position: [number, number, number];
   } | null;
+  /** Settings: remove stock on the GPU between retained CPU stock frames. */
+  camGpuStockRemoval: boolean;
 }
 
 export type NativeViewportLinePattern = 'solid' | 'dotted';
@@ -213,6 +215,8 @@ export interface NativeViewportLineLayer {
     completedColor: [number, number, number, number];
     segmentTimes: number[];
   };
+  /** Timed travel kept for GPU stock removal while Paths is hidden. */
+  hidden?: boolean;
 }
 
 export interface NativeViewportPointLayer {
@@ -1014,11 +1018,14 @@ export function collectNativeViewportPresentation(): NativePresentation {
     camStockVisible: camView.stockVisible
       && state.camSimulation?.native_stock_present === true,
     camTool,
-    camPathProgress: state.camToolpathsVisible && camPlayback && camPathPoint ? {
+    // The cursor also drives GPU stock removal, so it does not depend on
+    // Paths visibility; hidden timed layers are not drawn.
+    camPathProgress: camPlayback && camPathPoint ? {
       pathId: simulationPlaybackPathId(camPlayback.timeline),
       timeSeconds: camPlayback.timeSeconds,
       position: [camPathPoint.x, camPathPoint.y, camPathPoint.z],
     } : null,
+    camGpuStockRemoval: state.gpuStockRemoval,
   };
 }
 
@@ -1810,6 +1817,7 @@ function previewKey(preview: NativeViewportTransient): string {
     addString(layer.pattern);
     layer.segments.forEach(addNumber);
     addNumber(layer.playback ? 1 : 0);
+    addNumber(layer.hidden ? 1 : 0);
     if (layer.playback) {
       addNumber(layer.playback.pathId);
       layer.playback.completedColor.forEach(addNumber);

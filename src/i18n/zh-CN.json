@@ -123,6 +123,8 @@
     "display": "显示",
     "uiScale": "界面大小",
     "uiScaleDescription": "缩放菜单、面板和工具栏。3D 视图保留自己的缩放。Ctrl 或 ⌘ 配合 +、− 或 0。",
+    "gpuStockRemoval": "GPU 去除余料",
+    "gpuStockRemovalDescription": "CAM 仿真回放时，在 GPU 上紧随刀具去除余料。CPU 仿真仍负责测量和校验剩余余料。",
     "navigation": "导航",
     "sixDofSpeed": "3D 鼠标速度",
     "sixDofSpeedDescription": "控制平移和旋转。生产默认值为 150%。",

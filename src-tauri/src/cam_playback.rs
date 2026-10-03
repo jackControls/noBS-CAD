@@ -166,7 +166,10 @@ pub(crate) async fn engine_cam_playback_sample(
             .sample(input.time, Some(&worker.cancellation))
             .map_err(|error| error.to_string())?;
         if simulation.stock_mesh.is_some() {
-            player.stock = retained_cam_stock(&simulation);
+            player.stock = retained_cam_stock(&simulation).map(|stock| ViewportCamStock {
+                time_seconds: Some(input.time),
+                ..stock
+            });
             player.revision += 1;
         }
         let mesh_bytes = player
@@ -288,6 +291,7 @@ mod tests {
         let stock = ViewportCamStock {
             positions: Arc::new(vec![0.0; 9]),
             normals: Arc::new(vec![1.0; 9]),
+            time_seconds: None,
         };
         let frames = (1..9)
             .map(|id| ReadyFrame {

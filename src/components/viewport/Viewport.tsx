@@ -3394,6 +3394,7 @@ export function Viewport() {
         camSimulationPlayback: transientState.camSimulationPlayback,
         camWorkpieceView: transientState.camWorkpieceView,
         camToolpathsVisible: transientState.camToolpathsVisible,
+        camGpuStockRemoval: nativeViewportIsActive() && transientState.gpuStockRemoval,
         renderPlaybackTool: !nativeViewportIsActive(),
         camPointPick: transientState.camPointPick,
         camHolePick: transientState.camHolePick,

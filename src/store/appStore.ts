@@ -76,6 +76,7 @@ import {
   persistSixDofSpeed,
   readSixDofSpeed,
 } from '../navigationPreferences';
+import { persistGpuStockRemoval, readGpuStockRemoval } from '../simulationPreferences';
 import { applyUiScale, currentUiScale, persistUiScale, readUiScale, snapUiScale } from '../uiScale';
 import type { BrowserNode, DocumentDto, NodeId } from '../types/document';
 import { stageDatumPlanes, stageFinishedSketches } from '../engine/historyStage';
@@ -832,6 +833,8 @@ export interface AppState {
   sixDofSpeed: number;
   /** Desktop webview zoom; 1 renders CSS pixels at the OS logical pixel size. */
   uiScale: number;
+  /** Desktop CAM playback: remove stock on the GPU between CPU stock frames. */
+  gpuStockRemoval: boolean;
   /** Global appearance preference; System is the first-run/default value. */
   themePreference: ThemePreference;
   resolvedTheme: ResolvedTheme;
@@ -1124,6 +1127,7 @@ export interface AppState {
   setShowDof: (show: boolean) => void;
   setSixDofSpeed: (speed: number) => void;
   setUiScale: (scale: number, force?: boolean) => void;
+  setGpuStockRemoval: (enabled: boolean) => void;
   setThemePreference: (preference: ThemePreference) => void;
   syncResolvedTheme: () => void;
   setSettingsOpen: (open: boolean) => void;
@@ -1392,6 +1396,7 @@ export const useAppStore = create<AppState>()((set) => ({
   showDof: false,
   sixDofSpeed: INITIAL_SIX_DOF_SPEED,
   uiScale: INITIAL_UI_SCALE,
+  gpuStockRemoval: readGpuStockRemoval(),
   themePreference: INITIAL_THEME_PREFERENCE,
   resolvedTheme: INITIAL_RESOLVED_THEME,
   settingsOpen: false,
@@ -2649,6 +2654,8 @@ export const useAppStore = create<AppState>()((set) => ({
   setShowDof: (show) => set({ showDof: show }),
 
   setSixDofSpeed: (speed) => set({ sixDofSpeed: persistSixDofSpeed(speed) }),
+
+  setGpuStockRemoval: (enabled) => set({ gpuStockRemoval: persistGpuStockRemoval(enabled) }),
 
   setUiScale: (scale, force = false) => {
     const next = snapUiScale(scale);

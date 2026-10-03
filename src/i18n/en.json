@@ -123,6 +123,8 @@
     "display": "DISPLAY",
     "uiScale": "Interface size",
     "uiScaleDescription": "Scales menus, panels and toolbars. The 3D view keeps its own zoom. Ctrl or ⌘ with +, −, or 0.",
+    "gpuStockRemoval": "GPU stock removal",
+    "gpuStockRemovalDescription": "During CAM simulation playback, remove stock on the GPU right behind the cutter. The CPU simulation still measures and verifies remaining stock.",
     "navigation": "NAVIGATION",
     "sixDofSpeed": "3D mouse speed",
     "sixDofSpeedDescription": "Controls both translation and rotation. The production default is 150%.",

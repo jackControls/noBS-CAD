@@ -52,6 +52,8 @@ export function AppearanceDialog() {
   const setSixDofSpeed = useAppStore((s) => s.setSixDofSpeed);
   const uiScale = useAppStore((s) => s.uiScale);
   const setUiScale = useAppStore((s) => s.setUiScale);
+  const gpuStockRemoval = useAppStore((s) => s.gpuStockRemoval);
+  const setGpuStockRemoval = useAppStore((s) => s.setGpuStockRemoval);
   const setOpen = useAppStore((s) => s.setSettingsOpen);
   const locale = useLocaleStore((s) => s.locale);
   const setLocale = useLocaleStore((s) => s.setLocale);
@@ -240,6 +242,23 @@ export function AppearanceDialog() {
                   </button>
                 </div>
               </div>
+              <label className="mt-2 flex cursor-pointer items-start gap-3 rounded-lg border border-edge bg-header/55 p-3">
+                <input
+                  type="checkbox"
+                  data-testid="gpu-stock-removal"
+                  checked={gpuStockRemoval}
+                  onChange={(event) => setGpuStockRemoval(event.target.checked)}
+                  className="mt-0.5 accent-accent"
+                />
+                <span>
+                  <span className="block text-xs font-semibold text-ink">
+                    {t('appearance.gpuStockRemoval')}
+                  </span>
+                  <span className="mt-1 block text-[10px] leading-relaxed text-mute">
+                    {t('appearance.gpuStockRemovalDescription')}
+                  </span>
+                </span>
+              </label>
             </div>
           )}
 

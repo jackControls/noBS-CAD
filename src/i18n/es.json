@@ -123,6 +123,8 @@
     "display": "PANTALLA",
     "uiScale": "Tamaño de la interfaz",
     "uiScaleDescription": "Escala menús, paneles y barras de herramientas. La vista 3D conserva su propio zoom. Ctrl o ⌘ con +, − o 0.",
+    "gpuStockRemoval": "Eliminación de material en la GPU",
+    "gpuStockRemovalDescription": "Durante la reproducción de la simulación CAM, elimina el material en la GPU justo detrás de la herramienta. La simulación en CPU sigue midiendo y verificando el material restante.",
     "navigation": "NAVEGACIÓN",
     "sixDofSpeed": "Velocidad del ratón 3D",
     "sixDofSpeedDescription": "Controla tanto la traslación como la rotación. El valor predeterminado de producción es 150%.",
