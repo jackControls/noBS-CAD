@@ -10,4 +10,8 @@ publish = false
 anyhow = "1"
 base64 = "0.22"
 serde_json = { version = "1", features = ["float_roundtrip"] }
+toml_edit = "0.25.15"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
