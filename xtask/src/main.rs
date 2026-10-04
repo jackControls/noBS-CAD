@@ -12,6 +12,7 @@ mod icon_audit;
 mod install_mcp;
 mod knowledge;
 mod linux_fixture;
+mod material_catalog;
 mod mcp_scenarios;
 mod native_assembly_test;
 mod native_body_appearance_test;
@@ -86,6 +87,7 @@ fn run() -> Result<()> {
     };
 
     match command.as_str() {
+        "materials" => material_catalog::run(args),
         "doctor" => build_tools::doctor(args),
         "bootstrap" => build_tools::bootstrap(args),
         "check" => build_tools::check(args),
@@ -133,6 +135,7 @@ Usage:
   cargo run -p xtask -- install-mcp --clients LIST [--no-build] [--binary PATH]
 
 Commands:
+  materials     Fetch pinned engineering/filament data into the unified catalog; --fetch, --check.
   doctor        Read-only compiler/SDK prerequisites; --scope engine|desktop|mcp|wasm.
   bootstrap     Install pinned Rust targets/tools; --wasm, --target TRIPLE, --tool NAME.
   check         Scoped locked Cargo check and formatting; --clippy, --timings, --sccache.

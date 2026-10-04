@@ -228,6 +228,11 @@ fn migrate_v2_to_v3(model: &mut serde_json::Value) {
 }
 
 pub(crate) fn validate_project(model: &ProjectModelV9) -> Result<(), String> {
+    for appearance in &model.body_appearances {
+        if let Some(material) = &appearance.material {
+            material.validate()?;
+        }
+    }
     if model.format != PROJECT_FORMAT || model.schema_version != PROJECT_SCHEMA_VERSION {
         return Err("project header does not match the supported schema".to_string());
     }

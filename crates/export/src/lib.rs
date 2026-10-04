@@ -340,6 +340,7 @@ mod tests {
     #[test]
     fn threemf_bambu_target_is_a_standard_model() {
         let blue = BodyAppearance {
+            material: None,
             body_id: BodyId(2),
             color: nbcad_core::Rgba8::opaque(40, 90, 200),
             material_name: "Bambu PLA Basic".into(),

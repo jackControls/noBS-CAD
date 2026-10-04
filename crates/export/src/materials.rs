@@ -1,7 +1,7 @@
 //! Material catalog presets for manufacturing appearance + slicer metadata.
 //!
 //! Source of truth: [`../presets/catalog.json`](../presets/catalog.json).
-//! The TypeScript UI imports the same JSON via Vite so brands stay aligned.
+//! Engineering properties and slicer profiles share this same catalog and API.
 
 use std::sync::OnceLock;
 
@@ -23,9 +23,11 @@ struct CatalogEntry {
     filament_id: Option<String>,
     density_g_cm3: Option<f64>,
     diameter_mm: f64,
+    #[serde(default)]
+    material: Option<nbcad_core::MaterialDetails>,
 }
 
-/// One selectable filament color / profile entry.
+/// One selectable material, with optional engineering and printing properties.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MaterialPreset {
     pub id: String,
@@ -37,6 +39,8 @@ pub struct MaterialPreset {
     pub filament_id: Option<String>,
     pub density_g_cm3: Option<f64>,
     pub diameter_mm: f64,
+    #[serde(default)]
+    pub material: Option<nbcad_core::MaterialDetails>,
 }
 
 impl MaterialPreset {
@@ -52,6 +56,7 @@ impl MaterialPreset {
             preset_id: Some(self.id.clone()),
             density_g_cm3: self.density_g_cm3,
             diameter_mm: self.diameter_mm,
+            material: self.material.clone(),
         }
     }
 }
@@ -73,13 +78,14 @@ fn catalog_entries() -> &'static [MaterialPreset] {
                     filament_id: entry.filament_id,
                     density_g_cm3: entry.density_g_cm3,
                     diameter_mm: entry.diameter_mm,
+                    material: entry.material,
                 })
                 .collect()
         })
         .as_slice()
 }
 
-/// Built-in catalog covering Generic + major FDM ecosystems.
+/// Embedded unified catalog covering plastics, metals, and FDM ecosystems.
 pub fn material_catalog() -> &'static [MaterialPreset] {
     catalog_entries()
 }
@@ -92,6 +98,13 @@ pub fn find_preset(id: &str) -> Option<&'static MaterialPreset> {
 /// mutation. Desktop inboxes and headless tools must send the same full value
 /// to the owning engine; deserializing a shorthand directly invents defaults.
 pub fn resolve_body_appearance(arguments: &serde_json::Value) -> Result<BodyAppearance, String> {
+    // A full resolved record is a saved snapshot, not a request to update it.
+    if arguments.get("material").is_some_and(|v| !v.is_null()) {
+        let appearance: BodyAppearance =
+            serde_json::from_value(arguments.clone()).map_err(|e| e.to_string())?;
+        appearance.material.as_ref().unwrap().validate()?;
+        return Ok(appearance);
+    }
     if let Some(preset_id) = arguments
         .get("preset_id")
         .and_then(serde_json::Value::as_str)
@@ -167,5 +180,85 @@ mod tests {
     fn catalog_json_roundtrips_count() {
         let value: serde_json::Value = serde_json::from_str(&catalog_json()).unwrap();
         assert_eq!(value.as_array().unwrap().len(), material_catalog().len());
+    }
+
+    #[test]
+    fn unified_catalog_preserves_units_context_and_provenance() {
+        let mut ids = std::collections::BTreeSet::new();
+        for preset in material_catalog() {
+            assert!(ids.insert(&preset.id));
+            let material = preset.material.as_ref().unwrap();
+            material.validate().unwrap();
+            assert_eq!(material.catalog_id, preset.id);
+        }
+        let metal = find_preset("material.aluminum-6061-t6")
+            .unwrap()
+            .material
+            .as_ref()
+            .unwrap();
+        assert_eq!(metal.kind, "metal");
+        assert!(metal.print_profiles.is_empty());
+        assert!(metal.properties.iter().any(|p| p.name == "YoungsModulus"
+            && p.unit == "Pa"
+            && p.value == nbcad_core::MaterialValue::Number(68_900_000_000.)));
+        let plastic = find_preset("generic.pla.gray")
+            .unwrap()
+            .material
+            .as_ref()
+            .unwrap();
+        assert!(plastic
+            .properties
+            .iter()
+            .any(|p| p.context.starts_with("Engineering reference:")));
+        assert!(plastic
+            .properties
+            .iter()
+            .any(|p| p.context.starts_with("Print profile:")));
+        assert!(plastic
+            .sources
+            .iter()
+            .any(|s| s.repository == "FreeCAD/FreeCAD"));
+        assert!(plastic
+            .sources
+            .iter()
+            .any(|s| s.repository == "OrcaSlicer/OrcaSlicer"));
+        assert!(plastic
+            .warnings
+            .iter()
+            .any(|w| w.contains("not measured strength")));
+        let branded = find_preset("bambu.pla.basic.red")
+            .unwrap()
+            .material
+            .as_ref()
+            .unwrap();
+        assert!(
+            !branded
+                .properties
+                .iter()
+                .any(|p| p.context.starts_with("Engineering reference:")),
+            "Generic plastic strength must not be assigned to a branded formulation"
+        );
+    }
+
+    #[test]
+    fn full_snapshot_survives_missing_preset_and_shorthand_resolves_catalog() {
+        let mut appearance = find_preset("generic.pla.gray")
+            .unwrap()
+            .to_appearance(BodyId(7));
+        appearance.preset_id = Some("removed-in-a-future-catalog".into());
+        let serialized = serde_json::to_value(&appearance).unwrap();
+        assert_eq!(resolve_body_appearance(&serialized).unwrap(), appearance);
+        assert_eq!(
+            resolve_body_appearance(
+                &serde_json::json!({"body_id":7,"preset_id":"material.aluminum-6061-t6"})
+            )
+            .unwrap(),
+            find_preset("material.aluminum-6061-t6")
+                .unwrap()
+                .to_appearance(BodyId(7))
+        );
+        let mut invalid = serialized;
+        invalid["material"]["properties"][0]["source_id"] = serde_json::json!("missing");
+        assert!(resolve_body_appearance(&invalid).is_err());
     }
 }

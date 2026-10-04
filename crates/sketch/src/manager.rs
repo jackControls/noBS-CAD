@@ -2703,6 +2703,9 @@ impl SketchManager {
                 "body appearance requires a non-zero body id".to_string(),
             ));
         }
+        if let Some(material) = &appearance.material {
+            material.validate().map_err(SessionError::Solid)?;
+        }
         let material_name = appearance.material_name.trim();
         let material_name = if material_name.is_empty() {
             DEFAULT_MATERIAL_NAME.to_string()
@@ -2746,6 +2749,7 @@ impl SketchManager {
             } else {
                 nbcad_core::DEFAULT_FILAMENT_DIAMETER_MM
             },
+            material: appearance.material,
         };
         if let Some(existing) = self
             .body_appearances
@@ -6696,6 +6700,34 @@ mod project_tests {
         }
         .origin_basis()
         .unwrap();
+        let material = nbcad_core::MaterialDetails {
+            kind: "plastic".into(),
+            catalog_id: "saved.material".into(),
+            warnings: vec!["Saved reference data".into()],
+            sources: vec![nbcad_core::MaterialSource {
+                id: "saved.source".into(),
+                repository: "test/source".into(),
+                revision: "1".repeat(40),
+                path: "card.json".into(),
+                sha256: "2".repeat(64),
+                license: "CC-BY-4.0".into(),
+                author: "Test author".into(),
+                reference: "https://example.com/card".into(),
+            }],
+            properties: vec![nbcad_core::MaterialProperty {
+                name: "Density".into(),
+                value: nbcad_core::MaterialValue::Number(1234.56789012345),
+                unit: "kg/m^3".into(),
+                context: "Engineering reference: saved material".into(),
+                source_id: "saved.source".into(),
+            }],
+            print_profiles: vec![nbcad_core::MaterialPrintProfile {
+                name: "Saved profile".into(),
+                source_id: "saved.source".into(),
+                compatible_printers: vec!["Test printer".into()],
+            }],
+            ..Default::default()
+        };
         manager
             .begin_sketch(PlaneRef::OriginPlane {
                 plane: OriginPlane::Xy,
@@ -6748,6 +6780,7 @@ mod project_tests {
                 filament_id: Some("GFA00".into()),
                 preset_id: Some("bambu.pla.basic.red".into()),
                 density_g_cm3: Some(1.24),
+                material: Some(material.clone()),
                 diameter_mm: 1.75,
             })
             .unwrap();
@@ -6762,6 +6795,7 @@ mod project_tests {
             filament_id: None,
             preset_id: None,
             density_g_cm3: None,
+            material: None,
             diameter_mm: 1.75,
         });
         let visibility = manager
@@ -6808,6 +6842,18 @@ mod project_tests {
         assert_eq!(restored[0].body_id, body_id);
         assert_eq!(restored[0].material_name, "PLA Red");
         assert_eq!(restored[0].color.r, 200);
+        assert_eq!(restored[0].material.as_ref(), Some(&material));
+        let before = loaded.export_project_model().unwrap();
+        let mut bad = restored[0].clone();
+        bad.material.as_mut().unwrap().kind = "invalid".into();
+        assert!(loaded.set_body_appearance(bad).is_err());
+        assert_eq!(loaded.export_project_model().unwrap(), before);
+        let mut bad_project: serde_json::Value = serde_json::from_str(&before).unwrap();
+        bad_project["body_appearances"][0]["material"]["kind"] = serde_json::json!("invalid");
+        assert!(loaded
+            .prepare_load_project(bad_project.to_string())
+            .is_err());
+        assert_eq!(loaded.export_project_model().unwrap(), before);
         assert_eq!(loaded.project_visibility(), visibility);
 
         // Opening a project repairs datum frames by visiting earlier history
@@ -6906,6 +6952,7 @@ mod project_tests {
                     filament_id: None,
                     preset_id: None,
                     density_g_cm3: None,
+                    material: None,
                     diameter_mm: 1.75,
                 })
                 .unwrap();

@@ -68,6 +68,11 @@ impl Draft {
                         return Err("Enter a filament type".into());
                     }
                     next.filament_type = text.trim().into();
+                    if next.filament_type != self.value.filament_type {
+                        next.material = None;
+                        next.density_g_cm3 = None;
+                        next.filament_id = None;
+                    }
                 }
                 Field::Color => next.color = parse_color(text, next.color.a)?,
                 Field::ColorName => next.color_name = text.into(),
@@ -156,5 +161,38 @@ mod tests {
         assert_eq!(draft.value.preset_id, None);
         assert_eq!(draft.value.filament_id, before.filament_id);
         assert_eq!(draft.value.density_g_cm3, before.density_g_cm3);
+    }
+
+    #[test]
+    fn changing_family_clears_properties_and_vendor_facts_for_the_previous_material() {
+        let appearance = nbcad_export::find_preset("bambu.pla.basic.red")
+            .unwrap()
+            .to_appearance(BodyId(9));
+        let mut draft = Draft::new(appearance.clone());
+        draft.edit(Field::FilamentType, "PLA").unwrap();
+        assert_eq!(draft.value, appearance);
+        draft.edit(Field::FilamentType, "PETG").unwrap();
+        assert!(draft.value.material.is_none());
+        assert!(draft.value.preset_id.is_none());
+        assert!(draft.value.filament_id.is_none());
+        assert!(draft.value.density_g_cm3.is_none());
+        assert_eq!(draft.value.body_id, BodyId(9));
+    }
+
+    #[test]
+    fn legacy_curated_density_remains_visible_alongside_its_quality_note() {
+        let draft = Draft::new(
+            nbcad_export::find_preset("prusa.pla.msasaki_orange")
+                .unwrap()
+                .to_appearance(BodyId(9)),
+        );
+        let rows = super::super::panel::property_rows(&draft);
+        assert!(rows
+            .iter()
+            .any(|(_, name, value)| name.contains("Assigned density")
+                && value.as_ref().is_some_and(|v| v.contains("g/cm^3"))));
+        assert!(rows
+            .iter()
+            .any(|(_, name, _)| name.starts_with("Material data note")));
     }
 }

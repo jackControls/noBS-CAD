@@ -44,6 +44,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: repository-tools
+      - name: Fetch and verify embedded material catalog
+        run: cargo xtask materials --fetch --check
+
       - run: cargo test --locked -p xtask 'repository_ci::'
       - run: cargo test --locked -p xtask 'workflow_contracts::'
       - run: cargo test --locked -p nbcad-interface

@@ -6,6 +6,14 @@ lockfiles are the authoritative inventory of exact dependency versions; this
 document calls out the primary runtime components and preserves notices that
 must accompany redistributed builds.
 
+## Embedded material data
+
+The unified catalog adapts pinned material cards from [FreeCAD](https://github.com/FreeCAD/FreeCAD) and filament profile data from [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer) and [Bambu Studio](https://github.com/bambulab/BambuStudio). Adaptations resolve inheritance, normalize units, and associate profiles with existing material/color records.
+
+FreeCAD cards retain each card's author and declared license. Attribution, exact source paths, commit revisions, and source hashes are preserved per card in `crates/export/presets/catalog.json`, exposed through `material_catalog` and the Bevy material Properties view. Creative Commons licenses: [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) and [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+OrcaSlicer and Bambu Studio profile contributions retain their AGPL-3.0 attribution, full pinned commit, file path, and hash in the same catalog. Their license texts are available in the pinned repositories' LICENSE files; the corresponding unmodified source files can be fetched with `cargo xtask materials --fetch`. Source data remains under its stated license.
+
 ## Geometry kernels
 
 - **Open CASCADE Technology (OCCT) 7.9.x** is used by native builds under the

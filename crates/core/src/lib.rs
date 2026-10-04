@@ -12,6 +12,7 @@ mod dto;
 pub mod edge_chain;
 mod feature;
 mod ids;
+mod material;
 mod plane;
 mod units;
 
@@ -24,5 +25,8 @@ pub use document::Document;
 pub use dto::DocumentDto;
 pub use feature::{Feature, FeatureId, FeatureKind, FeatureStatus, FeatureTree};
 pub use ids::{BodyId, EdgeId, FaceId};
+pub use material::{
+    MaterialDetails, MaterialPrintProfile, MaterialProperty, MaterialSource, MaterialValue,
+};
 pub use plane::{OriginPlane, PlaneBasis, PlaneError, PlaneRef};
 pub use units::{DimensionStyle, DocumentSettings, UnitSystem};

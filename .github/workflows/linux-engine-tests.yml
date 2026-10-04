@@ -55,5 +55,8 @@ jobs:
       - name: Install fonts for actual Unicode drawing export
         run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends fonts-noto-core fonts-noto-cjk
 
+      - name: Fetch and verify embedded material catalog
+        run: cargo xtask materials --fetch --check
+
       - name: Test complete host-neutral workspace
         run: cargo test --locked --workspace

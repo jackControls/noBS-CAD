@@ -18,6 +18,8 @@ pub(crate) enum Command {
     Reset,
     SlicerTarget,
     Scroll(i32),
+    Details,
+    Info,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -34,6 +36,7 @@ struct State {
     name: String,
     draft: Option<Draft>,
     scroll: usize,
+    details: bool,
     errors: std::collections::BTreeMap<Field, (String, String)>,
     slicer_target: nbcad_export::SlicerTarget,
     preference: preferences::Observer,
@@ -89,7 +92,18 @@ fn choices(draft: &Draft, field: Field) -> Option<Vec<ChoiceOption>> {
                     .map(|p| {
                         option(
                             p.id.clone(),
-                            format!("{} · {}", p.material_name, p.color_name),
+                            format!(
+                                "{} · {} · {}",
+                                p.material
+                                    .as_ref()
+                                    .map_or("Plastic", |m| if m.kind == "metal" {
+                                        "Metal"
+                                    } else {
+                                        "Plastic"
+                                    }),
+                                p.material_name,
+                                p.color_name
+                            ),
                         )
                     }),
             );
@@ -136,6 +150,17 @@ pub(crate) fn reduce(
         return Err("The body changed before the appearance edit was applied".into());
     }
     state.refresh_preference(true);
+    if matches!(command, Command::Info) {
+        return Ok(json!({"handled":true,"read_only":true}));
+    }
+    if matches!(command, Command::Details) {
+        if !super::super::is_activation(&action.control.input) {
+            return Err("Activate Material properties".into());
+        }
+        state.details = !state.details;
+        state.scroll = 0;
+        return Ok(json!({"handled":true,"properties_visible":state.details}));
+    }
     if matches!(command, Command::SlicerTarget) {
         let options = slicer_choices();
         let selected = workbench::cam::choose(
@@ -161,7 +186,9 @@ pub(crate) fn reduce(
         .as_mut()
         .ok_or("The selected body was removed")?;
     match command {
-        Command::Scroll(_) | Command::SlicerTarget => unreachable!(),
+        Command::Scroll(_) | Command::SlicerTarget | Command::Details | Command::Info => {
+            unreachable!()
+        }
         Command::Field(field) => {
             let value = if let Some(options) = choices(draft, *field) {
                 workbench::cam::choose(&options, &draft.text(*field), &action.control.input)?

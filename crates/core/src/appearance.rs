@@ -96,6 +96,9 @@ pub struct BodyAppearance {
     /// Filament diameter in millimetres (default 1.75).
     #[serde(default = "default_filament_diameter")]
     pub diameter_mm: f64,
+    /// Frozen merged engineering and printing properties; absent in old files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<crate::MaterialDetails>,
 }
 
 fn default_material_name() -> String {
@@ -126,6 +129,7 @@ impl BodyAppearance {
             filament_id: None,
             preset_id: None,
             density_g_cm3: None,
+            material: None,
             diameter_mm: DEFAULT_FILAMENT_DIAMETER_MM,
         }
     }
@@ -155,6 +159,7 @@ impl PartialEq for BodyAppearance {
             && self.filament_id == other.filament_id
             && self.preset_id == other.preset_id
             && float_eq(self.density_g_cm3, other.density_g_cm3)
+            && self.material == other.material
             && (self.diameter_mm - other.diameter_mm).abs() < 1e-9
     }
 }
@@ -186,6 +191,7 @@ mod tests {
             filament_id: Some("GFA00".into()),
             preset_id: Some("bambu.pla.basic.red".into()),
             density_g_cm3: Some(1.24),
+            material: None,
             diameter_mm: 1.75,
         };
         let json = serde_json::to_string(&appearance).unwrap();

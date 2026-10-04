@@ -102,6 +102,9 @@ jobs:
         with:
           target: ${{ matrix.rust_target }}
 
+      - name: Fetch and verify embedded material catalog
+        run: cargo xtask materials --fetch --check
+
       - name: Build portable ZIP
         shell: pwsh
         env:
@@ -209,6 +212,9 @@ jobs:
           key: linux-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.cargo/config.toml', 'src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'crates/**/Cargo.toml', 'vcpkg.json') }}
           restore-keys: |
             linux-ubuntu-26.04-${{ runner.arch }}-
+
+      - name: Fetch and verify embedded material catalog
+        run: cargo xtask materials --fetch --check
 
       - name: Build and audit Linux packages
         shell: bash
@@ -402,6 +408,9 @@ jobs:
             /opt/opencascade
             ${{ runner.temp }}/nbcad-occt-cache
           key: ${{ steps.occt.outputs.cache-primary-key }}
+
+      - name: Fetch and verify embedded material catalog
+        run: cargo xtask materials --fetch --check
 
       - name: Build and audit the AppImage
         shell: bash
@@ -671,6 +680,9 @@ jobs:
             echo "APPLE_API_PRIVATE_KEY is not an App Store Connect .p8 private key." >&2
             exit 1
           fi
+
+      - name: Fetch and verify embedded material catalog
+        run: cargo xtask materials --fetch --check
 
       - name: Build ad-hoc signed DMG
         if: env.MACOS_DISTRIBUTION_BUILD != 'true'

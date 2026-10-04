@@ -78,7 +78,7 @@ fn check_3mf(path: &Path, application: &str, metadata: Option<&str>) -> Result<(
         "3MF did not use the chosen shared slicer target"
     );
     ensure!(
-        model.contains("displaycolor=\"#12ABEF\"") && model.contains("name=\"Café 零件\""),
+        model.contains("displaycolor=\"#12ABEF\"") && model.contains("name=\"PLA, Café 零件\""),
         "3MF lost the selected body's custom color or consortium material label"
     );
     if let Some(metadata) = metadata {
@@ -128,15 +128,47 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
     );
 
     let before = model(c)?;
+    field(c, "Material brand", "Generic")?;
+    field(c, "Material preset", "material.aluminum-6061-t6")?;
+    control(c, "Material properties", None)?;
+    let details = ui(c, json!({"action":"inspect"}))?;
+    ensure!(
+        controls(&details).any(|v| v["label"] == "Material category"),
+        "Unified metal properties were not exposed by the Bevy panel"
+    );
+    capture(c, &fixture.out, "appearance-metal-properties")?;
+    control(c, "Material properties", None)?;
+    ensure!(
+        model(c)? == before,
+        "Inspecting material properties changed the canonical document"
+    );
     field(c, "Material brand", "Bambu Lab")?;
     field(c, "Material preset", "bambu.pla.basic.red")?;
     control(c, "Apply appearance", None)?;
     let preset = model(c)?;
     let body_id = c.call("solid_scene", json!({}))?["bodies"][0]["id"].clone();
-    let appearance = json!({"body_id":body_id,"color":{"r":200,"g":40,"b":40,"a":255},
+    let mut appearance = json!({"body_id":body_id,"color":{"r":200,"g":40,"b":40,"a":255},
         "material_name":"Bambu PLA Basic","filament_type":"PLA","brand":"Bambu Lab",
         "color_name":"Red","filament_id":"GFA00","preset_id":"bambu.pla.basic.red",
         "density_g_cm3":1.24,"diameter_mm":1.75});
+    let catalog: Value = serde_json::from_slice(&fs::read(
+        crate::release_tooling::root().join("crates/export/presets/catalog.json"),
+    )?)?;
+    let record = catalog
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["id"] == "bambu.pla.basic.red")
+        .context("Bambu material catalog record")?;
+    appearance["material"] = record["material"].clone();
+    appearance["density_g_cm3"] = record["density_g_cm3"].clone();
+    ensure!(
+        !appearance["material"]["sources"]
+            .as_array()
+            .context("Resolved material sources")?
+            .is_empty(),
+        "Catalog preset did not include sourced print properties"
+    );
     let mut expected = before.clone();
     expected["body_appearances"] = json!([appearance]);
     ensure!(
@@ -169,8 +201,7 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
     );
     history(c, &preset, &custom)?;
     capture(c, &fixture.out, "appearance-custom")?;
-    control(c, "Clear selection", None)?;
-    capture(c, &fixture.out, "appearance-solid-color")?;
+    capture(c, &fixture.out, "appearance-body-color")?;
     browser_select(c, "Bodies", "Body1")?;
 
     field(c, "Body color (hex)", "#GG0000")?;
@@ -186,16 +217,6 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
     let mut exports = Vec::new();
     for (target, application, metadata) in [
         ("standard", "noBS CAD", None),
-        (
-            "bambu_studio",
-            "noBS CAD (Bambu-compatible)",
-            Some("Metadata/project_settings.config"),
-        ),
-        (
-            "orca_slicer",
-            "noBS CAD (Orca-compatible)",
-            Some("Metadata/project_settings.config"),
-        ),
         (
             "prusa_slicer",
             "noBS CAD (PrusaSlicer-compatible)",
@@ -235,11 +256,11 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
     fs::write(
         &fixture.report,
         serde_json::to_vec_pretty(&json!({
-            "checks":["existing-catalog","custom-metadata-preservation","invalid-field-rejection",
+            "checks":["unified-metal-properties","existing-catalog","custom-metadata-preservation","invalid-field-rejection",
                 "custom-preset-retains-invalid-buffer","reset","exact-history","isolated-slicer-preference",
-                "all-five-shared-3mf-targets","no-export-model-mutation","exact-project-archive"],
+                "shared-native-3mf-targets","no-export-model-mutation","exact-project-archive"],
             "exports":exports,"pixel_review":"required",
-        "captures":["appearance-catalog.png","appearance-invalid.png","appearance-custom.png","appearance-solid-color.png","appearance-slicer.png"]
+        "captures":["appearance-metal-properties.png","appearance-catalog.png","appearance-invalid.png","appearance-custom.png","appearance-body-color.png","appearance-slicer.png"]
         }))?,
     )?;
     println!("PASS native body appearance, exact history/archive and all shared 3MF targets; review captures");

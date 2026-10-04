@@ -4206,7 +4206,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::direct(
             "material_catalog",
             "Material catalog",
-            "Return built-in filament presets (Generic, Bambu Lab, Prusa, Polymaker, Hatchbox, Overture, Elegoo, Creality, Sunlu, eSun, Anycubic).",
+            "Return the unified embedded plastic, metal, and filament catalog with engineering properties, print profiles, units, source provenance, and data quality notes.",
             "material_catalog",
             Payload::Empty,
             empty_schema(),
@@ -4222,7 +4222,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::direct(
             "set_body_appearance",
             "Set body appearance",
-            "Assign filament/color to a body. Prefer body_id + preset_id from material_catalog; or pass a full BodyAppearance object.",
+            "Assign material/color to a body. Prefer body_id + preset_id from material_catalog; or pass a full BodyAppearance including its frozen material property snapshot.",
             "set_body_appearance",
             Payload::BodyAppearance,
             object_schema(
@@ -4234,7 +4234,7 @@ fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "preset_id": {
                         "type": "string",
-                        "description": "Catalog preset id (e.g. bambu.pla.basic.red). When set, other fields are filled from the catalog."
+                        "description": "Catalog material id (e.g. material.aluminum-6061-t6 or bambu.pla.basic.red). Shorthand resolves the catalog; a full material snapshot preserves saved properties."
                     },
                     "color": {
                         "type": "object",
@@ -4251,7 +4251,20 @@ fn tool_specs() -> Vec<ToolSpec> {
                     "color_name": {"type": "string"},
                     "filament_id": {"type": ["string", "null"]},
                     "density_g_cm3": {"type": ["number", "null"]},
-                    "diameter_mm": {"type": "number", "exclusiveMinimum": 0}
+                    "diameter_mm": {"type": "number", "exclusiveMinimum": 0},
+                    "material": {
+                        "type": ["object", "null"],
+                        "description": "Frozen merged MaterialDetails from material_catalog or body_appearances. Pass the complete saved object to preserve its properties. Property source_id values must refer to sources in this snapshot.",
+                        "properties": {
+                            "kind": {"type":"string","enum":["plastic","metal"]},
+                            "catalog_id": {"type":"string"},
+                            "properties": {"type":"array","items":{"type":"object"}},
+                            "sources": {"type":"array","items":{"type":"object"}},
+                            "print_profiles": {"type":"array","items":{"type":"object"}},
+                            "warnings": {"type":"array","items":{"type":"string"}}
+                        },
+                        "required":["kind","catalog_id"]
+                    }
                 }),
                 &["body_id"],
             ),

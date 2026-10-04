@@ -42,6 +42,7 @@ fn saved_appearance(body: u64) -> BodyAppearance {
         filament_id: Some("preserved-vendor-id".into()),
         preset_id: None,
         density_g_cm3: Some(1.234_567_89),
+        material: None,
         diameter_mm: 2.850_123_45,
     }
 }
@@ -238,6 +239,7 @@ impl Panel {
                 Command::Apply => "appearance-Apply appearance".into(),
                 Command::Reset => "appearance-Reset appearance".into(),
                 Command::SlicerTarget => "appearance-field-None".into(),
+                Command::Details => "material-properties".into(),
                 _ => panic!("This helper expects an appearance field or footer"),
             })
             .unwrap()
@@ -365,6 +367,83 @@ impl Panel {
             std::thread::sleep(Duration::from_millis(2));
         }
     }
+}
+
+#[test]
+fn unified_material_picker_exposes_metals_and_properties_then_persists_the_same_snapshot() {
+    let _lock = crate::session_bridge::tests::TEST_LOCK.lock().unwrap();
+    let fixture = Fixture::new();
+    let mut panel = Panel::new(&fixture);
+    let before = model(&fixture);
+    panel.set(Field::Brand, "Generic");
+    panel.paint(&fixture);
+    let preset = "material.aluminum-6061-t6";
+    let state = panel.app.world().resource::<State>();
+    let available = choices(state.draft.as_ref().unwrap(), Field::Preset).unwrap();
+    assert!(available
+        .iter()
+        .any(|c| c.value == preset && c.label.starts_with("Metal")));
+    assert!(available
+        .iter()
+        .any(|c| c.value == "generic.pla.gray" && c.label.starts_with("Plastic")));
+    panel.set(Field::Preset, preset);
+    let expected = nbcad_export::find_preset(preset)
+        .unwrap()
+        .to_appearance(BodyId(panel.bodies[0]));
+    let details = panel.action(Command::Details, ControlInput::Click);
+    panel.reduce(&details).unwrap();
+    panel.paint(&fixture);
+    let state = panel.app.world().resource::<State>();
+    assert!(state.details);
+    let control = panel
+        .app
+        .world()
+        .get::<InterfaceControl>(
+            state
+                .widgets
+                .entity("appearance-property-Material category")
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(matches!(
+        &control.field,
+        ControlField::Text {
+            read_only: true,
+            ..
+        }
+    ));
+    let rows = panel::property_rows(state.draft.as_ref().unwrap());
+    assert!(rows
+        .iter()
+        .any(|(_, label, value)| label.contains("YoungsModulus")
+            && value.as_ref().is_some_and(|v| v.contains("68900000000 Pa"))));
+    assert!(rows
+        .iter()
+        .any(|(_, label, value)| label.starts_with("Material source:")
+            && value
+                .as_ref()
+                .is_some_and(|v| v.contains("SHA256") && v.contains("CC-BY"))));
+    assert_eq!(
+        model(&fixture),
+        before,
+        "Browsing property details must not mutate the document"
+    );
+    let details = panel.action(Command::Details, ControlInput::Click);
+    panel.reduce(&details).unwrap();
+    panel.paint(&fixture);
+    let apply = panel.action(Command::Apply, ControlInput::Click);
+    panel.reduce(&apply).unwrap();
+    panel.drain();
+    let saved = appearances(&fixture);
+    assert_eq!(
+        saved
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["body_id"] == panel.bodies[0])
+            .unwrap(),
+        &serde_json::to_value(expected).unwrap()
+    );
 }
 
 #[test]
