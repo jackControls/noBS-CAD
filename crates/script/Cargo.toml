@@ -6,4 +6,5 @@ license = "LGPL-2.1-or-later"
 description = "Declarative CAD command replay shared by MCP and repository examples"
 
 [dependencies]
+nbcad-core = { path = "../core" }
 serde_json = { version = "1", features = ["float_roundtrip"] }

@@ -646,6 +646,10 @@ pub fn tags_for_tool(name: &str) -> (FocusPack, bool) {
         | "set_body_appearance"
         | "project_visibility"
         | "project_set_visibility"
+        | "named_views"
+        | "named_view_solution"
+        | "set_named_views"
+        | "recall_named_view"
         | "demo_export_pip_3mf" => FocusPack::Print,
         "cam_get_document"
         | "cam_set_document"
@@ -732,6 +736,10 @@ pub fn auto_focus_for_tool(name: &str) -> Option<FocusPack> {
             | "set_body_appearance"
             | "project_visibility"
             | "project_set_visibility"
+            | "named_views"
+            | "named_view_solution"
+            | "set_named_views"
+            | "recall_named_view"
             | "demo_export_pip_3mf"
     ) {
         return Some(FocusPack::Print);

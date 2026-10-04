@@ -35,12 +35,17 @@ jobs:
           key: sketch-wasm
       - name: Install pinned WASM packager
         run: cargo install wasm-pack --version 0.13.1 --locked
+      - name: Fetch and verify embedded printer profiles
+        run: cargo xtask printer-profiles --fetch --check
+
       - name: Build current browser engine
         run: npm run build:wasm
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: Preview, commit, cancellation and history smoke tests
         run: npm run e2e:sketch-smoke
+      - name: Named view and print layout browser regressions
+        run: npm run e2e:named-layouts
       - name: Broader sketch interaction regressions on main or manual runs
         if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         run: npm run e2e:sketch-regression
@@ -63,6 +68,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Install Rust for printer profile generation
+        uses: dtolnay/rust-toolchain@stable
+      - name: Fetch and verify embedded printer profiles
+        run: cargo xtask printer-profiles --fetch --check
+
       - name: Install pinned frontend dependencies
         run: npm ci --ignore-scripts
       - name: Run all frontend regression suites
@@ -75,8 +85,6 @@ jobs:
         run: npx tsx scripts/sessionSnapshot.test.ts
       - name: Install Chromium for UI contract checks
         run: npx playwright install --with-deps chromium
-      - name: Install Rust for xtask
-        uses: dtolnay/rust-toolchain@stable
       - name: Test live UI control contracts and product command coverage
         run: cargo xtask test-mcp contracts
       - name: Test associative drawing dimension references

@@ -31,7 +31,7 @@
     "test:arc-sweep": "tsx src/components/viewport/arcSweep.test.ts && tsx src/components/viewport/toolOperation.test.ts",
     "test:drawing-instances": "tsx src/drawing/instances.test.ts",
     "test:export-flow": "tsx src/files/exportFlow.test.ts && tsx src/engine/projectLoad.test.ts",
-    "test:presentation": "tsx src/operationPlayback.test.ts && tsx src/viewControl.test.ts && tsx src/scripts/sourceNavigation.test.ts",
+    "test:presentation": "tsx src/operationPlayback.test.ts && tsx src/viewControl.test.ts && tsx src/scripts/sourceNavigation.test.ts && tsx src/namedViews.test.ts && tsx src/viewLayout.test.ts",
     "test:constraint-glyphs": "tsx src/sketch/constraintGlyphAnchor.test.ts && tsx src/sketch/applyConstraint.test.ts",
     "test:revolve-axis": "tsx src/lib/revolveAxis.test.ts",
     "test:modeling-picker": "tsx src/modeling/viewportPicker.test.ts",
@@ -102,7 +102,8 @@
     "e2e:ribbon": "node scripts/run-e2e.mjs e2e-ribbon-responsive.mjs e2e-ribbon-submenu.mjs",
     "e2e:files": "node scripts/run-e2e.mjs e2e-m2.mjs",
     "build:help-index": "node scripts/build-help-index.mjs",
-    "check:help": "npm run check:knowledge && npm run build:help-index"
+    "check:help": "npm run check:knowledge && npm run build:help-index",
+    "e2e:named-layouts": "node scripts/run-e2e.mjs e2e-named-layouts.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",

@@ -60,6 +60,8 @@ interface ProjectTabViewState {
   assemblySolution: AssemblySolutionDto;
   projectVisibility: ProjectVisibilityDto;
   camDocument: CamDocumentDto;
+  viewPartOffsets: import('../engine/types').ViewPartOffsetDto[];
+  activeNamedView: string | null;
 }
 
 export interface RecoverableProjectTab {
@@ -177,6 +179,8 @@ function activeViewState(): ProjectTabViewState | null {
     assemblySolution: state.assemblySolution,
     projectVisibility: state.projectVisibility,
     camDocument: state.camDocument,
+    viewPartOffsets: state.viewPartOffsets,
+    activeNamedView: state.activeNamedView,
   };
 }
 
@@ -196,7 +200,9 @@ function sameViewState(
     left.assemblyDocument === right.assemblyDocument &&
     left.assemblySolution === right.assemblySolution &&
     left.projectVisibility === right.projectVisibility &&
-    left.camDocument === right.camDocument
+    left.camDocument === right.camDocument &&
+    left.viewPartOffsets === right.viewPartOffsets &&
+    left.activeNamedView === right.activeNamedView
   );
 }
 
@@ -308,6 +314,8 @@ async function loadModelState(
     assemblySolution,
     projectVisibility,
     camDocument,
+    viewPartOffsets: [],
+    activeNamedView: null,
   };
 }
 
@@ -347,6 +355,8 @@ async function currentModelState(): Promise<ProjectTabViewState> {
     assemblySolution,
     projectVisibility,
     camDocument,
+    viewPartOffsets: useAppStore.getState().viewPartOffsets,
+    activeNamedView: useAppStore.getState().activeNamedView,
   };
 }
 
@@ -393,6 +403,8 @@ async function hydrateProjectTab(tabId: string): Promise<void> {
         projectState.projectVisibility,
         projectState.assemblySolution,
         projectState.camDocument,
+        projectState.viewPartOffsets,
+        projectState.activeNamedView,
       );
     useAppStore.setState({
       activeProjectTabId: tabId,
@@ -498,6 +510,8 @@ export function createProjectTab(operationOwner?: EngineOperationOwner): Promise
         assemblySolution: emptyAssemblySolution(),
         projectVisibility: { hidden_body_ids: [], hidden_datum_plane_ids: [], hidden_sketch_names: [] },
         camDocument: emptyCamDocument(),
+        viewPartOffsets: [],
+        activeNamedView: null,
       },
     });
     const state = useAppStore.getState();
@@ -594,6 +608,8 @@ export function closeProjectTab(
         assemblySolution: emptyAssemblySolution(),
         projectVisibility: { hidden_body_ids: [], hidden_datum_plane_ids: [], hidden_sketch_names: [] },
         camDocument: emptyCamDocument(),
+        viewPartOffsets: [],
+        activeNamedView: null,
       },
     });
     useAppStore.getState().loadProjectState(update, [], [], null);
@@ -746,7 +762,7 @@ export async function restoreProjectTabs(
         camera: null,
         viewState:
           tab.id === active.id
-            ? { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility, camDocument }
+            ? { update, finishedSketches, datumPlanes, bodyAppearances, drawingDocument, assemblyDocument, assemblySolution, projectVisibility, camDocument, viewPartOffsets: [], activeNamedView: null }
             : null,
       });
     }

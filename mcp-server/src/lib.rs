@@ -459,7 +459,7 @@ impl CadServer {
             } else if name == "solid_tessellate" {
                 self.tessellate_tool(arguments)?
             } else if name == "solid_export_preflight" {
-                self.export_preflight_tool()?
+                self.export_preflight_tool(arguments)?
             } else if name == "demo_export_pip_3mf" {
                 self.demo_pip_3mf_tool(arguments)?
             } else if name == "material_catalog" {
@@ -1628,7 +1628,15 @@ impl CadServer {
                 mesh.name = body.name.clone();
             }
         }
-        let solution = self.manager.assembly_solution();
+        let solution = self
+            .manager
+            .named_view_solution(request.named_view.as_deref())
+            .map_err(|e| e.to_string())?;
+        if request.scope == nbcad_export::MeshExportScope::Definition
+            && request.named_view.is_some()
+        {
+            return Err("Named-view placement requires assembly scope.".into());
+        }
         if request.scope == nbcad_export::MeshExportScope::Assembly && !solution.solved {
             return Err("Resolve assembly errors before mesh export.".into());
         }
@@ -1643,13 +1651,27 @@ impl CadServer {
                 visible: p.visible,
             })
             .collect();
-        let meshes = nbcad_export::prepare_export_meshes(&meshes, &instances, request.scope)
-            .map_err(|e| e.to_string())?;
-        let bytes = if name == "solid_export_stl" {
-            nbcad_export::write_stl(&meshes).map_err(|error| error.to_string())?
+        let portable_scene = name == "solid_export_3mf"
+            && request.scope == nbcad_export::MeshExportScope::Assembly
+            && request.slicer_target != nbcad_export::SlicerTarget::PrusaSlicer;
+        let bytes = if portable_scene {
+            nbcad_export::write_3mf_scene(
+                &meshes,
+                &appearances,
+                &request,
+                &self.manager.assembly_document().component_structure,
+                &solution,
+            )
+            .map_err(|e| e.to_string())?
         } else {
-            nbcad_export::ExportFacade::export_3mf(&meshes, &appearances, &request)
-                .map_err(|error| error.to_string())?
+            let meshes = nbcad_export::prepare_export_meshes(&meshes, &instances, request.scope)
+                .map_err(|e| e.to_string())?;
+            if name == "solid_export_stl" {
+                nbcad_export::write_stl(&meshes).map_err(|error| error.to_string())?
+            } else {
+                nbcad_export::ExportFacade::export_3mf(&meshes, &appearances, &request)
+                    .map_err(|error| error.to_string())?
+            }
         };
         Ok(json!({
             "format": if name == "solid_export_stl" { "stl" } else { "3mf" },
@@ -1709,7 +1731,7 @@ impl CadServer {
         }))
     }
 
-    fn export_preflight_tool(&mut self) -> Result<Value, String> {
+    fn export_preflight_tool(&mut self, arguments: Value) -> Result<Value, String> {
         let scene = self.manager.solid_scene();
         let errors: Vec<String> = scene
             .errors
@@ -1725,7 +1747,7 @@ impl CadServer {
             .filter(|id| !appearing.contains(id))
             .collect();
         let ok = errors.is_empty() && !body_ids.is_empty();
-        Ok(json!({
+        let mut result = json!({
             "ok": ok,
             "body_count": body_ids.len(),
             "body_ids": body_ids,
@@ -1743,7 +1765,57 @@ impl CadServer {
                     "Ready for solid_export_3mf (preferred) or solid_export_stl / solid_export_step."
                 ])
             },
-        }))
+        });
+        if ok {
+            let request: MeshExportRequest = serde_json::from_value(if arguments.is_null() {
+                json!({})
+            } else {
+                arguments
+            })
+            .map_err(|e| e.to_string())?;
+            if request.scope != nbcad_export::MeshExportScope::Assembly {
+                return Err("Print layout checks require assembly scope.".into());
+            }
+            request
+                .check_model_snapshot(
+                    &self
+                        .manager
+                        .export_project_model()
+                        .map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+            let meshes = self
+                .kernel
+                .tessellate_bodies(&request)
+                .map_err(|e| e.to_string())?;
+            let solution = self
+                .manager
+                .named_view_solution(request.named_view.as_deref())
+                .map_err(|e| e.to_string())?;
+            let view_bed = request
+                .named_view
+                .as_ref()
+                .and_then(|name| {
+                    self.manager
+                        .named_views()
+                        .views
+                        .into_iter()
+                        .find(|v| &v.name == name)
+                })
+                .map(|v| v.print_bed);
+            let bed = request.print_bed.or(view_bed).unwrap_or_default();
+            result["layout"] = serde_json::to_value(
+                nbcad_export::analyze_print_layout(
+                    &meshes,
+                    &self.manager.assembly_document().component_structure,
+                    &solution,
+                    &bed,
+                )
+                .map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(result)
     }
 
     fn demo_pip_3mf_tool(&mut self, arguments: Value) -> Result<Value, String> {
@@ -1945,6 +2017,8 @@ fn is_read_safe_while_attached(name: &str) -> bool {
             | "cad_document"
             | "cad_project_model"
             | "project_visibility"
+            | "named_views"
+            | "named_view_solution"
             | "sketch_active"
             | "sketch_finished"
             | "sketch_profiles"
@@ -3284,7 +3358,7 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::direct(
             "project_set_visibility",
             "Set saved model visibility",
-            "Replace the Browser's complete saved visibility snapshot. Read project_visibility first to preserve other choices. All three arrays are required; empty arrays show everything. Like the app, this normalizes duplicates and removes stale references. It does not remove geometry or exclude hidden bodies from exports; use export body selection for that.",
+            "Replace the Browser's complete saved visibility snapshot. Read project_visibility first to preserve other choices. All three arrays are required; empty arrays show everything. Like the app, this normalizes duplicates and removes stale references. Assembly mesh exports honor body visibility; definition exports retain selected body definitions regardless of visibility.",
             "project_set_visibility",
             Payload::Object,
             object_schema(json!({
@@ -3292,6 +3366,61 @@ fn tool_specs() -> Vec<ToolSpec> {
                 "hidden_datum_plane_ids":{"type":"array","items":{"type":"integer","minimum":1}},
                 "hidden_sketch_names":{"type":"array","items":{"type":"string","minLength":1}}
             }), &["hidden_body_ids", "hidden_datum_plane_ids", "hidden_sketch_names"]),
+        ),
+        ToolSpec::direct(
+            "named_views",
+            "Read named view configurations",
+            "Return saved review views and the view recalled in this session, if any. Each view stores a name, camera, visible body ids, and optional display offsets. Geometry is unchanged.",
+            "named_views",
+            Payload::Empty,
+            empty_schema(),
+        ),
+        ToolSpec::direct(
+            "named_view_solution",
+            "Resolve named view placement",
+            "Return the shared occurrence layout solution for a saved named view, without changing visibility, geometry or mechanical placement.",
+            "named_view_solution",
+            Payload::Object,
+            object_schema(json!({"name":{"type":"string","minLength":1,"maxLength":200}}), &["name"]),
+        ),
+        ToolSpec::direct(
+            "set_named_views",
+            "Replace named view configurations",
+            "Replace saved presentation and print views. Each view needs name, camera and visible_body_ids. occurrence_offsets move/rotate occurrences and descendants without editing mechanical placement. Optional print_layout and print_bed enable checks. Legacy part_offsets remain readable. Unknown IDs or stale expected_model_json reject the whole list.",
+            "set_named_views",
+            Payload::Object,
+            object_schema(json!({
+                "expected_model_json":{"type":"string"},
+                "views": {"type":"array","items":{
+                    "type":"object",
+                    "additionalProperties": false,
+                    "required": ["name","camera","visible_body_ids"],
+                    "properties": {
+                        "name": {"type":"string","minLength":1,"maxLength":200},
+                        "camera": {"type":"object","additionalProperties":false,"required":["position","target","up"],"properties":{
+                            "position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},
+                            "target":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},
+                            "up":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}
+                        }},
+                        "visible_body_ids":{"type":"array","items":{"type":"integer","minimum":1}},
+                        "print_layout":{"type":"boolean","default":false},
+                        "print_bed":print_bed_schema(),
+                        "occurrence_offsets":{"type":"array","items":occurrence_offset_schema()},
+                        "part_offsets":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["body_id","translation"],"properties":{
+                            "body_id":{"type":"integer","minimum":1},
+                            "translation":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}
+                        }}}
+                    }
+                }}
+            }), &["views"]),
+        ),
+        ToolSpec::direct(
+            "recall_named_view",
+            "Recall a named view",
+            "Show only the view's visible bodies and return its camera and display offsets. Part offsets are not written into solid geometry. Unknown names reject without changing visibility.",
+            "recall_named_view",
+            Payload::Object,
+            object_schema(json!({"name":{"type":"string","minLength":1,"maxLength":200}}), &["name"]),
         ),
         ToolSpec::direct(
             "construction_plane_offset",
@@ -4115,6 +4244,8 @@ fn tool_specs() -> Vec<ToolSpec> {
                         "items": {"type": "integer", "minimum": 1},
                         "description": "Empty exports every active body."
                     },
+                    "named_view":{"type":"string","description":"Saved layout name; requires assembly scope. Includes every visible repetition."},
+                    "print_bed":print_bed_schema(),
                     "scope": {"type":"string","enum":["assembly","definition"],"default":"assembly","description":"Assembly exports visible solved occurrences. Definition exports each selected body once in its part coordinates."},
                     "expected_model_json": {"type":"string","description":"Optional exact cad_project_model string captured before an interactive choice. Export rejects if the current model differs; no geometry is written."},
                     "linear_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.15},
@@ -4136,6 +4267,8 @@ fn tool_specs() -> Vec<ToolSpec> {
                         "items": {"type": "integer", "minimum": 1},
                         "description": "Empty exports every active body."
                     },
+                    "named_view":{"type":"string","description":"Saved layout name; requires assembly scope. Includes every visible repetition."},
+                    "print_bed":print_bed_schema(),
                     "scope": {"type":"string","enum":["assembly","definition"],"default":"assembly","description":"Assembly exports visible solved occurrences. Definition exports each selected body once in its part coordinates."},
                     "expected_model_json": {"type":"string","description":"Optional exact cad_project_model string captured before an interactive choice. Export rejects if the current model differs; no geometry is written."},
                     "linear_deflection": {"type": "number", "exclusiveMinimum": 0, "default": 0.15},
@@ -4207,10 +4340,15 @@ fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec::direct(
             "solid_export_preflight",
             "Export preflight",
-            "Check timeline errors, active bodies, and appearance coverage before mesh/STEP export.",
+            "Check timeline errors, appearance coverage and assembly print layout before export. Reports included/excluded quantities, conservative overlaps and envelope issues, plus additional whole-group translations to review. Warnings permit deliberate export. Defaults to the Bambu X2D main envelope.",
             "solid_export_preflight",
-            Payload::Empty,
-            empty_schema(),
+            Payload::Object,
+            object_schema(json!({
+                "named_view":{"type":"string","minLength":1},
+                "body_ids":{"type":"array","items":{"type":"integer","minimum":1}},
+                "expected_model_json":{"type":"string"},
+                "print_bed":print_bed_schema()
+            }), &[]),
         ),
         ToolSpec::direct(
             "demo_export_pip_3mf",
@@ -4598,6 +4736,8 @@ fn records_in_script(name: &str) -> bool {
             | "material_catalog"
             | "body_appearances"
             | "project_visibility"
+            | "named_views"
+            | "named_view_solution"
             | "demo_export_pip_3mf"
             | "print_calibrate"
             | "print_crop"
@@ -5061,7 +5201,7 @@ mod tests {
         let model = server.call_tool("cad_project_model", json!({})).unwrap();
         {
             let mut legacy: Value = serde_json::from_str(model.as_str().unwrap()).unwrap();
-            assert_eq!(legacy["schema_version"], 9);
+            assert_eq!(legacy["schema_version"], 10);
             fn remove_guards(value: &mut Value) {
                 match value {
                     Value::Object(object) => {
@@ -5090,7 +5230,7 @@ mod tests {
                     .unwrap();
                 let resaved = migrated.call_tool("cad_project_model", json!({})).unwrap();
                 let resaved: Value = serde_json::from_str(resaved.as_str().unwrap()).unwrap();
-                assert_eq!(resaved["schema_version"], 9);
+                assert_eq!(resaved["schema_version"], 10);
                 assert_eq!(
                     serde_json::from_value::<nbcad_sketch::DrawingDocumentDto>(
                         resaved["drawings"].clone()
@@ -7450,38 +7590,96 @@ mod tests {
     }
 
     fn parse_3mf_model_mesh(xml: &str) -> nbcad_export::TriangleMesh {
-        use nbcad_core::BodyId;
         let mut positions = Vec::new();
-        for line in xml.lines() {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("<vertex x=\"") {
-                let parts: Vec<&str> = rest.split('"').collect();
-                if parts.len() >= 6 {
-                    let x: f32 = parts[0].parse().unwrap();
-                    let y: f32 = parts[2].parse().unwrap();
-                    let z: f32 = parts[4].parse().unwrap();
-                    positions.extend_from_slice(&[x, y, z]);
-                }
-            }
-        }
         let mut indices = Vec::new();
-        for line in xml.lines() {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("<triangle v1=\"") {
-                let parts: Vec<&str> = rest.split('"').collect();
-                if parts.len() >= 6 {
-                    indices.push(parts[0].parse().unwrap());
-                    indices.push(parts[2].parse().unwrap());
-                    indices.push(parts[4].parse().unwrap());
-                }
-            }
+        for mesh in nbcad_export::test_reader::read_build(xml).unwrap() {
+            let base = (positions.len() / 3) as u32;
+            positions.extend(mesh.vertices.into_iter().flatten().map(|v| v as f32));
+            indices.extend(
+                mesh.triangles
+                    .into_iter()
+                    .flatten()
+                    .map(|i| i as u32 + base),
+            );
         }
         nbcad_export::TriangleMesh {
-            body_id: BodyId(1),
+            body_id: nbcad_core::BodyId(1),
             name: "exported".into(),
             positions,
             indices,
         }
+    }
+
+    #[test]
+    fn named_print_view_exports_repeats_without_mutating_mechanical_placement() {
+        let (mut server, initial) = mcp_box();
+        let body = initial["scene"]["bodies"][0]["id"].clone();
+        let assembly = server.call_tool("assembly_document", json!({})).unwrap();
+        let root = &assembly["component_structure"]["occurrences"][0];
+        let repeated = server
+            .call_tool(
+                "assembly_create_occurrence",
+                json!({"component_id":root["component_id"],"name":"Intentional repeat"}),
+            )
+            .unwrap();
+        server.call_tool("assembly_set_occurrence_pose", json!({"occurrence_id":repeated["id"],"local_pose":{"translation":[40.,0.,0.],"rotation":[0.,0.,0.,1.]}})).unwrap();
+        let mechanical = server.call_tool("assembly_solution", json!({})).unwrap();
+        let before = server.manager.export_project_model().unwrap();
+        let view = json!({"name":"Print","camera":{"position":[100.,-100.,100.],"target":[0.,0.,0.],"up":[0.,0.,1.]},
+            "visible_body_ids":[body],"print_layout":true,
+            "occurrence_offsets":[{"occurrence_id":root["id"],"translation":[10.,20.,-2.],"rotation":[0.,0.,0.,1.]}]});
+        server
+            .call_tool(
+                "set_named_views",
+                json!({"views":[view],"expected_model_json":before}),
+            )
+            .unwrap();
+        let saved = server.manager.export_project_model().unwrap();
+        assert!(server
+            .call_tool(
+                "set_named_views",
+                json!({"views":[],"expected_model_json":before})
+            )
+            .is_err());
+        assert_eq!(server.manager.export_project_model().unwrap(), saved);
+        let layout = server
+            .call_tool("named_view_solution", json!({"name":"Print"}))
+            .unwrap();
+        assert_eq!(layout["instance_body_poses"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            layout["instance_body_poses"][0]["translation"],
+            json!([10., 20., -2.])
+        );
+        let report = server
+            .call_tool(
+                "solid_export_preflight",
+                json!({"named_view":"Print","expected_model_json":saved}),
+            )
+            .unwrap();
+        assert_eq!(report["layout"]["printable_instances"], 2);
+        assert!(report["layout"]["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "below_bed"));
+        let exported = server.call_tool("solid_export_3mf", json!({"named_view":"Print","expected_model_json":saved,"slicer_target":"bambu_studio"})).unwrap();
+        let bytes = BASE64
+            .decode(exported["bytes_base64"].as_str().unwrap())
+            .unwrap();
+        let actual = nbcad_export::test_reader::read_package(&bytes).unwrap();
+        assert_eq!(actual.len(), 2);
+        assert!(actual[0].vertices.iter().any(|p| (p[2] + 2.).abs() < 1e-5));
+        assert_eq!(
+            server.call_tool("assembly_solution", json!({})).unwrap(),
+            mechanical
+        );
+        assert_eq!(server.manager.export_project_model().unwrap(), saved);
+        assert!(server
+            .call_tool(
+                "solid_export_3mf",
+                json!({"scope":"definition","named_view":"Print"})
+            )
+            .is_err());
     }
 
     #[test]
@@ -7504,7 +7702,11 @@ mod tests {
                 .decode(assemble["bytes_base64"].as_str().unwrap())
                 .unwrap(),
         );
-        assert_eq!(xml.matches("<mesh>").count(), 2);
+        assert_eq!(xml.matches("<mesh>").count(), 1);
+        assert_eq!(
+            nbcad_export::test_reader::read_build(&xml).unwrap().len(),
+            2
+        );
         let definition = server
             .call_tool(
                 "solid_export_3mf",
@@ -7873,12 +8075,28 @@ mod tests {
         let mut xml = String::new();
         std::io::Read::read_to_string(&mut zip.by_name("3D/3dmodel.model").unwrap(), &mut xml)
             .unwrap();
-        assert_eq!(xml.matches("<mesh>").count(), 2);
-        let meshes: Vec<_> = xml
-            .split("<mesh>")
-            .skip(1)
-            .map(|part| parse_3mf_model_mesh(part.split("</mesh>").next().unwrap()))
+        assert_eq!(xml.matches("<mesh>").count(), 1);
+        let meshes: Vec<_> = nbcad_export::test_reader::read_build(&xml)
+            .unwrap()
+            .into_iter()
+            .map(|mesh| nbcad_export::TriangleMesh {
+                body_id: nbcad_core::BodyId(1),
+                name: "exported".into(),
+                positions: mesh
+                    .vertices
+                    .into_iter()
+                    .flatten()
+                    .map(|v| v as f32)
+                    .collect(),
+                indices: mesh
+                    .triangles
+                    .into_iter()
+                    .flatten()
+                    .map(|i| i as u32)
+                    .collect(),
+            })
             .collect();
+        assert_eq!(meshes.len(), 2);
         for mesh in &meshes {
             nbcad_export::validate_3mf_model_mesh(mesh).unwrap();
         }
@@ -11154,7 +11372,7 @@ mod tests {
         let model = server.call_tool("cad_project_model", json!({})).unwrap();
         let model: Value = serde_json::from_str(model.as_str().unwrap()).unwrap();
         assert_eq!(model["cam"]["units"], "inches");
-        assert_eq!(model["schema_version"], 9);
+        assert_eq!(model["schema_version"], 10);
     }
 
     #[test]
@@ -15577,4 +15795,24 @@ mod agent_feedback_tests {
             .unwrap();
         assert_eq!(live_auto["fidelity"], "lossy_session_trace");
     }
+}
+
+fn print_bed_schema() -> Value {
+    object_schema(
+        json!({"name":{"type":"string"},"size_mm":{"type":"array","items":{"type":"number","exclusiveMinimum":0},"minItems":3,"maxItems":3},"margin_mm":{"type":"number","minimum":0},"nozzle_mode":{"type":"string","enum":["main","dual"]}, "origin_mm":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2}, "printable_regions":{"type":"array","items":print_region_schema()}, "excluded_regions":{"type":"array","items":print_region_schema()}, "source":print_profile_source_schema()}),
+        &["name", "size_mm"],
+    )
+}
+fn occurrence_offset_schema() -> Value {
+    object_schema(
+        json!({"occurrence_id":{"type":"integer","minimum":1},"translation":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation":{"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4}}),
+        &["occurrence_id", "translation"],
+    )
+}
+
+fn print_region_schema() -> Value {
+    json!({"type":"array","minItems":3,"maxItems":1024,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number"}}})
+}
+fn print_profile_source_schema() -> Value {
+    json!({"type":"object","additionalProperties":false,"required":["repository","revision","profile","files"],"properties":{"repository":{"type":"string"},"revision":{"type":"string"},"profile":{"type":"string"},"files":{"type":"object","additionalProperties":{"type":"string"}}}})
 }

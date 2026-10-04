@@ -184,6 +184,44 @@ impl Document {
         Some(id)
     }
 
+    /// Replace Named Views children, keeping the node id of a view whose name
+    /// is unchanged. Names are the stable identity of a saved view.
+    pub fn set_named_view_children(&mut self, names: &[String]) {
+        fn find_folder(nodes: &mut [BrowserNode]) -> Option<&mut BrowserNode> {
+            for node in nodes {
+                if node.kind == BrowserNodeKind::NamedViews {
+                    return Some(node);
+                }
+                if let Some(found) = find_folder(&mut node.children) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let mut existing = {
+            let Some(folder) = find_folder(&mut self.browser) else {
+                return;
+            };
+            std::mem::take(&mut folder.children)
+        };
+        let mut next = Vec::with_capacity(names.len());
+        for name in names {
+            if let Some(index) = existing.iter().position(|child| {
+                child.kind == BrowserNodeKind::NamedView
+                    && child.name.as_deref() == Some(name.as_str())
+            }) {
+                next.push(existing.remove(index));
+            } else {
+                let id = self.alloc_node_id();
+                next.push(BrowserNode::new(id, BrowserNodeKind::NamedView).named(name.clone()));
+            }
+        }
+        if let Some(folder) = find_folder(&mut self.browser) {
+            folder.children = next;
+        }
+    }
+
     /// Add a construction-plane row linked to its stable datum id.
     pub fn add_construction_plane_node(
         &mut self,

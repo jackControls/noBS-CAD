@@ -1013,25 +1013,9 @@ fn validate_print_3mf(export: &Value, count: usize, bed: [f64; 3], path: &std::p
         .read_to_string(&mut xml)
         .unwrap();
     assert!(xml.contains("unit=\"millimeter\""));
-    fn attribute<'a>(tag: &'a str, name: &str) -> &'a str {
-        tag.split(&format!("{name}=\""))
-            .nth(1)
-            .unwrap()
-            .split('"')
-            .next()
-            .unwrap()
-    }
     let mut bounds = Vec::new();
-    for object in xml.split("<object ").skip(1) {
-        let object = object.split("</object>").next().unwrap();
-        let vertices: Vec<[f64; 3]> = object
-            .split("<vertex ")
-            .skip(1)
-            .map(|tag| ["x", "y", "z"].map(|axis| attribute(tag, axis).parse().unwrap()))
-            .collect();
-        if vertices.is_empty() {
-            continue;
-        }
+    for mesh in nbcad_export::test_reader::read_build(&xml).unwrap() {
+        let vertices = mesh.vertices;
         let mut min = [f64::INFINITY; 3];
         let mut max = [f64::NEG_INFINITY; 3];
         for point in &vertices {
@@ -1050,9 +1034,7 @@ fn validate_print_3mf(export: &Value, count: usize, bed: [f64; 3], path: &std::p
         }
         let mut edges = std::collections::BTreeMap::<(usize, usize), usize>::new();
         let mut signed_volume = 0.;
-        for triangle in object.split("<triangle ").skip(1) {
-            let indices =
-                ["v1", "v2", "v3"].map(|name| attribute(triangle, name).parse::<usize>().unwrap());
+        for indices in mesh.triangles {
             assert!(indices.iter().all(|index| *index < vertices.len()));
             let [a, b, c] = indices.map(|index| vertices[index]);
             signed_volume += (a[0] * (b[1] * c[2] - b[2] * c[1])

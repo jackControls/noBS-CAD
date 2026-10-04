@@ -14,7 +14,12 @@ pub mod edge_chain;
 mod feature;
 mod ids;
 mod plane;
+mod print_bed;
 mod units;
+pub use print_bed::{
+    embedded_printer_catalog, PrintBedDto, PrintNozzleMode, PrintProfileSource, PrinterCatalogDto,
+    PrinterExtruderDto, PrinterProfileDto,
+};
 
 pub use appearance::{
     BodyAppearance, Rgba8, DEFAULT_BODY_COLOR, DEFAULT_BRAND, DEFAULT_FILAMENT_DIAMETER_MM,

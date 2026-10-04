@@ -1,7 +1,7 @@
 interface ExportFlow<Options, Target> {
   assertSelectionOwner(): void | Promise<void>;
   captureModel(): Promise<string>;
-  chooseOptions(): Promise<Options | null>;
+  chooseOptions(expectedModelJson: string): Promise<Options | null>;
   render(options: Options, expectedModelJson: string): Promise<Uint8Array>;
   chooseTarget(): Promise<Target | null>;
   write(target: Target, bytes: Uint8Array): Promise<void>;
@@ -14,7 +14,7 @@ export async function runExport<Options, Target>(flow: ExportFlow<Options, Targe
   await flow.assertSelectionOwner();
   const expectedModelJson = await flow.captureModel();
   await flow.assertSelectionOwner();
-  const options = await flow.chooseOptions();
+  const options = await flow.chooseOptions(expectedModelJson);
   if (options === null) return false;
   await flow.assertSelectionOwner();
   const bytes = await flow.render(options, expectedModelJson);

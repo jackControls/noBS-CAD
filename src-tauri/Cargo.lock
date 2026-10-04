@@ -3990,12 +3990,14 @@ name = "nbcad-core"
 version = "0.2.2"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]
 name = "nbcad-export"
 version = "0.2.2"
 dependencies = [
+ "nbcad-assembly",
  "nbcad-core",
  "nbcad-solid",
  "serde",
@@ -4075,6 +4077,7 @@ dependencies = [
 name = "nbcad-script"
 version = "0.2.2"
 dependencies = [
+ "nbcad-core",
  "serde_json",
 ]
 

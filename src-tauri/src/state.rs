@@ -793,6 +793,76 @@ impl AppState {
         }
     }
 
+    pub fn mesh_export_report(
+        &self,
+        payload: &str,
+    ) -> Result<nbcad_export::PrintLayoutReport, String> {
+        let request: nbcad_export::MeshExportRequest =
+            serde_json::from_str(payload).map_err(|e| e.to_string())?;
+        if request.scope != nbcad_export::MeshExportScope::Assembly {
+            return Err("Print layout checks require assembly scope.".into());
+        }
+        let workspace = self
+            .inner
+            .lock()
+            .map_err(|_| "engine lock poisoned".to_string())?;
+        let inner = workspace.active();
+        request
+            .check_model_snapshot(
+                &inner
+                    .manager
+                    .export_project_model()
+                    .map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+        if !inner.manager.solid_scene().errors.is_empty() {
+            return Err("Resolve timeline errors before checking the layout.".into());
+        }
+        let draft: Option<nbcad_sketch::NamedViewConfigurationDto> =
+            serde_json::from_str::<serde_json::Value>(payload)
+                .map_err(|e| e.to_string())?
+                .get("draft_view")
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| e.to_string())?;
+        let solution = match &draft {
+            Some(view) => inner.manager.resolve_named_view(view),
+            None => inner
+                .manager
+                .named_view_solution(request.named_view.as_deref()),
+        }
+        .map_err(|e| e.to_string())?;
+        let meshes = inner
+            .kernel
+            .tessellate_bodies(&request)
+            .map_err(|e| e.to_string())?;
+        let view_bed = request
+            .named_view
+            .as_ref()
+            .and_then(|name| {
+                inner
+                    .manager
+                    .named_views()
+                    .views
+                    .into_iter()
+                    .find(|v| &v.name == name)
+            })
+            .map(|v| v.print_bed);
+        let bed = request
+            .print_bed
+            .or_else(|| draft.map(|v| v.print_bed))
+            .or(view_bed)
+            .unwrap_or_default();
+        nbcad_export::analyze_print_layout(
+            &meshes,
+            &inner.manager.assembly_document().component_structure,
+            &solution,
+            &bed,
+        )
+        .map_err(|e| e.to_string())
+    }
+
     pub fn export_stl(&self, payload: &str) -> Result<Vec<u8>, String> {
         let request: nbcad_export::MeshExportRequest = serde_json::from_str(payload)
             .map_err(|error| format!("bad request payload: {error}"))?;
@@ -824,7 +894,15 @@ impl AppState {
                 mesh.name = body.name.clone();
             }
         }
-        let solution = inner.manager.assembly_solution();
+        let solution = inner
+            .manager
+            .named_view_solution(request.named_view.as_deref())
+            .map_err(|e| e.to_string())?;
+        if request.scope == nbcad_export::MeshExportScope::Definition
+            && request.named_view.is_some()
+        {
+            return Err("Named-view placement requires assembly scope.".into());
+        }
         if request.scope == nbcad_export::MeshExportScope::Assembly && !solution.solved {
             return Err("Resolve assembly errors before mesh export.".into());
         }
@@ -876,9 +954,29 @@ impl AppState {
                 mesh.name = body.name.clone();
             }
         }
-        let solution = inner.manager.assembly_solution();
+        let solution = inner
+            .manager
+            .named_view_solution(request.named_view.as_deref())
+            .map_err(|e| e.to_string())?;
+        if request.scope == nbcad_export::MeshExportScope::Definition
+            && request.named_view.is_some()
+        {
+            return Err("Named-view placement requires assembly scope.".into());
+        }
         if request.scope == nbcad_export::MeshExportScope::Assembly && !solution.solved {
             return Err("Resolve assembly errors before mesh export.".into());
+        }
+        if request.scope == nbcad_export::MeshExportScope::Assembly
+            && request.slicer_target != nbcad_export::SlicerTarget::PrusaSlicer
+        {
+            return nbcad_export::write_3mf_scene(
+                &meshes,
+                &appearances,
+                &request,
+                &inner.manager.assembly_document().component_structure,
+                &solution,
+            )
+            .map_err(|e| e.to_string());
         }
         let instances: Vec<_> = solution
             .instance_body_poses

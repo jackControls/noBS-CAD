@@ -46,5 +46,8 @@ jobs:
       - name: Cache Rust workspace
         uses: Swatinem/rust-cache@v2
 
+      - name: Fetch and verify embedded printer profiles
+        run: cargo xtask printer-profiles --fetch --check
+
       - name: Test complete host-neutral workspace
         run: cargo test --locked --workspace

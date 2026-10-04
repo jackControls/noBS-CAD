@@ -62,11 +62,12 @@ use crate::dto::{
     EvalExpressionRequest, EvalExpressionResult, ExtendRequest, FaceSketchOrigin, FilletPreviewDto,
     FilletRequest, LockedCircleRequest, LockedRectangleRequest, LockedSegmentRequest,
     MidpointLineRequest, MirrorRequest, MoveCopyRequest, MoveDimensionRequest, MovePointRequest,
-    MovePointResult, OffsetPreviewDto, OffsetRequest, PointRequest, PolygonRequest, PreviewDto,
-    ProjectVisibilityDto, ProjectedEdgeDto, RectangleRequest, RectangularPatternRequest,
-    ScaleRequest, SegmentRequest, SetDimensionModeRequest, SetDimensionStyleRequest,
-    SetGridSnapRequest, SetGridStepRequest, SketchDto, SlotRequest, SplineRequest,
-    ToggleFixBatchRequest, ToolResult, TrimPreviewDto, TrimRequest, UndoResult,
+    MovePointResult, NamedViewConfigurationDto, NamedViewsDto, OffsetPreviewDto, OffsetRequest,
+    PointRequest, PolygonRequest, PreviewDto, ProjectVisibilityDto, ProjectedEdgeDto,
+    RecallNamedViewDto, RectangleRequest, RectangularPatternRequest, ScaleRequest, SegmentRequest,
+    SetDimensionModeRequest, SetDimensionStyleRequest, SetGridSnapRequest, SetGridStepRequest,
+    SketchDto, SlotRequest, SplineRequest, ToggleFixBatchRequest, ToolResult, TrimPreviewDto,
+    TrimRequest, UndoResult,
 };
 use crate::entity::EntityId;
 use crate::project::{
@@ -125,6 +126,10 @@ pub struct SketchManager {
     assembly_solution_cache: RefCell<Option<AssemblySolutionDto>>,
     /// Persistent Browser visibility expressed with stable model identities.
     project_visibility: ProjectVisibilityDto,
+    /// Saved review views. Display offsets are not baked into solids.
+    named_views: Vec<NamedViewConfigurationDto>,
+    /// View recalled in this session. Not written to the project file.
+    active_named_view: Option<String>,
     /// Persistent 3-axis manufacturing setups, tools, and operation intent.
     cam: CamDocumentDto,
     /// Candidate manager held until its OCCT replay commits successfully.
@@ -205,6 +210,8 @@ impl SketchManager {
             assembly: AssemblyDocumentDto::default(),
             assembly_solution_cache: RefCell::new(None),
             project_visibility: ProjectVisibilityDto::default(),
+            named_views: Vec::new(),
+            active_named_view: None,
             cam: CamDocumentDto::default(),
             pending_project: None,
             pending_joint_body_deletion: None,
@@ -265,6 +272,7 @@ impl SketchManager {
             drawings: self.drawings.clone(),
             assembly: self.assembly.clone(),
             visibility: self.scrubbed_project_visibility(),
+            views: self.scrubbed_named_views(),
             cam: self.cam.clone(),
             counters: ProjectCountersV2 {
                 sketch: self.sketch_count,
@@ -380,6 +388,8 @@ impl SketchManager {
             assembly: model.assembly,
             assembly_solution_cache: RefCell::new(None),
             project_visibility: model.visibility,
+            named_views: model.views,
+            active_named_view: None,
             cam: model.cam,
             pending_project: None,
             pending_joint_body_deletion: None,
@@ -428,6 +438,7 @@ impl SketchManager {
             .solids
             .prepare_recompute_resilient(&catalog, &active)
             .map_err(|error| SessionError::Solid(error.to_string()))?;
+        candidate.sync_named_view_browser();
         self.pending_project = Some(PendingProject {
             transaction_id: plan.transaction_id,
             manager: Box::new(candidate),
@@ -1391,6 +1402,166 @@ impl SketchManager {
         visibility.hidden_sketch_names = hidden_sketches.into_iter().collect();
         visibility.hidden_datum_plane_ids = hidden_datums.into_iter().collect();
         self.set_project_visibility(visibility)
+    }
+
+    pub fn named_views(&self) -> NamedViewsDto {
+        NamedViewsDto {
+            views: self.scrubbed_named_views(),
+            active: self.active_named_view.clone(),
+        }
+    }
+
+    /// Replace the saved review views. Unknown bodies reject the whole list.
+    /// Solid definitions are not modified.
+    pub fn set_named_views(
+        &mut self,
+        mut views: Vec<NamedViewConfigurationDto>,
+    ) -> Result<NamedViewsDto, SessionError> {
+        crate::dto::validate_named_views(&views).map_err(SessionError::Solid)?;
+        for view in &mut views {
+            view.visible_body_ids.sort_unstable();
+            view.part_offsets.sort_by_key(|offset| offset.body_id);
+            view.occurrence_offsets
+                .sort_by_key(|offset| offset.occurrence_id.0);
+            for offset in &view.occurrence_offsets {
+                if !self
+                    .assembly
+                    .component_structure
+                    .occurrences
+                    .iter()
+                    .any(|o| o.id == offset.occurrence_id)
+                {
+                    return Err(SessionError::Solid(format!(
+                        "Named view '{}' references unknown occurrence {}",
+                        view.name, offset.occurrence_id.0
+                    )));
+                }
+            }
+        }
+        let retained = self.retained_presentation_body_ids();
+        for view in &views {
+            for id in view
+                .visible_body_ids
+                .iter()
+                .copied()
+                .chain(view.part_offsets.iter().map(|offset| offset.body_id))
+            {
+                if !retained.contains(&nbcad_core::BodyId(id)) {
+                    return Err(SessionError::Solid(format!("Body {id} was not found")));
+                }
+            }
+        }
+        self.named_views = views;
+        if self
+            .active_named_view
+            .as_ref()
+            .is_some_and(|name| !self.named_views.iter().any(|view| &view.name == name))
+        {
+            self.active_named_view = None;
+        }
+        self.sync_named_view_browser();
+        Ok(self.named_views())
+    }
+
+    /// Apply a saved view's body visibility. The camera and part offsets are
+    /// returned for the viewport; neither is written into solid geometry.
+    pub fn recall_named_view(&mut self, name: String) -> Result<RecallNamedViewDto, SessionError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(SessionError::Solid(
+                "named view name cannot be empty".to_string(),
+            ));
+        }
+        let view = self
+            .scrubbed_named_views()
+            .into_iter()
+            .find(|view| view.name == name)
+            .ok_or_else(|| SessionError::Solid(format!("Named view '{name}' was not found")))?;
+        let retained = self.retained_presentation_body_ids();
+        let visible = view
+            .visible_body_ids
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let mut visibility = self.project_visibility();
+        visibility.hidden_body_ids = retained
+            .iter()
+            .map(|id| id.0)
+            .filter(|id| !visible.contains(id))
+            .collect();
+        let visibility = self.set_project_visibility(visibility)?;
+        self.active_named_view = Some(view.name.clone());
+        let solution = self.named_view_solution(Some(&view.name))?;
+        Ok(RecallNamedViewDto {
+            view,
+            visibility,
+            solution,
+        })
+    }
+
+    /// One read-only layout resolver for display, STL and 3MF. Camera has no
+    /// influence on geometry; named-view offsets never modify the assembly.
+    pub fn named_view_solution(
+        &self,
+        name: Option<&str>,
+    ) -> Result<AssemblySolutionDto, SessionError> {
+        if let Some(name) = name {
+            let view = self
+                .named_views()
+                .views
+                .into_iter()
+                .find(|v| v.name == name)
+                .ok_or_else(|| SessionError::Solid(format!("Named view '{name}' was not found")))?;
+            return self.resolve_named_view(&view);
+        }
+        let mut solution = self.assembly_solution();
+        let hidden: BTreeSet<_> = self
+            .project_visibility()
+            .hidden_body_ids
+            .into_iter()
+            .collect();
+        for pose in &mut solution.instance_body_poses {
+            pose.visible &= !hidden.contains(&pose.body_id.0);
+        }
+        Ok(solution)
+    }
+
+    pub fn resolve_named_view(
+        &self,
+        view: &NamedViewConfigurationDto,
+    ) -> Result<AssemblySolutionDto, SessionError> {
+        crate::dto::validate_named_views(std::slice::from_ref(view))
+            .map_err(SessionError::Solid)?;
+        let mut solution = nbcad_assembly::resolve_view_layout(
+            &self.assembly.component_structure,
+            &self.assembly_solution(),
+            &view.occurrence_offsets,
+        )
+        .map_err(SessionError::Solid)?;
+        let visible: BTreeSet<_> = view.visible_body_ids.iter().copied().collect();
+        for pose in &mut solution.instance_body_poses {
+            pose.visible &= visible.contains(&pose.body_id.0);
+            if let Some(offset) = view
+                .part_offsets
+                .iter()
+                .find(|o| o.body_id == pose.body_id.0)
+            {
+                for axis in 0..3 {
+                    pose.translation[axis] += offset.translation[axis];
+                }
+            }
+        }
+        for pose in &mut solution.body_poses {
+            if let Some(instance) = solution
+                .instance_body_poses
+                .iter()
+                .find(|p| p.body_id == pose.body_id)
+            {
+                pose.translation = instance.translation;
+                pose.rotation = instance.rotation;
+            }
+        }
+        Ok(solution)
     }
 
     pub fn set_drawing_document(
@@ -2810,6 +2981,70 @@ impl SketchManager {
         self.project_visibility = self.scrubbed_project_visibility();
     }
 
+    fn scrubbed_named_views(&self) -> Vec<NamedViewConfigurationDto> {
+        let retained = self.retained_presentation_body_ids();
+        self.named_views
+            .iter()
+            .map(|view| {
+                let mut visible_body_ids = view
+                    .visible_body_ids
+                    .iter()
+                    .copied()
+                    .filter(|id| retained.contains(&nbcad_core::BodyId(*id)))
+                    .collect::<Vec<_>>();
+                visible_body_ids.sort_unstable();
+                visible_body_ids.dedup();
+                let mut part_offsets = view
+                    .part_offsets
+                    .iter()
+                    .filter(|offset| retained.contains(&nbcad_core::BodyId(offset.body_id)))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                part_offsets.sort_by_key(|offset| offset.body_id);
+                NamedViewConfigurationDto {
+                    name: view.name.clone(),
+                    camera: view.camera.clone(),
+                    visible_body_ids,
+                    part_offsets,
+                    occurrence_offsets: view
+                        .occurrence_offsets
+                        .iter()
+                        .filter(|offset| {
+                            self.assembly
+                                .component_structure
+                                .occurrences
+                                .iter()
+                                .any(|o| o.id == offset.occurrence_id)
+                        })
+                        .cloned()
+                        .collect(),
+                    print_layout: view.print_layout,
+                    print_bed: view.print_bed.clone(),
+                }
+            })
+            .collect()
+    }
+
+    fn scrub_named_views(&mut self) {
+        self.named_views = self.scrubbed_named_views();
+        if self
+            .active_named_view
+            .as_ref()
+            .is_some_and(|name| !self.named_views.iter().any(|view| &view.name == name))
+        {
+            self.active_named_view = None;
+        }
+    }
+
+    fn sync_named_view_browser(&mut self) {
+        let names = self
+            .named_views
+            .iter()
+            .map(|view| view.name.clone())
+            .collect::<Vec<_>>();
+        self.document.set_named_view_children(&names);
+    }
+
     pub fn extrude_definitions(&self) -> Vec<ExtrudeDefinitionDto> {
         self.solids.definitions().to_vec()
     }
@@ -3714,6 +3949,7 @@ impl SketchManager {
         self.invalidate_assembly_solution();
         self.scrub_body_appearances();
         self.scrub_project_visibility();
+        self.scrub_named_views();
 
         // Every recompute starts clean, then kernel failures and persistent
         // reference failures are overlaid onto their timeline entries.
@@ -6478,6 +6714,215 @@ mod project_tests {
             .export_project_model()
             .unwrap()
             .contains("\"Sketch1\""));
+    }
+
+    #[test]
+    fn named_view_recall_roundtrips_without_moving_geometry() {
+        let mut manager = SketchManager::new();
+        let plane = PlaneRef::OriginPlane {
+            plane: OriginPlane::Xy,
+        };
+        let basis = plane.origin_basis().unwrap();
+        let mut known_bodies = BTreeSet::new();
+        let extrude_body =
+            |manager: &mut SketchManager, known: &mut BTreeSet<BodyId>, width: f64| -> BodyId {
+                manager.begin_sketch(plane).unwrap();
+                manager
+                    .add_rectangle_locked(LockedRectangleRequest {
+                        mode: crate::dto::RectangleMode::TwoPoint,
+                        anchor: crate::Vec2::new(0.0, 0.0),
+                        width_mm: Some(width),
+                        height_mm: Some(10.0),
+                        width_text: Some(width.to_string()),
+                        height_text: Some("10".to_string()),
+                        corner_hint: crate::Vec2::new(width, 10.0),
+                        ctrl_held: false,
+                    })
+                    .unwrap();
+                manager.end_sketch().unwrap();
+                let sketch_name = manager.finished_sketches().last().unwrap().name.clone();
+                let plan = manager
+                    .prepare_extrude(ExtrudeRequest {
+                        source_face: None,
+                        sketch_name,
+                        profile_indices: vec![0],
+                        operation: ExtrudeOperation::NewBody,
+                        extent: ExtrudeExtent::Distance { distance: 8.0 },
+                        taper_angle_deg: 0.0,
+                        flip: false,
+                        target_body_ids: Vec::new(),
+                    })
+                    .unwrap();
+                commit_plan(manager, plan, basis);
+                let body_id = manager
+                    .solid_scene()
+                    .bodies
+                    .iter()
+                    .map(|body| body.id)
+                    .find(|id| known.insert(*id))
+                    .expect("a new body");
+                body_id
+            };
+        let clip = extrude_body(&mut manager, &mut known_bodies, 12.0);
+        let housing = extrude_body(&mut manager, &mut known_bodies, 20.0);
+        let definitions = manager.extrude_definitions();
+        let scene = manager.solid_scene();
+
+        let view = NamedViewConfigurationDto {
+            name: "detent".to_string(),
+            camera: crate::dto::ViewCameraDto {
+                position: [80.0, -40.0, 30.0],
+                target: [0.0, 0.0, 8.0],
+                up: [0.0, 0.0, 1.0],
+            },
+            visible_body_ids: vec![clip.0],
+            part_offsets: vec![crate::dto::ViewPartOffsetDto {
+                body_id: clip.0,
+                translation: [0.0, 14.0, 0.0],
+            }],
+            occurrence_offsets: vec![nbcad_assembly::ViewOccurrenceOffsetDto {
+                occurrence_id: manager.assembly_document().component_structure.occurrences[0].id,
+                translation: [3., 0., 2.],
+                rotation: [
+                    0.,
+                    0.,
+                    std::f64::consts::FRAC_1_SQRT_2,
+                    std::f64::consts::FRAC_1_SQRT_2,
+                ],
+            }],
+            print_layout: true,
+            print_bed: Default::default(),
+        };
+        let unknown = NamedViewConfigurationDto {
+            visible_body_ids: vec![999],
+            ..view.clone()
+        };
+        let before = manager.export_project_model().unwrap();
+        assert!(manager.set_named_views(vec![unknown]).is_err());
+        let collapsed = NamedViewConfigurationDto {
+            camera: crate::dto::ViewCameraDto {
+                position: [0.0, 0.0, 0.0],
+                target: [0.0, 0.0, 0.0],
+                up: [0.0, 0.0, 1.0],
+            },
+            ..view.clone()
+        };
+        assert!(manager.set_named_views(vec![collapsed]).is_err());
+        let distant = NamedViewConfigurationDto {
+            camera: crate::dto::ViewCameraDto {
+                position: [1.0e20, 0.0, 0.0],
+                target: [0.0, 0.0, 0.0],
+                up: [0.0, 0.0, 1.0],
+            },
+            ..view.clone()
+        };
+        assert!(manager.set_named_views(vec![distant]).is_err());
+        let duplicate = NamedViewConfigurationDto {
+            visible_body_ids: vec![clip.0, clip.0],
+            ..view.clone()
+        };
+        assert!(manager.set_named_views(vec![duplicate]).is_err());
+        assert_eq!(manager.export_project_model().unwrap(), before);
+
+        let stored = manager.set_named_views(vec![view]).unwrap();
+        assert_eq!(stored.views.len(), 1);
+        assert!(stored.active.is_none());
+        let names: Vec<_> = manager
+            .document()
+            .browser()
+            .iter()
+            .find(|node| node.kind == BrowserNodeKind::NamedViews)
+            .unwrap()
+            .children
+            .iter()
+            .map(|node| {
+                assert_eq!(node.kind, BrowserNodeKind::NamedView);
+                node.name.clone()
+            })
+            .collect();
+        assert_eq!(names, vec![Some("detent".to_string())]);
+
+        let json = manager.export_project_model().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["schema_version"], PROJECT_SCHEMA_VERSION);
+        assert_eq!(parsed["views"][0]["name"], "detent");
+        assert_eq!(parsed["views"][0]["print_layout"], true);
+        assert_eq!(
+            parsed["views"][0]["occurrence_offsets"][0]["translation"],
+            serde_json::json!([3., 0., 2.])
+        );
+        assert_eq!(
+            parsed["views"][0]["part_offsets"][0]["translation"][1],
+            14.0
+        );
+        assert_eq!(
+            parsed["extrudes"],
+            serde_json::to_value(&definitions).unwrap()
+        );
+
+        let mut legacy = parsed.clone();
+        legacy["schema_version"] = serde_json::json!(9);
+        legacy.as_object_mut().unwrap().remove("views");
+        let mut migrated = SketchManager::new();
+        let legacy_plan = migrated.prepare_load_project(legacy.to_string()).unwrap();
+        commit_plan(&mut migrated, legacy_plan, basis);
+        assert!(migrated.named_views().views.is_empty());
+        let resaved: serde_json::Value =
+            serde_json::from_str(&migrated.export_project_model().unwrap()).unwrap();
+        assert_eq!(resaved["schema_version"], PROJECT_SCHEMA_VERSION);
+        assert_eq!(resaved["views"], serde_json::json!([]));
+        assert_eq!(resaved["extrudes"], parsed["extrudes"]);
+
+        let mut loaded = SketchManager::new();
+        let replay = loaded.prepare_load_project(json).unwrap();
+        commit_plan(&mut loaded, replay, basis);
+        assert_eq!(loaded.extrude_definitions(), definitions);
+        assert_eq!(loaded.solid_scene().bodies.len(), scene.bodies.len());
+        let recalled = loaded.recall_named_view("detent".into()).unwrap();
+        assert_eq!(recalled.view.camera.position, [80.0, -40.0, 30.0]);
+        assert_eq!(recalled.view.part_offsets[0].translation, [0.0, 14.0, 0.0]);
+        assert_eq!(
+            recalled.view.occurrence_offsets[0].translation,
+            [3., 0., 2.]
+        );
+        assert!(recalled.view.print_layout);
+        assert_eq!(
+            recalled.solution,
+            loaded.named_view_solution(Some("detent")).unwrap()
+        );
+        assert_eq!(recalled.visibility.hidden_body_ids, vec![housing.0]);
+        let kept = loaded.set_named_views(loaded.named_views.clone()).unwrap();
+        assert_eq!(kept.active.as_deref(), Some("detent"));
+        loaded.named_views[0].visible_body_ids.push(999);
+        loaded.named_views[0]
+            .part_offsets
+            .push(crate::dto::ViewPartOffsetDto {
+                body_id: 999,
+                translation: [1.0, 0.0, 0.0],
+            });
+        let recalled = loaded.recall_named_view("detent".into()).unwrap();
+        assert!(!recalled.view.visible_body_ids.contains(&999));
+        assert!(recalled
+            .view
+            .part_offsets
+            .iter()
+            .all(|offset| offset.body_id != 999));
+        assert_eq!(recalled.visibility.hidden_body_ids, vec![housing.0]);
+        assert_eq!(loaded.extrude_definitions(), definitions);
+        let scene_after = loaded.solid_scene();
+        assert_eq!(scene_after.bodies.len(), scene.bodies.len());
+        for (before_body, after_body) in scene.bodies.iter().zip(scene_after.bodies.iter()) {
+            assert_eq!(before_body.mesh.positions, after_body.mesh.positions);
+        }
+        let saved_after: serde_json::Value =
+            serde_json::from_str(&loaded.export_project_model().unwrap()).unwrap();
+        assert_eq!(saved_after["extrudes"], parsed["extrudes"]);
+        assert_eq!(
+            saved_after["views"][0]["part_offsets"][0]["translation"],
+            serde_json::json!([0.0, 14.0, 0.0])
+        );
+        assert!(loaded.recall_named_view("missing".into()).is_err());
+        assert_eq!(loaded.extrude_definitions(), definitions);
     }
 
     #[test]

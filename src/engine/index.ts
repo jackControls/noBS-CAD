@@ -115,7 +115,9 @@ import type {
   PlaneRef,
   PointRequest,
   ProfileCatalogItemDto,
+  NamedViewsDto,
   ProjectVisibilityDto,
+  RecallNamedViewDto,
   PolygonRequest,
   PreviewDto,
   RectangleRequest,
@@ -153,6 +155,10 @@ export interface Engine {
   bodyAppearances(): Promise<BodyAppearance[]>;
   projectVisibility(): Promise<ProjectVisibilityDto>;
   setProjectVisibility(visibility: ProjectVisibilityDto): Promise<ProjectVisibilityDto>;
+  namedViews(): Promise<NamedViewsDto>;
+  namedViewSolution(name: string): Promise<AssemblySolutionDto>;
+  setNamedViews(views: import('./types').NamedViewConfigurationDto[], expectedModelJson?: string): Promise<NamedViewsDto>;
+  recallNamedView(name: string): Promise<RecallNamedViewDto>;
   setConstructionVisibility(request: import('./types').ConstructionVisibilityRequest): Promise<ProjectVisibilityDto>;
   drawingDocument(): Promise<DrawingDocumentDto>;
   drawingApply(command: import('./types').DrawingCommandDto): Promise<DrawingDocumentDto>;
@@ -264,6 +270,7 @@ export interface Engine {
   exportStep(request: StepExportRequest): Promise<Uint8Array>;
   exportStl(request: MeshExportRequest): Promise<Uint8Array>;
   export3mf(request: MeshExportRequest): Promise<Uint8Array>;
+  meshExportReport(request: MeshExportRequest & { draft_view?: import('./types').NamedViewConfigurationDto }): Promise<import('./types').PrintLayoutReport>;
   previewSegment(request: SegmentRequest): Promise<PreviewDto>;
   addLine(request: SegmentRequest): Promise<AddLineResult>;
   previewSegmentLocked(request: LockedSegmentRequest): Promise<PreviewDto>;

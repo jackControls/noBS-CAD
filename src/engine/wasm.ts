@@ -22,6 +22,10 @@ type WasmEngineMethods = WasmEngineInner & {
   set_body_appearance(payload: string): string;
   project_visibility(): string;
   project_set_visibility(payload: string): string;
+  named_views(): string;
+  named_view_solution(payload: string): string;
+  set_named_views(payload: string): string;
+  recall_named_view(payload: string): string;
   construction_set_visibility(payload: string): string;
   drawing_document(): string;
   drawing_apply(payload: string): string;
@@ -280,6 +284,26 @@ export class WasmEngine implements Engine {
   async setProjectVisibility(visibility: ProjectVisibilityDto): Promise<ProjectVisibilityDto> {
     return unwrapEnvelope(
       (this.inner as WasmEngineMethods).project_set_visibility(JSON.stringify(visibility)),
+    );
+  }
+
+  async namedViews(): Promise<import('./types').NamedViewsDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).named_views());
+  }
+
+  async namedViewSolution(name: string): Promise<AssemblySolutionDto> {
+    return unwrapEnvelope((this.inner as WasmEngineMethods).named_view_solution(JSON.stringify({ name })));
+  }
+
+  async setNamedViews(views: import('./types').NamedViewConfigurationDto[], expected_model_json?: string): Promise<import('./types').NamedViewsDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).set_named_views(JSON.stringify({ views, expected_model_json })),
+    );
+  }
+
+  async recallNamedView(name: string): Promise<import('./types').RecallNamedViewDto> {
+    return unwrapEnvelope(
+      (this.inner as WasmEngineMethods).recall_named_view(JSON.stringify({ name })),
     );
   }
 
@@ -958,6 +982,10 @@ export class WasmEngine implements Engine {
 
   async export3mf(request: MeshExportRequest): Promise<Uint8Array> {
     return (await this.browserKernel()).export3mf(request);
+  }
+
+  async meshExportReport(_request: MeshExportRequest & { draft_view?: import('./types').NamedViewConfigurationDto }): Promise<import('./types').PrintLayoutReport> {
+    throw new Error('Print layout checks require the native app in this build.');
   }
 
   private async executeSolidPlan(plan: RecomputePlanDto): Promise<SolidUpdateDto> {

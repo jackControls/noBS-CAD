@@ -9,6 +9,7 @@ mod install_mcp;
 mod package;
 mod package_mcp;
 mod playback_test;
+mod printer_profiles;
 mod project_archive;
 mod replay;
 mod test_mcp;
@@ -36,6 +37,7 @@ fn run() -> Result<()> {
 
     match command.as_str() {
         "package" => package::run(args),
+        "printer-profiles" => printer_profiles::run(args),
         "run-script" => replay::run(args),
         "cad-call" => replay::call(args),
         "verify-package-mcp" => package_mcp::run(args),
@@ -66,6 +68,8 @@ Usage:
   cargo run -p xtask -- install-mcp --clients LIST [--no-build] [--binary PATH]
 
 Commands:
+  printer-profiles Fetch pinned slicer geometry and generate the embedded printer catalog.
+                --fetch downloads sources; --check verifies without changing the catalog.
   package       Build the host desktop package using the existing platform bundler.
                 Use --help for prerequisites and optional Windows target selection.
   run-script    Run a .nbcad.jsonc file or --recipe ID using the Rust MCP client. Use --server PATH,

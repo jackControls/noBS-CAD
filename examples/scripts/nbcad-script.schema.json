@@ -60,6 +60,13 @@
             "$ref": "#/$defs/value"
           }
         },
+        "views": {
+          "type": "array",
+          "description": "Named view configurations stored in the project when the script runs. Each view recalls a camera, the bodies that stay visible, and optional display offsets so an exploded review does not need a second script.",
+          "items": {
+            "$ref": "#/$defs/named_view"
+          }
+        },
         "includes": {
           "type": "array",
           "description": "Relative collection fragments composed before steps/checks. Expanded by the host loader; the Rust parser rejects unresolved includes.",
@@ -452,6 +459,211 @@
           }
         }
       ]
+    },
+    "named_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "camera",
+        "visible_body_ids"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "camera": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "position",
+            "target",
+            "up"
+          ],
+          "properties": {
+            "position": {
+              "$ref": "#/$defs/vec3"
+            },
+            "target": {
+              "$ref": "#/$defs/vec3"
+            },
+            "up": {
+              "$ref": "#/$defs/vec3"
+            }
+          }
+        },
+        "visible_body_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/focal_id"
+          }
+        },
+        "part_offsets": {
+          "type": "array",
+          "description": "Display-only translations in millimeters. They do not edit solid geometry.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "body_id",
+              "translation"
+            ],
+            "properties": {
+              "body_id": {
+                "$ref": "#/$defs/focal_id"
+              },
+              "translation": {
+                "$ref": "#/$defs/vec3"
+              }
+            }
+          }
+        },
+        "print_layout": {
+          "type": "boolean"
+        },
+        "print_bed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "size_mm"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "size_mm": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "margin_mm": {
+              "type": "number",
+              "minimum": 0
+            },
+            "nozzle_mode": {
+              "enum": [
+                "main",
+                "dual"
+              ]
+            },
+            "origin_mm": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "type": "number"
+              }
+            },
+            "printable_regions": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 1024,
+                "items": {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": {
+                    "type": "number"
+                  }
+                }
+              }
+            },
+            "excluded_regions": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 1024,
+                "items": {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": {
+                    "type": "number"
+                  }
+                }
+              }
+            },
+            "source": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "repository",
+                "revision",
+                "profile",
+                "files"
+              ],
+              "properties": {
+                "repository": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                },
+                "profile": {
+                  "type": "string"
+                },
+                "files": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "occurrence_offsets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "occurrence_id",
+              "translation"
+            ],
+            "properties": {
+              "occurrence_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "translation": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "rotation": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 4,
+                "maxItems": 4
+              }
+            }
+          }
+        }
+      }
+    },
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "number"
+      }
     },
     "focal_id": {
       "description": "A nonnegative body/component ID or an expression resolving to one.",

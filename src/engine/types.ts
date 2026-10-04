@@ -1,3 +1,4 @@
+import printerCatalog from '../../crates/core/data/printers.json';
 /**
  * Engine IPC contract — mirrors the serde DTOs in `crates/sketch/src/dto.rs`
  * and `crates/sketch/src/plane.rs` 1:1. Both hosts (Tauri, WASM) exchange
@@ -3255,6 +3256,61 @@ export interface BodyAppearance {
   diameter_mm: number;
 }
 
+/** Camera stored with a named view. Model millimeters and a direction. */
+export interface ViewCameraDto {
+  position: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+}
+
+/** Display-only world-axis translation in millimeters. It does not edit solids. */
+export interface ViewPartOffsetDto {
+  body_id: number;
+  translation: [number, number, number];
+}
+
+/** A saved review view recalled by name from the project model. */
+export interface NamedViewConfigurationDto {
+  name: string;
+  camera: ViewCameraDto;
+  visible_body_ids: number[];
+  part_offsets?: ViewPartOffsetDto[];
+  occurrence_offsets?: ViewOccurrenceOffsetDto[];
+  print_layout?: boolean;
+  print_bed?: PrintBedDto;
+}
+
+export interface ViewOccurrenceOffsetDto {
+  occurrence_id: number;
+  translation: [number, number, number];
+  /** World-axis rotation about this occurrence's origin, inherited by children. */
+  rotation?: [number, number, number, number];
+}
+export interface PrintBedDto {
+  name: string;
+  size_mm: [number, number, number];
+  margin_mm: number;
+  nozzle_mode: 'main' | 'dual';
+  origin_mm?: [number, number];
+  printable_regions?: [number, number][][];
+  excluded_regions?: [number, number][][];
+  source?: { repository: string; revision: string; profile: string; files: Record<string, string> };
+}
+// The xtask validates tuple lengths and nozzle modes before generating this JSON.
+export const PRINTER_PROFILES = printerCatalog.profiles as unknown as { id: string; main: PrintBedDto; dual: PrintBedDto }[];
+export const DEFAULT_PRINT_BED: PrintBedDto = structuredClone(PRINTER_PROFILES[0].main);
+
+export interface NamedViewsDto {
+  views: NamedViewConfigurationDto[];
+  active?: string | null;
+}
+
+export interface RecallNamedViewDto {
+  view: NamedViewConfigurationDto;
+  visibility: ProjectVisibilityDto;
+  solution: AssemblySolutionDto;
+}
+
 /** Persisted Browser eye-toggle choices, keyed by stable model identity. */
 export interface ProjectVisibilityDto {
   hidden_body_ids: number[];
@@ -3278,6 +3334,8 @@ export interface MeshExportRequest {
   body_ids: number[];
   /** Defaults to solved visible occurrences. Definition exports each part once in its own coordinates. */
   scope?: MeshExportScope;
+  named_view?: string;
+  print_bed?: PrintBedDto;
   linear_deflection: number;
   angular_deflection: number;
   include_appearance: boolean;
@@ -3290,6 +3348,17 @@ export interface MeshExportRequest {
 }
 
 export const DEFAULT_BODY_COLOR: Rgba8 = { r: 180, g: 180, b: 180, a: 255 };
+export interface PrintLayoutReport {
+  bed: PrintBedDto;
+  printable_instances: number;
+  printable_groups: number;
+  excluded_instances: number;
+  issues: { code: string; message: string; occurrence_ids: number[] }[];
+  proposed_translations: { occurrence_id: number; translation: [number, number, number] }[];
+  proposal_fits: boolean;
+  clearance_mm: number;
+  overlap_check: string;
+}
 export const DEFAULT_MATERIAL_NAME = 'Generic';
 export const DEFAULT_MESH_LINEAR_DEFLECTION = 0.15;
 export const DEFAULT_MESH_ANGULAR_DEFLECTION = 0.35;

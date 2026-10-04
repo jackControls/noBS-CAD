@@ -15,6 +15,7 @@ export type NodeId = number;
 export type BrowserNodeKind =
   | 'document_settings'
   | 'named_views'
+  | 'named_view'
   | 'origin'
   | 'origin_plane_xy'
   | 'origin_plane_xz'

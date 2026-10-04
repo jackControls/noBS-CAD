@@ -11,7 +11,9 @@ use nbcad_core::{BodyId, EdgeId, FaceId};
 use nbcad_solid::{EdgeDto, FaceDto, SolidSceneDto};
 use serde::{Deserialize, Serialize};
 mod relations;
+mod view_layout;
 pub use relations::{CreateGearRelationRequestDto, GearRelationDto};
+pub use view_layout::{resolve_view_layout, ViewOccurrenceOffsetDto};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -40,6 +42,29 @@ impl Default for AssemblyTransformDto {
             translation: [0.0; 3],
             rotation: [0.0, 0.0, 0.0, 1.0],
         }
+    }
+}
+
+impl AssemblyTransformDto {
+    pub fn compose(self, rhs: Self) -> Self {
+        let pose = RigidPose::from_transform(self).compose(RigidPose::from_transform(rhs));
+        Self {
+            translation: pose.translation,
+            rotation: pose.rotation,
+        }
+    }
+    pub fn inverse(self) -> Self {
+        let pose = RigidPose::from_transform(self).inverse();
+        Self {
+            translation: pose.translation,
+            rotation: pose.rotation,
+        }
+    }
+    pub fn transform_point(self, point: [f64; 3]) -> [f64; 3] {
+        add(
+            self.translation,
+            rotate(normalize_quaternion(self.rotation), point),
+        )
     }
 }
 

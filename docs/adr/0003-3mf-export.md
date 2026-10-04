@@ -35,8 +35,12 @@ current implementation.
 4. Packages use millimetres. Optional Bambu Studio, OrcaSlicer, PrusaSlicer and
    Cura metadata targets provide compatible filament/color hints; these are not
    complete pre-sliced projects or guarantees for every slicer version.
-5. Assembly scope exports visible solved occurrences with their placement and
-   repetition; definition scope exports retained bodies in part coordinates.
+5. Assembly scope exports visible solved occurrences through core component
+   resources, preserving CAD-root multipart grouping, placement and repetition.
+   Named views provide shared presentation and print offsets; optional print
+   designation enables checks and reviewed whole-group corrections. See
+   [named views and print layouts](../manufacturing/PRINT_LAYOUTS.md).
+   Definition scope exports retained bodies in part coordinates.
 6. Keep **STEP** for exact CAD interchange. **3MF/STL** contain manufacturing
    meshes; **`.nbcad`** retains the editable sketches, features and assembly.
 7. **STL** does not preserve materials or colors. Material assignments and export

@@ -14,6 +14,8 @@ pub fn is_live_engine_query(method: &str) -> bool {
         method,
         "active_sketch"
             | "project_visibility"
+            | "named_views"
+            | "named_view_solution"
             | "drawing_export"
             | "drawing_projection"
             | "assembly_document"
@@ -58,6 +60,18 @@ pub static MUTATES: &[MutateSpec] = &[
     MutateSpec {
         name: "project_set_visibility",
         engine_method: "project_set_visibility",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "set_named_views",
+        engine_method: "set_named_views",
+        payload: PayloadKind::Object,
+        execution: ExecutionKind::Direct,
+    },
+    MutateSpec {
+        name: "recall_named_view",
+        engine_method: "recall_named_view",
         payload: PayloadKind::Object,
         execution: ExecutionKind::Direct,
     },

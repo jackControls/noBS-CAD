@@ -213,6 +213,8 @@ export class WasmEngine {
      * `payload`: serialized `MovePointRequest`.
      */
     move_point(payload: string): string;
+    named_view_solution(payload: string): string;
+    named_views(): string;
     constructor();
     /**
      * `payload`: serialized `OffsetRequest`.
@@ -241,6 +243,7 @@ export class WasmEngine {
     project_prepare_new(): string;
     project_set_visibility(payload: string): string;
     project_visibility(): string;
+    recall_named_view(payload: string): string;
     /**
      * `payload`: serialized `RectangularPatternRequest`.
      */
@@ -269,6 +272,7 @@ export class WasmEngine {
      * `payload`: serialized `SetGridStepRequest`.
      */
     set_grid_step(payload: string): string;
+    set_named_views(payload: string): string;
     solid_commit(payload: string): string;
     solid_prepare_body_feature(payload: string): string;
     solid_prepare_chamfer(payload: string): string;
@@ -419,6 +423,8 @@ export interface InitOutput {
     readonly wasmengine_move_copy_entities: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_move_dimension: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_move_point: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_named_view_solution: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_named_views: (a: number) => [number, number];
     readonly wasmengine_new: () => number;
     readonly wasmengine_offset_curve: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_offset_preview: (a: number, b: number, c: number) => [number, number];
@@ -432,6 +438,7 @@ export interface InitOutput {
     readonly wasmengine_project_prepare_new: (a: number) => [number, number];
     readonly wasmengine_project_set_visibility: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_project_visibility: (a: number) => [number, number];
+    readonly wasmengine_recall_named_view: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_rectangular_pattern: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_redo: (a: number) => [number, number];
     readonly wasmengine_revolve_definitions: (a: number) => [number, number];
@@ -442,6 +449,7 @@ export interface InitOutput {
     readonly wasmengine_set_dimension_style: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_set_grid_snap: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_set_grid_step: (a: number, b: number, c: number) => [number, number];
+    readonly wasmengine_set_named_views: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_solid_commit: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_solid_prepare_body_feature: (a: number, b: number, c: number) => [number, number];
     readonly wasmengine_solid_prepare_chamfer: (a: number, b: number, c: number) => [number, number];

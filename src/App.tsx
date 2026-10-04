@@ -78,6 +78,7 @@ import { createExitController } from './files/applicationExit';
 import { waitForExitEdits } from './files/exitSettlement';
 import { UnsavedChangesDialog } from './components/UnsavedChangesDialog';
 import { MeshExportDialog } from './components/MeshExportDialog';
+import { NamedViewDialog } from './components/NamedViewDialog';
 
 export default function App() {
   useEffect(installRecipeLinks, []);
@@ -503,6 +504,7 @@ export default function App() {
       <JointDialog />
       <UnsavedChangesDialog />
       <MeshExportDialog />
+      <NamedViewDialog />
     </div>
   );
 }

@@ -125,7 +125,7 @@ display; it does not remove geometry or substitute for explicit export selection
 ## File structure
 
 A script has `version: 1`, a human-readable `name`, ordered `steps`, optional final
-`checks`, and `exports`. The optional `starting_state: "empty"` documents the required
+`checks`, optional named `views`, and `exports`. The optional `starting_state: "empty"` documents the required
 blank starting state; omitting it has the same effect in version 1. The
 [editor schema](../examples/scripts/nbcad-script.schema.json) describes these fields.
 Each step has exactly one of these actions:
@@ -212,6 +212,15 @@ transition, put a normal view step before it. Orbit requires `view: "current"`.
 The same fields work directly with `cad_interface` action `view` on a loaded
 document; a script still starts from a blank document. Completion acknowledges the
 actual camera animation. Presentation speed and reduced-motion preferences apply.
+
+## Named view configurations
+
+A top-level `views` array is stored in the project when the script finishes, in
+both fast and presentation mode. Each view has a `name`, a `camera`
+(`position`, `target`, `up`, in millimeters), `visible_body_ids`, and optional
+`part_offsets` (`body_id` and a world-axis `translation` in millimeters).
+Offsets change only the display. Body ids may be literals or result references.
+The Browser recalls a view by name.
 
 The shared presentation interface exposes `configure`, `note`, `pause`, `resume`,
 `step`, `status`, `finish`, `stop`, `dismiss` and `show`. Configuration chooses `mode: "fast"` or

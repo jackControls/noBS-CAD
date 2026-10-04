@@ -90,6 +90,9 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      - name: Fetch and verify embedded printer profiles
+        run: cargo xtask printer-profiles --fetch --check
+
       - name: Rust formatting
         if: matrix.shard == 'core'
         shell: pwsh
@@ -245,6 +248,9 @@ jobs:
           node-version: '24'
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Fetch and verify embedded printer profiles
+        run: cargo xtask printer-profiles --fetch --check
 
       - name: Install OpenCASCADE 7.9 SDK (Ubuntu packages)
         shell: bash

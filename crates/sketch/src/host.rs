@@ -52,6 +52,20 @@ enum DocumentNamePayload {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetNamedViewsPayload {
+    views: Vec<crate::NamedViewConfigurationDto>,
+    #[serde(default)]
+    expected_model_json: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecallNamedViewPayload {
+    name: String,
+}
+
+#[derive(serde::Deserialize)]
 struct ProjectExportPayload {
     expected_model_json: String,
     save_name: Option<String>,
@@ -141,6 +155,21 @@ pub fn handle(manager: &mut SketchManager, method: &str, payload: &str) -> Strin
         "project_visibility" => ok_json(manager.project_visibility()),
         "project_set_visibility" => with_payload(payload, |visibility| {
             manager.set_project_visibility(visibility)
+        }),
+        "named_views" => ok_json(manager.named_views()),
+        "named_view_solution" => with_payload(payload, |request: RecallNamedViewPayload| {
+            manager.named_view_solution(Some(&request.name))
+        }),
+        "set_named_views" => with_payload(payload, |request: SetNamedViewsPayload| {
+            nbcad_solid::check_export_model_snapshot(
+                request.expected_model_json.as_deref(),
+                &manager.export_project_model()?,
+            )
+            .map_err(|e| crate::SessionError::Solid(e.into()))?;
+            manager.set_named_views(request.views)
+        }),
+        "recall_named_view" => with_payload(payload, |request: RecallNamedViewPayload| {
+            manager.recall_named_view(request.name)
         }),
         "construction_set_visibility" => with_payload(payload, |request| {
             manager.set_construction_visibility(request)

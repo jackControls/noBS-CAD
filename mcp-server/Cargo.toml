@@ -34,5 +34,6 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 windows-sys = { version = "0.61", features = ["Win32_System_Pipes"] }
 
 [dev-dependencies]
+nbcad-export = { path = "../crates/export", features = ["test-utils"] }
 jsonschema = { version = "0.56", default-features = false }
 zip = { version = "2", default-features = false, features = ["deflate"] }

@@ -531,9 +531,9 @@ async function exportMesh(format: 'stl' | '3mf', selectedOnly: boolean): Promise
   return runExport({
     assertSelectionOwner: exportSelectionOwner(transition, state),
     captureModel: () => engine.exportProjectModel(),
-    chooseOptions: requestMeshExportScope,
-    render: async (scope, expected_model_json) => {
-      const request = {body_ids: bodyIds, scope, expected_model_json,
+    chooseOptions: expectedModelJson => requestMeshExportScope(bodyIds, expectedModelJson),
+    render: async (options, expected_model_json) => {
+      const request = {body_ids: bodyIds, ...options, expected_model_json,
         linear_deflection: 0.15, angular_deflection: 0.35, include_appearance: format === '3mf'};
       if (format === 'stl') return engine.exportStl(request);
       return engine.export3mf({...request, slicer_target: (await import('../materials')).readSlicerTarget()});

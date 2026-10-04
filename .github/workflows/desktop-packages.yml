@@ -198,6 +198,9 @@ jobs:
           rustup default stable
           rustup target add ${{ matrix.rust_target }}
 
+      - name: Fetch and verify embedded printer profiles
+        run: cargo xtask printer-profiles --fetch --check
+
       - name: Install JavaScript dependencies
         run: npm ci
 
@@ -370,6 +373,9 @@ jobs:
           key: linux-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'crates/**/Cargo.toml') }}
           restore-keys: |
             linux-ubuntu-26.04-${{ runner.arch }}-
+
+      - name: Fetch and verify embedded printer profiles
+        run: cargo xtask printer-profiles --fetch --check
 
       - name: Install JavaScript dependencies
         run: npm ci
@@ -550,6 +556,9 @@ jobs:
           key: linux-appimage-ubuntu-22.04-${{ runner.arch }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml', 'crates/**/Cargo.toml', 'scripts/build-occt-linux.sh') }}
           restore-keys: |
             linux-appimage-ubuntu-22.04-${{ runner.arch }}-
+
+      - name: Fetch and verify embedded printer profiles
+        run: cargo xtask printer-profiles --fetch --check
 
       - name: Install JavaScript dependencies
         run: npm ci
@@ -752,6 +761,9 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustup target add aarch64-apple-darwin
+
+      - name: Fetch and verify embedded printer profiles
+        run: cargo xtask printer-profiles --fetch --check
 
       - name: Install JavaScript dependencies
         run: npm ci

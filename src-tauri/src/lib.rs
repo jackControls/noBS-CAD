@@ -435,6 +435,10 @@ engine_command!(
     read
 );
 engine_command!(engine_project_set_visibility, "project_set_visibility");
+engine_command!(engine_named_views, "named_views", no_payload, read);
+engine_command!(engine_named_view_solution, "named_view_solution", read);
+engine_command!(engine_set_named_views, "set_named_views");
+engine_command!(engine_recall_named_view, "recall_named_view");
 engine_command!(
     engine_construction_set_visibility,
     "construction_set_visibility"
@@ -1063,6 +1067,14 @@ fn engine_export_3mf(state: tauri::State<'_, AppState>, payload: &str) -> Result
     state.export_3mf(payload)
 }
 
+#[tauri::command]
+fn engine_mesh_export_report(
+    state: tauri::State<'_, AppState>,
+    payload: &str,
+) -> Result<nbcad_export::PrintLayoutReport, String> {
+    state.mesh_export_report(payload)
+}
+
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 fn cam_library_config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -1348,6 +1360,7 @@ pub fn run() {
             engine_export_step,
             engine_export_stl,
             engine_export_3mf,
+            engine_mesh_export_report,
             engine_end_sketch,
             engine_finished_sketches,
             engine_edit_sketch,
@@ -1357,6 +1370,10 @@ pub fn run() {
             engine_body_appearances,
             engine_project_visibility,
             engine_project_set_visibility,
+            engine_named_views,
+            engine_named_view_solution,
+            engine_set_named_views,
+            engine_recall_named_view,
             engine_construction_set_visibility,
             engine_drawing_document,
             engine_drawing_apply,

@@ -17,6 +17,19 @@ pub fn write_3mf(
     include_appearance: bool,
     target: SlicerTarget,
 ) -> Result<Vec<u8>, ExportError> {
+    write_package(meshes, appearances, include_appearance, target, None)
+}
+
+pub(crate) fn write_package(
+    meshes: &[TriangleMesh],
+    appearances: &[BodyAppearance],
+    include_appearance: bool,
+    target: SlicerTarget,
+    scene: Option<(
+        &nbcad_assembly::ComponentStructureDto,
+        &nbcad_assembly::AssemblySolutionDto,
+    )>,
+) -> Result<Vec<u8>, ExportError> {
     if meshes.is_empty() {
         return Err(ExportError("There are no active bodies to export.".into()));
     }
@@ -29,7 +42,17 @@ pub fn write_3mf(
         validate_3mf_model_mesh(mesh)?;
     }
 
-    let model_xml = build_3mf_model_xml(&welded, appearances, include_appearance, target)?;
+    let model_xml = match scene {
+        Some((structure, solution)) => crate::scene::build_scene_xml(
+            &welded,
+            appearances,
+            include_appearance,
+            target,
+            structure,
+            solution,
+        )?,
+        None => build_3mf_model_xml(&welded, appearances, include_appearance, target)?,
+    };
     let mut cursor = Cursor::new(Vec::new());
     {
         let mut zip = ZipWriter::new(&mut cursor);
@@ -235,7 +258,7 @@ fn write_prusa_metadata(
     Ok(())
 }
 
-fn build_3mf_model_xml(
+pub(crate) fn build_3mf_model_xml(
     meshes: &[TriangleMesh],
     appearances: &[BodyAppearance],
     include_appearance: bool,
@@ -365,7 +388,7 @@ fn nonempty(value: &str, fallback: &str) -> String {
     }
 }
 
-fn xml_escape(value: &str) -> String {
+pub(crate) fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")

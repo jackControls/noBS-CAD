@@ -20,6 +20,11 @@ Expect:
 For native OCCT/MCP coverage, use the runtime setup and sequential native test
 command in [DEVELOPMENT.md](../DEVELOPMENT.md#verify-changes).
 
+Multipart placement acceptance uses an independent XML/build-graph reader and
+installed slicer round trips. See [print layouts and recorded versions](PRINT_LAYOUTS.md#acceptance-evidence)
+and `scripts/test-3mf-slicers.ps1`. Existing flat smoke fixtures below exercise
+different appearance/geometry cases and retain their separate manual checklist.
+
 ## Manual slicer smoke (KR3.6)
 
 Regenerate fixtures: `cargo test -p nbcad-export --lib tests::regen_manual_smoke_fixtures -- --ignored --exact`
