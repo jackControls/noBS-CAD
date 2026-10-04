@@ -19,8 +19,9 @@
 //!   success. A later JS `noteEngineRevision` is not the sole advance and
 //!   must not double-count (frontend suppresses while applying / omits it).
 //! - Successful inbox apply requires `base_generation == engine_revision`,
-//!   applies on the live engine, then `engine_revision += 1` and writes
-//!   heartbeat.json. Two same-base ops therefore cannot both apply.
+//!   applies on the live engine, then mutations advance `engine_revision` and
+//!   write heartbeat.json. Reads retain that revision; two same-base mutations
+//!   therefore cannot both apply.
 //! - Conflicting or malformed head inbox entries are dead-lettered to
 //!   `inbox/failed/` so the queue cannot wedge forever.
 //! - Snapshot publication and heartbeat refresh never advance the engine
@@ -56,7 +57,10 @@ use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Mutex,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
@@ -67,12 +71,25 @@ use nbcad_mcp_mutate::ExecutionKind;
 
 use crate::state::{AppState, BOOTSTRAP_SESSION_ID};
 
+mod native_history;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub(crate) mod native_interface;
+
 /// Placeholder key used before the window is bound to a native project tab.
 const UNBOUND_PROJECT: &str = "__unbound__";
 
 #[derive(Debug)]
 struct ProjectPublisher {
     session_id: String,
+    /// Native control ownership follows document incarnation, not the mutable
+    /// engine revision or a reusable tab id. Retiring this publisher also
+    /// retires every queued native action for its incarnation.
+    native_interface_epoch: u64,
+    /// File destination lineage survives successful native Undo/Redo, while
+    /// external model replacement starts a new lineage. Control epochs still
+    /// retire on every replacement, including history restoration.
+    native_file_epoch: u64,
+    native_history: native_history::SolidHistory,
     /// Monotonic export ticket; independent of model mutations.
     next_export_sequence: u64,
     /// Latest export ticket written, including repeated exports of one revision.
@@ -94,9 +111,16 @@ struct ProjectPublisher {
 
 impl ProjectPublisher {
     fn new() -> Self {
+        static NEXT_NATIVE_EPOCH: AtomicU64 = AtomicU64::new(1);
+        let epoch = NEXT_NATIVE_EPOCH
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |epoch| epoch.checked_add(1))
+            .expect("native document incarnations exhausted");
         Self {
             session_id: Uuid::new_v4().to_string(),
+            native_interface_epoch: epoch,
+            native_file_epoch: epoch,
             next_export_sequence: 0,
+            native_history: native_history::SolidHistory::default(),
             last_export_sequence: 0,
             published_generation: 0,
             last_model_generation: None,
@@ -169,7 +193,7 @@ impl WindowPublisher {
     }
 }
 
-/// Process-lifetime bridge state. Tauri keeps this alive across WebView reloads.
+/// Process-lifetime bridge state. Native document activations retain its generations.
 #[derive(Debug)]
 pub struct SessionBridgeState {
     publishers: Mutex<HashMap<String, WindowPublisher>>,
@@ -346,23 +370,7 @@ impl SessionBridgeState {
         if let Some(project_session_id) = project_session_id {
             publisher.rebind_to(project_session_id);
         }
-        let project = publisher.active_mut();
-        project.next_export_sequence = project
-            .next_export_sequence
-            .checked_add(1)
-            .ok_or_else(|| "session generation exhausted".to_string())?;
-        project
-            .pending_exports
-            .insert(project.next_export_sequence, project.engine_revision);
-        let result = json!({
-            "session_id": project.session_id,
-            "window_id": window_label,
-            "generation": project.next_export_sequence,
-            "engine_revision": project.engine_revision,
-            "project_session_id": publisher.active_project_session_id,
-            "document_id": publisher.active_project_session_id,
-            "session_mode": "read_only_snapshot",
-        });
+        let result = reserve_project_export(publisher, window_label)?;
         drop(publishers);
         let _ = self.write_process_instance_file();
         Ok(result)
@@ -676,7 +684,7 @@ fn generation_conflict(session_id: &str, base: u64, current: Option<u64>) -> Str
     .unwrap_or_else(|_| "generation_conflict".to_string())
 }
 
-fn parse_engine_envelope(raw: String) -> Result<Value, String> {
+pub(crate) fn parse_engine_envelope(raw: String) -> Result<Value, String> {
     let envelope: Value =
         serde_json::from_str(&raw).map_err(|error| format!("invalid engine response: {error}"))?;
     if envelope.get("ok").and_then(Value::as_bool) == Some(true) {
@@ -745,6 +753,61 @@ fn dispatch_inbox_on_engine(
     let encoded = nbcad_mcp_mutate::encode_payload(spec.payload, arguments)?;
     let solid = matches!(spec.execution, ExecutionKind::SolidReplay);
     parse_engine_envelope(engine.apply_encoded_mutate(spec.engine_method, &encoded, solid))
+}
+
+fn reserve_project_export(
+    publisher: &mut WindowPublisher,
+    window_label: &str,
+) -> Result<Value, String> {
+    let project = publisher.active_mut();
+    project.next_export_sequence = project
+        .next_export_sequence
+        .checked_add(1)
+        .ok_or("Session generation exhausted")?;
+    project
+        .pending_exports
+        .insert(project.next_export_sequence, project.engine_revision);
+    Ok(json!({
+        "session_id": project.session_id,
+        "window_id": window_label,
+        "generation": project.next_export_sequence,
+        "engine_revision": project.engine_revision,
+        "project_session_id": publisher.active_project_session_id,
+        "document_id": publisher.active_project_session_id,
+        "session_mode": "read_only_snapshot",
+    }))
+}
+
+fn is_project_replacement(name: &str) -> bool {
+    matches!(name, "cad_new_project" | "cad_load_project_model")
+}
+
+/// The native interface and inbox use the same replacement dispatcher and
+/// unchanged marker. The caller owns the publisher lock and retirement.
+fn dispatch_project_replacement(
+    engine: &AppState,
+    name: &str,
+    arguments: &Value,
+) -> (Result<Value, String>, bool) {
+    let Some(spec) = nbcad_mcp_mutate::lookup_mutate(name).filter(|_| is_project_replacement(name))
+    else {
+        return (
+            Err("Not a whole-project replacement operation".into()),
+            false,
+        );
+    };
+    match nbcad_mcp_mutate::encode_payload(spec.payload, arguments) {
+        Ok(payload) => {
+            let raw = if name == "cad_load_project_model" {
+                engine.project_load(&payload)
+            } else {
+                engine.project_new()
+            };
+            let changed = !project_replacement_is_unchanged(&raw);
+            (parse_engine_envelope(raw), changed)
+        }
+        Err(error) => (Err(error), false),
+    }
 }
 
 fn archive_inbox_op(session_id: &str, seq: u64) -> Result<(), String> {
@@ -950,7 +1013,6 @@ impl SessionBridgeState {
         result
     }
 
-    #[cfg(test)]
     fn engine_revision_for_window(&self, window_label: &str) -> Result<Option<u64>, String> {
         let mut publishers = self
             .publishers
@@ -1132,21 +1194,7 @@ fn apply_project_replacement_inbox(
     let session_id = publisher.active_mut().session_id.clone();
     let document = engine.active_project_session_id();
     let arguments = request.get("arguments").cloned().unwrap_or(json!({}));
-    let spec = nbcad_mcp_mutate::lookup_mutate(name).expect("validated replacement operation");
-    let (outcome, changed) = match nbcad_mcp_mutate::encode_payload(spec.payload, &arguments) {
-        Ok(payload) => {
-            let raw = if name == "cad_load_project_model" {
-                // Preserve the unchanged marker for malformed/unsupported
-                // project data rejected before native recomputation begins.
-                engine.project_load(&payload)
-            } else {
-                engine.project_new()
-            };
-            let changed = !project_replacement_is_unchanged(&raw);
-            (parse_engine_envelope(raw), changed)
-        }
-        Err(error) => (Err(error), false),
-    };
+    let (outcome, changed) = dispatch_project_replacement(engine, name, &arguments);
     let replacement = changed.then(ProjectPublisher::new);
     let mut receipt = request.clone();
     let mut response = json!({
@@ -1436,7 +1484,7 @@ fn apply_or_reject_one_inbox_op(
             "engine_revision": project.engine_revision,
         }));
     }
-    if nbcad_mcp_mutate::lookup_mutate(&name).is_none() {
+    let Some(spec) = nbcad_mcp_mutate::lookup_mutate(&name) else {
         let error = format!("unsupported inbox mutate '{name}'");
         dead_letter_inbox_op(&session_id, seq, &error)?;
         return Ok(json!({
@@ -1451,8 +1499,9 @@ fn apply_or_reject_one_inbox_op(
             "pending": pending_inbox_seqs(&session_id).len(),
             "engine_revision": project.engine_revision,
         }));
-    }
-    if matches!(name.as_str(), "cad_new_project" | "cad_load_project_model") {
+    };
+    let model_changed = !spec.is_read_only();
+    if is_project_replacement(&name) {
         let result = apply_project_replacement_inbox(
             publisher,
             window_label,
@@ -1466,14 +1515,48 @@ fn apply_or_reject_one_inbox_op(
         let _ = state.write_process_instance_file();
         return result;
     }
-    match dispatch_inbox_on_engine(engine, &name, &arguments) {
+    let outcome = (|| {
+        let edit_history = if model_changed {
+            let next_revision = project
+                .engine_revision
+                .checked_add(1)
+                .ok_or("Session engine revision exhausted")?;
+            let owner = nbcad_interface::DocumentContext {
+                window_id: window_label.to_owned(),
+                document_id: engine_active.clone(),
+                epoch: project.native_interface_epoch,
+            };
+            native_interface::prepare_edit_history(engine, project, &owner, next_revision, &name)?
+        } else {
+            None
+        };
+        let result = dispatch_inbox_on_engine(engine, &name, &arguments)?;
+        // The model has committed even if publication below later fails.
+        if let Some(history) = edit_history {
+            project.native_history = history;
+        }
+        Ok::<_, String>(result)
+    })();
+    match outcome {
         Ok(result) => {
-            bump_engine_revision(
-                project,
-                window_label,
-                project_session_id.as_deref(),
-                &process_instance_id,
-            )?;
+            if model_changed {
+                bump_engine_revision(
+                    project,
+                    window_label,
+                    project_session_id.as_deref(),
+                    &process_instance_id,
+                )?;
+            } else {
+                // The owned query completed, but its model/history receipt is
+                // unchanged. Refresh liveness without inventing an edit.
+                write_project_heartbeat(
+                    project,
+                    window_label,
+                    project_session_id.as_deref(),
+                    &process_instance_id,
+                    "query_completed",
+                )?;
+            }
             atomic_write(
                 &inbox_dir(&session_id)
                     .join("results")
@@ -1483,6 +1566,7 @@ fn apply_or_reject_one_inbox_op(
             archive_inbox_op(&session_id, seq)?;
             let mut response = json!({
                 "applied": true,
+                "model_changed": model_changed,
                 "seq": seq,
                 "name": name,
                 "result": result,
@@ -1517,145 +1601,23 @@ fn apply_or_reject_one_inbox_op(
     }
 }
 
-/// Reserve a monotonic generation before the frontend starts an async export.
-#[tauri::command]
-pub fn mcp_session_bridge_reserve(
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, SessionBridgeState>,
-    engine: tauri::State<'_, AppState>,
-) -> Result<serde_json::Value, String> {
-    state.reserve_for_window_on_project(window.label(), Some(&engine.active_project_session_id()))
-}
-
-/// Publish a read-only snapshot for MCP attach.
-///
-/// Payload JSON: `{ focus, model_json?, active_sketch_json?, generation,
-/// session_id, project_session_id? }`. `session_id` (and project identity
-/// when reserved) must match the reservation; write never targets the
-/// currently active tab by generation alone.
-#[tauri::command]
-pub fn mcp_session_bridge_write(
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, SessionBridgeState>,
-    payload: String,
-) -> Result<serde_json::Value, String> {
-    let parsed: PublishPayload = serde_json::from_str(&payload)
-        .map_err(|error| format!("invalid session payload: {error}"))?;
-    state.write_for_window(window.label(), parsed)
-}
-
-/// Wake the UI from native events, rather than depending on background WebView
-/// timers. The UI remains the owner of live apply and presentation ordering.
-pub fn start_mcp_wake_loop(app: tauri::AppHandle) {
-    use tauri::{Emitter, Manager};
-    std::thread::spawn(move || {
-        let mut awake_until = HashMap::<String, u64>::new();
-        let mut last_keepalive = now_ms();
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(25));
-            let windows = app.webview_windows();
-            if windows.is_empty() {
-                break;
-            }
-            if now_ms().saturating_sub(last_keepalive) >= 10_000 {
-                last_keepalive = now_ms();
-                for window in windows.values() {
-                    let _ = window.emit("mcp-keepalive", ());
-                }
-            }
-            let state = app.state::<SessionBridgeState>();
-            let targets = match state.publishers.lock() {
-                Ok(publishers) => publishers
-                    .iter()
-                    .filter_map(|(label, publisher)| {
-                        publisher
-                            .active_project_session_id
-                            .as_ref()
-                            .and_then(|id| publisher.by_project.get(id))
-                            .map(|project| (label.clone(), project.session_id.clone()))
-                    })
-                    .collect::<Vec<_>>(),
-                Err(_) => break,
-            };
-            for (label, session_id) in targets {
-                let root = session_root().join(session_id);
-                let has_work = [root.join("controls"), root.join("inbox")]
-                    .iter()
-                    .any(|dir| {
-                        fs::read_dir(dir).ok().is_some_and(|entries| {
-                            entries.filter_map(Result::ok).any(|entry| {
-                                entry.file_type().is_ok_and(|kind| kind.is_file())
-                                    && entry.path().extension().is_some_and(|ext| ext == "json")
-                                    && !entry
-                                        .file_name()
-                                        .to_string_lossy()
-                                        .ends_with(".result.json")
-                            })
-                        })
-                    });
-                if has_work {
-                    awake_until.insert(label.clone(), now_ms() + 3_000);
-                }
-                if awake_until
-                    .get(&label)
-                    .is_some_and(|until| *until > now_ms())
-                {
-                    if let Some(window) = windows.get(&label) {
-                        let _ = window.emit("mcp-work", ());
-                    }
-                }
-            }
-        }
-    });
-}
-
-/// Window state is inspected after requesting the transition; focus is subject
-/// to the operating system's foreground policy, never inferred from success.
-#[tauri::command]
-pub fn mcp_path_exists(path: String) -> bool {
-    std::path::Path::new(&path).exists()
-}
-
-#[tauri::command]
-pub fn mcp_window_control(window: tauri::WebviewWindow, mode: String) -> Result<Value, String> {
-    match mode.as_str() {
-        "foreground" => {
-            window.show().map_err(|e| e.to_string())?;
-            window.unminimize().map_err(|e| e.to_string())?;
-            window.set_focus().map_err(|e| e.to_string())?;
-        }
-        "background" => window.minimize().map_err(|e| e.to_string())?,
-        "close" => {
-            // Same CloseRequested event as title-bar X / Alt+F4. The frontend
-            // guard owns confirmation and waits for the MCP reply before exit.
-            window.close().map_err(|e| e.to_string())?;
-            return Ok(json!({"close_requested": true}));
-        }
-        "inspect" => (),
-        _ => return Err("mode must be foreground, background, close, or inspect".into()),
-    }
-    Ok(
-        json!({"visible": window.is_visible().map_err(|e| e.to_string())?,
-        "minimized": window.is_minimized().map_err(|e| e.to_string())?,
-        "focused": window.is_focused().map_err(|e| e.to_string())?}),
-    )
-}
-
-#[tauri::command]
-pub fn mcp_session_bridge_control(
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, SessionBridgeState>,
-    engine: tauri::State<'_, AppState>,
-    response: Option<Value>,
-) -> Result<Value, String> {
-    control_for_window(&state, window.label(), &engine, response)
-}
-
 fn control_for_window(
     state: &SessionBridgeState,
     window_label: &str,
     engine: &AppState,
     response: Option<Value>,
+) -> Result<Value, String> {
+    control_for_window_owned(state, window_label, engine, response, None)
+}
+
+/// The native worker captures a specific document incarnation and request
+/// before leaving the render thread. Validate both before consuming its file.
+fn control_for_window_owned(
+    state: &SessionBridgeState,
+    window_label: &str,
+    engine: &AppState,
+    response: Option<Value>,
+    expected: Option<(&nbcad_interface::DocumentContext, &str)>,
 ) -> Result<Value, String> {
     // Use the established lease -> publisher order. A completed slow native
     // query must refresh both liveness files before its client sees the receipt.
@@ -1670,6 +1632,18 @@ fn control_for_window(
     let Some(publisher) = publishers.get_mut(window_label) else {
         return Ok(Value::Null);
     };
+    if let Some((owner, _)) = expected {
+        if owner.window_id != window_label
+            || publisher.active_project_session_id.as_deref() != Some(&owner.document_id)
+            || engine.active_project_session_id() != owner.document_id
+            || !publisher
+                .by_project
+                .get(&owner.document_id)
+                .is_some_and(|project| project.native_interface_epoch == owner.epoch)
+        {
+            return Err("The control request's document was replaced before it could run".into());
+        }
+    }
     let session_id = if let Some(response) = response.as_ref() {
         let requested = response
             .get("session_id")
@@ -1724,47 +1698,8 @@ fn control_for_window(
         let _ = fs::remove_file(request);
         return Ok(Value::Null);
     }
-    let Ok(entries) = fs::read_dir(&dir) else {
-        return Ok(Value::Null);
-    };
-    let mut paths = entries
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .is_some_and(|n| n.to_string_lossy().ends_with(".request.json"))
-        })
-        .collect::<Vec<_>>();
-    paths.sort();
-    for path in paths {
-        let Ok(body) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(mut request) = serde_json::from_str::<Value>(&body) else {
-            continue;
-        };
-        if !request.is_object() {
-            let _ = fs::remove_file(path);
-            continue;
-        }
-        let valid_id = request.get("id").and_then(Value::as_str).is_some_and(|id| {
-            !id.is_empty()
-                && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
-                && path
-                    .file_name()
-                    .is_some_and(|name| name == format!("{id}.request.json").as_str())
-        });
-        if !valid_id {
-            let _ = fs::remove_file(path);
-            continue;
-        }
-        if request
-            .get("expires_ms")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            < now_ms()
-        {
-            let _ = fs::remove_file(path);
+    for (path, mut request) in pending_control_requests(&dir) {
+        if expected.is_some_and(|(_, id)| request["id"].as_str() != Some(id)) {
             continue;
         }
         request["session_id"] = json!(session_id);
@@ -1859,53 +1794,85 @@ fn control_for_window(
     Ok(Value::Null)
 }
 
-/// Refresh `heartbeat.json` only — no model export / generation bump.
-#[tauri::command]
-pub fn mcp_session_bridge_heartbeat(
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, SessionBridgeState>,
-) -> Result<serde_json::Value, String> {
-    state.heartbeat_for_window(window.label())
-}
-
-/// Advance authoritative engine revision on a local UI mutation (no debounce).
-#[tauri::command]
-pub fn mcp_session_bridge_note_mutation(
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, SessionBridgeState>,
-) -> Result<serde_json::Value, String> {
-    state.note_mutation_for_window(window.label())
-}
-
-/// Apply one pending MCP inbox op on the live engine (UI-owned write).
-///
-/// Called from the session-bridge TS poll. After a successful apply the
-/// frontend store updates and the existing publisher writes a new snapshot.
-/// MCP `cad_refresh` then sees the same body. Never writes model.json here.
-#[tauri::command]
-pub fn mcp_session_bridge_apply_inbox(
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, SessionBridgeState>,
-    engine: tauri::State<'_, AppState>,
-    reject_reason: Option<String>,
-    document_id: Option<String>,
-    session_id: Option<String>,
-) -> Result<serde_json::Value, String> {
-    let (Some(document), Some(session)) = (document_id, session_id) else {
-        return Ok(Value::Null);
+/// Filesystem-only discovery shared by normal control dispatch and native
+/// busy rejection. It performs no model operation or publisher lock access.
+fn pending_control_requests(dir: &Path) -> Vec<(PathBuf, Value)> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
     };
-    if let Some(reason) = &reject_reason {
-        if reason.trim().is_empty() || reason.len() > 1000 {
-            return Err("playback rejection needs a nonempty reason of at most 1000 bytes".into());
-        }
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(".request.json"))
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            let request: Value = serde_json::from_str(&fs::read_to_string(&path).ok()?).ok()?;
+            let id = request["id"].as_str();
+            let valid = id.is_some_and(|id| {
+                !id.is_empty()
+                    && id.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+                    && path
+                        .file_name()
+                        .is_some_and(|name| name == format!("{id}.request.json").as_str())
+            });
+            if !valid || request["expires_ms"].as_u64().unwrap_or(0) < now_ms() {
+                let _ = fs::remove_file(&path);
+                return None;
+            }
+            if dir.join(format!("{}.result.json", id.unwrap())).exists() {
+                return None;
+            }
+            Some((path, request))
+        })
+        .collect()
+}
+
+fn reject_native_control(session: &str, id: &str, code: &str, reason: &str) -> Result<(), String> {
+    let dir = session_root().join(session).join("controls");
+    if let Some((path, _)) = pending_control_requests(&dir)
+        .into_iter()
+        .find(|(_, request)| request["id"].as_str() == Some(id))
+    {
+        atomic_write(
+            &dir.join(format!("{id}.result.json")),
+            &json!({"status":"failed", "code":code, "mutation_applied":false, "error":reason})
+                .to_string(),
+        )?;
+        let _ = fs::remove_file(path);
     }
-    apply_or_reject_one_inbox_op(
-        &state,
-        window.label(),
-        &engine,
-        reject_reason.as_deref(),
-        Some((&document, &session)),
-    )
+    Ok(())
+}
+
+fn reject_busy_controls(session: &str, except_id: Option<&str>) -> Result<(), String> {
+    let dir = session_root().join(session).join("controls");
+    for (path, request) in pending_control_requests(&dir) {
+        let id = request["id"].as_str().expect("validated control id");
+        // A committed inbox receipt can reach the script runner before the
+        // worker finishes refreshing the native scene. Keep its next caption
+        // or camera request queued for that completed scene. Validation,
+        // ownership and expiry still apply when the UI thread dispatches it;
+        // this filesystem-only path must not acquire publisher/engine locks.
+        let view_request = request.get("ui").is_none()
+            && request.get("sketch_query").is_none()
+            && request["view"].as_str().is_some_and(|view| {
+                view == "current" || native_interface::ViewDirection::parse(view).is_ok()
+            });
+        if except_id == Some(id) || request["ui"]["action"] == "presentation" || view_request {
+            continue;
+        }
+        atomic_write(&dir.join(format!("{id}.result.json")), &json!({
+            "status":"failed", "code":"native_busy", "mutation_applied":false,
+            "error":"A modeling operation is still running. This request was not applied; retry after it completes."
+        }).to_string())?;
+        let _ = fs::remove_file(path);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1913,7 +1880,7 @@ mod tests {
     use super::*;
 
     /// Serialize bridge tests because they share `NBCAD_SESSION_DIR`.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    pub(super) static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn reserve(state: &SessionBridgeState, window_label: &str) -> (String, u64) {
         let result = state.reserve_for_window(window_label).unwrap();
@@ -2120,8 +2087,8 @@ mod tests {
                 );
                 let projected = export_handoff["drawing_projections"].as_array().unwrap();
                 assert_eq!(projected.len(), 2);
-                assert_eq!(projected[0]["request"]["deflection"], 0.04);
-                assert_eq!(projected[1]["request"]["deflection"], 0.16);
+                assert_eq!(projected[0]["request"]["deflection"], 0.005);
+                assert_eq!(projected[1]["request"]["deflection"], 0.02);
                 assert_ne!(
                     projected[1]["request"]["section_plane"]["point"],
                     json!([999., 999., 999.])
@@ -2442,7 +2409,7 @@ mod tests {
     }
 
     #[test]
-    fn webview_reload_continues_backend_generation() {
+    fn repeated_reservation_continues_backend_generation() {
         let _test = TEST_LOCK.lock().unwrap();
         let state = SessionBridgeState::default();
         let dir = std::env::temp_dir().join(format!("nbcad-bridge-reload-{}", now_ms()));
@@ -2452,7 +2419,7 @@ mod tests {
         state
             .write_for_window("main", payload(&session_id, first, "before-reload"))
             .unwrap();
-        // A reloaded WebView asks Tauri for its next ticket instead of resetting locally.
+        // A repeated reservation continues the backend generation instead of resetting it.
         let (same_session_id, after_reload) = reserve(&state, "main");
         assert_eq!(same_session_id, session_id);
         assert_eq!(after_reload, first + 1);

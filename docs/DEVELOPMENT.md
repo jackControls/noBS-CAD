@@ -5,16 +5,20 @@ source when developing the project. Start with current `main`; check out a
 release's tag instead when reproducing that release or pairing a source-built
 MCP server with a downloaded desktop.
 
-Install Git, [Node.js 22](https://nodejs.org/en/download), and the
+Install Git and the
 [Rust toolchain](https://rustup.rs/), then:
 
 ```sh
 git clone https://github.com/jackControls/Limo-CAD.git
-cd noBS-CAD
-npm ci
+cd Limo-CAD
 ```
 
 ## Build the desktop package
+
+`rust-toolchain.toml` pins the compiler and formatting/lint components.
+`cargo xtask doctor --scope desktop` checks the compiler and OCCT headers/link
+libraries without building or opening a CAD window. An explicit SDK override
+must be complete and use the OCCT 7.9 ABI; it never silently falls back.
 
 Set up the native SDK for your machine below, then use the same build command
 on Windows, macOS and Linux:
@@ -23,15 +27,14 @@ on Windows, macOS and Linux:
 cargo xtask package
 ```
 
-It selects the existing platform packager, which builds the frontend, native
-application and embedded MCP server, stages dependencies and license notices,
+It selects the existing platform packager, which builds the native application and embedded MCP server, stages dependencies and license notices,
 and produces the application package. SDK and signing environment overrides
 pass through unchanged. Desktop builds do not require `wasm-pack` or a browser
 WASM build. Run commands from the repository root.
 
 ### Windows SDK
 
-Install PowerShell 7, Visual Studio C++ Build Tools with the Windows SDK and your
+Install Visual Studio C++ Build Tools with the Windows SDK and your
 target architecture, and the pinned vcpkg dependency set from the
 [Windows setup](WINDOWS_PACKAGING.md#local-windows-build).
 
@@ -80,29 +83,75 @@ The committed container supplies the reproducible Linux SDK. With Docker install
 ```sh
 docker build -f scripts/docker/ubuntu-26.04.Dockerfile -t nbcad-ubuntu-26.04 .
 docker run --rm -v "$PWD:/workspace" -w /workspace nbcad-ubuntu-26.04 \
-  sh -lc 'npm ci && cargo xtask package'
+  sh -lc 'cargo xtask package'
 ```
 
 The `.deb` and AppImage are written under `src-tauri/target/release/bundle/`.
 Release AppImages are built on Ubuntu 22.04 instead so they run on older glibc;
 see [Ubuntu packaging](LINUX_PACKAGING.md#reproducible-container-build).
 The container builds packages; launch them on a desktop with Vulkan support.
-For native SDK setup and X11/XWayland checks, use
+For native SDK setup and X11/Wayland checks, use
 [Ubuntu packaging](LINUX_PACKAGING.md).
 
 ## Verify changes
 
-For shared model and frontend changes:
+Use a scoped check for normal development; it compiles without running a suite
+or starting the application. Add `--fmt` to check the selected workspace's
+formatting, `--clippy` for linting, and `--timings` for a Cargo build report:
+
+```sh
+cargo xtask check --scope engine --fmt --clippy
+cargo xtask check --scope desktop --timings
+cargo xtask check --scope mcp
+```
+
+The engine, desktop and MCP retain separate workspaces to keep native SDK
+features out of host-neutral builds. Shared engine/tooling dependency versions
+live in the root `workspace.dependencies`; member manifests own feature choices.
+`deps --scope desktop` reports duplicate versions. `deps --unused` uses
+cargo-machete; `deps --advisories` uses cargo-deny. Install either explicitly with
+`cargo xtask bootstrap --tool cargo-machete` or `--tool cargo-deny`.
+
+`check --timings` records Cargo's report during the requested build. It does not
+start a second benchmark. Reuse a stable `CARGO_TARGET_DIR` for compatible builds;
+Cargo checks compiler, profile and flag fingerprints. Separate simultaneous
+agents' output directories to avoid target-directory locks, and reuse those
+directories rather than creating a fresh one for every run.
+
+Optional `check --sccache` uses the pinned tool from `.cargo/tools.toml` and
+prints cache statistics. Install it with `bootstrap --tool sccache`; its local
+build disables cloud backends. This invocation disables incremental compilation,
+which sccache cannot cache; ordinary development retains Cargo's incremental
+defaults. Link steps are still uncached. No linker, optimization level, LTO,
+symbol policy or global cache wrapper is changed.
+
+OCCT source builds reuse verified downloads and compatible CMake/Ninja objects:
+
+```sh
+cargo xtask build-occt --prefix /absolute/path/to/a/fresh/sdk --cache-dir /absolute/path/to/build-cache
+```
+
+`NBCAD_BUILD_CACHE` supplies the default cache location; otherwise it is
+`target/nbcad-build-cache`. The key covers the source checksum, compiler/target,
+FreeType inputs and recipe. Interrupted builds retain objects, while completion
+receipts are published only after SDK/library/notices checks succeed. An unmanaged
+or differently keyed install prefix is preserved; choose a fresh prefix for a
+different compiler/recipe. `--sccache` optionally caches C/C++ compilation too.
+Docker BuildKit retains Rust and OCCT cache mounts across application source
+edits; source mounts do not enter the image. BuildKit/GitHub cache quotas govern
+retention; the Rust command does not delete other SDKs or user build directories.
+
+For shared Rust model and interface changes:
 
 ```sh
 cargo test --locked --workspace
-npm run test:frontend
-npm run build:desktop
-npm run check:knowledge
-npm run version:check
+cargo xtask knowledge check
+cargo xtask version --check
 ```
 
-Version carriers are covered by `npm run test:version`; see
+Compilation, packaging, WASM engine checks and repository tasks use Cargo.
+
+Version carriers are covered by `cargo test --locked -p xtask release_tooling::`; see
 [Versioning and releases](RELEASING.md) before changing `VERSION`.
 
 For native geometry and MCP changes, with the matching OCCT SDK available:
@@ -120,6 +169,51 @@ cargo test --locked -p nbcad-occt --features native-occt
 cargo test --locked --manifest-path mcp-server/Cargo.toml -- --test-threads=1
 ```
 
+The desktop shell is its own Cargo workspace, so the root `--workspace` command
+above does not reach it. With the matching OCCT SDK available, run:
+
+```sh
+cargo test --locked --manifest-path src-tauri/Cargo.toml
+```
+
+The default desktop build compiles the Bevy interface, Winit host, native sketch
+editor, and controller. The temporary `dev-bevy-host` switch and React desktop
+host have been removed. The retired browser frontend was not a desktop
+build dependency. The transition remains under validation on draft PR #124.
+
+The native host supports middle-button pan, right-button or Shift+middle-button
+orbit, wheel zoom, trackpad pan, Shift+scroll orbit, and pinch zoom. These use the
+rendered camera and remain available while the modeling worker is busy. Escape
+or loss of window focus ends a camera drag; new navigation interrupts a timed
+view transition. An OCC operation that has already started still runs to completion.
+
+Run the complete native modeling lifecycle against an explicitly chosen blank
+document in a native desktop build:
+
+```sh
+cargo xtask test-mcp native-lifecycle --server /absolute/path/to/nbcad --session BLANK_DOCUMENT_UUID --out /absolute/path/to/fresh-evidence-directory
+```
+
+The fixture creates its own tab, draws a rectangle through native controls, checks
+Extrude preview/invalid input/edit/Cancel/Apply and Undo/Redo, then saves, closes,
+and reopens the `.nbcad` file through native File actions. A separate headless
+process recomputes the saved archive to check that it does not depend on live
+editor caches. Captures and a JSON report stay in the supplied evidence directory;
+partial runs are preserved. This requires a graphical desktop and complements
+the library tests; it is not a cross-platform visual parity check.
+
+The native File lifecycle regressions exercise the real ordered worker and
+`.nbcad` archives, including failed Save As, cancelled Save-and-close pickers,
+same-tab replacement during Save, and partial Save-all failure/retry. Run them
+without opening an OS window or file picker:
+
+```sh
+cargo test --locked --manifest-path src-tauri/Cargo.toml --lib session_bridge::native_interface::controller::files::tests -- --test-threads=1
+```
+
+These controller tests complement live rendered checks; they do not establish
+visual, keyboard, or native-picker parity. Browser checks cover the separate web target.
+
 The MCP suite includes complete recipe acceptance tests and can take a while.
 Run its native tests sequentially so heavy OCCT operations do not compete for
 memory and request deadlines. The **Desktop packages** workflow also checks the
@@ -135,9 +229,9 @@ guarded exit through an exact-session headless worker. The report retains the
 saved fixture's path. A second empty window verifies that closing through its
 own stdio flushes the acknowledgement before exit. Windows run sequentially;
 this check never attaches to another running CAD process.
-Windows and Linux use a fresh browser profile for each window, preserving the
-developer's recovery and settings. macOS currently runs this check only on a
-disposable GitHub-hosted runner because WKWebView's default data store is shared.
+The checks use private session and configuration directories on every platform,
+preserving the developer's recovery and settings. Desktop checks require an
+isolated graphical session; CI supplies disposable GitHub-hosted runners.
 
 ## Replay a recipe
 
@@ -240,43 +334,49 @@ for supported clients, runtime setup and manual configuration.
 
 ## Browser development
 
-<details>
-<summary>For browser/WASM changes and browser regression tests</summary>
+The browser replacement reuses the desktop Bevy UI. The React application and npm
+dependencies have been removed. See [the browser host](../web/README.md) for the
+remaining Bevy host and browser/geometry-service work. The planned first host
+offloads geometry to native Rust/OCCT; an optional in-browser OCCT port is separate.
 
-The browser is a development and testing host with its own kernel adapter.
-It is not required to build or use the native application. Install
-[`wasm-pack`](https://drager.github.io/wasm-pack/installer/), then:
-
-```sh
-rustup target add wasm32-unknown-unknown
-npm run build:wasm
-npm run dev
-```
-
-Open the Vite address. To build and check the browser bundle:
+Install wasm-pack and Chrome to check the existing Rust engine facade:
 
 ```sh
-npm run build
-npm run smoke:wasm
-npx playwright install chromium
-npm run e2e:release
+cargo xtask bootstrap --wasm
+cargo xtask build-wasm
+cargo xtask smoke-wasm
 ```
 
-The `e2e:*` commands in `package.json` select individual feature suites when a
-change needs a narrower check.
-
-</details>
+This checks engine bindings, not a completed Bevy browser application.
 
 ## Where the code lives
+
+Repository maintenance runs through the same Cargo entry point on Windows,
+Linux and macOS. These commands do not require Node or npm:
+
+```text
+cargo xtask audit-icons
+cargo xtask knowledge check
+cargo xtask knowledge index --check
+cargo xtask knowledge site
+cargo xtask knowledge media --verify
+cargo xtask ci mcp-shard core
+cargo xtask ci stage-demo-projects
+```
+
+`knowledge index` regenerates the committed index. `knowledge media` stages
+the verified public videos into a fresh `_site/media` directory; `--verify`
+checks publication without fetching video bodies. Site/demo staging refuses
+existing output, rather than merging artifacts from different attempts.
+The demo task reads `GITHUB_SHA` and `VERSION` for its provenance receipt.
 
 - Rust crates own project data, sketches, feature history, references, drawings,
   assemblies, kinematics and recompute planning.
 - Native OCCT supplies exact geometry through a narrow C++ bridge.
-- Bevy renders the native viewport; React and Tauri currently own the surrounding
-  interface and window integration.
+- Bevy owns the native interface and viewport; Winit supplies window integration.
 - The MCP server and Rust script interpreter drive the shared product interface.
-- The browser host uses the Rust model through WebAssembly and OpenCascade.js
-  for solid operations.
+- The browser replacement shares the Bevy UI and uses a native Rust/OCCT service;
+  an optional in-browser geometry backend requires the OCCT WASM port.
 
 See [architecture](proposed-architecture.md), [assemblies](ASSEMBLIES.md),
 [drawings](2D_DRAWINGS.md), [the MCP harness](mcp-harness.md), and

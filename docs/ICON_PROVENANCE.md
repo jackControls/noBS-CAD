@@ -1,9 +1,9 @@
 # noBS CAD Icon Provenance
 
-Last reviewed: 2026-09-10
+Last reviewed: 2026-10-02
 
 This file records the source and design rationale for the NB product mark and
-every icon rendered by `src/components/icons.tsx`. It is an engineering
+the Bevy vectors in `assets/ribbon-icons`. It is an engineering
 provenance record, not a legal opinion.
 
 ## NB product mark
@@ -19,13 +19,10 @@ application's dark rounded tile:
   external reference, or third-party asset.
 
 The compact header renders the letters `NB` with the same blue/iris design
-language. Desktop PNG, ICNS, ICO, and Windows Store outputs under
-`src-tauri/icons/` are generated derivatives. Mobile-only output from the icon
-generator is removed because mobile is not a current product target:
-
-```sh
-npx tauri icon public/app-icon.svg -o src-tauri/icons
-```
+language. The generated derivatives under `src-tauri/icons/` are the
+256-pixel PNG used by Linux packaging, the macOS ICNS, and the Windows ICO.
+Unused mobile and Windows Store outputs are removed. Keep those three desktop
+formats in sync with the canonical SVG when changing the product mark.
 
 The browser favicon loads the canonical SVG directly. This provenance record
 documents authorship; it does not make a trademark-availability claim.
@@ -67,12 +64,14 @@ The complete custom inventory is:
 | Manufacture workspace | `camManufacture` | Milling head and cutter over stock on a machine table, replacing the generic wrench in both workspace entry points. |
 <!-- custom-icon-inventory:end -->
 
-`CUSTOM_ICON_IDS` is exported from the source file so automated checks can
-compare the live registry with this inventory. Run `npm run audit:icons` to
-perform that comparison and reject embedded or imported image assets in the
-custom registry.
+The table records the original custom art family. The React glyph registry and
+machining component below were retired with the browser app on 2026-10-02;
+their authored source remains available in Git history. The active Bevy registry
+is `src-tauri/src/native_viewport/interface_shell/ribbon.rs`. Run
+`cargo xtask audit-icons` to check every embedded vector exists and reject
+external image references and executable content in the shared SVG assets.
 
-### Machining pictograms
+### Historical React machining pictograms
 
 `src/components/cam/CamToolIcon.tsx` owns the machining family approved on
 2026-09-10. It uses a 64×64 coordinate grid, steel-grey stock and tools, and
@@ -121,8 +120,20 @@ The following registry IDs use `lucide-react` rather than product-owned paths:
 
 Lucide is distributed under the ISC license. Its copyright and permission
 notice is preserved in [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
-The package copy is also available at `node_modules/lucide-react/LICENSE`
-after dependency installation.
+The vector notice is also retained in `assets/ribbon-icons/LICENSE.lucide`.
+
+The native ribbon in `src-tauri/src/native_viewport/interface_shell/ribbon.rs`
+renders `assets/ribbon-icons/*.svg` through Rust/resvg into cached Bevy
+textures. The browser replacement uses this same Rust registry. The sketch, point, spline, finish,
+cancel and chevron assets retain Lucide 0.474.0 PenLine, Crosshair, Spline,
+Check, X and ChevronDown geometry. The native tabs, file menu, history and
+navigation toolbar also use Lucide 0.474.0 BookOpen, FileDown, FileUp,
+FolderOpen, Grid3x3, Hand, History, Maximize, Monitor, Move3d, Redo2, Ruler,
+SquareDashed, Undo2 and ZoomIn. Their source SVGs carry attribution, and
+`assets/ribbon-icons/LICENSE.lucide` retains the ISC notice. These are
+renderer ports, not new command identities. The icon audit also checks these
+sources for external references and executable content. Visual parity remains
+part of the native-interface draft review.
 
 ## Contribution requirements
 
@@ -140,7 +151,7 @@ For every new icon:
 
 - Commit canonical editable icon sources, the inventory, and required license
   notices. Generated platform icons derive from `public/app-icon.svg`.
-- `npm run audit:icons` checks the live registry and reports source digests.
+- `cargo xtask audit-icons` checks the live registry and reports source digests.
 - Keep construction drafts, reference artwork, review conversations and local
   captures outside the repository. They are not release assets.
 - Include this provenance document and `THIRD_PARTY_NOTICES.md` with source

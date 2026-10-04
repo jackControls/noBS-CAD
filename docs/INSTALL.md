@@ -1,9 +1,16 @@
-# Install noBS CAD
+# Install Limo CAD's Bevy preview
 
-Download the **[0.2.2 release](https://github.com/jackControls/Limo-CAD/releases/tag/v0.2.2)**
-for your computer. The application includes the Scripts library and MCP server;
-you do not need Rust, Node.js or an agent to use it. Choose an application package,
-not GitHub's **Source code** archives.
+Download the **[Bevy rc.2 preview](https://github.com/jackControls/Limo-CAD/releases/tag/bevy-preview-0.2.2-20261002.3)**
+for **Windows x64 or Ubuntu 26.04 x64**. It includes the native desktop, Scripts
+library and MCP server; no compiler or agent is needed to use it. Choose an
+application package, not GitHub's **Source code** archives.
+
+This published preview uses application version **0.2.2**, source **`82cd981e`**
+and channel **`bevy-preview-0.2.2-20261002.3`**. It is separate from the older
+stable `v0.2.2` release and does not include later integration fixes. Its package
+and executable names still use **noBS CAD**, the former product name. See
+[transition status](native-transition-status.md) for newer source and package
+qualification. The Bevy browser application is still unfinished.
 
 This is pre-alpha software. Keep the original copy of an important `.nbcad`
 project when trying a new build. The release notes record the source revision
@@ -14,17 +21,15 @@ Find the installed version, source revision and build channel under
 
 ## Windows
 
-1. Download `noBS-CAD-0.2.2-windows-x64.zip` for an Intel/AMD PC. On Windows
-   on Arm, use `noBS-CAD-0.2.2-windows-arm64.zip` instead.
-2. Install the matching Microsoft Visual C++ v14 Redistributable if needed:
-   [x64](https://aka.ms/vc14/vc_redist.x64.exe) or
-   [ARM64](https://aka.ms/vc14/vc_redist.arm64.exe).
+1. Download `noBS-CAD-0.2.2-windows-x64.zip` for an Intel/AMD PC.
+2. Install the [Microsoft Visual C++ v14 x64 Redistributable](https://aka.ms/vc14/vc_redist.x64.exe)
+   if needed.
 3. Extract **all** files into a folder you can keep, then open `noBS-CAD.exe`.
    Keep its DLLs and notices in that folder. The executable is not yet
    code-signed, so if SmartScreen shows **Windows protected your PC**, choose
    **More info → Run anyway**.
 
-Use **Windows 11** with Microsoft Edge **WebView2**. The native viewport needs
+Use **Windows 11**. The native Bevy application needs
 a graphics adapter and driver that support **Direct3D 12 or Vulkan**;
 see [wgpu's platform support](https://github.com/gfx-rs/wgpu#supported-platforms).
 To update CAD, close it and extract the new ZIP to a separate folder;
@@ -33,35 +38,17 @@ your saved projects can stay where they are.
 <details>
 <summary>Windows startup help</summary>
 
-If WebView2 is missing, install Microsoft's
-[Evergreen Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
 Check the package architecture and Visual C++ runtime if a DLL error appears.
 For a blank viewport or graphics-adapter error, [update the display driver](https://support.microsoft.com/en-us/windows/update-drivers-through-device-manager-in-windows-ec62f46c-ff14-c91d-eead-d7126dc1f7b6)
 through Windows Update or the GPU manufacturer's support site, then restart CAD.
-Package CI checks Windows Server 2025 on x64 and Windows 11 on ARM64 in the
-[desktop workflow](../.github/workflows/desktop-packages.yml). Windows 10 remains
-a compatibility target; this preview has no verified Windows 10 minimum.
+The published Windows x64 package passed its owned-window checks in the
+[tagged package run](https://github.com/jackControls/Limo-CAD/actions/runs/37026966691).
+This preview has no verified Windows 10 minimum.
 This preview has no setup installer or automatic updater.
 
 See [Windows packaging and troubleshooting](WINDOWS_PACKAGING.md) for details.
 
 </details>
-
-## macOS
-
-Download the **Apple-silicon `.dmg`**, open it, and drag **noBS CAD** into
-**Applications**. Launch it from Applications. Use the published release package,
-which is Developer ID signed and notarized. There is no Intel Mac package.
-
-The tested baseline is **macOS 15 (Sequoia), Apple silicon** in the
-[desktop package workflow](../.github/workflows/desktop-packages.yml).
-Older macOS versions have not been qualified for this preview; the minimum
-compatible version has not yet been established. Keep the system components
-current through **System Settings → General → Software Update**
-([Apple's instructions](https://support.apple.com/en-us/108382)).
-
-To update CAD, close it and replace the application in **Applications** with the
-copy from the new DMG. Your saved project files can stay where they are.
 
 ## Ubuntu
 
@@ -87,37 +74,16 @@ installed one share the same version number.
 Reopen CAD and check **File → Settings → About noBS CAD** against the release's
 source revision. Your saved project files can stay where they are.
 
-<details>
-<summary>Ubuntu portable alternative: AppImage</summary>
-
-If you prefer a portable application, download the AppImage instead:
-
-```sh
-chmod +x noBS.CAD_0.2.2_amd64.AppImage
-./noBS.CAD_0.2.2_amd64.AppImage
-```
-
-For a FUSE error, launch it with `--appimage-extract-and-run`.
-The AppImage is built on Ubuntu 22.04 and carries its own libraries, so it also
-starts on other x86_64 distributions with glibc 2.35 or newer (for example
-Ubuntu 22.04 and 24.04, or Debian 12). Release CI launches it on Ubuntu 22.04 and
-26.04; other distributions are not tested.
-
-To update, close CAD, download the new AppImage and replace the old file in its
-kept folder. Make it executable with `chmod +x` as above, then launch the new
-file once. That launch refreshes recipe-link registration to its current path,
-including when you move the AppImage. Update your MCP command path if it moved,
-and check the new source revision in **About noBS CAD**. Saved projects can stay
-where they are.
-
-Opening recipes from browser links requires the AppImage to launch normally
-with FUSE. Its registered handler does not retain the extraction flag; use the
-recommended DEB on a machine without FUSE. AppImage registration also requires
-`xdg-utils` and `desktop-file-utils`, normally supplied by the Ubuntu desktop.
-
 See [Linux dependencies and troubleshooting](LINUX_PACKAGING.md).
 
-</details>
+## Targets still withheld
+
+This preview has no macOS, Windows ARM64 or AppImage download. macOS
+notarization needs the Apple account owner to resolve a team-agreement error;
+ARM64 native-input checks and AppImage package qualification remain open.
+An older package with the same **0.2.2** application version is not an equivalent
+Bevy preview. Developers can [build from source](DEVELOPMENT.md); those local
+builds do not establish published platform qualification.
 
 ## Make your first part
 
@@ -169,7 +135,7 @@ another document; after `cad_detach`, the agent must select a target again.
 ### Cursor
 
 Edit your user MCP configuration: `%USERPROFILE%/.cursor/mcp.json` on Windows,
-or `~/.cursor/mcp.json` on macOS/Linux. Add `nobs-cad` under `mcpServers`, keeping
+or `~/.cursor/mcp.json` on Linux. Add `nobs-cad` under `mcpServers`, keeping
 any existing servers. This Windows example uses the extracted application:
 
 ```json
@@ -187,8 +153,7 @@ any existing servers. This Windows example uses the extracted application:
 
 Run **MCP: Open User Configuration** from the Command Palette to open the active
 profile's `mcp.json`. For the default profile, the file is
-`%APPDATA%/Code/User/mcp.json` on Windows,
-`~/Library/Application Support/Code/User/mcp.json` on macOS, or
+`%APPDATA%/Code/User/mcp.json` on Windows or
 `~/.config/Code/User/mcp.json` on Linux. A workspace configuration instead belongs
 in `.vscode/mcp.json`.
 
@@ -215,7 +180,6 @@ for custom profiles and configuration options.
 Use the absolute path to your installed executable. On other platforms, keep
 `"args": ["--headless"]` and change `command`:
 
-- **macOS:** `/Applications/noBS CAD.app/Contents/MacOS/nbcad`
 - **Ubuntu DEB:** `/usr/bin/nbcad`
 
 Reload the client's MCP servers and confirm that **nobs-cad** is available. Open
@@ -235,15 +199,12 @@ The server runs locally and needs no cloud account. Your agent/model provider
 has its own setup and data-handling choices.
 
 <details>
-<summary>Other clients, AppImage, and developer MCP setup</summary>
+<summary>Other clients and developer MCP setup</summary>
 
 Some clients use a different configuration container; the executable and
-arguments stay the same. Keep the complete Windows folder or macOS `.app`
-together. Packaged MCP does not require an OCCT SDK or developer `PATH` setup.
+arguments stay the same. Keep the complete Windows folder together.
+Packaged MCP does not require an OCCT SDK or developer `PATH` setup.
 In Windows JSON paths, use forward slashes or escape backslashes.
-
-For AppImage, use its absolute path as the command. If FUSE is unavailable,
-use `"args": ["--appimage-extract-and-run", "--headless"]`.
 
 Stdout carries MCP JSON-RPC; diagnostics go to stderr. See the
 [server guide](../mcp-server/README.md) and [live-control contract](mcp-harness.md)
@@ -257,15 +218,14 @@ installation.
 <summary>Verify a download's SHA-256 checksum</summary>
 
 Download the package's adjacent `.sha256` asset into the same folder.
-On Windows, compare the following values (substitute the ARM64 filename if used;
-hash letter case does not matter):
+On Windows, compare the following values (hash letter case does not matter):
 
 ```powershell
 Get-FileHash .\noBS-CAD-0.2.2-windows-x64.zip -Algorithm SHA256
 Get-Content .\noBS-CAD-0.2.2-windows-x64.zip.sha256
 ```
 
-On macOS use `shasum -a 256 -c PACKAGE.sha256`; on Ubuntu use
-`sha256sum -c PACKAGE.sha256`, substituting the downloaded checksum filename.
+On Ubuntu use `sha256sum -c PACKAGE.sha256`, substituting the downloaded
+checksum filename.
 
 </details>

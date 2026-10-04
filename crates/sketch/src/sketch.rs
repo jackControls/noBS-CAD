@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -63,7 +63,7 @@ impl std::error::Error for SolveError {}
 /// for undo/redo. Cheap at sketch scale and exact by construction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SketchSnapshot {
-    #[serde(default)]
+    #[serde(default, serialize_with = "serialize_constraint_map")]
     offset_sides: HashMap<ConstraintId, f64>,
     #[serde(default)]
     reference_edges: Vec<crate::dto::ProjectedEdgeDto>,
@@ -72,16 +72,29 @@ pub struct SketchSnapshot {
     #[serde(default)]
     generated_points: BTreeSet<EntityId>,
     constraints: Vec<(ConstraintId, Constraint)>,
+    #[serde(serialize_with = "serialize_constraint_map")]
     fix_targets: HashMap<ConstraintId, Vec<f64>>,
     params: ParamTable,
+    #[serde(serialize_with = "serialize_constraint_map")]
     dim_params: HashMap<ConstraintId, ParamId>,
+    #[serde(serialize_with = "serialize_constraint_map")]
     dim_placements: HashMap<ConstraintId, Vec2>,
     /// Added after the original driving-only snapshot format. Missing entries
     /// deserialize as driving dimensions for backwards compatibility.
-    #[serde(default)]
+    #[serde(default, serialize_with = "serialize_constraint_map")]
     dim_modes: HashMap<ConstraintId, DimensionMode>,
     next_entity: u64,
     next_constraint: u64,
+}
+
+/// Hash seeds change when saved sketches are loaded into another document or
+/// MCP reader. Keep model exports byte-stable without changing solver lookup
+/// storage or the schema used by existing archives.
+fn serialize_constraint_map<S: serde::Serializer, V: Serialize>(
+    map: &HashMap<ConstraintId, V>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    map.iter().collect::<BTreeMap<_, _>>().serialize(serializer)
 }
 
 impl SketchSnapshot {
@@ -1183,6 +1196,52 @@ impl SketchSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_dimension_and_fix_maps_keep_exact_json_after_restore() {
+        let mut sketch = Sketch::new();
+        for row in 0..8 {
+            let y = row as f64 * 10.;
+            let a = sketch.add_entity(Entity::point(0., y));
+            let b = sketch.add_entity(Entity::point(10., y));
+            let c = sketch.add_entity(Entity::point(0., y + 3.));
+            let d = sketch.add_entity(Entity::point(10., y + 3.));
+            let from = sketch.add_entity(Entity::line(a, b));
+            let to = sketch.add_entity(Entity::line(c, d));
+            let dimension = sketch.add_constraint(Constraint::Distance {
+                from,
+                to: Some(to),
+                value: 3.,
+            });
+            let parameter = sketch
+                .params_mut()
+                .add(crate::params::ParamKind::Length, None, 3.)
+                .unwrap();
+            sketch.bind_dimension(dimension, parameter, Vec2::new(12., y + 1.5));
+            sketch.set_offset_side(dimension, 1.);
+            let fixed = sketch.add_constraint(Constraint::Fix { entity: a });
+            sketch.set_fix_targets(fixed, vec![0., y]);
+        }
+        let snapshot = sketch.snapshot();
+        snapshot.validate().unwrap();
+        let expected = serde_json::to_string_pretty(&snapshot).unwrap();
+        let expected_value: serde_json::Value = serde_json::from_str(&expected).unwrap();
+        for _ in 0..16 {
+            // Reopening a document reconstructs these maps with fresh hash
+            // seeds. Identical authored intent must retain its exact export.
+            let decoded: SketchSnapshot = serde_json::from_str(&expected).unwrap();
+            decoded.validate().unwrap();
+            let mut reopened = Sketch::new();
+            reopened.restore(decoded);
+            let actual = serde_json::to_string_pretty(&reopened.snapshot()).unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&actual).unwrap(),
+                expected_value,
+                "Restore must preserve every authored value"
+            );
+            assert_eq!(actual, expected, "Restore must preserve exact model JSON");
+        }
+    }
 
     /// Line (0,0)-(50,0) built from shared points, plus a circle.
     fn sample_sketch() -> (Sketch, EntityId, EntityId, EntityId, EntityId) {

@@ -16,6 +16,7 @@
 
 mod cam_chamfer;
 mod cam_height_geometry;
+pub use cam_height_geometry::resolve as resolve_cam_height_geometry;
 mod constraint;
 mod drawing;
 pub mod drawing_commands;
@@ -37,17 +38,23 @@ mod solver;
 
 pub mod host;
 
-pub use cam_chamfer::{CamChamferGeometry, CamChamferGeometryRequest};
+pub use cam_chamfer::{
+    resolve as resolve_cam_chamfer_geometry, CamChamferGeometry, CamChamferGeometryRequest,
+};
 pub use constraint::{ArcEndpoint, Constraint, ConstraintId, ConstraintKind};
 pub use drawing::{
-    DrawingAnnotationDto, DrawingBreakAxis, DrawingCircularRefDto, DrawingDimensionPresentationDto,
-    DrawingDimensionToleranceMode, DrawingDocumentDto, DrawingEdgeEndpoint, DrawingLineRefDto,
-    DrawingLineStyleDto, DrawingLinearDimensionMode, DrawingProjectionMethod,
-    DrawingRadialDimensionMode, DrawingSheetDto, DrawingSheetFormat, DrawingSheetOrientation,
-    DrawingSheetStyleDto, DrawingStandard, DrawingTemplateDto, DrawingTitleBlockDto,
-    DrawingToleranceNoteDto, DrawingTolerancePreset, DrawingTopologyAnchorRefDto,
-    DrawingViewAlignment, DrawingViewDerivationDto, DrawingViewDto, DrawingViewKind,
-    DrawingViewScope,
+    DrawingAnnotationDto, DrawingAttachmentRefDto, DrawingBomItemDto, DrawingBreakAxis,
+    DrawingChainDimensionLayout, DrawingCircularRefDto, DrawingDatumReferenceDto,
+    DrawingDimensionPresentationDto, DrawingDimensionToleranceDto, DrawingDimensionToleranceMode,
+    DrawingDocumentDto, DrawingDualUnitDto, DrawingDualUnitPlacement, DrawingEdgeEndpoint,
+    DrawingGdtCharacteristic, DrawingHoleStyle, DrawingLineDimensionMode, DrawingLineRefDto,
+    DrawingLineStyleDto, DrawingLinearDimensionMode, DrawingMaterialCondition, DrawingOrdinateAxis,
+    DrawingProjectionMethod, DrawingRadialDimensionMode, DrawingReleaseDto, DrawingReleaseStatus,
+    DrawingRevisionDto, DrawingSecondaryUnit, DrawingSheetDto, DrawingSheetFormat,
+    DrawingSheetOrientation, DrawingSheetStyleDto, DrawingStandard, DrawingSurfaceLay,
+    DrawingTemplateDto, DrawingTitleBlockDto, DrawingToleranceNoteDto, DrawingTolerancePreset,
+    DrawingTopologyAnchorRefDto, DrawingViewAlignment, DrawingViewDerivationDto, DrawingViewDto,
+    DrawingViewKind, DrawingViewScope, DrawingWeldContour, DrawingWeldSide, DrawingWeldType,
 };
 pub use dto::{
     err_json, ok_json, AddConstraintResult, AddLineResult, Arc3PointRequest, ArcCenterRequest,
@@ -68,14 +75,20 @@ pub use dto::{
     SketchDto, SlotMode, SlotRequest, SnapTarget, SplineRequest, ToggleFixBatchRequest, ToolResult,
     TrackingAxis, TrackingGuideDto, TrimPreviewDto, TrimRequest, UndoResult,
 };
-pub use edge_selection::{ChainMode, ChainSource, EdgeChainRequest};
+pub use edge_selection::{
+    candidates as edge_chain_candidates, resolve as resolve_edge_chain, ChainMode, ChainSource,
+    EdgeChainRequest,
+};
 pub use entity::{Entity, EntityId};
 pub use expr::{
     eval_expression, parse as parse_expression, referenced_idents, Ast, ExprError,
     Func as ExpressionFunction, Op as ExpressionOperator,
 };
 pub use geometry::Vec2;
-pub use manager::SketchManager;
+pub use manager::resolve_cam_hole as resolve_cam_hole_reference;
+// Native tool previews share these exact constructions with committed geometry.
+pub use geomops::{slot::slot_capsule, spline::tessellate_spline};
+pub use manager::{construction_plane_basis, RetainedSketchSessions, SketchManager};
 pub use nbcad_assembly::{
     approximate_pair_result, broad_phase_interference_pairs, contact_violation_score,
     ApplyJointMotionsRequestDto, AssemblyDiagnosticDto, AssemblyDiagnosticKindDto,

@@ -1,8 +1,8 @@
 //! Cross-platform 3Dconnexion adapter. macOS prefers the installed 3DxWare
 //! client framework so the official driver remains the sole owner of the
 //! physical device; raw HID stays available as the Windows/macOS fallback.
-//! Both transports emit one small, shared motion event consumed by the
-//! viewport camera.
+//! Both transports deliver the same typed events to a host-owned sink. The
+//! native controller routes those events to the focused document camera.
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -11,7 +11,10 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+
+mod raw;
+#[cfg(test)]
+pub(crate) use raw::motion_from_report;
 
 const CURRENT_VENDOR_ID: u16 = 0x256f;
 const LEGACY_VENDOR_ID: u16 = 0x046d;
@@ -30,27 +33,59 @@ pub struct SixDofMouseInfo {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct MotionPacket {
+pub(crate) struct MotionPacket {
     #[serde(skip_serializing_if = "Option::is_none")]
-    translation: Option<[i16; 3]>,
+    pub translation: Option<[i16; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    rotation: Option<[i16; 3]>,
+    pub rotation: Option<[i16; 3]>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
-struct ButtonPacket {
-    button: u32,
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub(crate) struct ButtonPacket {
+    pub button: u32,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SixDofEvent {
+    Motion(MotionPacket),
+    Button(ButtonPacket),
+    Error(String),
+}
+
+/// Called on the HID worker or installed-driver callback thread. A sink must
+/// enqueue promptly and must not call connect/disconnect from that callback.
+/// Its host owns focus/document gating and camera updates; transport packets
+/// keep the existing device axis order and scale.
+pub(crate) type SixDofEventSink = Arc<dyn Fn(SixDofEvent) + Send + Sync>;
 
 struct RawHidWorker {
     stop: Arc<AtomicBool>,
-    thread: std::thread::JoinHandle<()>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for RawHidWorker {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 enum SixDofConnection {
     RawHid(RawHidWorker),
     #[cfg(target_os = "macos")]
     InstalledDriver(mac_driver::Connection),
+}
+
+impl SixDofConnection {
+    fn close(self) {
+        match self {
+            Self::RawHid(worker) => drop(worker),
+            #[cfg(target_os = "macos")]
+            Self::InstalledDriver(connection) => drop(connection),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -60,23 +95,64 @@ pub struct SixDofMouseState {
 }
 
 impl SixDofMouseState {
-    fn stop(&self) {
-        if let Some(connection) = self
+    /// Opens a device only for an explicit host connection request. HID
+    /// discovery, driver registration and replacing an old connection can
+    /// block; a native host should call this from its connection worker.
+    pub(crate) fn connect(&self, sink: SixDofEventSink) -> Result<SixDofMouseInfo, String> {
+        self.connect_with(|| open_connection(sink))
+    }
+
+    fn connect_with(
+        &self,
+        open: impl FnOnce() -> Result<(SixDofConnection, SixDofMouseInfo), String>,
+    ) -> Result<SixDofMouseInfo, String> {
+        let _operation = self
+            .operation
+            .lock()
+            .map_err(|_| "six-dof mouse operation mutex poisoned".to_string())?;
+        self.stop()?;
+        let (connection, info) = open()?;
+        *self
             .connection
             .lock()
-            .expect("six-dof mouse worker mutex poisoned")
-            .take()
-        {
-            match connection {
-                SixDofConnection::RawHid(worker) => {
-                    worker.stop.store(true, Ordering::Relaxed);
-                    let _ = worker.thread.join();
-                }
-                #[cfg(target_os = "macos")]
-                SixDofConnection::InstalledDriver(connection) => {
-                    connection.disconnect();
-                }
-            }
+            .map_err(|_| "six-dof mouse worker mutex poisoned".to_string())? = Some(connection);
+        Ok(info)
+    }
+
+    /// Stops delivery and joins the raw worker before returning. As with
+    /// connect, call from a host worker rather than the render/input thread.
+    pub(crate) fn disconnect(&self) -> Result<(), String> {
+        let _operation = self
+            .operation
+            .lock()
+            .map_err(|_| "six-dof mouse operation mutex poisoned".to_string())?;
+        self.stop()
+    }
+
+    fn stop(&self) -> Result<(), String> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| "six-dof mouse worker mutex poisoned".to_string())?
+            .take();
+        if let Some(connection) = connection {
+            connection.close();
+        }
+        Ok(())
+    }
+}
+
+impl Drop for SixDofMouseState {
+    fn drop(&mut self) {
+        // Dropping a native window's state must not detach a live HID reader.
+        // No other state operation can run while we have exclusive access.
+        let connection = self
+            .connection
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(connection) = connection {
+            connection.close();
         }
     }
 }
@@ -115,8 +191,8 @@ fn vector(data: &[u8], offset: usize) -> Option<[i16; 3]> {
     ])
 }
 
-#[tauri::command]
-pub async fn six_dof_mouse_devices() -> Result<Vec<SixDofMouseInfo>, String> {
+/// Enumerate the same supported multi-axis interfaces without opening one.
+pub(crate) fn devices() -> Result<Vec<SixDofMouseInfo>, String> {
     let api = hidapi::HidApi::new().map_err(|error| error.to_string())?;
     Ok(api
         .device_list()
@@ -130,25 +206,11 @@ pub async fn six_dof_mouse_devices() -> Result<Vec<SixDofMouseInfo>, String> {
         .collect())
 }
 
-#[tauri::command]
-pub async fn six_dof_mouse_connect(
-    app: AppHandle,
-    state: State<'_, SixDofMouseState>,
-) -> Result<SixDofMouseInfo, String> {
-    let _operation = state
-        .operation
-        .lock()
-        .map_err(|_| "six-dof mouse operation mutex poisoned".to_string())?;
-    state.stop();
+fn open_connection(sink: SixDofEventSink) -> Result<(SixDofConnection, SixDofMouseInfo), String> {
     #[cfg(target_os = "macos")]
-    let installed_driver_error = match mac_driver::Connection::connect(app.clone()) {
+    let installed_driver_error = match mac_driver::Connection::connect(sink.clone()) {
         Ok((connection, info)) => {
-            *state
-                .connection
-                .lock()
-                .map_err(|_| "six-dof mouse connection mutex poisoned".to_string())? =
-                Some(SixDofConnection::InstalledDriver(connection));
-            return Ok(info);
+            return Ok((SixDofConnection::InstalledDriver(connection), info));
         }
         Err(error) => Some(error),
     };
@@ -176,94 +238,15 @@ pub async fn six_dof_mouse_connect(
         serial_number: info.serial_number().map(str::to_string),
     };
     let device = info.open_device(&api).map_err(|error| error.to_string())?;
-    let stop = Arc::new(AtomicBool::new(false));
-    let worker_stop = Arc::clone(&stop);
-    let thread = std::thread::Builder::new()
-        .name("nbcad-six-dof-mouse".to_string())
-        .spawn(move || {
-            let mut buffer = [0_u8; 64];
-            let mut previous_buttons = 0_u32;
-            let mut pending_translation = None;
-            let mut pending_rotation = None;
-            let mut last_motion_emit = Instant::now()
-                .checked_sub(RAW_HID_EMIT_INTERVAL)
-                .unwrap_or_else(Instant::now);
-            while !worker_stop.load(Ordering::Relaxed) {
-                let length = match device.read_timeout(&mut buffer, RAW_HID_READ_TIMEOUT_MS) {
-                    Ok(length) => length,
-                    Err(error) => {
-                        let _ = app.emit("six-dof-mouse-error", error.to_string());
-                        break;
-                    }
-                };
-                if length >= 2 {
-                    let report_id = buffer[0];
-                    let data = &buffer[1..length];
-                    match report_id {
-                        1 => {
-                            if let Some(translation) = vector(data, 0) {
-                                pending_translation = Some(translation);
-                            }
-                            if let Some(rotation) = vector(data, 6) {
-                                pending_rotation = Some(rotation);
-                            }
-                        }
-                        2 => {
-                            if let Some(rotation) = vector(data, 0) {
-                                pending_rotation = Some(rotation);
-                            }
-                        }
-                        3 => {
-                            let mut bytes = [0_u8; 4];
-                            let count = data.len().min(bytes.len());
-                            bytes[..count].copy_from_slice(&data[..count]);
-                            let buttons = u32::from_le_bytes(bytes);
-                            let newly_pressed = buttons & !previous_buttons;
-                            previous_buttons = buttons;
-                            for index in 0..32 {
-                                if newly_pressed & (1 << index) != 0 {
-                                    let _ = app.emit(
-                                        "six-dof-mouse-button",
-                                        ButtonPacket { button: index + 1 },
-                                    );
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
-                if (pending_translation.is_some() || pending_rotation.is_some())
-                    && last_motion_emit.elapsed() >= RAW_HID_EMIT_INTERVAL
-                {
-                    let _ = app.emit(
-                        "six-dof-mouse-motion",
-                        MotionPacket {
-                            translation: pending_translation.take(),
-                            rotation: pending_rotation.take(),
-                        },
-                    );
-                    last_motion_emit = Instant::now();
-                }
-            }
-        })
-        .map_err(|error| error.to_string())?;
-    *state
-        .connection
-        .lock()
-        .map_err(|_| "six-dof mouse worker mutex poisoned".to_string())? =
-        Some(SixDofConnection::RawHid(RawHidWorker { stop, thread }));
-    Ok(result)
-}
-
-#[tauri::command]
-pub async fn six_dof_mouse_disconnect(state: State<'_, SixDofMouseState>) -> Result<(), String> {
-    let _operation = state
-        .operation
-        .lock()
-        .map_err(|_| "six-dof mouse operation mutex poisoned".to_string())?;
-    state.stop();
-    Ok(())
+    let worker = raw::spawn(
+        move |buffer, timeout| {
+            device
+                .read_timeout(buffer, timeout)
+                .map_err(|error| error.to_string())
+        },
+        sink,
+    )?;
+    Ok((SixDofConnection::RawHid(worker), result))
 }
 
 #[cfg(target_os = "macos")]
@@ -350,7 +333,7 @@ mod mac_driver {
     }
 
     struct CallbackState {
-        app: AppHandle,
+        sink: SixDofEventSink,
         client_id: u16,
         previous_buttons: u32,
     }
@@ -389,25 +372,27 @@ mod mac_driver {
         let Some(callback) = guard.as_mut() else {
             return;
         };
-        if device.client != callback.client_id {
-            return;
-        }
-        if device.command == CONNEXION_COMMAND_HANDLE_AXIS {
-            let _ = callback
-                .app
-                .emit("six-dof-mouse-motion", canonical_motion(&device));
-        }
-        let buttons = device.buttons();
-        if device.command == CONNEXION_COMMAND_HANDLE_BUTTONS
-            || buttons != callback.previous_buttons
-        {
-            let newly_pressed = buttons & !callback.previous_buttons;
-            callback.previous_buttons = buttons;
-            for index in 0..32 {
-                if newly_pressed & (1 << index) != 0 {
-                    let _ = callback
-                        .app
-                        .emit("six-dof-mouse-button", ButtonPacket { button: index + 1 });
+        callback.receive(&device);
+    }
+
+    impl CallbackState {
+        fn receive(&mut self, device: &ConnexionDeviceState) {
+            if device.client != self.client_id {
+                return;
+            }
+            if device.command == CONNEXION_COMMAND_HANDLE_AXIS {
+                (self.sink)(SixDofEvent::Motion(canonical_motion(device)));
+            }
+            let buttons = device.buttons();
+            if device.command == CONNEXION_COMMAND_HANDLE_BUTTONS
+                || buttons != self.previous_buttons
+            {
+                let newly_pressed = buttons & !self.previous_buttons;
+                self.previous_buttons = buttons;
+                for index in 0..32 {
+                    if newly_pressed & (1 << index) != 0 {
+                        (self.sink)(SixDofEvent::Button(ButtonPacket { button: index + 1 }));
+                    }
                 }
             }
         }
@@ -484,7 +469,7 @@ mod mac_driver {
     }
 
     impl Connection {
-        pub fn connect(app: AppHandle) -> Result<(Self, SixDofMouseInfo), String> {
+        pub fn connect(sink: SixDofEventSink) -> Result<(Self, SixDofMouseInfo), String> {
             let api = Api::load()?;
             {
                 let mut callback = callback_state()
@@ -497,7 +482,7 @@ mod mac_driver {
                     return Err("A 3Dconnexion driver client is already active.".to_string());
                 }
                 *callback = Some(CallbackState {
-                    app,
+                    sink,
                     client_id: 0,
                     previous_buttons: 0,
                 });
@@ -560,10 +545,6 @@ mod mac_driver {
                 },
             ))
         }
-
-        pub fn disconnect(self) {
-            drop(self);
-        }
     }
 
     impl Drop for Connection {
@@ -584,6 +565,52 @@ mod mac_driver {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn installed_driver_dispatches_only_its_client_and_preserves_button_edges() {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let output = events.clone();
+            let mut callback = CallbackState {
+                sink: Arc::new(move |event| output.lock().unwrap().push(event)),
+                client_id: 17,
+                previous_buttons: 0,
+            };
+            let mut device = ConnexionDeviceState {
+                version: 0,
+                client: 18,
+                command: CONNEXION_COMMAND_HANDLE_AXIS,
+                param: 0,
+                value: 0,
+                time: 0,
+                report: [0; 8],
+                buttons8: 0,
+                axis: [10, -20, 30, -40, 50, -60],
+                address: 0,
+                buttons: 0x8000_0001,
+            };
+            callback.receive(&device);
+            assert!(events.lock().unwrap().is_empty());
+            device.client = 17;
+            callback.receive(&device);
+            device.command = CONNEXION_COMMAND_HANDLE_BUTTONS;
+            callback.receive(&device);
+            device.buttons = 0;
+            callback.receive(&device);
+            device.buttons = 1;
+            callback.receive(&device);
+            assert_eq!(
+                *events.lock().unwrap(),
+                vec![
+                    SixDofEvent::Motion(MotionPacket {
+                        translation: Some([10, -20, 30]),
+                        rotation: Some([-40, 50, -60])
+                    }),
+                    SixDofEvent::Button(ButtonPacket { button: 1 }),
+                    SixDofEvent::Button(ButtonPacket { button: 32 }),
+                    SixDofEvent::Button(ButtonPacket { button: 1 }),
+                ]
+            );
+        }
 
         #[test]
         fn connexion_device_state_matches_the_installed_framework_abi() {
@@ -670,28 +697,4 @@ mod mac_driver {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn selects_only_the_multi_axis_hid_interface() {
-        assert!(supported_descriptor(
-            CURRENT_VENDOR_ID,
-            GENERIC_DESKTOP_USAGE_PAGE,
-            MULTI_AXIS_CONTROLLER_USAGE,
-            "SpaceMouse Wireless BT",
-        ));
-        assert!(!supported_descriptor(
-            CURRENT_VENDOR_ID,
-            GENERIC_DESKTOP_USAGE_PAGE,
-            0x02,
-            "3Dconnexion Virtual Mouse",
-        ));
-        assert!(!supported_descriptor(
-            CURRENT_VENDOR_ID,
-            0xff00,
-            0x01,
-            "3Dconnexion Virtual Data",
-        ));
-    }
-}
+mod tests;

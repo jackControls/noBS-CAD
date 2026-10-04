@@ -3,7 +3,7 @@
 //! Snapshot publish is **UI-owned**. MCP may `cad_attach` (copy) and `cad_submit`
 //! an inbox op; it must **not** write `model.json` back (no last-writer-wins).
 //! The desktop/engine applies inbox ops via the same `host::handle` path as
-//! Tauri IPC, then the existing publisher writes a new snapshot. This is still
+//! native host requests, then the existing publisher writes a new snapshot. This is still
 //! **not** in-process shared memory.
 //!
 //! Layout: `<session_dir>/<uuid>/{model.json,active-sketch.json?,focus.json,heartbeat.json,closed.json?,inbox/<seq>.json,inbox/applied/<seq>.json?,inbox/failed/<seq>.json?}`.
@@ -185,6 +185,7 @@ pub fn request_ui(arguments: &Value, attached: Option<&str>) -> Result<Value, St
             | "viewport"
             | "presentation"
             | "open_recipe"
+            | "capture"
     ) {
         return Err("unknown UI action".into());
     }
@@ -790,7 +791,7 @@ fn is_live_for_windows(session_id: &str, registry: &ProcessRegistry) -> bool {
 
 /// Resolve attach target to a UUID session dir.
 ///
-/// Accepts `session_id` (UUID), `window_id` (Tauri label), and/or `document_id`
+/// Accepts `session_id` (UUID), `window_id` (stable desktop window id), and/or `document_id`
 /// (native project-session id). UUID `document_id` remains an alias for
 /// `session_id` for compatibility. All provided selectors are intersected;
 /// ambiguity is reported only after every supplied filter is applied. Closed
@@ -1564,13 +1565,20 @@ pub fn snapshot_publication_after(
     session_id: &str,
     base_generation: u64,
 ) -> Option<SnapshotPublication> {
+    snapshot_publication_at_least(session_id, base_generation.checked_add(1)?)
+}
+
+fn snapshot_publication_at_least(
+    session_id: &str,
+    minimum_generation: u64,
+) -> Option<SnapshotPublication> {
     let Ok(body) = read_session_file(session_id, "heartbeat.json") else {
         return None;
     };
     let parsed: Value = serde_json::from_str(&body).unwrap_or(json!({}));
     let engine_generation = parsed.get("generation").and_then(Value::as_u64)?;
     let published_generation = parsed.get("published_generation").and_then(Value::as_u64)?;
-    if published_generation <= base_generation || published_generation != engine_generation {
+    if published_generation < minimum_generation || published_generation != engine_generation {
         return None;
     }
     if parsed
@@ -1585,6 +1593,31 @@ pub fn snapshot_publication_after(
         model_generation: read_optional_u64(&parsed, "model_generation"),
         active_sketch_generation: read_optional_u64(&parsed, "active_sketch_generation"),
     })
+}
+
+fn receipt_publication(session_id: &str, receipt: &InboxReceipt) -> Option<SnapshotPublication> {
+    let InboxReceipt::Applied {
+        base_generation,
+        name,
+        replacement_session_id,
+    } = receipt
+    else {
+        return None;
+    };
+    let read_only = name
+        .as_deref()
+        .and_then(nbcad_mcp_mutate::lookup_mutate)
+        .is_some_and(nbcad_mcp_mutate::MutateSpec::is_read_only);
+    // Only audited immutable methods can reuse the exact submitted snapshot.
+    // Keep the current-engine fence, so an intervening edit must still publish.
+    // Do not trust optional request/receipt flags to weaken a mutation fence.
+    if replacement_session_id.is_some() {
+        snapshot_publication_after(session_id, 0)
+    } else if read_only {
+        snapshot_publication_at_least(session_id, *base_generation)
+    } else {
+        snapshot_publication_after(session_id, *base_generation)
+    }
 }
 
 fn empty_publication_fields() -> Value {
@@ -1652,19 +1685,7 @@ fn await_inbox_apply_observing(
         // publisher. Other pending work remains owned by the retired document.
         let publication_session = replacement_session_id.unwrap_or(session_id);
         let current_generation = read_heartbeat_generation(publication_session).ok();
-        let publication = match &receipt {
-            InboxReceipt::Applied {
-                base_generation, ..
-            } => snapshot_publication_after(
-                publication_session,
-                if replacement_session_id.is_some() {
-                    0
-                } else {
-                    *base_generation
-                },
-            ),
-            _ => None,
-        };
+        let publication = receipt_publication(publication_session, &receipt);
         after_receipt();
         // A replacement cannot publish any more work for the retired identity.
         // Keep completed/failed receipts inspectable, but do not make an active
@@ -1680,22 +1701,8 @@ fn await_inbox_apply_observing(
             if inbox_op_receipt(session_id, seq)? != receipt {
                 continue;
             }
-            if let InboxReceipt::Applied {
-                base_generation, ..
-            } = &receipt
-            {
-                if snapshot_publication_after(
-                    publication_session,
-                    if replacement_session_id.is_some() {
-                        0
-                    } else {
-                        *base_generation
-                    },
-                )
-                .is_some()
-                {
-                    continue;
-                }
+            if receipt_publication(publication_session, &receipt).is_some() {
+                continue;
             }
             let (applied, name, base_generation) = match &receipt {
                 InboxReceipt::Applied {
@@ -2179,7 +2186,7 @@ mod tests {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
             while std::time::Instant::now() < deadline {
                 if let Ok(entries) = fs::read_dir(&controls) {
-                    for entry in entries.flatten().filter(|entry| {
+                    if let Some(entry) = entries.flatten().find(|entry| {
                         entry
                             .file_name()
                             .to_string_lossy()
@@ -3623,6 +3630,79 @@ mod tests {
         assert!(applied.op.session_id.is_none());
         assert!(applied.op.window_id.is_none());
 
+        std::env::remove_var("NBCAD_SESSION_DIR");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn completed_cam_reads_use_the_existing_snapshot_but_mutations_wait_for_a_new_one() {
+        let _guard = env_lock();
+        let unique = test_session_uuid();
+        let dir = std::env::temp_dir().join(format!("nbcad-sessions-cam-read-{unique}"));
+        std::env::set_var("NBCAD_SESSION_DIR", &dir);
+        let heartbeat = |generation, published_generation| {
+            write_session(&unique, "heartbeat.json", &json!({
+                "updated_ms":now_ms(), "generation":generation,
+                "published_generation":published_generation, "model_generation":published_generation,
+                "session_id":unique,
+            }).to_string()).unwrap();
+        };
+        for name in [
+            "cam_plan_setup",
+            "cam_post_setup",
+            "cam_post_events",
+            "cam_simulate_setup",
+            "cam_simulate_gcode",
+        ] {
+            heartbeat(7, 7);
+            write_session(
+                &unique,
+                "inbox/applied/1.json",
+                &json!({"name":name,"base_generation":7}).to_string(),
+            )
+            .unwrap();
+            let read = await_inbox_apply(&unique, 1, 0, 1).unwrap();
+            assert_eq!(read["status"], "applied", "{name}: {read}");
+            assert_eq!(read["published_generation"], 7);
+            assert_eq!(read["model_published"], true);
+            heartbeat(8, 7);
+            assert_eq!(
+                await_inbox_apply(&unique, 1, 0, 1).unwrap()["status"],
+                "timeout",
+                "An intervening edit still needs publication"
+            );
+            heartbeat(8, 8);
+            assert_eq!(
+                await_inbox_apply(&unique, 1, 0, 1).unwrap()["status"],
+                "applied"
+            );
+            heartbeat(6, 6);
+            assert_eq!(
+                await_inbox_apply(&unique, 1, 0, 1).unwrap()["status"],
+                "timeout",
+                "A snapshot older than the query cannot satisfy its receipt"
+            );
+        }
+        heartbeat(7, 7);
+        for name in [
+            "cam_set_document",
+            "cam_regenerate_operation",
+            "cam_regenerate_setup",
+            "solid_extrude",
+            "unknown_future_operation",
+        ] {
+            write_session(
+                &unique,
+                "inbox/applied/1.json",
+                &json!({"name":name,"base_generation":7,"model_changed":false}).to_string(),
+            )
+            .unwrap();
+            assert_eq!(
+                await_inbox_apply(&unique, 1, 0, 1).unwrap()["status"],
+                "timeout",
+                "{name} must still require a newer revision, regardless of untrusted receipt flags"
+            );
+        }
         std::env::remove_var("NBCAD_SESSION_DIR");
         let _ = fs::remove_dir_all(&dir);
     }

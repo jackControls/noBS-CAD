@@ -27,7 +27,7 @@ OKF concepts, not inside them.
 Validate:
 
 ```sh
-npm run check:knowledge
+cargo xtask knowledge check
 ```
 
 Keep concepts **thin**. Do not paste ASME/ISO standard body text. Distill

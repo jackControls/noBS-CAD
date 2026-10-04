@@ -195,7 +195,13 @@ fn load_image(path: &Path) -> Result<Gray, String> {
     let mut reader = decoder
         .read_info()
         .map_err(|e| format!("decode {}: {e}", path.display()))?;
-    let mut buffer = vec![0; reader.output_buffer_size()];
+    let buffer_size = reader.output_buffer_size().ok_or_else(|| {
+        format!(
+            "decode {}: PNG dimensions exceed addressable memory",
+            path.display()
+        )
+    })?;
+    let mut buffer = vec![0; buffer_size];
     let info = reader
         .next_frame(&mut buffer)
         .map_err(|e| format!("decode {}: {e}", path.display()))?;

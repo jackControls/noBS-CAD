@@ -46,14 +46,48 @@ impl Client {
         )
     }
     fn start_with_timeouts(
-        mut command: Command,
+        command: Command,
         initialization_timeout: Duration,
         request_timeout: Option<Duration>,
     ) -> Result<Self> {
+        Self::start_with_logs(command, initialization_timeout, request_timeout, None)
+    }
+    /// Retain only the explicitly owned fixture child's output. Stdout remains
+    /// the same parsed MCP transport; the copy must never replace that pipe.
+    pub(crate) fn start_command_logged(
+        command: Command,
+        request_timeout: Option<Duration>,
+        directory: &Path,
+    ) -> Result<Self> {
+        let stdout = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(directory.join("host-stdout.jsonl"))?;
+        let stderr = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(directory.join("host-stderr.log"))?;
+        Self::start_with_logs(
+            command,
+            request_timeout.unwrap_or(DEFAULT_INITIALIZATION_TIMEOUT),
+            request_timeout,
+            Some((stdout, stderr)),
+        )
+    }
+    fn start_with_logs(
+        mut command: Command,
+        initialization_timeout: Duration,
+        request_timeout: Option<Duration>,
+        logs: Option<(fs::File, fs::File)>,
+    ) -> Result<Self> {
+        let (mut stdout_log, stderr) = match logs {
+            Some((stdout, stderr)) => (Some(stdout), Stdio::from(stderr)),
+            None => (None, Stdio::inherit()),
+        };
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(stderr);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -65,6 +99,12 @@ impl Client {
         let (sender, replies) = mpsc::channel();
         std::thread::spawn(move || {
             for line in BufReader::new(output).lines() {
+                if let (Ok(line), Some(log)) = (&line, stdout_log.as_mut()) {
+                    if let Err(error) = writeln!(log, "{line}").and_then(|_| log.flush()) {
+                        let _ = sender.send(Err(format!("Retain owned host stdout: {error}")));
+                        break;
+                    }
+                }
                 let result = line
                     .map_err(|e| e.to_string())
                     .and_then(|s| parse_reply_line(&s));
@@ -931,6 +971,8 @@ mod tests {
     #[ignore = "child-process fixture invoked only by transport tests"]
     fn transport_child_waits_for_eof() {
         if std::env::var_os("NBCAD_TRANSPORT_TEST_CHILD").is_some() {
+            println!("NBCAD_TRANSPORT_READY");
+            std::io::stdout().flush().unwrap();
             for line in std::io::stdin().lock().lines() {
                 if line.is_err() {
                     break;
@@ -952,7 +994,7 @@ mod tests {
             ])
             .env("NBCAD_TRANSPORT_TEST_CHILD", "1")
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null());
         #[cfg(windows)]
         {
@@ -960,6 +1002,34 @@ mod tests {
             command.creation_flags(0x08000000);
         }
         let mut child = command.spawn().unwrap();
+        // These tests measure shutdown after EOF, not cold executable startup.
+        // Keep startup separately bounded and observable before starting any
+        // request/shutdown deadline. The Rust harness also writes to stdout.
+        let output = child.stdout.take().unwrap();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(output).lines() {
+                match line {
+                    Ok(line) if line == "NBCAD_TRANSPORT_READY" => {
+                        let _ = ready_tx.send(());
+                        // Drain the harness's final status after the child
+                        // consumes EOF; closing this pipe would cause EPIPE.
+                    }
+                    Ok(_) => {}
+                    Err(_) => return,
+                }
+            }
+        });
+        let ready = ready_rx.recv_timeout(Duration::from_secs(30));
+        if ready.is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+            reader.join().unwrap();
+        }
+        assert!(
+            ready.is_ok(),
+            "Transport fixture did not become ready: {ready:?}"
+        );
         let input = child.stdin.take();
         let (sender, replies) = mpsc::channel();
         (
@@ -1053,6 +1123,31 @@ mod tests {
         assert!(client.is_running().unwrap());
         drop(sender);
         client.finish(Duration::from_secs(5)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owned_fixture_logs_preserve_protocol_and_stderr_without_overwriting_evidence() {
+        let root = TestDirectory::new();
+        let mut command = Command::new("sh");
+        command.args(["-c", r#"read request
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"owned-fixture","version":"1"}}}'
+printf '%s\n' 'owned renderer diagnostic' >&2
+cat >/dev/null"#]);
+        let client =
+            Client::start_command_logged(command, Some(Duration::from_secs(5)), &root.0).unwrap();
+        assert_eq!(
+            client.initialization()["serverInfo"]["name"],
+            "owned-fixture"
+        );
+        client.finish(Duration::from_secs(5)).unwrap();
+        let stdout = fs::read(root.0.join("host-stdout.jsonl")).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&stdout).unwrap()["id"], 1);
+        assert!(fs::read_to_string(root.0.join("host-stderr.log"))
+            .unwrap()
+            .contains("owned renderer diagnostic"));
+        assert!(Client::start_command_logged(Command::new("sh"), None, &root.0).is_err());
+        assert_eq!(fs::read(root.0.join("host-stdout.jsonl")).unwrap(), stdout);
     }
 
     struct TestDirectory(PathBuf);

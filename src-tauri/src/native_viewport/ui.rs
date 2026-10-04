@@ -2,8 +2,8 @@
 //!
 //! This module deliberately uses Bevy's stable core UI primitives instead of
 //! `bevy_ui_widgets`: the latter is still documented as experimental and
-//! unstyled in Bevy 0.19. Keeping the visual tokens and small component
-//! builders here gives the embedded viewport and the dev capture lab one
+//! unstyled. Keeping the visual tokens and small component
+//! builders here gives the production host and the dev capture lab one
 //! canonical implementation.
 
 use std::fs;
@@ -14,13 +14,40 @@ use bevy::{
     ui::{BoxShadow, UiTransform},
 };
 
+use crate::app_preferences::{locale as dictionary, Locale};
+
 use super::{
     ViewportCamera, ViewportConstraintIcon, ViewportHud, ViewportHudSelection, ViewportPalette,
     ViewportToolIcon,
 };
 
+#[cfg(test)]
+mod font_tests;
+
 pub(crate) const DIAL_CENTER: f32 = 38.0;
 const DIAL_AXIS_LENGTH: f32 = 25.0;
+
+/// Per-window appearance. Native controls and viewport graphics read this same
+/// palette without storing application preferences in the CAD document.
+#[derive(Resource)]
+pub(crate) struct Appearance {
+    pub palette: ViewportPalette,
+    pub theme: ViewportUiTheme,
+    pub revision: u64,
+}
+
+pub(crate) fn palette(world: &World) -> ViewportPalette {
+    world.get_resource::<Appearance>().map_or_else(ViewportPalette::default, |a| a.palette.clone())
+}
+
+pub(crate) fn theme(world: &World) -> ViewportUiTheme {
+    world.get_resource::<Appearance>().map_or_else(
+        || ViewportUiTheme::from_palette(&ViewportPalette::default()), |appearance| appearance.theme)
+}
+
+pub(crate) fn appearance_revision(world: &World) -> u64 {
+    world.get_resource::<Appearance>().map_or(0, |a| a.revision)
+}
 
 #[derive(Component)]
 pub(crate) struct NativeHudRoot;
@@ -40,6 +67,9 @@ pub(crate) struct HudAxisLabel {
 #[derive(Resource, Clone, Default)]
 pub(crate) struct ViewportUiAssets {
     font: Option<Handle<Font>>,
+    semibold: Option<Handle<Font>>,
+    monospace: Option<Handle<Font>>,
+    fallbacks: Vec<Handle<Font>>,
 }
 
 /// Prefer a system UI font with broad glyph coverage so native labels match
@@ -71,7 +101,82 @@ pub(crate) fn load_system_font(mut commands: Commands, mut fonts: ResMut<Assets<
         .into_iter()
         .find_map(|path| fs::read(path).ok())
         .map(|bytes| fonts.add(Font::from_bytes(bytes)));
-    commands.insert_resource(ViewportUiAssets { font });
+    #[cfg(target_os = "windows")]
+    let semibold = fs::read(r"C:\Windows\Fonts\seguisb.ttf")
+        .ok()
+        .map(|bytes| fonts.add(Font::from_bytes(bytes)));
+    #[cfg(not(target_os = "windows"))]
+    let semibold = None;
+    // Bevy's system-font discovery is deliberately unavailable with the
+    // Windows COM binding pin used by the renderer. Load a small set of
+    // installed script/emoji faces once instead of scanning every system font
+    // or shipping copies. Their handles follow the existing Latin UI face.
+    #[cfg(target_os = "windows")]
+    let fallback_candidates: &[&[&str]] = &[
+        &[r"C:\Windows\Fonts\seguisym.ttf"],
+        &[
+            r"C:\Windows\Fonts\msyh.ttc",
+            r"C:\Windows\Fonts\simsun.ttc",
+            r"C:\Windows\Fonts\YuGothR.ttc",
+        ],
+        &[r"C:\Windows\Fonts\malgun.ttf"],
+        &[r"C:\Windows\Fonts\seguiemj.ttf"],
+    ];
+    #[cfg(target_os = "macos")]
+    let fallback_candidates: &[&[&str]] = &[
+        &["/System/Library/Fonts/Apple Symbols.ttf"],
+        &[
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/Supplemental/Songti.ttc",
+            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ],
+        &["/System/Library/Fonts/AppleSDGothicNeo.ttc"],
+        &["/System/Library/Fonts/Apple Color Emoji.ttc"],
+    ];
+    #[cfg(target_os = "linux")]
+    let fallback_candidates: &[&[&str]] = &[
+        &[
+            "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf",
+            "/usr/share/fonts/noto/NotoSansSymbols-Regular.ttf",
+        ],
+        &[
+            "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+            "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
+        ],
+        &[
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+        ],
+        &[
+            "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+            "/usr/share/fonts/noto/NotoColorEmoji.ttf",
+            "/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf",
+        ],
+    ];
+    let fallbacks = fallback_candidates
+        .iter()
+        .filter_map(|candidates| candidates.iter().find_map(|path| fs::read(path).ok()))
+        .map(|bytes| fonts.add(Font::from_bytes(bytes)))
+        .collect();
+    // Code keeps aligned columns like the existing NC textarea. Reuse the
+    // installed-font/fallback path instead of shipping another font bundle.
+    #[cfg(target_os = "windows")]
+    let code_candidates = [r"C:\Windows\Fonts\consola.ttf", r"C:\Windows\Fonts\cour.ttf"];
+    #[cfg(target_os = "macos")]
+    let code_candidates = ["/System/Library/Fonts/Menlo.ttc", "/System/Library/Fonts/Monaco.ttf"];
+    #[cfg(target_os = "linux")]
+    let code_candidates = ["/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf"];
+    let monospace = code_candidates.into_iter().find_map(|path| fs::read(path).ok())
+        .map(|bytes| fonts.add(Font::from_bytes(bytes)));
+    commands.insert_resource(ViewportUiAssets {
+        font,
+        semibold,
+        monospace,
+        fallbacks,
+    });
 }
 
 #[derive(Clone, Copy)]
@@ -90,6 +195,14 @@ pub struct ViewportUiTheme {
 }
 
 impl ViewportUiTheme {
+    pub(crate) fn code_text(self, assets: &ViewportUiAssets, size: f32) -> TextFont {
+        let mut text = self.text(assets, size, FontWeight::NORMAL);
+        if let Some(font) = &assets.monospace {
+            text.font = FontSource::list(std::iter::once(FontSource::from(font.clone()))
+                .chain(std::iter::once(text.font)));
+        }
+        text
+    }
     pub fn from_palette(palette: &ViewportPalette) -> Self {
         let light = relative_luminance(palette.background) > 0.52;
         Self {
@@ -109,8 +222,19 @@ impl ViewportUiTheme {
 
     pub(crate) fn text(self, assets: &ViewportUiAssets, size: f32, weight: FontWeight) -> TextFont {
         let mut text = TextFont::from_font_size(size).with_font_weight(weight);
-        if let Some(font) = &assets.font {
+        let face = if weight == FontWeight::SEMIBOLD {
+            assets.semibold.as_ref().or(assets.font.as_ref())
+        } else {
+            assets.font.as_ref()
+        };
+        if let Some(font) = face {
             text = text.with_font(font.clone());
+        }
+        if !assets.fallbacks.is_empty() {
+            text.font = FontSource::list(
+                std::iter::once(text.font)
+                    .chain(assets.fallbacks.iter().cloned().map(FontSource::from)),
+            );
         }
         text
     }
@@ -180,6 +304,7 @@ pub(crate) fn spawn_viewport_hud(
     hud: &ViewportHud,
     palette: &ViewportPalette,
     assets: &ViewportUiAssets,
+    locale: Locale,
 ) {
     let theme = ViewportUiTheme::from_palette(palette);
 
@@ -209,7 +334,7 @@ pub(crate) fn spawn_viewport_hud(
         return;
     }
 
-    spawn_orientation_dial(commands, camera, hud, palette, theme, assets);
+    spawn_orientation_dial(commands, camera, hud, palette, theme, assets, locale);
     spawn_navigation_bar(commands, camera, hud, theme, assets);
     if let Some(selection) = &hud.selection {
         spawn_selection_hud(commands, camera, selection, theme, assets);
@@ -236,6 +361,7 @@ fn spawn_orientation_dial(
     palette: &ViewportPalette,
     theme: ViewportUiTheme,
     assets: &ViewportUiAssets,
+    locale: Locale,
 ) {
     commands
         .spawn((
@@ -261,7 +387,7 @@ fn spawn_orientation_dial(
         ))
         .with_children(|card| {
             card.spawn((
-                Text::new("ORIENTATION DIAL"),
+                Text::new(dictionary::translate(locale, "orientationDial.label")),
                 theme.text(assets, 8.0, FontWeight::SEMIBOLD),
                 TextColor(theme.mute),
                 Node {
@@ -441,11 +567,7 @@ fn spawn_orientation_dial(
                             },
                         ),
                         TextColor(if state == ControlVisual::Idle {
-                            if emphasized {
-                                theme.ink
-                            } else {
-                                theme.mute
-                            }
+                            if emphasized { theme.ink } else { theme.mute }
                         } else {
                             text
                         }),
@@ -453,7 +575,7 @@ fn spawn_orientation_dial(
                 }
             });
             card.spawn((
-                Text::new("Drag the dial to orbit"),
+                Text::new(dictionary::translate(locale, "orientationDial.orbit")),
                 theme.text(assets, 8.0, FontWeight::NORMAL),
                 TextColor(theme.mute.with_alpha(0.72)),
                 Node {
@@ -989,9 +1111,8 @@ fn spawn_icon_rect(
     ));
 }
 
-/// Native counterpart of the shared 24×24 React constraint inventory. These
-/// procedural strokes keep the Metal/DX12/Vulkan child viewport visually
-/// identical without raster assets or font-dependent Unicode substitutes.
+/// Constraint icons use procedural strokes on a 24×24 canvas, independent of
+/// raster assets and installed fonts. The exhaustive match covers every icon.
 pub(crate) fn spawn_constraint_icon(
     parent: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     icon: ViewportConstraintIcon,
@@ -1448,28 +1569,35 @@ pub(crate) fn update_orientation_nodes(
         let endpoint =
             Vec2::new(mark.axis.dot(right), -mark.axis.dot(screen_up)) * DIAL_AXIS_LENGTH;
         let point = Vec2::splat(DIAL_CENTER) + endpoint * mark.fraction;
-        node.left = px(point.x - mark.radius);
-        node.top = px(point.y - mark.radius);
+        let left = px(point.x - mark.radius);
+        let top = px(point.y - mark.radius);
+        if node.left != left || node.top != top {
+            node.left = left;
+            node.top = top;
+        }
     }
     for (label, mut node) in labels {
         let endpoint =
             Vec2::new(label.axis.dot(right), -label.axis.dot(screen_up)) * DIAL_AXIS_LENGTH;
         let point = Vec2::splat(DIAL_CENTER) + endpoint;
-        node.left = px(point.x + if endpoint.x >= 0.0 { 4.0 } else { -8.0 });
-        node.top = px(point.y + if endpoint.y >= 0.0 { 2.0 } else { -10.0 });
+        let left = px(point.x + if endpoint.x >= 0.0 { 4.0 } else { -8.0 });
+        let top = px(point.y + if endpoint.y >= 0.0 { 2.0 } else { -10.0 });
+        if node.left != left || node.top != top {
+            node.left = left;
+            node.top = top;
+        }
     }
 }
 
 /// The dialog sample is not used as a command form in production. It is the
-/// visual contract used by the native capture lab to ensure Bevy can reproduce
-/// React's shared feature-dialog language before a viewport-native command
-/// graduates from React.
+/// visual contract used by the native capture lab for dialog layout and themes.
 #[cfg(feature = "dev-ui-lab")]
 pub(crate) fn spawn_reference_dialog(
     commands: &mut Commands,
     camera: Entity,
     theme: ViewportUiTheme,
     assets: &ViewportUiAssets,
+    locale: Locale,
 ) {
     commands
         .spawn((
@@ -1529,7 +1657,7 @@ pub(crate) fn spawn_reference_dialog(
                                 BorderColor::all(theme.accent),
                             ));
                             header.spawn((
-                                Text::new("Sketch coordinate origin"),
+                                Text::new(dictionary::translate(locale, "sketchOrigin.title")),
                                 theme.text(assets, 16.0, FontWeight::SEMIBOLD),
                                 TextColor(theme.ink),
                                 Node {
@@ -1554,7 +1682,8 @@ pub(crate) fn spawn_reference_dialog(
                         .with_children(|body| {
                             body.spawn((
                         Text::new(
-                            "Choose where sketch (0, 0) is placed on planar face #603509456585486.",
+                            dictionary::translate(locale, "sketchOrigin.description")
+                                .replace("{face}", "603509456585486"),
                         ),
                         theme.text(assets, 14.0, FontWeight::NORMAL),
                         TextColor(theme.mute),
@@ -1566,16 +1695,16 @@ pub(crate) fn spawn_reference_dialog(
                             spawn_dialog_choice(
                                 body,
                                 true,
-                                "Center of selected face",
-                                "Places zero at the area-weighted center of this face.",
+                                dictionary::translate(locale, "sketchOrigin.faceCenter"),
+                                dictionary::translate(locale, "sketchOrigin.faceCenterHint"),
                                 theme,
                                 assets,
                             );
                             spawn_dialog_choice(
                                 body,
                                 false,
-                                "Project the global origin",
-                                "Projects the document XYZ origin onto the selected face plane.",
+                                dictionary::translate(locale, "sketchOrigin.globalProjection"),
+                                dictionary::translate(locale, "sketchOrigin.globalProjectionHint"),
                                 theme,
                                 assets,
                             );
@@ -1597,8 +1726,20 @@ pub(crate) fn spawn_reference_dialog(
                             BorderColor::all(theme.edge),
                         ))
                         .with_children(|footer| {
-                            spawn_dialog_action(footer, "Cancel", false, theme, assets);
-                            spawn_dialog_action(footer, "Create Sketch", true, theme, assets);
+                            spawn_dialog_action(
+                                footer,
+                                dictionary::translate(locale, "sketchOrigin.cancel"),
+                                false,
+                                theme,
+                                assets,
+                            );
+                            spawn_dialog_action(
+                                footer,
+                                dictionary::translate(locale, "sketchOrigin.ok"),
+                                true,
+                                theme,
+                                assets,
+                            );
                         });
                 });
         });
@@ -1726,5 +1867,6 @@ pub(crate) fn light_reference_palette() -> ViewportPalette {
         finished_sketch_point_outline: [1.0, 1.0, 1.0],
         preview: [20.0 / 255.0, 127.0 / 255.0, 190.0 / 255.0],
         projected: [123.0 / 255.0, 63.0 / 255.0, 196.0 / 255.0],
+        dimension: [52.0 / 255.0, 70.0 / 255.0, 0.0],
     }
 }

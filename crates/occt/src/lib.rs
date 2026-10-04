@@ -1,14 +1,19 @@
 //! Native OCCT adapter.
 //!
-//! The C++ bridge is enabled by the `native-occt` feature in the Tauri
-//! shell. Keeping the feature off lets the host-neutral workspace and WASM
+//! The C++ bridge is enabled by the `native-occt` feature in the native
+//! desktop. Keeping the feature off lets the host-neutral workspace and WASM
 //! target build on machines that do not have the OCCT SDK installed.
 
 pub mod drawing_export;
 mod drawing_instances;
+pub mod drawing_presentation;
 pub use drawing_instances::{project_drawing, resolve_drawing_anchor, resolve_drawing_line};
 mod interference;
 pub use interference::{exact_interference_report, exact_pair_result};
+mod motion_evaluation;
+pub use motion_evaluation::evaluate_motion_study;
+mod motion_inspection;
+pub use motion_inspection::exact_swept_collision_check;
 
 use std::collections::HashSet;
 
@@ -122,6 +127,29 @@ pub struct DrawingProjectionAnchorDto {
     pub hidden: bool,
 }
 
+/// Transient orthonormal axes used by drawing projection and depth ranking.
+/// This is derived display metadata, not persisted camera intent.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DrawingProjectionBasis {
+    pub direction: [f64; 3],
+    pub right: [f64; 3],
+    pub up: [f64; 3],
+}
+
+pub fn drawing_projection_basis(
+    direction: [f64; 3],
+    up: [f64; 3],
+) -> Result<DrawingProjectionBasis, OcctError> {
+    let direction = normalize(direction)?;
+    let right = normalize(cross(up, direction))?;
+    let up = normalize(cross(direction, right))?;
+    Ok(DrawingProjectionBasis {
+        direction,
+        right,
+        up,
+    })
+}
+
 /// Project stable topology endpoints with the same orthographic basis used by
 /// OCCT HLR. The UI may visually collapse coincident pick markers, but the data
 /// contract preserves the exact edge identity required by associative notes.
@@ -130,9 +158,9 @@ pub fn drawing_projection_anchors(
     request: &DrawingProjectionRequest,
     projection: &DrawingProjectionDto,
 ) -> Result<Vec<DrawingProjectionAnchorDto>, OcctError> {
-    let direction = normalize(request.direction)?;
-    let right = normalize(cross(request.up, direction))?;
-    let page_up = normalize(cross(direction, right))?;
+    let DrawingProjectionBasis {
+        right, up: page_up, ..
+    } = drawing_projection_basis(request.direction, request.up)?;
 
     let mut anchors = Vec::new();
     for (body, occurrence) in drawing_instances::drawing_bodies(scene, request)? {
@@ -188,9 +216,11 @@ pub fn drawing_projection_circles(
     request: &DrawingProjectionRequest,
     projection: &DrawingProjectionDto,
 ) -> Result<Vec<DrawingProjectedCircleDto>, OcctError> {
-    let direction = normalize(request.direction)?;
-    let right = normalize(cross(request.up, direction))?;
-    let page_up = normalize(cross(direction, right))?;
+    let DrawingProjectionBasis {
+        direction,
+        right,
+        up: page_up,
+    } = drawing_projection_basis(request.direction, request.up)?;
 
     let mut candidates = Vec::new();
     for (body, occurrence) in drawing_instances::drawing_bodies(scene, request)? {
@@ -554,6 +584,27 @@ mod drawing_anchor_tests {
         assert_eq!(anchors[0].point, [-10.0, -5.0]);
         assert_eq!(anchors[1].point, [10.0, -5.0]);
         assert!(anchors.iter().all(|anchor| !anchor.hidden));
+        for (direction, up) in [
+            ([0., 0., 1e-6], [0., 7., 3.]),
+            ([0., 0., 40.], [0., 0.01, 29.]),
+        ] {
+            let scaled = DrawingProjectionRequest {
+                direction,
+                up,
+                ..request.clone()
+            };
+            assert_eq!(
+                drawing_projection_basis(direction, up).unwrap(),
+                drawing_projection_basis(request.direction, request.up).unwrap()
+            );
+            assert_eq!(
+                serde_json::to_value(
+                    drawing_projection_anchors(&scene, &scaled, &projection).unwrap()
+                )
+                .unwrap(),
+                serde_json::to_value(&anchors).unwrap()
+            );
+        }
     }
 
     #[test]
@@ -698,6 +749,16 @@ mod drawing_anchor_tests {
 
         let circles = drawing_projection_circles(&scene, &request, &projection).unwrap();
         assert_eq!(circles.len(), 2);
+        let scaled = DrawingProjectionRequest {
+            direction: [0., 0., 1e-6],
+            up: [0., 7., 3.],
+            ..request.clone()
+        };
+        assert_eq!(
+            serde_json::to_value(drawing_projection_circles(&scene, &scaled, &projection).unwrap())
+                .unwrap(),
+            serde_json::to_value(&circles).unwrap()
+        );
         assert!(circles.iter().all(|circle| circle.closed));
         assert!(circles
             .iter()

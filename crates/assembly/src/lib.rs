@@ -2368,6 +2368,49 @@ impl AssemblyDocumentDto {
     ) -> Result<MechanismPreviewDto, String> {
         solve_mechanism_drag(self, request, scene)
     }
+
+    /// Availability uses the same active scene and grounded joint graph as the
+    /// solver. A rigid-only or disconnected component stays a selection target.
+    pub fn can_drag_occurrence(
+        &self,
+        body: BodyId,
+        occurrence: OccurrenceId,
+        scene: &SolidSceneDto,
+    ) -> bool {
+        let mut active = self.clone();
+        if active.project_active_scene(scene).is_err()
+            || !active
+                .component_structure
+                .occurrence_contains_body(occurrence, body)
+        {
+            return false;
+        }
+        let Some(target) = active.component_structure.occurrence(occurrence) else {
+            return false;
+        };
+        let mut siblings = active
+            .component_structure
+            .occurrences
+            .iter()
+            .filter(|o| o.parent_occurrence_id == target.parent_occurrence_id)
+            .collect::<Vec<_>>();
+        siblings.sort_by_key(|o| o.id.0);
+        let Some(ground) = siblings
+            .iter()
+            .find(|o| o.grounded)
+            .or_else(|| siblings.first())
+            .map(|o| o.id)
+        else {
+            return false;
+        };
+        occurrence != ground
+            && joint_path(&active, ground, occurrence).is_some_and(|path| {
+                active
+                    .joints
+                    .iter()
+                    .any(|j| path.contains(&j.id) && !active_coordinates(j.kind).is_empty())
+            })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -3059,10 +3102,11 @@ fn export_motion_path_csv(
     if !request.sample_rate_hz.is_finite() || !(1.0..=240.0).contains(&request.sample_rate_hz) {
         return Err("motion path sample rate must be between 1 and 240 Hz".to_string());
     }
-    let sample_count = (study.duration_seconds * request.sample_rate_hz).ceil() as usize + 1;
-    if sample_count > 100_001 {
+    let steps = (study.duration_seconds * request.sample_rate_hz).ceil();
+    if !steps.is_finite() || !(0. ..=100_000.).contains(&steps) {
         return Err("motion path would exceed 100,001 samples".to_string());
     }
+    let sample_count = steps as usize + 1;
     let filter = request
         .occurrence_ids
         .iter()
@@ -5213,6 +5257,27 @@ const fn default_kinematic_iterations() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn motion_path_rejects_huge_durations_before_integer_conversion() {
+        let mut document = AssemblyDocumentDto::default();
+        let study = document
+            .create_motion_study(CreateMotionStudyRequestDto {
+                name: "Huge path".into(),
+                duration_seconds: 1e30,
+            })
+            .unwrap();
+        let error = document
+            .export_motion_path_csv(
+                MotionPathRequestDto {
+                    study_id: study.id,
+                    sample_rate_hz: 60.,
+                    occurrence_ids: vec![],
+                },
+                &scene(),
+            )
+            .unwrap_err();
+        assert!(error.contains("100,001"), "{error}");
+    }
     use nbcad_core::{FeatureId, PlaneBasis};
     use nbcad_solid::{BodyDto, CircularCurveDto, EdgeDto, MeshDto, Point3Dto};
 

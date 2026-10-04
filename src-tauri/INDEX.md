@@ -1,8 +1,11 @@
-# src-tauri index
+# Native desktop index
+
+The `src-tauri` directory is the retained Cargo workspace path. The desktop
+runtime is Bevy; no Tauri or embedded browser is built or packaged.
 
 | Path | Role |
 |------|------|
-| [src/lib.rs](src/lib.rs) | Tauri IPC + engine dispatch |
+| [src/lib.rs](src/lib.rs) | Native host and engine dispatch |
 | [src/session_bridge.rs](src/session_bridge.rs) | Per-window UUID + reload-safe atomic snapshot publish for MCP |
 | [Cargo.toml](Cargo.toml) | Native shell crate |
 

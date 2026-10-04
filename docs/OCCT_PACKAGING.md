@@ -1,7 +1,7 @@
 # OCCT Packaging and Browser/WASM Strategy
 
-Status: implemented for the current macOS, Windows x64 and ARM64, Ubuntu 26.04
-x64, and browser baseline.
+Status: native packages are implemented for macOS, Windows x64 and ARM64, and
+Ubuntu x64. The Bevy browser host and OCCT WASM port remain unfinished.
 
 Use [Install noBS CAD](INSTALL.md) for downloads or the
 [developer guide](DEVELOPMENT.md) for SDK setup and `cargo xtask package`.
@@ -13,21 +13,15 @@ that shared desktop build command.
 noBS CAD does not keep separate native and browser CAD models.
 
 ```text
-Sketch/document state
-        │
-        ▼
-Rust solid planner (definitions, history, IDs, reference validation)
-        │ serialized RecomputePlan
-        ├───────────────────────────┐
-        ▼                           ▼
-Native OCCT 7.9.x             OpenCascade.js
-`crates/occt`                 `src/engine/occtBrowser.ts`
-        │                           │
-        └──────── KernelScene ──────┘
-                    │
-                    ▼
-       Rust validation + commit + document DTO
+Rust document/history and solid planner (crates/core, sketch, solid)
+                         |
+Native OCCT 7.9.x adapter (crates/occt)
+                         |
+Rust validation + commit + document DTO
 ```
+
+The planned browser host shares the Rust model and Bevy UI. Its exact OCCT
+kernel still needs the WASM port; the engine facade alone is not a browser CAD app.
 
 `crates/solid` is authoritative for:
 
@@ -38,11 +32,9 @@ Native OCCT 7.9.x             OpenCascade.js
 - planar-face references and broken-reference errors;
 - mesh, face, edge, and plane DTO validation.
 
-The native and browser adapters are deliberately narrow: construct OCCT shapes,
-perform booleans, tessellate, enumerate topology, return `KernelSceneDto`, and
-serialize selected live B-reps to AP242 STEP. **STL / 3MF mesh packaging** is
-native + MCP only today (`nbcad-export`); the browser adapter throws
-`file.meshNativeOnly` until explicit parity work.
+The native adapter constructs shapes, performs booleans, tessellates, enumerates
+topology and returns validated kernel DTOs. It exports live B-reps to AP242 STEP.
+Manufacturing mesh packaging lives in the Rust `nbcad-export` crate.
 
 On native OCCT, the writer is constructed first, schema index 5 is selected,
 and `STEPControl_Writer::Model(Standard_True)` creates a fresh AP242 model
@@ -75,39 +67,32 @@ directory. Homebrew locations are probed only when `OCCT_ROOT` is absent.
 
 ## 3. Reproducible macOS application bundle
 
-Do not ship a Tauri binary linked directly to `/opt/homebrew` or another SDK
+Do not ship a desktop binary linked directly to `/opt/homebrew` or another SDK
 prefix. Copying dylibs without changing the executable's load commands is not
 sufficient.
 
-After SDK setup and `npm ci`, use the shared package entry point on macOS:
+After SDK setup, use the shared package entry point on macOS:
 
 ```sh
 cargo xtask package
 ```
 
-It selects `scripts/bundle-macos.mjs`, which:
+The Rust packager:
 
-1. runs `scripts/stage-occt-macos.mjs`;
+1. validates native SDK and signing prerequisites;
 2. discovers the recursive OCCT/TBB dylib closure with `otool -L`;
 3. copies the closure to generated `src-tauri/occt-libs`;
 4. changes dylib IDs and non-system dependencies to `@rpath`;
-5. stages the project license, third-party notices, OCCT license and exception,
-   and the OpenCascade.js license;
-6. generates `src-tauri/tauri.occt.conf.json` for Tauri's frameworks and
-   resources;
+5. stages the project license, third-party notices, OCCT license and exception;
+6. records the discovered native library closure in `occt-libs/libraries.json`;
 7. links the Rust executable against those staged libraries and adds
    `@executable_path/../Frameworks` to `LC_RPATH`;
 8. creates the `.app` and `.dmg`, seals local builds ad hoc when no signing
    identity is supplied, and verifies both the code signature and disk image.
 
-Desktop packaging does not build the browser Rust WASM module. Tauri's
-`build:desktop` mode selects the native engine at build time, Rollup removes the
-browser engine graph, and `scripts/verify-desktop-assets.mjs` rejects any
-accidental `.wasm` output. The checked-in generated declaration at
-`src/engine-wasm/pkg/nbcad_wasm.d.ts` preserves TypeScript checking in a clean
-desktop checkout without requiring `wasm-pack`.
-
-The generated staging directory and config overlay are intentionally ignored.
+Desktop packaging directly builds the native Cargo executable. It does not
+install frontend dependencies, embed web assets, or build browser WASM. The
+generated OCCT staging directory is ignored.
 The results are:
 
 ```text
@@ -136,7 +121,7 @@ list.
 For signed/notarized releases, the `v*` tag path in
 `.github/workflows/desktop-packages.yml` imports a **Developer ID Application**
 identity, enables hardened runtime, submits the app to Apple's notary service,
-waits for Tauri to staple the ticket, and verifies both Gatekeeper assessment
+staples the app and disk-image tickets, and verifies both Gatekeeper assessment
 and the stapled ticket. Pull-request and manually dispatched diagnostic builds
 remain ad-hoc signed; the local ad-hoc seal is a verification aid, not
 distribution signing.
@@ -165,11 +150,11 @@ The default manual option, `diagnostic`, remains ad-hoc signed.
 ## 4. Reproducible Windows portable build
 
 Windows targets are x64 and ARM64 on Windows 10 version 1803 or newer and
-Windows 11. They use the system WebView2 runtime and require Microsoft's
+Windows 11. They require Microsoft's
 centrally installed matching Visual C++ v14 Redistributable.
 
 The root `vcpkg.json` pins both the vcpkg registry and OCCT 7.9.3. The Windows
-packager compiles the Tauri executable with `--no-bundle`, copies the complete
+packager compiles the native Cargo executable, copies the complete
 DLL set from the isolated vcpkg prefix beside the executable, adds licenses,
 and creates a ZIP plus SHA-256 file:
 
@@ -177,8 +162,8 @@ and creates a ZIP plus SHA-256 file:
 cargo xtask package
 ```
 
-This selects the running Rust toolchain's architecture and the existing
-`scripts/bundle-windows-portable.ps1` builder. Install the matching SDK first;
+This selects the running Rust toolchain's architecture and the Rust portable
+ZIP builder. Install the matching SDK first;
 the [Windows setup](WINDOWS_PACKAGING.md#local-windows-build) also documents
 explicit `--target` selection and `OCCT_ROOT` overrides.
 
@@ -194,12 +179,12 @@ and runtime requirements.
 ## 5. Reproducible Ubuntu 26.04 packages
 
 Ubuntu 26.04 LTS is the official Linux baseline. The package uses Ubuntu's
-OCCT 7.9 runtime, GTK 3/WebKitGTK 4.1 shell, and a Vulkan Bevy viewport embedded
-in an X11 GTK child drawing surface. Native X11 and Wayland desktops through
-XWayland share the same raw-window-handle path and are both exercised by the
-packaged-application launch probe.
+OCCT 7.9 runtime and a full native Bevy/Winit window with Vulkan rendering.
+GTK supplies file dialogs and the desktop portal supplies printing. Package
+verification exercises private X11 and Wayland displays; it no longer checks
+an embedded browser's child surface.
 
-After SDK setup and `npm ci`, use the same entry point on Ubuntu:
+After SDK setup, use the same entry point on Ubuntu:
 
 ```sh
 cargo xtask package
@@ -209,52 +194,26 @@ It creates and audits a `.deb`, an AppImage, their SHA-256 files, and the
 required project/OCCT license notices. See [Ubuntu 26.04 packaging](LINUX_PACKAGING.md)
 for the exact SDK, runtime requirements, and verification commands.
 
-<details>
-<summary>Underlying builders for packaging maintenance</summary>
-
-`cargo xtask package` dispatches to the existing macOS and Linux JavaScript
-builders or the Windows PowerShell builder. The `bundle:macos`, `bundle:linux`
-and `bundle:windows:portable` npm aliases still invoke those same scripts for
-CI and packaging diagnostics. They are implementation details of the shared
-entry point, not separate application build paths.
-
-</details>
+Native packaging is implemented in `xtask/src/package/`. Deleted legacy scripts
+and npm aliases have no compatibility wrappers.
 
 ## 6. Browser/WASM development
 
-The browser host combines two WASM modules:
+The retired React app and OpenCascade.js package are no longer build inputs.
+The browser replacement must reuse the desktop Bevy UI. It requires an OCCT
+WASM kernel and browser host services; neither is supplied by the current
+engine bundle command.
 
-- `nbcad_wasm`: Rust product engine and recompute planner;
-- exact `opencascade.js@2.0.0-beta.b5ff984`: B-rep kernel.
-
-For browser-specific work, use the
-[browser development instructions](DEVELOPMENT.md#browser-development).
-With `wasm-pack` and the Rust WASM target installed, build and run:
+Build the existing Rust engine facade, which can be checked independently:
 
 ```sh
-npm ci
-npm run build:wasm
-npm run dev
+cargo xtask bootstrap --wasm
+cargo xtask build-wasm
 ```
 
-`src/engine/occtBrowser.ts` is loaded dynamically only when a solid operation
-first needs it. It consumes the same Rust `RecomputePlanDto` contract used by
-the native bridge and returns the same `KernelSceneDto`.
-
-The same adapter owns live browser B-reps and uses `STEPControl_Writer` for
-AP242 export through Emscripten's in-memory filesystem. STEP bytes are passed to
-the shared frontend file layer; display meshes never participate.
-
-The current production Vite build emits approximately:
-
-- 50 MB raw (about 14 MB gzip) for the full OpenCascade.js WASM module;
-- 2.1 MB raw (about 0.7 MB gzip) for the noBS CAD Rust WASM module.
-
-The full prebuilt module is acceptable for current development and browser preview.
-Before public browser distribution, generate a custom OpenCascade.js build that
-contains only the symbols reached by `occtBrowser.ts`, then lock it by content
-digest and run the native/browser conformance suite. Threaded OpenCascade.js is
-deferred until hosting provides COOP/COEP cross-origin isolation.
+See [the browser host backlog](../web/README.md) for the remaining integration
+work and [browser development](DEVELOPMENT.md#browser-development) for the
+optional Chrome engine smoke test.
 
 ## 7. Version and CI policy
 
@@ -271,16 +230,15 @@ deferred until hosting provides COOP/COEP cross-origin isolation.
   packages, and verify Vulkan viewport startup under headless X11 and
   Weston/XWayland sessions. Build the AppImage in an Ubuntu 22.04 container
   against OCCT 7.9.3 compiled from pinned, checksummed source
-  (`scripts/build-occt-linux.sh`, cached by the script's hash), refuse it if
+  (`cargo xtask build-occt --prefix PATH`, cached by verified compiler/SDK/recipe fingerprints), refuse it if
   it needs glibc newer than 2.35, and verify it under X11 on Ubuntu 22.04 and
   26.04.
-- Browser: keep the exact OpenCascade.js package version; upgrades require
-  native/browser conformance fixtures and a checked bundle-size report.
-- The lockfile is committed with the exact browser-kernel package resolution.
-- A release is blocked by absolute non-system dylib paths, signature failure,
-  mismatched topology IDs, or divergent native/browser feature results.
+- Browser publication requires the shared Bevy UI, an exact kernel WASM port,
+  host-service integration and native/browser conformance evidence.
+- Native release guards reject absolute non-system dylib paths, signature
+  failures and invalid topology results.
 
-## 7. Current limitations
+## 8. Current limitations
 
 - `To Face` supports a parallel planar target face.
 - `Through All` uses a finite ±1,000,000 mm construction extent.
@@ -291,20 +249,14 @@ deferred until hosting provides COOP/COEP cross-origin isolation.
 - Stable topology IDs persist when the adapter returns the same topology key.
   Topology-changing edits and booleans can intentionally invalidate downstream
   face references; the timeline then reports a broken reference.
-- Public-web payload optimization and native/browser fixture automation remain
-  release hardening work.
+- A runnable Bevy browser app remains separate migration work.
 
-## 8. Upstream references
+## 9. Upstream references
 
 - OCCT build guidance: <https://dev.opencascade.org/doc/overview/html/build_upgrade__building_occt.html>
 - OCCT meshing guidance: <https://github.com/Open-Cascade-SAS/OCCT/wiki/mesh>
 - Homebrew OCCT formula: <https://formulae.brew.sh/formula/opencascade>
-- Tauri Windows prerequisites: <https://v2.tauri.app/start/prerequisites/>
 - Microsoft Visual C++ runtime deployment:
   <https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files>
 - vcpkg binary caching:
   <https://learn.microsoft.com/vcpkg/users/binarycaching>
-- OpenCascade.js prebuilt workflow: <https://ocjs.org/docs/app-dev-workflow/pre-built>
-- OpenCascade.js custom builds: <https://ocjs.org/docs/app-dev-workflow/custom-builds>
-- OpenCascade.js file size notes: <https://ocjs.org/docs/getting-started/file-size>
-- Tauri macOS dynamic libraries: <https://v2.tauri.app/distribute/macos-application-bundle/>

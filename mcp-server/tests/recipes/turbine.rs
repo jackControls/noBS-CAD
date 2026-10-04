@@ -511,7 +511,7 @@ fn stage_drawing(client: &mut Client, exports: &Value, diameter: f64) {
         drawing["content"]
             .as_str()
             .unwrap()
-            .contains(&format!("Ø{diameter:.2}</text>")),
+            .contains(&format!(">Ø{diameter:.2} mm</text>")),
         "the associative stage drawing must measure its actual edited shaft bore"
     );
 }

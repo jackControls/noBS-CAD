@@ -1,0 +1,28 @@
+[package]
+name = "nbcad-native-engine"
+version.workspace = true
+edition.workspace = true
+description = "Shared OCCT document host for the Bevy desktop and hosted geometry service"
+license = "LGPL-2.1-or-later"
+repository.workspace = true
+
+[features]
+default = []
+native-occt = [
+    "dep:nbcad-cam", "dep:nbcad-core", "dep:nbcad-export", "dep:nbcad-occt",
+    "dep:nbcad-sketch", "dep:nbcad-solid", "dep:serde", "dep:serde_json",
+    "nbcad-occt/native-occt",
+]
+
+[dependencies]
+nbcad-cam = { path = "../cam", optional = true }
+nbcad-core = { path = "../core", optional = true }
+nbcad-export = { path = "../export", optional = true }
+nbcad-occt = { path = "../occt", optional = true }
+nbcad-sketch = { path = "../sketch", optional = true }
+nbcad-solid = { path = "../solid", optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, features = ["float_roundtrip"], optional = true }
+
+[dev-dependencies]
+base64.workspace = true

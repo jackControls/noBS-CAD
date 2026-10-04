@@ -1,6 +1,6 @@
 //! Sketch manager: owns the document plus the sketch-session lifecycle
 //! (`begin_sketch` / `end_sketch`) and routes drawing ops to the active
-//! session. This is the object both engine hosts (Tauri, WASM) hold.
+//! session. This is the object both engine hosts (native, WASM) hold.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -76,6 +76,9 @@ use crate::project::{
 use crate::session::{
     SessionError, SketchSession, GRID_STEP_MM, MAX_GRID_STEP_MM, MIN_GRID_STEP_MM,
 };
+
+mod retention;
+pub use retention::RetainedSketchSessions;
 
 /// A sketch that has been finished and is kept in the document. The full
 /// session is retained (M1d): it renders muted in 3D and re-enters editing
@@ -157,6 +160,10 @@ mod cam_order_tests;
 #[path = "cam_tool_compatibility_tests.rs"]
 mod cam_tool_compatibility_tests;
 
+#[cfg(test)]
+#[path = "cam_fingerprint_tests.rs"]
+mod cam_fingerprint_tests;
+
 struct CamSetupDependencyFingerprints {
     model: String,
     setup: String,
@@ -217,6 +224,17 @@ impl SketchManager {
 
     pub fn document_dto(&self) -> DocumentDto {
         DocumentDto::from(&self.document)
+    }
+
+    /// Script playback may start only in a document with no authored work.
+    /// Shared by the desktop lesson controls and the existing script runner.
+    pub fn is_blank_for_script(&self) -> bool {
+        self.active.is_none()
+            && self.document.features().features.is_empty()
+            && self.solids.scene().bodies.is_empty()
+            && self.drawings.sheets.is_empty()
+            && self.assembly == AssemblyDocumentDto::default()
+            && self.cam == CamDocumentDto::default()
     }
 
     pub fn set_document_name(&mut self, name: String) -> Result<DocumentDto, SessionError> {
@@ -1557,7 +1575,16 @@ impl SketchManager {
         let sketches = self
             .finished
             .iter()
-            .map(|finished| finished.session.dto())
+            .map(|finished| {
+                let mut sketch = finished.session.dto();
+                // Local editing stacks are intentionally absent from saved
+                // projects. Their availability cannot change a geometry key
+                // when the same sketch is replayed in another host/process.
+                // Keep every actual entity, constraint and support reference.
+                sketch.can_undo = false;
+                sketch.can_redo = false;
+                sketch
+            })
             .collect::<Vec<_>>();
         let upstream_tool_ids = upstream_setups
             .iter()
@@ -4565,6 +4592,26 @@ impl SketchManager {
         self.active_mut()?.add_rectangle_locked(&request)
     }
 
+    pub fn preview_rectangle_locked(
+        &self,
+        request: LockedRectangleRequest,
+    ) -> Result<[crate::Vec2; 2], SessionError> {
+        self.active
+            .as_ref()
+            .ok_or(SessionError::NoActiveSketch)?
+            .preview_rectangle_locked(&request)
+    }
+
+    pub fn preview_circle_locked(
+        &self,
+        request: LockedCircleRequest,
+    ) -> Result<[crate::Vec2; 2], SessionError> {
+        self.active
+            .as_ref()
+            .ok_or(SessionError::NoActiveSketch)?
+            .preview_circle_locked(&request)
+    }
+
     pub fn add_circle(&mut self, request: CircleRequest) -> Result<ToolResult, SessionError> {
         self.active_mut()?.add_circle_selective(
             request.mode,
@@ -4696,6 +4743,16 @@ impl SketchManager {
 
     pub fn chamfer_lines(&mut self, request: ChamferRequest) -> Result<ToolResult, SessionError> {
         self.active_mut()?.chamfer_lines(&request)
+    }
+
+    pub fn chamfer_preview(
+        &self,
+        request: ChamferRequest,
+    ) -> Result<crate::PreviewCurve, SessionError> {
+        self.active
+            .as_ref()
+            .ok_or(SessionError::NoActiveSketch)?
+            .chamfer_preview(&request)
     }
 
     pub fn offset_preview(
@@ -5060,6 +5117,16 @@ fn resolve_datum_source(
         }
     };
 
+    construction_plane_basis(source, resolve, |body, edge| solids.edge_points(body, edge))
+}
+
+/// The same validated construction geometry serves history replay and native
+/// previews. Callers resolve only references from their coherent model snapshot.
+pub fn construction_plane_basis(
+    source: &mut DatumPlaneSourceDto,
+    resolve: impl Fn(PlaneRef) -> Result<PlaneBasis, SessionError>,
+    edge_points: impl Fn(BodyId, nbcad_core::EdgeId) -> Option<Vec<Point3Dto>>,
+) -> Result<PlaneBasis, SessionError> {
     match source {
         DatumPlaneSourceDto::Offset {
             reference,
@@ -5111,8 +5178,7 @@ fn resolve_datum_source(
                 ));
             }
             let basis = resolve(*reference)?;
-            let points = solids
-                .edge_points(*body_id, *edge_id)
+            let points = edge_points(*body_id, *edge_id)
                 .filter(|points| points.len() >= 2)
                 .or_else(|| axis_points.map(|points| points.to_vec()))
                 .ok_or_else(|| {
@@ -5290,7 +5356,7 @@ fn resolve_cam_chain(
     ))
 }
 
-fn resolve_cam_hole(
+pub fn resolve_cam_hole(
     reference: &str,
     hole: &mut CamHoleDto,
     setup: &CamSetupDto,
@@ -9708,6 +9774,7 @@ mod project_tests {
             reference_midpoints: Vec::new(),
             dimensions: Vec::new(),
             dimension_style: DimensionStyle::Aligned,
+            grid_snap: true,
             dof: crate::dto::DofDto {
                 value: 0,
                 fully_defined: true,

@@ -1,0 +1,5 @@
+[toolchain]
+# Pin the current stable compiler so local and CI dependency builds agree.
+channel = "1.99.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

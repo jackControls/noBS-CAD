@@ -4,10 +4,10 @@ dist-ssr
 public/__bevy_ui__/
 target
 src-tauri/target
+# Generated output retained from older desktop builds.
 src-tauri/gen
-src/engine-wasm/pkg
+web/engine
 src-tauri/occt-libs
-src-tauri/tauri.occt.conf.json
 src-tauri/linux-licenses
 vcpkg_installed
 .vcpkg

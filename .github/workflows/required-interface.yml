@@ -1,0 +1,17 @@
+name: Required native interface contracts
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: required-interface-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Preserve main's required check identity while its implementation moves to Rust.
+  frontend_regressions:
+    uses: ./.github/workflows/rust-interface-contracts.yml

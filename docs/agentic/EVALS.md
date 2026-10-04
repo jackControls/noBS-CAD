@@ -30,7 +30,7 @@ In-process BM25 unit tests live in `crates/help`. MCP unit coverage for `cad_hel
 ```bash
 cargo test -p nbcad-help
 cargo test --manifest-path mcp-server/Cargo.toml cad_help -- --nocapture
-npm run check:knowledge
+cargo xtask knowledge check
 ```
 
 Optional stdio wire checks against a freshly built `nbcad-mcp` binary

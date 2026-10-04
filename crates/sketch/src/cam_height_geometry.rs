@@ -3,7 +3,7 @@ use crate::dto::{EntityDto, SketchDto};
 use nbcad_cam::{CamHeightGeometryDto, CamSetupDto};
 use nbcad_solid::SolidSceneDto;
 
-pub(crate) fn resolve(
+pub fn resolve(
     reference: &CamHeightGeometryDto,
     setup: &CamSetupDto,
     scene: &SolidSceneDto,

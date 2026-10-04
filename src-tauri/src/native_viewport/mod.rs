@@ -1,14 +1,4 @@
-//! Native viewport bridge.
-//!
-//! Bevy owns viewport rendering and viewport-local visual state. React owns the
-//! application shell, accessible input proxies, and form-heavy command dialogs.
-//! The DOM proxies are transparent when the native surface is active, which
-//! keeps keyboard/screen-reader semantics without letting CSS and native pixels
-//! drift apart. macOS clips WKWebView over a sibling Metal NSView; Windows clips
-//! an opaque DX12/Vulkan HWND around real DOM islands and passes hit tests
-//! through to WebView2. Model synchronization stays entirely in-process: the
-//! OCCT tessellation is cloned from `AppState` instead of being serialized
-//! through JavaScript.
+//! Bevy CAD rendering and native desktop controls over the shared engine.
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod path_progress;
@@ -16,15 +6,37 @@ mod path_progress;
 mod platform;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub(crate) use platform::script_preview;
+pub(crate) use platform::physical_pick;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod interface_shell;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod profile_outline;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub(crate) mod screenshot;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod ui;
+mod preview_color;
+pub(crate) use preview_color::ViewportColorRole;
+pub(crate) mod localization;
+pub(crate) mod system_locale;
+#[cfg(test)]
+pub(crate) use platform::{interface_scene_fixture, interface_geometry_fixture_snapshot};
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub(crate) use platform::{
+    interface_camera_snapshot,
+    interface_geometry,
+    interface_model_revision,
+    apply_interface_model, apply_interface_edit_model, apply_interface_preview, apply_interface_view, interface_body_transform,
+    interface_pick, interface_preview_revision, interface_preview_snapshot, interface_sketch_point,
+    interface_view_snapshot, interface_visible_occurrences, interface_world_point,
+};
+pub(crate) use platform::{apply_interface_cam_stock, interface_cam_stock_snapshot, apply_interface_sketch_lines, apply_interface_viewport, interface_support_pick, apply_interface_palette, interface_navigation_source, retire_interface_model_session};
 #[cfg(all(
     any(target_os = "macos", target_os = "windows", target_os = "linux"),
     feature = "dev-ui-lab"
 ))]
 pub mod ui_lab;
+pub mod winit_host;
 
 use nbcad_core::{BodyAppearance, PlaneBasis};
 use nbcad_sketch::{BodyPoseDto, InstanceBodyPoseDto, SketchDto};
@@ -33,32 +45,6 @@ use nbcad_solid::{
     SolidSceneDto,
 };
 use serde::{Deserialize, Serialize};
-use tauri::{App, AppHandle};
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ViewportRect {
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-    #[serde(default)]
-    pub corner_radius: f64,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ViewportLayout {
-    #[serde(default)]
-    pub revision: u64,
-    pub viewport: ViewportRect,
-    #[serde(default)]
-    pub overlays: Vec<ViewportRect>,
-    #[serde(default)]
-    pub palette: ViewportPalette,
-    #[serde(default)]
-    pub hud: ViewportHud,
-}
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +81,8 @@ pub struct ViewportPalette {
     pub finished_sketch_point: [f32; 3],
     pub finished_sketch_point_outline: [f32; 3],
     pub preview: [f32; 3],
+    #[serde(default = "default_dimension_color")]
+    pub dimension: [f32; 3],
     /// Support-face boundary projected into the active sketch. Read-only
     /// reference geometry, never a pick target.
     pub projected: [f32; 3],
@@ -104,15 +92,15 @@ impl Default for ViewportPalette {
     fn default() -> Self {
         Self {
             background: [42.0 / 255.0, 45.0 / 255.0, 51.0 / 255.0],
-            panel: [34.0 / 255.0, 38.0 / 255.0, 44.0 / 255.0],
-            header: [40.0 / 255.0, 45.0 / 255.0, 52.0 / 255.0],
+            panel: [35.0 / 255.0, 38.0 / 255.0, 43.0 / 255.0],
+            header: [43.0 / 255.0, 46.0 / 255.0, 53.0 / 255.0],
             ui_edge: [58.0 / 255.0, 62.0 / 255.0, 70.0 / 255.0],
-            ink: [231.0 / 255.0, 235.0 / 255.0, 239.0 / 255.0],
-            mute: [154.0 / 255.0, 163.0 / 255.0, 173.0 / 255.0],
-            accent: [124.0 / 255.0, 109.0 / 255.0, 242.0 / 255.0],
+            ink: [215.0 / 255.0, 220.0 / 255.0, 226.0 / 255.0],
+            mute: [154.0 / 255.0, 160.0 / 255.0, 168.0 / 255.0],
+            accent: [116.0 / 255.0, 99.0 / 255.0, 216.0 / 255.0],
             grid_fine: [58.0 / 255.0, 63.0 / 255.0, 71.0 / 255.0],
             grid_major: [77.0 / 255.0, 84.0 / 255.0, 95.0 / 255.0],
-            body: [139.0 / 255.0, 155.0 / 255.0, 172.0 / 255.0],
+            body: [170.0 / 255.0, 190.0 / 255.0, 209.0 / 255.0],
             body_selected: [169.0 / 255.0, 103.0 / 255.0, 37.0 / 255.0],
             body_tool: [181.0 / 255.0, 138.0 / 255.0, 67.0 / 255.0],
             body_selected_edge: [1.0, 208.0 / 255.0, 0.0],
@@ -134,10 +122,13 @@ impl Default for ViewportPalette {
             finished_sketch_point: [134.0 / 255.0, 169.0 / 255.0, 199.0 / 255.0],
             finished_sketch_point_outline: [21.0 / 255.0, 25.0 / 255.0, 31.0 / 255.0],
             preview: [143.0 / 255.0, 196.0 / 255.0, 1.0],
+            dimension: default_dimension_color(),
             projected: [192.0 / 255.0, 140.0 / 255.0, 245.0 / 255.0],
         }
     }
 }
+
+fn default_dimension_color() -> [f32; 3] { [174.0 / 255.0, 203.0 / 255.0, 30.0 / 255.0] }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -159,6 +150,12 @@ pub enum ViewportOriginPlane {
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportPresentation {
+    /// Presentation-only palette choices; hiding a point never deletes it or
+    /// disables snapping. False preserves existing clients' display defaults.
+    #[serde(default)]
+    pub hide_sketch_grid: bool,
+    #[serde(default)]
+    pub hide_sketch_points: bool,
     #[serde(default)]
     pub mode: ViewportMode,
     pub hovered_origin_plane: Option<ViewportOriginPlane>,
@@ -232,7 +229,7 @@ pub struct ViewportPresentation {
     #[serde(default)]
     pub instance_body_poses: Vec<InstanceBodyPoseDto>,
     /// Desktop CAM simulation stock is retained directly by Bevy rather than
-    /// travelling through the webview's transient preview JSON.
+    /// travelling through transient preview JSON.
     #[serde(default)]
     pub cam_stock_visible: bool,
     /// Retained CAM cutter primitive. Playback updates only its pose and
@@ -315,19 +312,10 @@ pub struct ViewportHud {
     #[serde(default)]
     pub dim_opacity: f32,
     pub selection: Option<ViewportHudSelection>,
-    /// CSS-to-native pixel factor of the zoomed webview. Native HUD sizes and
-    /// browser-projected annotation positions are CSS pixels, so Bevy UI
-    /// draws at this scale to stay on top of their DOM hit targets.
-    #[serde(default = "default_ui_scale")]
-    pub ui_scale: f32,
 }
 
 fn default_nav_tool() -> String {
     "select".to_string()
-}
-
-fn default_ui_scale() -> f32 {
-    1.0
 }
 
 impl Default for ViewportHud {
@@ -346,12 +334,11 @@ impl Default for ViewportHud {
             coordinate_readout: None,
             dim_opacity: 0.0,
             selection: None,
-            ui_scale: default_ui_scale(),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportCamera {
     pub position: [f32; 3],
@@ -374,9 +361,12 @@ pub enum ViewportLinePattern {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportLineLayer {
-    /// sRGBA from the DOM theme/presentation material.
+    /// sRGBA from the interface palette.
     #[serde(default)]
     pub color: [f32; 4],
+    /// Native preview roles follow palette changes without a geometry query.
+    #[serde(skip)]
+    pub(crate) color_role: ViewportColorRole,
     /// Requested screen-space width. Bevy maps this to its normal/highlight
     /// gizmo pipelines rather than treating it as a world-space measurement.
     #[serde(default = "default_line_width")]
@@ -423,6 +413,8 @@ pub struct ViewportPointLayer {
     /// sRGBA from the DOM theme/presentation material.
     #[serde(default)]
     pub color: [f32; 4],
+    #[serde(skip)]
+    pub(crate) color_role: ViewportColorRole,
     /// Approximate world-space marker radius derived from the current camera.
     #[serde(default)]
     pub radius: f32,
@@ -505,10 +497,7 @@ pub enum ViewportConstraintIcon {
     Fix,
     Midpoint,
     Concentric,
-    /// A point glued to an arc's implicit start/end. Every variant here must
-    /// stay in step with `ConstraintIconKind` in
-    /// `src/sketch/constraintIcons.tsx`: an unknown variant makes serde reject
-    /// the whole transient preview, which freezes the cursor HUD on screen.
+    /// A point glued to an arc's implicit start/end.
     ArcEndpoint,
     Collinear,
     Symmetry,
@@ -541,9 +530,8 @@ pub enum ViewportToolIcon {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportAnnotation {
-    /// Viewport-local logical pixels. React already owns the exact projection
-    /// used for picking, so annotations stay aligned with its interaction
-    /// scene during orbit, resize, and DPI changes.
+    /// Viewport-local logical pixels, using the camera projection shared with
+    /// picking during orbit, resize, and DPI changes.
     #[serde(default)]
     pub screen: [f32; 2],
     #[serde(default)]
@@ -620,6 +608,10 @@ pub enum NativePickPurpose {
     #[default]
     Geometry,
     JointConnector,
+    RefinableEdge,
+    Edge,
+    StraightEdge,
+    Vertex,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -638,26 +630,6 @@ pub struct NativePick {
     pub connector_radius: Option<f32>,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NativeViewportMetrics {
-    pub available: bool,
-    pub ready: bool,
-    pub startup_error: Option<String>,
-    pub backend: String,
-    pub logical_width: f64,
-    pub logical_height: f64,
-    pub scale_factor: f64,
-    pub physical_width: u32,
-    pub physical_height: u32,
-    pub rendered_frames: u64,
-    pub wakeups: u64,
-    pub average_frame_ms: f64,
-    pub last_pointer_latency_ms: f64,
-    pub body_count: usize,
-    pub triangle_count: usize,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct ViewportModel {
     pub session_id: String,
@@ -672,183 +644,26 @@ pub(crate) struct ViewportModel {
     pub instance_body_poses: Vec<InstanceBodyPoseDto>,
 }
 
+/// Borrowed rendered geometry for framing; this also includes isolated feature
+/// edit inputs, and never copies the meshes to move a camera.
+pub(crate) struct ViewportGeometry<'a> {
+    pub scene: &'a SolidSceneDto,
+    pub active_sketch: Option<&'a SketchDto>,
+    pub finished_sketches: &'a [SketchDto],
+    pub instance_body_poses: &'a [InstanceBodyPoseDto],
+}
+impl<'a> From<&'a ViewportModel> for ViewportGeometry<'a> {
+    fn from(model: &'a ViewportModel) -> Self {
+        Self { scene:&model.scene, active_sketch:model.active_sketch.as_ref(), finished_sketches:&model.finished_sketches, instance_body_poses:&model.instance_body_poses }
+    }
+}
+
 /// Remaining-stock surface already transformed into model/world coordinates.
 /// This is an internal Rust-to-Bevy channel: it deliberately has no serde
-/// contract because the webview must never relay these large buffers.
+/// contract because these large buffers stay within the native renderer.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ViewportCamStock {
     pub positions: std::sync::Arc<Vec<f32>>,
     pub normals: std::sync::Arc<Vec<f32>>,
 }
 
-pub struct NativeViewport {
-    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-    inner: platform::PlatformNativeViewport,
-}
-
-impl NativeViewport {
-    pub fn install(app: &mut App) -> Result<Self, String> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        {
-            platform::PlatformNativeViewport::install(app).map(|inner| Self { inner })
-        }
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        {
-            let _ = app;
-            Ok(Self {})
-        }
-    }
-
-    pub fn set_layout(&self, app: &AppHandle, layout: ViewportLayout) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        {
-            self.inner.set_layout(app, layout)
-        }
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        {
-            let _ = (app, layout);
-            Err("the embedded native viewport is unavailable on this platform".to_string())
-        }
-    }
-
-    pub fn set_suspended(&self, app: &AppHandle, suspended: bool) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        {
-            self.inner.set_suspended(app, suspended)
-        }
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        {
-            let _ = (app, suspended);
-            Err("the embedded native viewport is unavailable on this platform".to_string())
-        }
-    }
-
-    pub(crate) fn sync_model(&self, model: ViewportModel) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        {
-            self.inner.sync_model(model)
-        }
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        {
-            let _ = model;
-            Err("the embedded native viewport is unavailable on this platform".to_string())
-        }
-    }
-
-    pub(crate) fn drop_model_session(&self, session_id: String) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        {
-            self.inner.drop_model_session(session_id)
-        }
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        {
-            let _ = session_id;
-            Err("the embedded native viewport is unavailable on this platform".to_string())
-        }
-    }
-
-    pub(crate) fn rebind_model_session(&self, from: String, to: String) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        {
-            self.inner.rebind_model_session(from, to)
-        }
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        {
-            let _ = (from, to);
-            Err("the embedded native viewport is unavailable on this platform".to_string())
-        }
-    }
-
-    pub fn set_camera(&self, camera: ViewportCamera) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        {
-            self.inner.set_camera(camera)
-        }
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        {
-            let _ = camera;
-            Err("the embedded native viewport is unavailable on this platform".to_string())
-        }
-    }
-
-    pub fn set_preview(&self, preview: ViewportPreview) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        {
-            self.inner.set_preview(preview)
-        }
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        {
-            let _ = preview;
-            Err("the embedded native viewport is unavailable on this platform".to_string())
-        }
-    }
-
-    pub(crate) fn set_cam_stock(&self, stock: Option<ViewportCamStock>) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        {
-            self.inner.set_cam_stock(stock)
-        }
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        {
-            let _ = stock;
-            Err("the embedded native viewport is unavailable on this platform".to_string())
-        }
-    }
-
-    pub fn set_presentation(&self, presentation: ViewportPresentation) -> Result<(), String> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        {
-            self.inner.set_presentation(presentation)
-        }
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        {
-            let _ = presentation;
-            Err("the embedded native viewport is unavailable on this platform".to_string())
-        }
-    }
-
-    pub fn pick(
-        &self,
-        x: f32,
-        y: f32,
-        camera: Option<ViewportCamera>,
-        logical_size: Option<(f32, f32)>,
-        purpose: NativePickPurpose,
-    ) -> Result<Option<NativePick>, String> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        {
-            self.inner.pick(x, y, camera, logical_size, purpose)
-        }
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        {
-            let _ = (x, y, camera, logical_size, purpose);
-            Err("the embedded native viewport is unavailable on this platform".to_string())
-        }
-    }
-
-    pub fn metrics(&self) -> NativeViewportMetrics {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        {
-            self.inner.metrics()
-        }
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        {
-            NativeViewportMetrics {
-                backend: "unavailable".to_string(),
-                ..Default::default()
-            }
-        }
-    }
-}

@@ -831,6 +831,10 @@ pub enum DrawingAnnotationDto {
         diameter: f64,
         #[serde(default)]
         depth: Option<f64>,
+        /// Explicit authored extent. Legacy notes may carry exact "THRU" in
+        /// note; a missing depth or a source feature ID alone proves nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        through_all: Option<bool>,
         #[serde(default)]
         thread: String,
         #[serde(default)]
@@ -1480,6 +1484,7 @@ impl DrawingDocumentDto {
                         quantity,
                         diameter,
                         depth,
+                        through_all,
                         thread,
                         note,
                         counterbore_diameter,
@@ -1499,6 +1504,7 @@ impl DrawingDocumentDto {
                             || !diameter.is_finite()
                             || *diameter <= 0.0
                             || depth.is_some_and(|value| !value.is_finite() || value <= 0.0)
+                            || (*through_all == Some(true) && depth.is_some())
                             || counterbore_diameter
                                 .is_some_and(|value| !value.is_finite() || value <= *diameter)
                             || counterbore_depth

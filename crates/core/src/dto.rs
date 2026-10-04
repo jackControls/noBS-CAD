@@ -7,7 +7,7 @@ use crate::Document;
 
 /// Serializable snapshot of a [`Document`] for IPC with the frontend.
 ///
-/// This is the wire contract of the `get_document` Tauri command; the
+/// This is the shared `get_document` engine contract; the
 /// frontend TypeScript types in `src/types/document.ts` mirror it 1:1.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocumentDto {

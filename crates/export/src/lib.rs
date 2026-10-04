@@ -9,6 +9,7 @@ mod instances;
 mod materials;
 mod mesh_weld;
 mod pip_demo;
+pub mod profile_dxf;
 mod slicer;
 mod stl;
 mod threemf;

@@ -10,9 +10,11 @@ repository = "https://github.com/jackControls/Limo-CAD"
 [workspace]
 
 [dependencies]
-base64 = "0.22"
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["float_roundtrip"] }
+nbcad-build-info = { path = "../crates/build-info" }
+nbcad-interface = { path = "../crates/interface" }
+base64 = "0.23.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 nbcad-script = { path = "../crates/script" }
 nbcad-recipes = { path = "../crates/recipes" }
 nbcad-help = { path = "../crates/help" }
@@ -25,14 +27,14 @@ nbcad-mcp-mutate = { path = "../crates/mcp-mutate" }
 nbcad-print = { path = "../crates/print" }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc = "0.2.189"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Threading"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Threading"] }
 
 [target.'cfg(windows)'.dev-dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Pipes"] }
+windows-sys = { version = "0.61.2", features = ["Win32_System_Pipes"] }
 
 [dev-dependencies]
-jsonschema = { version = "0.56", default-features = false }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+jsonschema = { version = "0.58.4", default-features = false }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

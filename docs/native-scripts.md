@@ -53,6 +53,59 @@ steps and checks combined, and 2 MiB of source. Use **Run in new design** for a
 larger assembly. Both paths execute the same native command interpreter; a preview is
 not a replacement for the editable `.nbcad` project or the final validation gate.
 
+## Bevy development host
+
+The `dev-bevy-host` Scripts card keeps its four short built-in lesson buttons.
+They run only in the current blank document and do not select flagship recipes.
+The separate **Open script...** chooser and **Path / Load script** controls accept
+an absolute `.nbcad.jsonc` file through the same Rust parser and include loader.
+Loading displays the source name, step/check counts and loaded path; it does not
+run commands or change the active design.
+
+**Run in new design** creates a new retained document tab before starting the
+shared live runner. The previous design stays available in its tab. Execution
+uses the inspected, expanded source snapshot, including its loaded includes;
+loading or validating again is required to pick up later included-file edits. Pause, Step,
+Resume, Stop and rate controls use the existing native playback bar. Saving the
+result writes the ordinary editable `.nbcad` project.
+
+**Inspect / edit source** opens the authored JSONC in the existing native
+multiline text field. Comments and `includes` remain intact. **Validate source**
+uses the shared parser and resolves includes beside the displayed source path;
+errors remain visible and Run stays unavailable until the current draft is
+valid. Validation does not save edits. **Save script as...** explicitly writes
+the authored text, including unfinished invalid drafts, through the existing
+atomic file writer. It never substitutes expanded source or copies included
+files. After saving to a new directory, Validate resolves includes there and
+reports missing fragments. Opening another source requires saving or explicitly
+discarding unsaved edits first. Closing the Scripts card retains its draft.
+Application exit waits for script file operations and requires Save As or
+Discard for an unsaved draft, including text still being edited in the field.
+
+**Browse examples** lists the installed catalog, including complete designs,
+feature and assembly lessons, and manufacturing coupons. Selecting an example
+opens its authored source without running it. Bundled source has no filesystem
+path until Save As. The four quick lesson buttons remain separate and still
+require a blank document.
+
+Recipe command-line URLs and `cad_interface` action `open_recipe` enter that
+same source-only queue. Busy file/script work finishes first; unsaved source
+requires Save As, Discard, or Cancel opening. A queued receipt acknowledges
+delivery, not playback or replacement of the design. Native OS protocol
+registration and platform URL delivery still require acceptance testing before
+the release shell changes.
+
+For the catalog's preview-enabled lesson, **Preview lesson** renders the shared
+isolated teaching frames without accessing the current CAD document. Previous,
+Next, explicit Replay/Stop, Fit, drag and arrow/Home keys use the preview camera.
+It does not autoplay. Editing the bundled source disables its preview; use Run
+in new design to inspect those edits. Closing the preview releases its retained
+document, view and image. DPI-scaled requests use the shared bounded renderer.
+
+Native source editing, file dialogs, IME and preview pixels still
+require live acceptance checks; this workflow does not establish full Scripts
+parity. React remains the release shell while those checks remain incomplete.
+
 ## One execution path
 
 The Rust `nbcad-script` crate resolves references and sequences the existing grouped

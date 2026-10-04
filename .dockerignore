@@ -3,6 +3,10 @@ node_modules
 dist
 target
 src-tauri/target
+**/target
+**/AGENTS.md
+**/CLAUDE.md
+**/CODEX.md
 vcpkg_installed
 release
 *.app

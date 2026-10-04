@@ -16,11 +16,15 @@ use crate::planner::{
     RAPID_FEED_ESTIMATE_MM_PER_MIN,
 };
 use crate::simulation::{
-    simulate_program, CamSimulationRequestDto, CamSimulationResultDto, CamSimulationSourceDto,
-    CamSimulationTargetDto, CamStockMeshDto,
+    CamSimulationCancellation, CamSimulationRequestDto, CamSimulationResultDto,
+    CamSimulationSourceDto, CamSimulationTargetDto, CamStockMeshDto,
 };
 
-const MAX_GCODE_BYTES: usize = 8 * 1024 * 1024;
+mod native;
+pub use native::simulate_gcode_with_cancellation;
+
+/// Shared bound for NC source input, including native file reads.
+pub const MAX_GCODE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_GCODE_LINES: usize = 500_000;
 const MAX_GCODE_COMMANDS: usize = 300_000;
 const EPSILON: f64 = 1.0e-9;
@@ -60,32 +64,7 @@ pub fn simulate_gcode(
     document: &CamDocumentDto,
     request: &CamGcodeSimulationRequestDto,
 ) -> Result<CamSimulationResultDto, CamPlanError> {
-    document.validate().map_err(CamPlanError)?;
-    let setup = document.setup(request.setup_id).ok_or_else(|| {
-        CamPlanError(format!(
-            "CAM setup {} does not exist for G-code simulation",
-            request.setup_id
-        ))
-    })?;
-    let parsed = parse_gcode(document, setup, request)?;
-    let simulation_request = CamSimulationRequestDto {
-        setup_id: request.setup_id,
-        voxel_size: request.voxel_size,
-        max_voxels: request.max_voxels,
-        stock_mesh: request.stock_mesh.clone(),
-        target: request.target.clone(),
-        through_operation_id: None,
-        completed_steps: request.completed_steps,
-        playback_time_seconds: None,
-    };
-    simulate_program(
-        document,
-        setup,
-        &parsed.program,
-        &simulation_request,
-        CamSimulationSourceDto::GCode,
-        &parsed.source_lines,
-    )
+    simulate_gcode_with_cancellation(document, request, None)
 }
 
 struct ParsedGcode {
@@ -146,11 +125,24 @@ struct Interpreter<'a> {
     siemens_normal_approach: bool,
 }
 
+#[cfg(test)]
 fn parse_gcode(
     document: &CamDocumentDto,
     setup: &CamSetupDto,
     request: &CamGcodeSimulationRequestDto,
 ) -> Result<ParsedGcode, CamPlanError> {
+    parse_gcode_with_cancellation(document, setup, request, None)
+}
+
+fn parse_gcode_with_cancellation(
+    document: &CamDocumentDto,
+    setup: &CamSetupDto,
+    request: &CamGcodeSimulationRequestDto,
+    cancellation: Option<&CamSimulationCancellation>,
+) -> Result<ParsedGcode, CamPlanError> {
+    if let Some(cancellation) = cancellation {
+        cancellation.check()?;
+    }
     if request.source.len() > MAX_GCODE_BYTES {
         return Err(CamPlanError(format!(
             "G-code source exceeds the {MAX_GCODE_BYTES}-byte safety limit"
@@ -216,6 +208,9 @@ fn parse_gcode(
 
     let mut comment_depth = 0usize;
     for (index, raw) in request.source.lines().enumerate() {
+        if let Some(cancellation) = cancellation {
+            cancellation.check()?;
+        }
         let physical_line = u32::try_from(index + 1).unwrap_or(u32::MAX);
         if comment_depth == 0
             && interpreter.interpret_siemens_cycle_control(physical_line, raw.trim())?
@@ -232,7 +227,14 @@ fn parse_gcode(
             "G-code source ends inside a parenthesized comment".to_string(),
         ));
     }
-    interpreter.finish(program_name)
+    if let Some(cancellation) = cancellation {
+        cancellation.check()?;
+    }
+    let parsed = interpreter.finish(program_name)?;
+    if let Some(cancellation) = cancellation {
+        cancellation.check()?;
+    }
+    Ok(parsed)
 }
 
 fn resolve_dialect(request: &CamGcodeSimulationRequestDto) -> CamGcodeDialectDto {

@@ -1,0 +1,26 @@
+name: Rust interface contracts
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  interface-contracts:
+    name: Frontend regression tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+        with:
+          target: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: interface-contracts
+      - name: Check shared control identity, focus and ownership
+        run: cargo test --locked -p nbcad-interface
+      - name: Compile the browser engine boundary
+        run: cargo check --locked -p nbcad-wasm --target wasm32-unknown-unknown

@@ -15,23 +15,27 @@
 Konstruiere mechanische Bauteile, Baugruppen und Zeichnungen auf deinem eigenen Rechner, von
 Hand oder mit deinem KI-Agenten, und behalte jede Skizze und jedes Feature editierbar.
 
-[![Neueste Version](https://img.shields.io/github/v/release/jackControls/Limo-CAD?label=release)](https://github.com/jackControls/Limo-CAD/releases/latest)
+[![Bevy-Vorschau](https://img.shields.io/badge/Bevy-0.20.0--rc.2-blue)](https://github.com/jackControls/Limo-CAD/releases/tag/bevy-preview-0.2.2-20261002.3)
 [![Lizenz: LGPL 2.1+](https://img.shields.io/badge/license-LGPL%202.1%2B-blue)](LICENSE)
 [![Discussions](https://img.shields.io/github/discussions/jackControls/Limo-CAD?label=discussions)](https://github.com/jackControls/Limo-CAD/discussions)
 
-**Pre-Alpha · Version 0.2.2**
-· [Versionshinweise und Prüfungen](https://github.com/jackControls/Limo-CAD/releases/tag/v0.2.2)
+**Pre-Alpha · Bevy-rc.2-Vorschau · Anwendungsversion 0.2.2**
+· [Vorschauhinweise, Quellstand und Prüfungen](https://github.com/jackControls/Limo-CAD/releases/tag/bevy-preview-0.2.2-20261002.3)
 · [Installationshilfe (englisch)](docs/INSTALL.md)
 
 | Plattform | Download |
 |---|---|
-| Windows 11 | [x64-ZIP](https://github.com/jackControls/Limo-CAD/releases/download/v0.2.2/noBS-CAD-0.2.2-windows-x64.zip) · [ARM64-ZIP](https://github.com/jackControls/Limo-CAD/releases/download/v0.2.2/noBS-CAD-0.2.2-windows-arm64.zip) |
-| macOS (Apple Silicon) | [DMG](https://github.com/jackControls/Limo-CAD/releases/download/v0.2.2/noBS.CAD_0.2.2_aarch64.dmg), signiert und notarisiert |
-| Linux | [DEB für Ubuntu 26.04](https://github.com/jackControls/Limo-CAD/releases/download/v0.2.2/noBS.CAD_0.2.2_amd64.deb) · [AppImage](https://github.com/jackControls/Limo-CAD/releases/download/v0.2.2/noBS.CAD_0.2.2_amd64.AppImage) |
+| Windows 11 | [x64-ZIP](https://github.com/jackControls/Limo-CAD/releases/download/bevy-preview-0.2.2-20261002.3/noBS-CAD-0.2.2-windows-x64.zip) |
+| Linux | [DEB für Ubuntu 26.04 x64](https://github.com/jackControls/Limo-CAD/releases/download/bevy-preview-0.2.2-20261002.3/noBS.CAD_0.2.2_amd64.deb) |
 
-Die Code-Signierung für Windows ist in Arbeit. Bis dahin zeigt SmartScreen beim
-ersten Start möglicherweise eine Warnung; wähle **Weitere Informationen → Trotzdem ausführen**.
-Sichere wichtige Projekte, solange die Anwendung in der Pre-Alpha-Phase ist.
+Diese Pakete stammen vom Quellstand `82cd981e`; spätere Integrationskorrekturen
+sind noch nicht enthalten. Windows ARM64, macOS und AppImage sind bis zur
+Qualifikation zurückgehalten. Die Bevy-Browseroberfläche ist noch in Entwicklung.
+Veröffentlichte Dateinamen behalten den früheren Produktnamen. Siehe
+[Umstellungsstatus (englisch)](docs/native-transition-status.md).
+
+Die Windows-Pakete sind nicht signiert. SmartScreen kann beim ersten Start warnen;
+wähle **Weitere Informationen → Trotzdem ausführen**. Sichere wichtige Pre-Alpha-Projekte.
 
 > **Hinweis zur Sprache:** Diese Seite ist auf Deutsch. Die verlinkten Dokumente, Beispiele und
 > Wissensressourcen gibt es derzeit nur auf Englisch; sie sind mit „(englisch)“ gekennzeichnet
@@ -180,10 +184,8 @@ Festigkeitsanalyse bleibt eine zukünftige Fähigkeit.
 ## Open-Source-Grundlagen
 
 - **[Open CASCADE Technology](https://github.com/Open-Cascade-SAS/OCCT)** — Geometrie und CAD-Austausch.
-- **[Bevy](https://bevy.org/) und [wgpu](https://wgpu.rs/)** — natives Rendering.
+- **[Bevy](https://bevy.org/) und [wgpu](https://wgpu.rs/)** — native Oberfläche und Rendering.
 - **[Rust](https://rust-lang.org/)** — Modellierung, Baugruppen und Rezeptausführung.
-- **[Tauri](https://tauri.app/) und [React](https://react.dev/)** — Desktop-Hülle und Oberfläche.
-- **[OpenCascade.js](https://github.com/donalffons/opencascade.js)** — Entwicklungs-Builds für den Browser.
 
 Dank auch an [FreeCAD](https://www.freecad.org/) und die gesamte Open-Source-CAD-Gemeinschaft.
 
@@ -198,8 +200,7 @@ Lizenzen und Quellenangaben der Abhängigkeiten stehen in den [Hinweisen zu Drit
 Die Quellen der Symbole sind in der [Herkunft der Symbole](docs/ICON_PROVENANCE.md) dokumentiert.
 Andere CAD-Projekte haben eigene Lizenzen; siehe die [Hinweise zum Mitwirken](CONTRIBUTING.md#license--borrow).
 
-Limo CAD unterstützt 3Dconnexion-SpaceMouse-Geräte. Die optionale Treiberbrücke für die
-Browser-Entwicklung wird erst geladen, nachdem der Nutzer sie aktiviert hat.
+Der Bevy-Desktop unterstützt 3Dconnexion-SpaceMouse-Geräte über native HID-Eingabe.
 Limo CAD ist unabhängig und steht in keiner Verbindung zu 3Dconnexion; es wird von
 3Dconnexion weder empfohlen noch zertifiziert.
 3Dconnexion und SpaceMouse sind Marken oder eingetragene Marken von 3Dconnexion.

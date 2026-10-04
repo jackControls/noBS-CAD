@@ -3,7 +3,7 @@ name = "nbcad"
 default-run = "nbcad"
 version = "0.2.2"
 edition = "2021"
-description = "noBS CAD desktop shell (Tauri 2)"
+description = "noBS CAD native Bevy desktop"
 license = "LGPL-2.1-or-later"
 repository = "https://github.com/jackControls/Limo-CAD"
 
@@ -13,17 +13,13 @@ repository = "https://github.com/jackControls/Limo-CAD"
 
 [lib]
 name = "nbcad_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [features]
 default = []
-# Tauri's CLI enables this feature for release builds so the web shell is
-# loaded from the assets embedded by `tauri-build` instead of the Vite dev URL.
-custom-protocol = ["tauri/custom-protocol"]
-# Adds logging only for the headless GPU visual-regression lab. The production
-# Tauri binary keeps using the embedded native view and does not include the
-# capture entry point.
+# Optional lab and bounded native IME diagnostics; the product host is always Bevy.
 dev-ui-lab = ["bevy/bevy_log"]
+dev-native-ime-trace = ["bevy/bevy_log"]
 
 [[bin]]
 name = "bevy-ui-lab"
@@ -31,28 +27,47 @@ path = "src/bin/bevy_ui_lab.rs"
 required-features = ["dev-ui-lab"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+winresource = "=0.1.31"
 
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-dialog = "2"
-tauri-plugin-deep-link = "2"
-tokio = { version = "1", features = ["time"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["float_roundtrip"] }
-sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
-uuid = { version = "1", features = ["v4"] }
+nbcad-build-info = { path = "../crates/build-info" }
+time = { version = "=0.3.55", features = ["formatting"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+dirs = "7.0.0"
+# Native inactive-tab retention needs the portable physical-memory probe.
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+base64 = "0.23.1"
+# Render shared vector glyphs; native printing also resolves shared drawing text.
+# External image loading remains disabled in the print SVG parser.
+# svg2pdf 0.13 consumes this usvg tree directly; upgrade the SVG/PDF family together.
+resvg = { version = "=0.45.1", default-features = false, features = ["text", "system-fonts"] }
+uuid = { version = "1.26.1", features = ["v4"] }
 nbcad-core = { path = "../crates/core" }
+nbcad-interface = { path = "../crates/interface" }
+nbcad-project-file = { path = "../crates/project-file" }
 nbcad-cam = { path = "../crates/cam" }
 nbcad-sketch = { path = "../crates/sketch" }
 nbcad-solid = { path = "../crates/solid" }
 nbcad-export = { path = "../crates/export" }
 nbcad-occt = { path = "../crates/occt", features = ["native-occt"] }
+nbcad-native-engine = { path = "../crates/native-engine", features = ["native-occt"] }
 nbcad-mcp-mutate = { path = "../crates/mcp-mutate" }
 nbcad-mcp = { path = "../mcp-server" }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
-bevy = { version = "0.19.0", default-features = false, features = [
+bevy = { version = "=0.20.0-rc.2", default-features = false, features = [
+  "bevy_winit",
+  "bevy_input_focus",
+  # Shared text-input guards and candidate probes need widgets, not Feathers.
+  "bevy_ui_widgets",
+  "ui_picking",
+  "custom_cursor",
+  "system_clipboard",
+  "complex_script_segmentation",
+  "x11",
+  "wayland",
+  "accesskit_unix",
   "async_executor",
   "bevy_asset",
   "bevy_camera",
@@ -79,44 +94,37 @@ bevy = { version = "0.19.0", default-features = false, features = [
   "tonemapping_luts",
   "zstd_rust",
 ] }
-bevy_ecs = "0.19.0"
-bevy_gizmos = "0.19.0"
-bevy_reflect = "0.19.0"
-raw-window-handle = "0.6"
+# Bevy's derives expand to these crate paths even when their types come from
+# bevy::prelude; keep the direct dependencies required by generated code.
+bevy_ecs = "=0.20.0-rc.2"
+bevy_gizmos = "=0.20.0-rc.2"
+bevy_reflect = "=0.20.0-rc.2"
+raw-window-handle = "0.6.2"
+# These nodes/actions cross Bevy's AccessKit 0.24 boundary.
+accesskit = { version = "=0.24.1" }
+# Prepared drawing pages become PDF bytes on every desktop. Windows uses that
+# file when no printer is installed; Linux and macOS already spool the same bytes.
+svg2pdf = { version = "=0.13.0", default-features = false, features = ["text"] }
+winit = { version = "=0.30.13", default-features = false }
+# RFD 0.17 drives portal requests itself; xdg-portal enables its pollster bridge.
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal", "wayland"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# GTK/WebKitGTK remain the React/Tauri shell. An X11 child DrawingArea beneath
-# the transparent webview is the native wgpu surface, matching the opaque-window
-# architecture used on macOS and Windows without a second top-level window.
-# Ubuntu's Wayland desktop reaches this child-window path through XWayland.
-gdk = "0.18.2"
-gdkx11-sys = "0.18.2"
-glib = "0.18.5"
-gtk = "0.18.2"
-webkit2gtk = "2.0.2"
-hidapi = { version = "2.6", default-features = false, features = ["linux-static-hidraw"] }
+# Only the Linux print portal creates a Tokio runtime.
+tokio = { version = "1.53.1", features = ["time", "rt"] }
+ashpd = { version = "=0.13.13", default-features = false, features = ["tokio", "print", "raw_handle", "wayland"] }
+hidapi = { version = "2.6.7", default-features = false, features = ["linux-static-hidraw"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-hidapi = { version = "2.6", default-features = false, features = ["macos-shared-device"] }
-objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSView", "NSWindow", "NSGraphics", "objc2-quartz-core"] }
-objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGGeometry", "CGPath"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry"] }
-objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "CAShapeLayer", "objc2-core-foundation", "objc2-core-graphics"] }
+objc2-pdf-kit = { version = "=0.3.2", default-features = false, features = ["std", "PDFDocument", "objc2-app-kit"] }
+hidapi = { version = "2.6.7", default-features = false, features = ["macos-shared-device"] }
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSResponder", "NSView", "NSWindow", "NSGraphics", "NSApplication", "NSPrintOperation", "NSPrintInfo", "NSPrinter", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSAppleEventManager", "NSAppleEventDescriptor", "objc2-core-services", "NSString", "NSGeometry", "NSData"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-hidapi = { version = "2.6", default-features = false, features = ["windows-native"] }
+hidapi = { version = "2.6.7", default-features = false, features = ["windows-native"] }
 # Keep gpu-allocator and wgpu-hal on the same Direct3D COM types. Version 0.62.0
 # is the exact intersection of gpu-allocator's `<=0.62` cap and wgpu-hal's
 # `^0.62` requirement; allowing a newer patch release makes Cargo split them.
-windows = { version = "=0.62.0", default-features = false }
-webview2-com = "0.38.2"
-windows-core-webview2 = { package = "windows-core", version = "0.61" }
-windows-sys = { version = "0.61", features = [
-  "Win32_Foundation",
-  "Win32_Graphics_Gdi",
-  "Win32_System_LibraryLoader",
-  "Win32_UI_HiDpi",
-  "Win32_UI_Input_KeyboardAndMouse",
-  "Win32_UI_WindowsAndMessaging",
-] }
+windows = { version = "=0.62.0", default-features = false, features = ["Win32_System_Registry", "Win32_Security", "Win32_UI_Controls_Dialogs", "Win32_Graphics_Gdi", "Win32_Graphics_Printing", "Win32_Storage_Xps", "Win32_System_Memory", "Win32_System_Com", "Win32_System_Threading", "Win32_UI_Input_Ime", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_TextServices", "Win32_UI_WindowsAndMessaging"] }

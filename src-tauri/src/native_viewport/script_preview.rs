@@ -3,27 +3,40 @@
 //! AppState, publisher, native child view, or access to the live camera/picker.
 use super::super::DEFAULT_VERTICAL_FOV_DEGREES;
 use super::*;
-use bevy::{
-    image::ImageFormat,
-    render::{
-        pipelined_rendering::PipelinedRenderingPlugin,
-        render_resource::{
-            CachedPipelineState, Extent3d, PipelineCache, PollType, TextureDimension,
-            TextureFormat, TextureUsages,
-        },
-        renderer::RenderDevice,
-        view::screenshot::{Screenshot, ScreenshotCaptured},
-        RenderApp,
+use bevy::render::{
+    pipelined_rendering::PipelinedRenderingPlugin,
+    render_resource::{
+        CachedPipelineState, Extent3d, PipelineCache, PollType, TextureDimension, TextureFormat,
+        TextureUsages,
     },
+    renderer::RenderDevice,
+    view::screenshot::{Screenshot, ScreenshotCaptured},
+    RenderApp,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::VecDeque, io::Cursor, sync::mpsc, time::Duration};
+use bevy::window::{ExitCondition, WindowPlugin};
+use std::{
+    collections::VecDeque,
+    panic::AssertUnwindSafe,
+    sync::{mpsc, atomic::{AtomicBool, AtomicUsize, Ordering}},
+    time::{Duration, Instant},
+};
 
 const MAX_CACHE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DOCUMENTS: usize = 8;
 const MAX_VIEWS: usize = 8;
 const REQUEST_LIFETIME: Duration = Duration::from_secs(20);
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown renderer panic".to_owned()
+    }
+}
 
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Frame {
@@ -447,6 +460,10 @@ impl PreviewRenderer {
         // This worker already runs off the UI thread. Keep its render world
         // local so readiness can be observed before reading back an image.
         let plugins = plugins.disable::<PipelinedRenderingPlugin>();
+        // The native desktop enables Winit for the live window, but this renderer
+        // owns only an image on its worker thread. It must never create an OS
+        // event loop, either beside that live loop or in a GPU test thread.
+        let plugins = plugins.disable::<bevy::winit::WinitPlugin>();
         app.add_plugins(plugins);
         install_cad_scene(&mut app);
         app.init_resource::<CapturedImage>();
@@ -598,34 +615,23 @@ impl PreviewRenderer {
                     if result.revision != revision {
                         return;
                     }
-                    result.result = Some((|| {
-                        let image = capture
-                            .image
-                            .clone()
-                            .try_into_dynamic()
-                            .map_err(|error| error.to_string())?;
-                        let mut png = Cursor::new(Vec::new());
-                        image
-                            .write_to(&mut png, ImageFormat::Png.as_image_crate_format().unwrap())
-                            .map_err(|error| error.to_string())?;
-                        Ok(png.into_inner())
-                    })());
+                    result.result = Some(crate::native_viewport::screenshot::png_bytes(&capture.image));
                 },
             );
-        for _ in 0..12 {
+        let mut captured = None;
+        crate::native_viewport::screenshot::until_captured(|| {
             self.update(cancelled, deadline)?;
-            if let Some(result) = self
+            captured = self
                 .app
                 .world_mut()
                 .resource_mut::<CapturedImage>()
                 .result
-                .take()
-            {
-                check_request(cancelled, deadline)?;
-                return result;
-            }
-        }
-        Err("Feature preview capture did not complete".into())
+                .take();
+            Ok(captured.is_some())
+        })
+        .map_err(|_| "Feature preview capture did not complete".to_owned())?;
+        check_request(cancelled, deadline)?;
+        captured.ok_or_else(|| "Feature preview capture did not complete".to_owned())?
     }
 }
 

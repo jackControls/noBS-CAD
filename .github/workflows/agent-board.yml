@@ -1,0 +1,28 @@
+name: Agent board
+on:
+  pull_request:
+    paths:
+      - 'crates/agent-board/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/agent-board.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: agent-board-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  agent-board:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-rust
+      - run: cargo fmt -p nbcad-agent-board --check
+      - run: cargo test --locked -p nbcad-agent-board
+      - run: cargo clippy --locked -p nbcad-agent-board --all-targets -- -D warnings

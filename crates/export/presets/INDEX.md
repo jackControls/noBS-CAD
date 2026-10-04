@@ -5,7 +5,7 @@
 | File | Role |
 |------|------|
 | [Manufacturing objectives](../../../docs/manufacturing/OKRs.md) | Material catalog contract |
-| `catalog.json` | Brand filament presets; source for `src/materials/catalog.json` |
+| `catalog.json` | Brand filament presets embedded by the shared Rust engine |
 
 After editing the catalog, sync the UI mirror explicitly:
 

@@ -186,6 +186,39 @@ pub struct CamSimulationStepDto {
     pub gouged_voxels: usize,
 }
 
+impl CamSimulationStepDto {
+    /// Physical cutter position along the simulator's compensated motion.
+    /// Native playback uses the same arc interpolation as material removal.
+    pub fn point_at_fraction(&self, fraction: f64) -> Result<Option<Point3Dto>, CamPlanError> {
+        if !fraction.is_finite() {
+            return Err(CamPlanError("Invalid playback fraction".into()));
+        }
+        let (Some(from), Some(to)) = (self.from.or(self.to), self.to.or(self.from)) else {
+            return Ok(None);
+        };
+        let fraction = fraction.clamp(0., 1.);
+        if fraction == 0. {
+            return Ok(Some(from));
+        }
+        if fraction == 1. {
+            return Ok(Some(to));
+        }
+        if self.kind == CamSimulationStepKind::Circular {
+            let arc = ArcSweep::new(
+                from,
+                self.center
+                    .ok_or_else(|| CamPlanError("CAM playback arc has no center".into()))?,
+                to,
+                self.clockwise.unwrap_or(false),
+                self.plane.unwrap_or(CamArcPlane::Xy),
+            )?;
+            Ok(Some(arc.point(fraction)))
+        } else {
+            Ok(Some(lerp(from, to, fraction)))
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CamSimulationCollisionKindDto {
@@ -288,7 +321,7 @@ impl CamSimulationCancellation {
         self.cancelled.load(Ordering::Acquire)
     }
 
-    fn check(&self) -> Result<(), CamPlanError> {
+    pub(crate) fn check(&self) -> Result<(), CamPlanError> {
         if self.is_cancelled() {
             Err(CamPlanError(
                 "CAM simulation superseded by a newer request".to_string(),
@@ -417,26 +450,7 @@ fn truncate_program_through(
     Ok(())
 }
 
-pub(crate) fn simulate_program(
-    document: &CamDocumentDto,
-    setup: &CamSetupDto,
-    program: &CamProgramDto,
-    request: &CamSimulationRequestDto,
-    source: CamSimulationSourceDto,
-    source_lines: &[Option<u32>],
-) -> Result<CamSimulationResultDto, CamPlanError> {
-    simulate_program_with_cancellation(
-        document,
-        setup,
-        program,
-        request,
-        source,
-        source_lines,
-        None,
-    )
-}
-
-fn simulate_program_with_cancellation(
+pub(crate) fn simulate_program_with_cancellation(
     document: &CamDocumentDto,
     setup: &CamSetupDto,
     program: &CamProgramDto,

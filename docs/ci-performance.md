@@ -102,7 +102,8 @@ flagship tests more useful than adding Rust caches alone. In
 the cold Windows ARM SDK installation took 71 minutes. These are baselines, not
 a guaranteed runtime for every runner.
 
-Run `node --test scripts/ci/*.test.mjs scripts/sync-version.test.mjs` for fast
+Run `cargo test --locked -p xtask release_tooling::` and
+`node --test scripts/ci/*.test.mjs` for fast
 contract and negative-path tests. Also validate workflow YAML/expressions with
 actionlint when editing it; its runner-label catalog may lag the existing
 `ubuntu-26.04` and `windows-11-vs2026-arm` labels used by this repository. Compare

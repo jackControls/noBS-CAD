@@ -69,7 +69,7 @@ fn read_bounded(path: &Path, max: u64) -> Result<Option<String>, String> {
     Ok(Some(text))
 }
 
-fn validate_library(json: &str) -> Result<usize, String> {
+pub(crate) fn validate_library(json: &str) -> Result<usize, String> {
     if json.len() as u64 > MAX_BYTES {
         return Err("Tool library exceeds the 16 MB safety limit".into());
     }
@@ -166,11 +166,15 @@ fn directory_choice(config: &Path, chosen: Option<&Path>) -> Result<(PathBuf, bo
 fn snapshot(directory: &Path) -> Result<Snapshot, String> {
     let path = directory.join(LIBRARY);
     let json = read_bounded(&path, MAX_BYTES)?;
+    snapshot_from_raw(directory, json.as_deref())
+}
+
+fn snapshot_from_raw(directory: &Path, json: Option<&str>) -> Result<Snapshot, String> {
     let mut hash = DefaultHasher::new();
     json.hash(&mut hash);
     Ok(Snapshot {
-        json: json.as_deref().map(normalized_library).transpose()?,
-        path: path.to_string_lossy().into_owned(),
+        json: json.map(normalized_library).transpose()?,
+        path: directory.join(LIBRARY).to_string_lossy().into_owned(),
         revision: format!("{:016x}", hash.finish()),
     })
 }
@@ -271,6 +275,18 @@ pub fn set_location(
     directory: Option<&Path>,
     action: LocationAction,
 ) -> Result<Location, String> {
+    set_location_at(config, directory, action, None)
+}
+
+/// Copy the collection opened by the caller, retaining its exact source bytes.
+/// UseExisting intentionally needs no readable old source, so an offline custom
+/// location can always be replaced by an explicitly selected valid folder.
+pub fn set_location_at(
+    config: &Path,
+    directory: Option<&Path>,
+    action: LocationAction,
+    expected: Option<(&str, &str)>,
+) -> Result<Location, String> {
     let _guard = STORAGE.lock().map_err(|_| "Library storage lock failed")?;
     let (target, is_default) = directory_choice(config, directory)?;
     if is_default {
@@ -283,11 +299,23 @@ pub fn set_location(
         if destination.exists {
             return Err("That folder already contains a library. Use it explicitly, or choose an empty folder for a copy. Nothing was overwritten.".into());
         }
-        let (source, _) = configured_directory(config)?;
-        let json = read_bounded(&source.join(LIBRARY), MAX_BYTES)?
-            .unwrap_or_else(|| "{\"next_tool_id\":1,\"tools\":[]}".into());
-        // Validate the UI representation but copy the original bytes exactly.
-        normalized_library(&json)?;
+        let (source, source_is_default) = configured_directory(config)?;
+        if source_is_default {
+            fs::create_dir_all(&source)
+                .map_err(|e| format!("Could not create default library folder: {e}"))?;
+        }
+        // Hold both existing writer locks until the copy is complete. Aliased
+        // spellings of one empty folder must not acquire the same lock twice.
+        let same_directory = source.canonicalize().map_err(|e| e.to_string())?
+            == target.canonicalize().map_err(|e| e.to_string())?;
+        let _source_lock = if same_directory { None } else { Some(FileLock::acquire(&source)?) };
+        let raw = read_bounded(&source.join(LIBRARY), MAX_BYTES)?;
+        let opened = snapshot_from_raw(&source, raw.as_deref())?;
+        if expected.is_some_and(|(path, revision)| opened.path != path || opened.revision != revision) {
+            return Err("The current library or its location changed after loading. Refresh before copying; no destination or preference was changed.".into());
+        }
+        let json = raw.unwrap_or_else(|| "{\"next_tool_id\":1,\"tools\":[]}".into());
+        // snapshot_from_raw validated these same bytes under the source lock.
         atomic_write(&target.join(LIBRARY), &json, false)?;
     }
     fs::create_dir_all(config).map_err(|e| format!("Could not save library location: {e}"))?;
@@ -302,6 +330,9 @@ pub fn set_location(
         .map_err(|e|format!("{e} Location was not changed. Any completed library copy remains in the selected folder."))?;
     location(&target, is_default)
 }
+
+#[cfg(test)]
+mod native_copy_tests;
 
 #[cfg(test)]
 mod tests {

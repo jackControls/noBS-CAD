@@ -1,6 +1,7 @@
 //! Playback consumes the already-compensated physical timeline. One bounded
 //! forward checkpoint avoids replaying an operation's earlier moves per frame.
 use super::*;
+mod gcode;
 
 /// One prepared playback session. The desktop host owns this on a background
 /// worker: no document cloning, cache-key serialization, target work or full

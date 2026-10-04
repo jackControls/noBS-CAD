@@ -644,6 +644,11 @@ impl SketchSession {
         Ok((l1, l2, distance, result.point_on_l1, result.point_on_l2))
     }
 
+    pub fn chamfer_preview(&self, request: &ChamferRequest) -> Result<PreviewCurve, SessionError> {
+        let (_, _, _, a, b) = self.resolve_chamfer(request)?;
+        Ok(PreviewCurve::Line { a, b })
+    }
+
     pub fn chamfer_lines(&mut self, request: &ChamferRequest) -> Result<ToolResult, SessionError> {
         let (l1, l2, distance, p1, p2) = self.resolve_chamfer(request)?;
         self.mutate_with_undo(move |s| {

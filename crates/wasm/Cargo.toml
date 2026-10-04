@@ -1,10 +1,10 @@
 [package]
 name = "nbcad-wasm"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 description = "wasm-bindgen facade over the noBS CAD engine crates"
 license = "LGPL-2.1-or-later"
-repository = "https://github.com/jackControls/Limo-CAD"
+repository.workspace = true
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -20,7 +20,12 @@ wasm-opt = [
 ]
 
 [dependencies]
-wasm-bindgen = "0.2"
-nbcad-core = { path = "../core" }
+wasm-bindgen.workspace = true
 nbcad-sketch = { path = "../sketch" }
-nbcad-solid = { path = "../solid" }
+nbcad-project-file = { path = "../project-file" }
+serde_json.workspace = true
+earcutr.workspace = true
+
+[dev-dependencies]
+wasm-bindgen-test.workspace = true
+js-sys.workspace = true

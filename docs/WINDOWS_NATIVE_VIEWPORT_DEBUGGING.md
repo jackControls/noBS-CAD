@@ -1,6 +1,10 @@
 # Windows native viewport debugging
 
-Status: Windows-only field notes from the August 2026 Bevy viewport bring-up.
+Status: Historical field notes from the August 2026 embedded viewport bring-up.
+The desktop no longer uses Tauri, WebView2, child-window composition or these
+legacy test commands. For the native-only build and current checks, use
+[Development](DEVELOPMENT.md) and [transition status](native-transition-status.md).
+The material below records the retired architecture, not current instructions.
 
 This runbook records failure signatures, root causes, diagnostic techniques,
 and validation commands that are specific to the Tauri + WebView2 + embedded

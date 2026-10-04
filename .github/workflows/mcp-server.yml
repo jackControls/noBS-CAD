@@ -10,6 +10,8 @@ on:
       - 'knowledge/**'
       - 'interface/**'
       - 'crates/core/**'
+      - 'crates/build-info/**'
+      - 'crates/interface/**'
       - 'crates/sketch/**'
       - 'crates/solid/**'
       - 'crates/occt/**'
@@ -24,10 +26,14 @@ on:
       - '.cargo/config.toml'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - '.github/actions/setup-rust/**'
       - 'xtask/**'
       - 'vcpkg.json'
       - '.github/workflows/mcp-server.yml'
       - '.github/actions/setup-windows-occt/**'
+      - '.github/actions/setup-linux-desktop/**'
       - 'scripts/ci/**'
   pull_request:
     paths:
@@ -35,6 +41,8 @@ on:
       - 'knowledge/**'
       - 'interface/**'
       - 'crates/core/**'
+      - 'crates/build-info/**'
+      - 'crates/interface/**'
       - 'crates/sketch/**'
       - 'crates/solid/**'
       - 'crates/occt/**'
@@ -49,10 +57,14 @@ on:
       - '.cargo/config.toml'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - '.github/actions/setup-rust/**'
       - 'xtask/**'
       - 'vcpkg.json'
       - '.github/workflows/mcp-server.yml'
       - '.github/actions/setup-windows-occt/**'
+      - '.github/actions/setup-linux-desktop/**'
       - 'scripts/ci/**'
 
 permissions:
@@ -60,7 +72,9 @@ permissions:
 
 concurrency:
   group: mcp-server-${{ github.ref }}
-  cancel-in-progress: true
+  # Complete expensive recipe checks and save their build cache; only the
+  # newest pending revision is retained while this run finishes.
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -82,13 +96,10 @@ jobs:
             project: d-screw-vise
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: ./.github/actions/setup-rust
         with:
-          targets: x86_64-pc-windows-msvc
+          target: x86_64-pc-windows-msvc
 
       - name: Rust formatting
         if: matrix.shard == 'core'
@@ -130,7 +141,7 @@ jobs:
           NBCAD_RECIPE_ARTIFACT_DIR: ${{ github.workspace }}/target/mcp-recipe-evidence
         run: |
           $env:Path = "$env:OCCT_ROOT\bin;$env:Path"
-          node scripts/ci/run-mcp-tests.mjs ${{ matrix.shard }}
+          cargo xtask ci mcp-shard ${{ matrix.shard }}
           if ($LASTEXITCODE -ne 0) { throw "mcp-server tests failed" }
 
       # Preserve native geometry coverage once per platform without repeating
@@ -240,11 +251,8 @@ jobs:
     strategy: *acceptance-shards
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: ./.github/actions/setup-rust
 
       - name: Install OpenCASCADE 7.9 SDK (Ubuntu packages)
         shell: bash
@@ -256,6 +264,7 @@ jobs:
             ca-certificates \
             clang \
             cmake \
+            fonts-noto-core fonts-noto-cjk \
             libocct-data-exchange-7.9 \
             libocct-foundation-dev \
             libocct-modeling-algorithms-dev \
@@ -277,7 +286,7 @@ jobs:
         env:
           OCCT_ROOT: /usr
           NBCAD_RECIPE_ARTIFACT_DIR: ${{ github.workspace }}/target/mcp-recipe-evidence
-        run: node scripts/ci/run-mcp-tests.mjs ${{ matrix.shard }}
+        run: cargo xtask ci mcp-shard ${{ matrix.shard }}
 
       - name: Native geometry integration regressions
         if: matrix.shard == 'core'
@@ -341,16 +350,13 @@ jobs:
       NATIVE_RESULT: ${{ needs.mcp-windows.result }}
       MCP_PLATFORM: windows
     steps: &publish-demo-projects
-      - name: Require every platform acceptance shard
-        run: |
-          if [[ "$NATIVE_RESULT" != success ]]; then
-            echo "Native acceptance did not pass: $MCP_PLATFORM=$NATIVE_RESULT" >&2
-            exit 1
-          fi
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@v2
         with:
-          node-version: '24'
+          key: demo-publication
+      - name: Require every platform acceptance shard
+        run: cargo xtask ci require-platform
       - name: Download verified bench
         uses: actions/download-artifact@v4
         with:
@@ -367,7 +373,7 @@ jobs:
           name: mcp-demo-${{ env.MCP_PLATFORM }}-vise
           path: target/mcp-recipe-evidence
       - name: Stage verified editable demo projects
-        run: node scripts/ci/stage-demo-projects.mjs
+        run: cargo xtask ci stage-demo-projects
       - name: Upload verified editable demo projects
         uses: actions/upload-artifact@v4
         with:

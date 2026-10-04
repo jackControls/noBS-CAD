@@ -38,7 +38,7 @@ sheet interface, and Bevy owns the native 3D viewport.
 | --- | --- |
 | `nbcad-sketch` | Persists standards-aware sheets, title blocks, aligned view relationships, semantic annotations, body filters, scale, and display options inside `model.json`. |
 | `nbcad-occt` | Produces visible/hidden vector curves from exact B-reps with OCCT HLR and exposes stable endpoints and fitted circular topology for annotations. |
-| Tauri host | Serializes drawing commands and exact projection requests with the live kernel. |
+| Native host | Serializes drawing commands and exact projection requests with the live kernel. |
 | React/SVG | Lays out sheets, edits properties, and moves views. SVG remains an internal browser/debug surface. |
 | DXF writer | Emits editable true-size paper geometry, layers, semantic dimensions, leaders, notes, and title-block content for CAD interchange, plus separate 1:1 model profiles. |
 | Browser fallback | Projects tessellated topology for fast UI development when the native kernel is unavailable. It is not an exact manufacturing result. |

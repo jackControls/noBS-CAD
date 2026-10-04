@@ -2273,6 +2273,15 @@ mod tests {
             kernel.drawing_projection(&request).unwrap();
         }
         assert!(kernel.projection_cache.lock().unwrap().len() <= 16);
+        let retained_points: usize = kernel
+            .projection_cache
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|(_, p)| p.visible.iter().chain(&p.hidden).chain(&p.section))
+            .map(|line| line.points.len())
+            .sum();
+        assert!(retained_points <= 500_000);
         plan.errors.push(KernelFeatureErrorDto {
             feature_id: nbcad_core::FeatureId(2),
             message: "missing sketch".into(),
@@ -4317,3 +4326,6 @@ mod tests {
 
 #[cfg(test)]
 mod rounded_thread_tests;
+
+#[cfg(test)]
+mod drawing_quality_tests;

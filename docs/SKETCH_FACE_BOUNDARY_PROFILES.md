@@ -186,7 +186,7 @@ preserved conservatively. Undo/redo and save/reopen retain ownership.
 - `npm run test:viewport-theme` — the projected color token matches both
   themes, stays legible, and is distinct from authored sketch geometry.
 - `node scripts/run-e2e.mjs e2e-face-boundary-profile.mjs` — browser-engine
-  check of the picker behavior (requires `npm run build:wasm`).
+  check of the picker behavior (requires `cargo xtask build-wasm`).
 - `npm run e2e:sketch-smoke` — creation snapping, arc entry, duplicate submits,
   failed-operation retry, late replies, signed offset drift and face profiles.
 - `npm run e2e:sketch-regression` — the broader arc, point, slot, spline,

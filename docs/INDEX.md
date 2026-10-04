@@ -30,7 +30,7 @@
 |------|------|
 | [src/](../src/INDEX.md) | Desktop UI entrypoints |
 | [crates/](../crates/INDEX.md) | Host-neutral Rust crates |
-| [src-tauri/](../src-tauri/INDEX.md) | Native shell (Tauri + OCCT) |
+| [src-tauri/](../src-tauri/INDEX.md) | Native desktop (Bevy + OCCT) |
 | [mcp-server/](../mcp-server/INDEX.md) | MCP server surface and disclosure |
 | [examples/scripts/](../examples/scripts/README.md) | Bundled recipes and lessons |
 | [knowledge/](../knowledge/index.md) | Engineering knowledge served through MCP |

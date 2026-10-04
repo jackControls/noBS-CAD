@@ -1,7 +1,35 @@
-use serde_json::{json, Value};
-use std::sync::OnceLock;
+use serde_json::Value;
 
 use nbcad_script::MAX_SCRIPT_BYTES;
+
+/// Keep native file exchange discoverable without enlarging the already broad
+/// interface JSON macro past Rust's default expansion depth.
+pub fn with_file_options(mut schema: Value) -> Value {
+    schema["properties"]["command"]["enum"]
+        .as_array_mut()
+        .unwrap()
+        .extend(
+            [
+                "new",
+                "close",
+                "import_step",
+                "export_step",
+                "export_3mf",
+                "export_stl",
+                "export_drawing_svg",
+                "export_drawing_dxf",
+                "export_profile_dxf",
+                "print_drawing",
+                "print_status",
+            ]
+            .map(Value::from),
+        );
+    schema["properties"]["selected_only"] = serde_json::json!({"type":"boolean","description":"For file exports, export only selected bodies or occurrences."});
+    schema["properties"]["scope"] = serde_json::json!({"type":"string","enum":["assembly","definition"],"description":"Required for 3MF/STL file export: placed assembly occurrences or one mesh per selected definition."});
+    schema["properties"]["feature_id"] = serde_json::json!({"type":"integer","minimum":0,"description":"For export_profile_dxf: sketch feature ID from sketch_profiles."});
+    schema["properties"]["profile_index"] = serde_json::json!({"type":"integer","minimum":0,"maximum":4294967295u64,"description":"For export_profile_dxf: zero-based even-depth material-region index from sketch_profiles. Its immediate hole wires are included at 1:1 in local sketch-plane millimetres."});
+    schema
+}
 
 /// Authored text plus the expanded document the interpreter runs.
 #[derive(Debug)]
@@ -135,33 +163,7 @@ fn expand_includes_if_needed(
 }
 
 /// The renderer and API consume the same product-owned grouping data.
-pub fn groups() -> &'static Vec<Value> {
-    static GROUPS: OnceLock<Vec<Value>> = OnceLock::new();
-    GROUPS.get_or_init(|| {
-        let catalog: Value = serde_json::from_str(include_str!("../../interface/catalog.json")).unwrap();
-        let mut groups = catalog["groups"].as_array().unwrap().clone();
-        for workspace in catalog["workspaces"].as_array().unwrap() {
-            for panel in workspace["panels"].as_array().unwrap() {
-                groups.push(json!({"id":format!("{}/{}",workspace["id"].as_str().unwrap(),panel["id"].as_str().unwrap()),
-                    "labelKey":panel["labelKey"],"operations":panel["operations"]}));
-            }
-        }
-        groups
-    })
-}
-
-pub fn group_for(operation: &str) -> Option<&'static str> {
-    groups()
-        .iter()
-        .find(|g| {
-            g["operations"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|n| n == operation)
-        })
-        .and_then(|g| g["id"].as_str())
-}
+pub use nbcad_interface::catalog::{group_for, groups};
 
 pub fn validate_script(script: &nbcad_script::Script) -> Result<(), String> {
     script.validate_calls(|group, operation| match group_for(operation) {
@@ -174,6 +176,22 @@ pub fn validate_script(script: &nbcad_script::Script) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn file_schema_exposes_sheet_and_exact_profile_exports() {
+        let schema = with_file_options(json!({"properties":{"command":{"enum":["save"]}}}));
+        let commands = schema["properties"]["command"]["enum"].as_array().unwrap();
+        for command in [
+            "export_drawing_svg",
+            "export_drawing_dxf",
+            "export_profile_dxf",
+        ] {
+            assert!(commands.contains(&json!(command)));
+        }
+        assert_eq!(schema["properties"]["feature_id"]["type"], "integer");
+        assert_eq!(schema["properties"]["profile_index"]["maximum"], u32::MAX);
+    }
 
     #[test]
     fn bundled_recipe_calls_preflight_against_the_product_catalog() {

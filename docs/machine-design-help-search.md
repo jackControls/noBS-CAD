@@ -37,7 +37,7 @@ harness (or successor) over anecdotes.
 ```bash
 cargo test -p nbcad-help
 cargo test --manifest-path mcp-server/Cargo.toml cad_help -- --nocapture
-npm run check:knowledge
+cargo xtask knowledge check
 cargo xtask install-mcp --dry-run
 ```
 
@@ -52,7 +52,7 @@ re-Add the MCP client (restart alone can leave a stale server).
 | Layer | Role |
 |-------|------|
 | `knowledge/machine-design/**/*.md` | **Only** authored source (OKF + frontmatter) |
-| `scripts/build-help-index.mjs` → `search-index.json` | CI freshness + Pages interchange (not the product ranker) |
+| `cargo xtask knowledge index` → `search-index.json` | CI freshness + Pages interchange (not the product ranker) |
 | **`nbcad-help` (`crates/help`)** | Catalog + search + get; owns ranking |
 | MCP | Thin `cad_help` over `nbcad-help` |
 | Tauri Help | Same crate via `invoke` + markdown → safe HTML panel |
@@ -217,6 +217,6 @@ Optional: boost `related_recipes` when the caller passes active recipe context.
 - [x] Agent doctrine page `concepts/agent-mcp-workflow`
 - [x] MCP initialize instructions mention tenacity / `cad_help`
 - [ ] Tauri Help panel (later)
-- [x] CI: `cargo test --workspace` (linux-engine-tests, includes `nbcad-help`); MCP acceptance also runs on `crates/help/**`; `npm run check:knowledge` + `search-index.json` freshness on the Pages knowledge workflow
+- [x] CI: `cargo test --workspace` (linux-engine-tests, includes `nbcad-help`); MCP acceptance also runs on `crates/help/**`; `cargo xtask knowledge check` + `search-index.json` freshness on the Pages knowledge workflow
 - [ ] Tantivy when growth bar trips
 

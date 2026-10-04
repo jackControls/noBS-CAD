@@ -17,7 +17,7 @@ bundle: Markdown concepts with YAML frontmatter for humans and agents.
 Validate the bundle locally with:
 
 ```sh
-npm run check:knowledge
+cargo xtask knowledge check
 ```
 
 The Pages site is intentionally a thin landing page over the source bundle.
@@ -66,7 +66,7 @@ requirements. Link to proprietary standards and material with incompatible or
 unclear reuse terms rather than copying it. Do not reproduce standards tables,
 vendor datasets or third-party figures without the necessary permission.
 
-`npm run check:knowledge` validates structure, source metadata, recipe paths and
+`cargo xtask knowledge check` validates structure, source metadata, recipe paths and
 case-sensitive local links. Its fixture tests run in the existing Pages job;
 native MCP tests check that every Markdown file is served unchanged and recipe
 references name published recipes. These checks do not establish factual accuracy,

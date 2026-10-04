@@ -2,12 +2,11 @@
 //!
 //! Owns the in-memory representation of a CAD document: its unit settings,
 //! the browser tree shown in the UI, and the parametric feature tree. The
-//! Tauri shell exchanges snapshots of this model with the frontend via
+//! native and browser hosts exchange snapshots of this model via
 //! [`DocumentDto`].
 
 mod appearance;
 mod browser;
-mod build_info;
 mod document;
 mod dto;
 pub mod edge_chain;
@@ -21,7 +20,6 @@ pub use appearance::{
     DEFAULT_FILAMENT_TYPE, DEFAULT_MATERIAL_NAME,
 };
 pub use browser::{BrowserNode, BrowserNodeKind, NodeId};
-pub use build_info::{build_info, BuildInfo};
 pub use document::Document;
 pub use dto::DocumentDto;
 pub use feature::{Feature, FeatureId, FeatureKind, FeatureStatus, FeatureTree};

@@ -3,7 +3,7 @@ type: Concept
 title: Architecture
 description: Kernel, shell, viewport, and project-file boundaries in noBS CAD.
 status: stable
-updated: 2026-09-11
+updated: 2026-10-02
 ---
 
 # Architecture
@@ -17,9 +17,9 @@ updated: 2026-09-11
 
 ## Shells
 
-- Desktop: Tauri 2 + React/TypeScript UI
-- Desktop viewport: native Rust/Bevy; isolated script previews reuse its scene systems
-- Browser build: WASM geometry adapter and Three.js viewport; useful for browser contracts
+- Desktop UI and viewport: Rust/Bevy; isolated script previews reuse its scene systems
+- Browser replacement: the same Bevy UI, with the OCCT WASM and browser host-service
+  ports still unfinished. The React/Three.js application is retired.
 
 ## Files
 

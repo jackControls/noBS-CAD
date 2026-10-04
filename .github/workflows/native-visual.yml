@@ -13,17 +13,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-platform-input:
+    uses: ./.github/workflows/native-host-tests.yml
+    with:
+      desktop-input: true
+
   native-visual:
     runs-on: macos-14
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci --ignore-scripts
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target

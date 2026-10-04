@@ -1,24 +1,28 @@
 [package]
 name = "nbcad-occt"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 description = "Native Open CASCADE adapter for noBS CAD"
 license = "LGPL-2.1-or-later"
-repository = "https://github.com/jackControls/Limo-CAD"
+repository.workspace = true
 
 [features]
 default = []
-native-occt = []
+native-occt = ["dep:cxx", "dep:cxx-build"]
 
 [dependencies]
 nbcad-assembly = { path = "../assembly" }
 nbcad-sketch = { path = "../sketch" }
-cxx = "1"
+cxx = { workspace = true, optional = true }
 nbcad-core = { path = "../core" }
 nbcad-solid = { path = "../solid" }
 nbcad-export = { path = "../export" }
-serde_json = "1"
-serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
+serde = { workspace = true, features = ["derive"] }
+ttf-parser.workspace = true
+# Native printing shares this font database/tree with resvg and svg2pdf 0.13.
+usvg = { workspace = true, features = ["text", "system-fonts"] }
+unicode-segmentation.workspace = true
 
 [build-dependencies]
-cxx-build = "1"
+cxx-build = { workspace = true, optional = true }

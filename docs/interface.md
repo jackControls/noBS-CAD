@@ -63,6 +63,15 @@ focus policy. Native wake events advance camera animation, operation playback,
 and keepalives while browser timers are throttled. Hidden execution reports
 `presented: false`; a successful operation is not proof of rendered pixels.
 
+The native Bevy host also supports `action: capture` with an absolute PNG `path`.
+It captures the application's own rendered window, including controls and open
+dialogs, without reading the desktop or other applications. The reply waits for
+GPU readback and file encoding and returns the path and pixel dimensions. Existing
+files require explicit `overwrite: true`. Restore a minimized window with
+`action: window, mode: foreground` first. The legacy web shell does not implement
+this capture action. Native background control retains the last window layout
+while reporting `presented: false`.
+
 `close` requests application exit through the same unsaved-work guard as the
 title-bar close button, Alt+F4, File → Exit, and native macOS Quit. Its reply
 acknowledges the request, not process termination. Inspect and use the normal
@@ -101,12 +110,8 @@ preferences suppress the highlight animation.
 
 ## Checks that grow with the product
 
-Run `cargo xtask test-mcp contracts` for browser behavior contracts: actual
-DOM discovery, grouping, disabled/hidden/stale/modal guards, field events,
-tree gestures, atomic drags, serialization, and recovery after failure. It
-derives enabled ribbon commands from product configuration and checks that
-they dispatch an action. It does not maintain copied tool counts. The desktop
-frontend CI job runs this test with Playwright Chromium.
+The shared command catalog is checked by `cargo test --locked -p nbcad-interface`.
+Bevy control and revision guards live in the native interface Rust tests.
 
 Run the native golden against a newly launched disposable document:
 
@@ -117,7 +122,7 @@ cargo xtask test-mcp live --server <nbcad-mcp.exe> --desktop <nbcad.exe> --part 
 The executable and native libraries must be available (development builds may
 need the OCCT bin directory on PATH). Use `--pace 500` for a live demonstration.
 The runner speaks MCP stdio only. It checks launch readiness, foreground and
-minimized camera control, optional 35-second idle recovery, native sketch/UI
+background camera control, optional 35-second idle recovery, native sketch/UI
 mode agreement, the real Extrude dialog and resulting solid, optional drawing
 placement, save/open, overwrite refusal, and continued control after open.
 Reports contain calls, responses, and timings; assertion failures stop the plan.
@@ -157,7 +162,7 @@ Mutation routing comes from the server catalog's shared `mutates` metadata.
 Active-sketch inspection, expression evaluation, and previews query the live
 engine through the existing control channel. They do not read the completed
 model snapshot, which intentionally excludes a sketch still being edited.
-The product drivers live in `xtask/mcp` and use the shared `mcp-server/client.mjs` transport.
+The native product drivers live in `xtask/src/mcp_scenarios` and use the shared Rust `replay::Client` transport. Browser contract fixtures remain under `xtask/mcp`.
 
 The workshop exercises sketch operations and mutations in the product's solid
 build, refine, repeat, and body groups. Adding an operation fails coverage until an
@@ -221,7 +226,7 @@ This is a focused example, not a comprehensive feature-coverage requirement.
 Specialized annotations, derived-view ergonomics, editing/deletion of individual
 views/annotations, and drawing exports remain tracked in #93.
 
-All stdio example/test drivers share `mcp-server/client.mjs`. The part-design
+All native stdio example/test drivers share the Rust `replay::Client`. Browser-only fixtures still use JavaScript. The part-design
 examples in #89 retain their distinct geometry checks and lessons.
 
 ### Associative linear dimensions

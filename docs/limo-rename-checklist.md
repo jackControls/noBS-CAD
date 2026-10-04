@@ -16,15 +16,15 @@ Surveyed from the repository on 2026-10-02.
 |---|---|---|
 | Display name | `productName` and window title `noBS CAD` in `src-tauri/tauri.conf.json`; usage text in `src-tauri/src/startup.rs`; help, recipe and knowledge copy | **Rename** per locale (phase 2) |
 | Bundle identifier | `org.nbcad.desktop` | **Keep.** Changing it makes the OS treat the app as new: separate settings, signing and notarization identity, no in-place upgrade |
-| Project file | `.nbcad` extension, `NBCAD_EXTENSION` in `src/files/nbcad.ts` | **Keep.** Existing projects must open unchanged. Any new extension is an additional format decision |
-| URL scheme | `nbcad://recipe/<id>` (Tauri deep link, `recipe_links.rs`) | **Keep and later add** a Limo scheme alongside it. Published "Open recipe" links depend on the old one |
+| Project file | `.nbcad` extension, shared Rust project-file crate | **Keep.** Existing projects must open unchanged. Any new extension is an additional format decision |
+| URL scheme | `nbcad://recipe/<id>` (native `recipe_links.rs`) | **Keep and later add** a Limo scheme alongside it. Published "Open recipe" links depend on the old one |
 | Environment variables | `NBCAD_*` (session dir, build channel, test hooks) | **Keep.** Internal and scripted; document only |
-| Browser storage keys | `nbcad.locale`, `nbcad.theme`, `nbcad.uiScale`, `nbcad-project`, and others | **Keep**, or read-old/write-new with a migration. Never drop saved language and theme preferences |
+| Retired browser storage | Former React browser preference/project keys | Browser replacement must offer an explicit import path for old user projects; native preferences remain in the Rust preference store |
 | Crate names | `nbcad`, `nbcad-*` workspace crates | **Keep** unless a separate refactor justifies the churn |
 | MCP server name | `nobs-cad` in documented `mcpServers` configs (`docs/INSTALL.md`) | **Keep working.** Introduce a Limo name as an alias, document both, retire the old only after a deprecation notice |
 | Windows executable and artifacts | `noBS-CAD.exe`; `noBS-CAD-<ver>-windows-<arch>.zip`, `noBS.CAD_<ver>_*.dmg/.deb/.AppImage` | **Rename** at the first Limo release (phase 4), with the old names noted in release notes |
 | CI workflow text | step and artifact names in `.github/workflows/desktop-packages.yml` and others | **Rename** with the artifact change; branch-protection required-check names may depend on job names, so check first |
-| Package metadata | repository, homepage and bugs URLs in `package.json` and every `Cargo.toml` | **Update** with `scripts/retarget-repository.mjs` after the repository move (phase 3); `package.json` is the single source of the slug for scripts |
+| Package metadata | repository URLs in `Cargo.toml`, shared `REPOSITORY` slug | **Update** with `cargo xtask retarget-repository` after the repository move (phase 3); `REPOSITORY` is the single source for Rust knowledge/media tools |
 | Docs and READMEs | `jackControls/Limo-CAD` URLs, badges, prose in `docs/`, `knowledge/`, `examples/`, four README languages | **Sweep** after the move; GitHub redirects keep old links alive meanwhile |
 | GitHub Pages | `https://jackcontrols.github.io/Limo-CAD/` (`pages-knowledge.yml`): showcase, `open.html` recipe links | **Replace.** Pages URLs do not redirect when a repository is renamed or transferred |
 | Release assets | `releases/download/v*/…` and `showcase-v0.2.0` URLs | Redirect after a move, but pinned-release checks in workflows must follow the new path |
@@ -32,10 +32,8 @@ Surveyed from the repository on 2026-10-02.
 
 ## Phase 0: confirm names
 
-- [x] Choose the account: renamed under `jackControls` to `Limo-CAD` on
-      2026-10-03. A later transfer to a Limo organization stays possible;
-      GitHub redirects again, but the Pages address changes a second time
-      unless the site has a custom domain by then.
+- [ ] Choose the account: stay under `jackControls`, or create a Limo
+      organization and transfer the repository once. One move is better than two.
 - [ ] Choose the repository and site name. Checked 2026-10-02: the GitHub
       account name `limo` is already taken; `limo-cad` resolved as unused for
       both users and organizations. Recheck immediately before creating it.
@@ -113,25 +111,24 @@ A first-pass screen, not legal clearance.
 
 ## Phase 3: move the repository and site
 
-- [x] Rename or transfer the repository (GitHub redirects the web, git,
-      release-download and API URLs). Renamed to `jackControls/Limo-CAD` on
-      2026-10-03.
-- [x] Pages serves under the new address,
-      `https://jackcontrols.github.io/Limo-CAD/`. The old
-      `jackcontrols.github.io/noBS-CAD/` path returns 404 and cannot host a
-      redirect page: that would need a new `noBS-CAD` repository, which breaks
-      GitHub's repository redirect.
-- [x] In one PR, run `node scripts/retarget-repository.mjs --to <owner>/<repo>`
+- [x] Rename the repository to `jackControls/Limo-CAD` (2026-10-03).
+      GitHub redirects the old repository, Git and release-download URLs.
+- [x] Serve Pages at `https://jackcontrols.github.io/Limo-CAD/`.
+      Direct HTTP checks on 2026-10-04 returned 200 there and 404 at the old
+      `/noBS-CAD/` path. The old Pages address does not redirect.
+- [x] Retarget repository links and hosted-runner identity. For a subsequent
+      move, run `cargo xtask retarget-repository --to <owner>/<repo>`
       (dry run first, then `--write`; add `--pages-url <host/path>` for a custom
       domain). It rewrites repository, `.git`, SSH, raw, API, shields.io badge
       and Pages URLs, plus backtick-quoted slugs, in package metadata, every
       README language, docs and the knowledge pages. It leaves release-note
       history, lockfiles and artifact file names alone, and lists any line that
       still names the old slug so prose mentions get a manual edit. The
-      knowledge checker and showcase staging script read the slug from
-      `package.json`, so they follow without edits, and the checker rejects
+      knowledge checker and showcase staging task read the slug from
+      `REPOSITORY`, so they follow without edits, and the checker rejects
       repository file links that still use the old slug. Then run
-      `node --test scripts/*.test.mjs` and `npm run check:knowledge`.
+      `cargo test -p xtask repository::`, `cargo test -p xtask showcase_media::`
+      and `cargo xtask knowledge check`.
 - [ ] Update local remotes, branch-protection required checks, CODEOWNERS,
       secrets and environments, issue templates, and the Discussions links.
 - [ ] Update external listings and shared links: awesome-list entry, plugin

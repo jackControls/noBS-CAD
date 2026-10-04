@@ -1,6 +1,5 @@
-//! Serializable DTOs for the sketch-session API, exchanged as JSON over both
-//! hosts. The frontend TypeScript types in `src/engine/types.ts` mirror these
-//! 1:1.
+//! Serializable DTOs for the sketch-session API, shared by native and
+//! WebAssembly hosts and the MCP JSON interface.
 
 use serde::{Deserialize, Serialize};
 
@@ -157,9 +156,16 @@ pub struct SketchDto {
     /// Driving dimensions with presentation data (D9).
     pub dimensions: Vec<DimensionDto>,
     pub dimension_style: DimensionStyle,
+    /// Current snap preference, including changes made through another host.
+    #[serde(default = "snap_enabled_by_default")]
+    pub grid_snap: bool,
     pub dof: DofDto,
     pub can_undo: bool,
     pub can_redo: bool,
+}
+
+fn snap_enabled_by_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -986,7 +992,7 @@ pub struct EndSketchResult {
 
 /// Uniform result envelope for the JSON host boundary: every host function
 /// returns either `{"ok": true, "value": ...}` or `{"ok": false, "error":
-/// "..."}`. Both hosts (Tauri commands, wasm-bindgen exports) emit exactly
+/// "..."}`. Both hosts (native commands, wasm-bindgen exports) emit exactly
 /// this shape so the frontend adapters are interchangeable.
 pub fn ok_json<T: Serialize>(value: T) -> String {
     serde_json::json!({ "ok": true, "value": value }).to_string()

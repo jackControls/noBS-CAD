@@ -8,10 +8,12 @@ use std::{
 };
 mod includes;
 mod manufacturing;
+mod source_navigation;
 pub use includes::{
     flatten_includes, has_unresolved_includes, parse_with_includes, resolve_include_path,
     validate_include_path, MAX_INCLUDE_DEPTH,
 };
+pub use source_navigation::authored_chapters;
 
 /// Shared limit for files, source text, the desktop picker and MCP.
 pub const MAX_SCRIPT_BYTES: usize = 16 * 1024 * 1024;

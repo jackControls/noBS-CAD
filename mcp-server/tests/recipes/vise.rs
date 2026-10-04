@@ -145,7 +145,7 @@ fn check_edits(client: &mut Client, exports: &Value) {
             drawing["content"]
                 .as_str()
                 .unwrap()
-                .contains(&format!(">{changed:.2}</text>")),
+                .contains(&format!(">{changed:.2} mm</text>")),
             "{name}: drawing must measure edited geometry"
         );
         client.call("sketch_edit", json!({"name":name}));

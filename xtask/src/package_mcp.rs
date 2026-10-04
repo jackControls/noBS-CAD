@@ -13,6 +13,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+mod lifecycle_evidence;
+
 #[derive(Debug)]
 struct Options {
     server: String,
@@ -147,32 +149,25 @@ fn package_command(
         .current_dir(&sessions.0)
         .env("NBCAD_SESSION_DIR", &sessions.0);
     if desktop {
-        // Session publication is not browser storage. Give every GUI case a
-        // fresh profile so localStorage recovery/settings never touch the
-        // user's normal CAD profile or leak into the next lifecycle case.
-        #[cfg(any(windows, target_os = "linux"))]
-        {
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static NEXT_PROFILE: AtomicU64 = AtomicU64::new(0);
-            let profile = sessions.0.join(format!(
-                "webview-{}",
-                NEXT_PROFILE.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir(&profile).context("Create isolated desktop browser profile")?;
-            #[cfg(windows)]
-            command.env("WEBVIEW2_USER_DATA_FOLDER", &profile);
-            #[cfg(target_os = "linux")]
-            for (name, directory) in [
-                ("XDG_DATA_HOME", "data"),
-                ("XDG_CACHE_HOME", "cache"),
-                ("XDG_CONFIG_HOME", "config"),
-            ] {
-                let path = profile.join(directory);
-                // xdg-mime writes mimeapps.list directly into XDG_CONFIG_HOME;
-                // unlike WebKit, it does not create this parent directory.
-                fs::create_dir(&path).context("Create isolated desktop XDG directory")?;
-                command.env(name, path);
-            }
+        // Each owned desktop case gets native preferences/session recovery
+        // isolated from both the operator and earlier fixture cases.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_PROFILE: AtomicU64 = AtomicU64::new(0);
+        let profile = sessions.0.join(format!(
+            "native-profile-{}",
+            NEXT_PROFILE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&profile).context("Create isolated native configuration")?;
+        command.env("NBCAD_CONFIG_DIR", &profile);
+        #[cfg(target_os = "linux")]
+        for (name, directory) in [
+            ("XDG_DATA_HOME", "data"),
+            ("XDG_CACHE_HOME", "cache"),
+            ("XDG_CONFIG_HOME", "config"),
+        ] {
+            let path = profile.join(directory);
+            fs::create_dir(&path).context("Create isolated desktop XDG directory")?;
+            command.env(name, path);
         }
     }
     // Headless startup must not depend on a graphical login. Desktop checks
@@ -478,7 +473,7 @@ fn startup_diagnostics(sessions: &SessionDirectory, pid: u32) -> Value {
             let name = entry.file_name();
             let name = name.to_string_lossy();
             name != "_ui"
-                && !name.starts_with("webview-")
+                && !name.starts_with("native-profile-")
                 && entry.file_type().is_ok_and(|kind| kind.is_dir())
         })
         .take(MAX_ENTRIES)
@@ -494,7 +489,7 @@ fn startup_diagnostics(sessions: &SessionDirectory, pid: u32) -> Value {
         "documents":documents,"entry_limit":MAX_ENTRIES})
 }
 
-// A WebKit descendant can keep the host's output pipe open after the desktop
+// A child process can keep the host's output pipe open after the desktop
 // retires its own writer. Diagnose only this fixture's process tree and only
 // descriptors for that original pipe; never collect process commands or data.
 #[cfg(any(target_os = "linux", test))]
@@ -634,7 +629,7 @@ mod stdout_diagnostics {
                 }
             }
             // Children may have been created by any thread in the desktop or
-            // a WebKit helper. Never enumerate unrelated /proc processes.
+            // a child helper. Never enumerate unrelated /proc processes.
             if let Ok(threads) = fs::read_dir(directory.join("task")) {
                 for (index, thread) in threads.enumerate() {
                     if index == MAX_THREADS || Instant::now() >= deadline {
@@ -813,19 +808,47 @@ fn wait_for_owned_window(
 }
 
 fn verify_desktop(options: &Options) -> Result<Value> {
-    // WKWebView's default data store cannot be redirected by a child-process
-    // environment override. Do not run this fixture against a developer's
-    // ordinary macOS profile until the app supports an isolated store.
+    // Keep interactive macOS package QA on a disposable runner. Native profile
+    // and session storage are isolated by package_command on every platform.
     #[cfg(target_os = "macos")]
-    ensure!(std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
-        && std::env::var("RUNNER_ENVIRONMENT").as_deref() == Ok("github-hosted"),
-        "--desktop on macOS currently requires a disposable GitHub-hosted runner; ordinary WKWebView profiles are not isolated");
+    ensure!(
+        std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+            && std::env::var("RUNNER_ENVIRONMENT").as_deref() == Ok("github-hosted"),
+        "--desktop on macOS requires a disposable GitHub-hosted runner"
+    );
     let sessions = SessionDirectory::create()?;
+    let result = verify_desktop_owned(options, &sessions);
+    // All owned clients have dropped (and reaped their children) before the
+    // bounded copy. Preserve failed runs just as carefully as successful ones.
+    let retained = lifecycle_evidence::retain(&sessions.0, options.out.as_deref());
+    match (result, retained) {
+        (Ok(mut report), Ok(path)) => {
+            report["lifecycle_evidence"] = json!(path);
+            Ok(report)
+        }
+        (Err(error), Ok(path)) => Err(error.context(format!(
+            "Owned desktop lifecycle evidence retained at {}",
+            path.display()
+        ))),
+        (Ok(_), Err(error)) => Err(error.context("Retain desktop lifecycle evidence")),
+        (Err(error), Err(retention)) => Err(error.context(format!(
+            "Lifecycle evidence retention failed: {retention:#}; original session: {}",
+            sessions.0.display()
+        ))),
+    }
+}
+
+fn verify_desktop_owned(options: &Options, sessions: &SessionDirectory) -> Result<Value> {
     let started = Instant::now();
-    let mut desktop = Client::start_command(
-        package_command(options, &sessions, true)?,
-        Some(options.timeout),
-    )?;
+    let command = package_command(options, &sessions, true)?;
+    let native_profile = command
+        .get_envs()
+        .find(|(name, _)| *name == "NBCAD_CONFIG_DIR")
+        .and_then(|(_, value)| value)
+        .map(PathBuf::from)
+        .context("Owned desktop command has no native profile")?;
+    let mut desktop =
+        lifecycle_evidence::start(command, options.timeout, &sessions.0, "default-desktop")?;
     let pid = desktop.process_id();
     #[cfg(target_os = "linux")]
     let original_stdout =
@@ -839,10 +862,12 @@ fn verify_desktop(options: &Options) -> Result<Value> {
         "Default desktop launch did not advertise MCP tools"
     );
     let catalog = desktop.call("cad_interface", json!({"action":"catalog"}))?;
+    lifecycle_evidence::stage(&sessions.0, "waiting-default-desktop-window", Some(pid))?;
     let window = wait_for_owned_window(&mut desktop, &sessions, options.timeout)?;
     let session = window["active_session_id"].as_str().unwrap();
     // Deliberately omit attach/session selectors: this verifies the default
     // transport binds its own visible document, never an invisible model.
+    lifecycle_evidence::stage(&sessions.0, "modeling-default-desktop", Some(pid))?;
     let initial = initial_project_model(&mut desktop, options.timeout)?;
     ensure!(
         initial
@@ -930,6 +955,7 @@ fn verify_desktop(options: &Options) -> Result<Value> {
             && unsaved_model.pointer("/document/name") == Some(&json!("stdio-lifecycle-unsaved")),
         "Fixture did not create an unsaved edit after Save"
     );
+    lifecycle_evidence::stage(&sessions.0, "disconnecting-default-stdio", Some(pid))?;
     desktop.close_input();
     let stdout_eof = desktop.require_stdout_eof(Duration::from_secs(10));
     #[cfg(target_os = "linux")]
@@ -950,9 +976,11 @@ fn verify_desktop(options: &Options) -> Result<Value> {
         );
         std::thread::sleep(Duration::from_millis(25));
     }
-    let mut observer = Client::start_command(
+    let mut observer = lifecycle_evidence::start(
         package_command(options, &sessions, false)?,
-        Some(options.timeout),
+        options.timeout,
+        &sessions.0,
+        "headless-observer",
     )?;
     observer.call("cad_attach", json!({"session_id":session}))?;
     let after_eof = observer.call(
@@ -976,27 +1004,48 @@ fn verify_desktop(options: &Options) -> Result<Value> {
         saved_after_eof["status"] == "applied" && fs::metadata(&retained_path)?.len() > 0,
         "Observer could not save the retained unsaved model after disconnect: {saved_after_eof}"
     );
+    lifecycle_evidence::stage(&sessions.0, "awaiting-observer-close-receipt", Some(pid))?;
     let closed = observer.call(
         "cad_interface",
         json!({"action":"window","mode":"close","session_id":session}),
     )?;
     ensure!(
-        closed["status"] == "applied"
-            && closed.pointer("/window/close_requested") == Some(&json!(true)),
+        clean_native_close_receipt(&closed, session),
         "Normal guarded window close was not acknowledged: {closed}"
     );
-    desktop.finish(Duration::from_secs(10))?;
-    observer.finish(Duration::from_secs(10))?;
+    lifecycle_evidence::stage(
+        &sessions.0,
+        "awaiting-observer-close-process-exit",
+        Some(pid),
+    )?;
+    desktop
+        .finish(Duration::from_secs(10))
+        .context("Finish the first desktop after observer close")?;
+    observer
+        .finish(Duration::from_secs(10))
+        .context("Finish the headless lifecycle observer")?;
 
     // The first owned window is fully gone before creating this empty one.
     // A close issued on this process's own stdio must flush its acknowledgement
     // before GUI shutdown terminates the process and its transport thread.
-    let mut self_closing = Client::start_command(
+    lifecycle_evidence::stage(&sessions.0, "starting-self-close-desktop", None)?;
+    let mut self_closing = lifecycle_evidence::start(
         package_command(options, &sessions, true)?,
-        Some(options.timeout),
+        options.timeout,
+        &sessions.0,
+        "self-close-desktop",
     )?;
-    let self_close_window = wait_for_owned_window(&mut self_closing, &sessions, options.timeout)?;
-    let empty_model = initial_project_model(&mut self_closing, options.timeout)?;
+    let self_pid = self_closing.process_id();
+    lifecycle_evidence::stage(&sessions.0, "waiting-self-close-window", Some(self_pid))?;
+    let self_close_window = wait_for_owned_window(&mut self_closing, &sessions, options.timeout)
+        .context("Wait for the second owned desktop window")?;
+    lifecycle_evidence::stage(
+        &sessions.0,
+        "reading-self-close-blank-document",
+        Some(self_pid),
+    )?;
+    let empty_model = initial_project_model(&mut self_closing, options.timeout)
+        .context("Read the second desktop's blank document before close")?;
     ensure!(
         empty_model
             .pointer("/document/history/features")
@@ -1004,22 +1053,44 @@ fn verify_desktop(options: &Options) -> Result<Value> {
             .is_some_and(Vec::is_empty),
         "Self-close fixture did not start with a blank document"
     );
-    let self_closed =
-        self_closing.call("cad_interface", json!({"action":"window","mode":"close"}))?;
+    lifecycle_evidence::stage(&sessions.0, "awaiting-self-close-receipt", Some(self_pid))?;
+    let self_closed = self_closing.call("cad_interface", json!({"action":"window","mode":"close"}))
+        .with_context(|| format!("Receive the second desktop's self-close receipt (PID {self_pid}, child_running={:?})", self_closing.is_running()))?;
     ensure!(
-        self_closed["status"] == "applied"
-            && self_closed.pointer("/window/close_requested") == Some(&json!(true))
-            && self_closed["active_session_id"] == self_close_window["active_session_id"],
+        clean_native_close_receipt(
+            &self_closed,
+            self_close_window["active_session_id"].as_str().unwrap()
+        ),
         "The desktop exited before its own stdio acknowledged guarded close: {self_closed}"
     );
-    self_closing.finish(Duration::from_secs(10))?;
+    lifecycle_evidence::stage(
+        &sessions.0,
+        "awaiting-self-close-process-exit",
+        Some(self_pid),
+    )?;
+    self_closing
+        .finish(Duration::from_secs(10))
+        .context("Finish the second desktop after its self-close receipt")?;
+    lifecycle_evidence::stage(&sessions.0, "complete", Some(self_pid))?;
     Ok(
         json!({"passed":true,"pid":pid,"window":window,"initialization":initialization,
-        "baseline_project":saved_path,"saved_project":retained_path,"saved_model":unsaved_model,"session_directory":sessions.0,"elapsed_ms":started.elapsed().as_millis(),
+        "baseline_project":saved_path,"saved_project":retained_path,"saved_model":unsaved_model,"session_directory":sessions.0,"native_profile":native_profile,"elapsed_ms":started.elapsed().as_millis(),
         "default_stdio":true,"automatic_live_document_binding":true,"fully_constrained_sketches":1,
         "survived_stdio_eof":true,"stdout_eof_before_gui_exit":true,"retained_unsaved_model":true,"retained_live_model":true,"guarded_close":true,"clean_exit_and_stdout":true,
         "self_stdio_close_acknowledged":true,"self_close_window":self_close_window}),
     )
+}
+
+fn clean_native_close_receipt(response: &Value, session: &str) -> bool {
+    // Native close shares the normal unsaved-document guard. Only a receipt
+    // explicitly reporting no pending prompt can proceed to the mandatory
+    // child-exit/stdout checks; an applied dirty-close prompt is not an exit.
+    !session.is_empty()
+        && response["status"] == "applied"
+        && response["active_session_id"] == session
+        && response["session_id"] == session
+        && response["awaiting_input"] == false
+        && response.pointer("/value/awaiting_input") == Some(&json!(false))
 }
 
 fn check_export(exported: &Value) -> Result<usize> {
@@ -1076,6 +1147,35 @@ fn check_export(exported: &Value) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_close_receipt_requires_clean_matching_document() {
+        let accepted = json!({"status":"applied","active_session_id":"owned", "session_id":"owned",
+            "awaiting_input":false,"value":{"awaiting_input":false}});
+        assert!(clean_native_close_receipt(&accepted, "owned"));
+        assert!(!clean_native_close_receipt(&accepted, "other"));
+        assert!(!clean_native_close_receipt(&accepted, ""));
+        for (pointer, value) in [
+            ("/status", json!("failed")),
+            ("/active_session_id", json!("foreign")),
+            ("/session_id", json!("foreign")),
+            ("/awaiting_input", json!(true)),
+            ("/value/awaiting_input", json!(true)),
+            ("/value/awaiting_input", Value::Null),
+        ] {
+            let mut rejected = accepted.clone();
+            *rejected.pointer_mut(pointer).unwrap() = value;
+            assert!(
+                !clean_native_close_receipt(&rejected, "owned"),
+                "{rejected}"
+            );
+        }
+        assert!(!clean_native_close_receipt(
+            &json!({"status":"applied", "active_session_id":"owned",
+            "window":{"close_requested":true}}),
+            "owned"
+        ));
+    }
 
     #[test]
     fn initial_readiness_retry_requires_the_exact_structured_tool_error() {
@@ -1309,9 +1409,8 @@ mod tests {
         fs::remove_dir(sessions.0.join("_ui")).unwrap();
     }
 
-    #[cfg(any(windows, target_os = "linux"))]
     #[test]
-    fn desktop_cases_use_distinct_private_browser_profiles() {
+    fn desktop_cases_use_distinct_private_native_profiles() {
         let options = Options::parse(
             ["--server", "cad", "--server-arg", "--headless", "--desktop"]
                 .into_iter()
@@ -1329,23 +1428,17 @@ mod tests {
                 if matches!(
                     key.to_str(),
                     Some(
-                        "WEBVIEW2_USER_DATA_FOLDER"
-                            | "XDG_DATA_HOME"
-                            | "XDG_CACHE_HOME"
-                            | "XDG_CONFIG_HOME"
+                        "NBCAD_CONFIG_DIR" | "XDG_DATA_HOME" | "XDG_CACHE_HOME" | "XDG_CONFIG_HOME"
                     )
                 ) {
                     assert!(
                         Path::new(path).is_dir(),
-                        "The browser and xdg-mime need {key:?} to exist before launch"
+                        "Native settings and xdg-mime need {key:?} to exist before launch"
                     );
                 }
             }
         }
-        #[cfg(windows)]
-        let key = "WEBVIEW2_USER_DATA_FOLDER";
-        #[cfg(target_os = "linux")]
-        let key = "XDG_DATA_HOME";
+        let key = "NBCAD_CONFIG_DIR";
         let profile = |command: &Command| {
             command
                 .get_envs()

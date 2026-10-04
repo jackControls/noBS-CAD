@@ -3,8 +3,9 @@
 //! Thin wasm-bindgen facade over [`SketchManager`]: one exported function
 //! per engine API method, JSON-string in / JSON-string out, dispatching
 //! through `nbcad_sketch::host::handle` — the exact same code path the
-//! Tauri commands use, so browser and native behavior are identical by
-//! construction. All payloads are the shared envelope
+//! native desktop commands use. Native solid geometry additionally requires
+//! the OCCT host; this facade supplies the host-neutral engine API. Payloads use
+//! the shared envelope
 //! (`{"ok":true,"value":...}` / `{"ok":false,"error":"..."}`).
 
 use wasm_bindgen::prelude::*;
@@ -12,7 +13,12 @@ use wasm_bindgen::prelude::*;
 use nbcad_sketch::host;
 use nbcad_sketch::SketchManager;
 
-/// Engine instance held by the frontend `WasmEngine` adapter.
+mod browser_data;
+#[cfg(test)]
+mod smoke;
+pub use browser_data::{project_archive_decode, project_archive_encode, triangulate_profile};
+
+/// Host-neutral engine instance exposed through wasm-bindgen.
 #[wasm_bindgen]
 pub struct WasmEngine {
     manager: SketchManager,
