@@ -6,7 +6,10 @@
 //! ```
 
 mod build_tools;
+mod hash;
 mod install_mcp;
+mod occt_cache;
+mod occt_sdk;
 mod package;
 mod package_mcp;
 mod playback_test;
@@ -36,6 +39,7 @@ fn run() -> Result<()> {
     };
 
     match command.as_str() {
+        "build-occt" => occt_sdk::run(args),
         "doctor" => build_tools::doctor(args),
         "bootstrap" => build_tools::bootstrap(args),
         "check" => build_tools::check(args),
@@ -71,6 +75,7 @@ Usage:
   cargo run -p xtask -- install-mcp --clients LIST [--no-build] [--binary PATH]
 
 Commands:
+  build-occt    Build a pinned OCCT 7.9.3 SDK with compatible source/object caching. Use --help.
   doctor        Inspect the Rust toolchain and selected engine/desktop/MCP/WASM prerequisites.
   bootstrap     Install pinned Rust targets and explicitly requested tools. Use --help.
   check         Run a scoped Cargo check; optional --fmt, --clippy, --timings and --sccache.
