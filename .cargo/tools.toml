@@ -1,0 +1,6 @@
+# Installed on demand by cargo xtask bootstrap. Native builds need none of these.
+[tools]
+wasm-pack = "0.15.0"
+cargo-machete = "0.9.2"
+cargo-deny = "0.20.2"
+sccache = "0.18.0"

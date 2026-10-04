@@ -54,8 +54,11 @@ RUN apt-get update \
     && rm -f libocct-data-exchange-dev_*.deb \
     && rm -rf /var/lib/apt/lists/*
 
+COPY rust-toolchain.toml /opt/nbcad-toolchain/rust-toolchain.toml
+WORKDIR /opt/nbcad-toolchain
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-      | sh -s -- -y --profile minimal --default-toolchain stable
+      | sh -s -- -y --profile minimal --default-toolchain none
+RUN rustup show
 
 # Keep the reproducible SDK rooted in the official Ubuntu 26.04 archive. CI
 # still uses setup-node for the pinned Node 22 release toolchain.

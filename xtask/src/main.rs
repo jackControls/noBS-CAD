@@ -5,6 +5,7 @@
 //! cargo run -p xtask -- install-mcp --clients cursor,vscode --no-build
 //! ```
 
+mod build_tools;
 mod install_mcp;
 mod package;
 mod package_mcp;
@@ -35,6 +36,10 @@ fn run() -> Result<()> {
     };
 
     match command.as_str() {
+        "doctor" => build_tools::doctor(args),
+        "bootstrap" => build_tools::bootstrap(args),
+        "check" => build_tools::check(args),
+        "deps" => build_tools::deps(args),
         "package" => package::run(args),
         "run-script" => replay::run(args),
         "cad-call" => replay::call(args),
@@ -66,6 +71,10 @@ Usage:
   cargo run -p xtask -- install-mcp --clients LIST [--no-build] [--binary PATH]
 
 Commands:
+  doctor        Inspect the Rust toolchain and selected engine/desktop/MCP/WASM prerequisites.
+  bootstrap     Install pinned Rust targets and explicitly requested tools. Use --help.
+  check         Run a scoped Cargo check; optional --fmt, --clippy, --timings and --sccache.
+  deps          Inspect duplicate, unused or advisory dependencies in one workspace. Use --help.
   package       Build the host desktop package using the existing platform bundler.
                 Use --help for prerequisites and optional Windows target selection.
   run-script    Run a .nbcad.jsonc file or --recipe ID using the Rust MCP client. Use --server PATH,

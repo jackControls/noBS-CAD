@@ -10,6 +10,9 @@ on:
       - 'xtask/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.cargo/tools.toml'
+      - '.github/actions/setup-rust/**'
       - '.github/workflows/linux-engine-tests.yml'
   pull_request:
     paths:
@@ -19,6 +22,9 @@ on:
       - 'xtask/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.cargo/tools.toml'
+      - '.github/actions/setup-rust/**'
       - '.github/workflows/linux-engine-tests.yml'
 
 permissions:
@@ -41,7 +47,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: ./.github/actions/setup-rust
 
       - name: Cache Rust workspace
         uses: Swatinem/rust-cache@v2

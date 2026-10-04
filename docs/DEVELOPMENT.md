@@ -92,6 +92,33 @@ For native SDK setup and X11/XWayland checks, use
 
 ## Verify changes
 
+`rust-toolchain.toml` pins the compiler, Rustfmt and Clippy; CI uses the same
+pin through the shared setup action. Optional build tools are pinned in
+`.cargo/tools.toml` and installed only when explicitly requested:
+
+```sh
+cargo xtask bootstrap --wasm
+cargo xtask bootstrap --tool cargo-machete
+cargo xtask doctor --scope desktop
+```
+
+For quick checks without running tests or opening an application:
+
+```sh
+cargo xtask check --scope engine --fmt --clippy
+cargo xtask check --scope desktop --timings
+cargo xtask check --scope mcp
+cargo xtask check --scope wasm
+cargo xtask deps --scope engine
+```
+
+The engine, desktop and MCP remain separate workspaces. WASM selects the engine
+facade. `--fmt` checks the selected workspace's formatting. Dependency inspection
+can also use `--unused` or `--advisories` after installing the corresponding
+pinned tool. Add `--sccache` to opt in for one check; this disables incremental
+compilation only for that invocation and prints cache statistics. Normal Cargo
+incremental builds and release profiles remain unchanged.
+
 For shared model and frontend changes:
 
 ```sh

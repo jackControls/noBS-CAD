@@ -76,8 +76,8 @@ jobs:
                 reason: "embedded MCP library or knowledge, interface catalog, native script, or package verifier",
               },
               {
-                pattern: /^\.github\/actions\//,
-                reason: "shared GitHub Action",
+                pattern: /^(\.github\/actions|\.cargo)\//,
+                reason: "shared build tooling",
               },
               {
                 pattern: /^\.github\/workflows\/desktop-packages\.yml$/,
@@ -192,11 +192,9 @@ jobs:
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust targets
-        shell: pwsh
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          rustup target add ${{ matrix.rust_target }}
+        uses: ./.github/actions/setup-rust
+        with:
+          target: ${{ matrix.rust_target }}
 
       - name: Install JavaScript dependencies
         run: npm ci
@@ -306,10 +304,7 @@ jobs:
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust targets
-        shell: bash
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+        uses: ./.github/actions/setup-rust
 
       - name: Install Ubuntu 26.04 desktop and OpenCASCADE SDK
         shell: bash
@@ -525,8 +520,11 @@ jobs:
         run: |
           set -euo pipefail
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-            | sh -s -- -y --profile minimal --default-toolchain stable
+            | sh -s -- -y --profile minimal --default-toolchain none
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install repository Rust toolchain
+        uses: ./.github/actions/setup-rust
 
       - name: Restore OCCT 7.9 build
         id: occt
@@ -644,10 +642,7 @@ jobs:
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust targets
-        shell: bash
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+        uses: ./.github/actions/setup-rust
 
       # AppImages intentionally use the host's graphics loaders and Wayland
       # client ABI so a newer GPU driver never loads an older bundled copy.
@@ -747,11 +742,9 @@ jobs:
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust targets
-        shell: bash
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          rustup target add aarch64-apple-darwin
+        uses: ./.github/actions/setup-rust
+        with:
+          target: aarch64-apple-darwin
 
       - name: Install JavaScript dependencies
         run: npm ci

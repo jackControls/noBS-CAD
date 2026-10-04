@@ -52,8 +52,11 @@ COPY scripts/build-occt-linux.sh /tmp/build-occt-linux.sh
 ARG CMAKE_BUILD_PARALLEL_LEVEL
 RUN /tmp/build-occt-linux.sh /opt/opencascade && rm /tmp/build-occt-linux.sh
 
+COPY rust-toolchain.toml /opt/nbcad-toolchain/rust-toolchain.toml
+WORKDIR /opt/nbcad-toolchain
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-      | sh -s -- -y --profile minimal --default-toolchain stable
+      | sh -s -- -y --profile minimal --default-toolchain none
+RUN rustup show
 
 # Ubuntu 22.04's nodejs is too old for the frontend build; use Node 22.
 RUN cd /tmp \

@@ -8,6 +8,8 @@ publish = false
 
 [dependencies]
 anyhow = "1"
+semver = "1.0.28"
+toml_edit = "0.25.15"
 base64 = "0.22"
 serde_json = { version = "1", features = ["float_roundtrip"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
