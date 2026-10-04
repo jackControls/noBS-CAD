@@ -4,7 +4,7 @@ version.workspace = true
 edition = "2021"
 license = "LGPL-2.1-or-later"
 description = "Shared help catalog and BM25 search for MCP cad_help and desktop Help"
-repository = "https://github.com/jackControls/Limo-CAD"
+repository.workspace = true
 
 [[bin]]
 name = "nbcad-help"

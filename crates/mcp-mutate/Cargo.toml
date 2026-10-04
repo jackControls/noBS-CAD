@@ -4,7 +4,7 @@ version.workspace = true
 edition = "2021"
 description = "Shared MCP modeling-mutate name → engine method + payload map"
 license = "LGPL-2.1-or-later"
-repository = "https://github.com/jackControls/Limo-CAD"
+repository.workspace = true
 
 [dependencies]
 nbcad-export = { path = "../export" }

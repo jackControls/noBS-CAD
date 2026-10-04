@@ -4,7 +4,7 @@ version.workspace = true
 edition = "2021"
 description = "Host-neutral solid feature history, stable topology ids, and kernel DTOs"
 license = "LGPL-2.1-or-later"
-repository = "https://github.com/jackControls/Limo-CAD"
+repository.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

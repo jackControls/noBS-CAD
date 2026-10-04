@@ -4,6 +4,7 @@ version.workspace = true
 edition = "2021"
 description = "Repo maintenance tasks (MCP client install, etc.)"
 license = "LGPL-2.1-or-later"
+repository.workspace = true
 publish = false
 
 [dependencies]

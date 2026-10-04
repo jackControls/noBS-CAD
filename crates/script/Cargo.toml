@@ -3,6 +3,7 @@ name = "nbcad-script"
 version.workspace = true
 edition = "2021"
 license = "LGPL-2.1-or-later"
+repository.workspace = true
 description = "Declarative CAD command replay shared by MCP and repository examples"
 
 [dependencies]
