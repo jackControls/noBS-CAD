@@ -6,6 +6,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/agent-board",
     "crates/core",
     "crates/assembly",
     "crates/cam",
